@@ -4080,16 +4080,16 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '3px',
-            padding: '5px 6px',
-            fontSize: '9px',
+            gap: '4px',
+            padding: '6px 7px',
+            fontSize: '10px',
             color: theme.textSecondary,
             backgroundColor: 'transparent',
             border: 'none',
             borderRadius: '3px',
             cursor: 'pointer',
             whiteSpace: 'nowrap',
-            maxWidth: '112px',
+            maxWidth: '132px',
             overflow: 'hidden',
           }}
           onMouseEnter={(e) => {
@@ -4099,7 +4099,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             e.currentTarget.style.backgroundColor = 'transparent';
           }}
         >
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             <line x1="12" y1="19" x2="12" y2="23"/>
@@ -4110,7 +4110,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
               : 'None'}
           </span>
-          <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="6 9 12 15 18 9"/>
           </svg>
         </button>
@@ -4557,8 +4557,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             }}
             tabIndex={0}
             style={{
-              padding: '5px 6px',
-              fontSize: '9px',
+              padding: '6px 7px',
+              fontSize: '10px',
               fontWeight: 500,
               backgroundColor: 'transparent',
               color: theme.textSecondary,
@@ -4569,7 +4569,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
+              gap: '4px',
               ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
@@ -4580,7 +4580,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             }}
             title="Create a new drawing"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19l7-7 3 3-7 7-3-3z" />
               <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
               <path d="M2 2l7.586 7.586" />
@@ -4599,8 +4599,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             tabIndex={0}
             style={{
               padding: '5px',
-              width: '22px',
-              height: '22px',
+              width: '24px',
+              height: '24px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: viewMode === 'feedback' && !showSettings ? theme.accent : 'transparent',
@@ -4628,7 +4628,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             }}
             title="Send feedback (F)"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             {/* Notification dot for new feedback - only when authenticated */}
@@ -4651,8 +4651,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             tabIndex={0}
             style={{
               padding: '5px',
-              width: '22px',
-              height: '22px',
+              width: '24px',
+              height: '24px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: showSettings ? theme.accent : 'transparent',
@@ -4679,7 +4679,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             }}
             title="Settings"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
