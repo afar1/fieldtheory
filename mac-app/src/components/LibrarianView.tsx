@@ -197,6 +197,12 @@ export function getLocalFileUrl(filePath: string): string {
   return `file://${prefixed.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
 }
 
+export function getReadingUpdatedByline(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign'>): string {
+  const updated = `Updated ${formatRelativeTime(reading.mtime)}`;
+  const callsign = reading.sharedAuthorCallsign?.trim();
+  return callsign ? `${updated} by ${callsign}` : updated;
+}
+
 function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -258,6 +264,8 @@ function readingFromWikiPage(page: WikiPage): Reading {
     createdAt: page.lastUpdated,
     mtime: page.lastUpdated,
     todoState: page.todoState,
+    sharedOriginalSourcePath: page.sharedOriginalSourcePath,
+    sharedAuthorCallsign: page.sharedAuthorCallsign,
     documentVersion: page.documentVersion,
   };
 }
@@ -8986,7 +8994,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             )}
             {activeReading && (
               <div
-                title={`Updated ${new Date(activeReading.mtime).toLocaleString()}`}
+                title={activeReading.sharedAuthorCallsign?.trim()
+                  ? `Updated ${new Date(activeReading.mtime).toLocaleString()} by ${activeReading.sharedAuthorCallsign.trim()}`
+                  : `Updated ${new Date(activeReading.mtime).toLocaleString()}`}
                 style={{
                   flex: '0 0 auto',
                   margin: contentMode === 'markdown' ? '-12px 0 14px 0' : '-16px 0 18px 0',
@@ -8998,7 +9008,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   userSelect: 'none',
                 }}
               >
-                Updated {formatRelativeTime(activeReading.mtime)}
+                {getReadingUpdatedByline(activeReading)}
               </div>
             )}
             {contentMode === 'markdown' || activeIsSourceOnlyDocument ? (
