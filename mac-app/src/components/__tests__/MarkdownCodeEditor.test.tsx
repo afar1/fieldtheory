@@ -58,6 +58,7 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSelectionWithoutTrailingLineStart,
   getMarkdownCodeEditorSourcePosition,
+  getVisualLineRowTopsFromLineBox,
   getMarkdownListArrowRightBoundaryEdit,
   getMarkdownListMarkerProtectedDeleteBackwardEdit,
   hasMarkdownCodeEditorRangeSelection,
@@ -486,6 +487,11 @@ describe('MarkdownCodeEditor line numbers', () => {
     expect(isVisualLineNumberRowSelected(10, [31], 20)).toBe(false);
     expect(isVisualLineNumberRowSelected(31.4, [31], 20)).toBe(true);
     expect(isVisualLineNumberRowSelected(52, [31], 20)).toBe(false);
+  });
+
+  it('anchors rendered line number rows to the line box top', () => {
+    expect(getVisualLineRowTopsFromLineBox(100, [104, 125], 20)).toEqual([100, 120]);
+    expect(getVisualLineRowTopsFromLineBox(160, [], 20)).toEqual([160]);
   });
 
   it('marks selected line numbers distinctly', () => {

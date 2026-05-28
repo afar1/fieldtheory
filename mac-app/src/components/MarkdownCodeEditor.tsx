@@ -320,12 +320,23 @@ function getVisualLineRowTopsFromClientRects(
   return rowTops.sort((a, b) => a - b);
 }
 
+export function getVisualLineRowTopsFromLineBox(
+  lineBoxTop: number,
+  textRowTops: readonly number[],
+  lineHeight: number,
+): number[] {
+  const rowCount = Math.max(1, textRowTops.length);
+  return Array.from({ length: rowCount }, (_, rowIndex) => lineBoxTop + (rowIndex * lineHeight));
+}
+
 function getVisualLineRowTopsFromElement(element: HTMLElement, lineHeight: number): number[] {
+  const lineBoxTop = element.getBoundingClientRect().top;
   const range = document.createRange();
   range.selectNodeContents(element);
-  const rowTops = getVisualLineRowTopsFromClientRects(Array.from(range.getClientRects()), lineHeight);
+  const textRowTops = getVisualLineRowTopsFromClientRects(Array.from(range.getClientRects()), lineHeight);
   range.detach();
-  return rowTops;
+  if (textRowTops.length === 0) return [];
+  return getVisualLineRowTopsFromLineBox(lineBoxTop, textRowTops, lineHeight);
 }
 
 function getLineElementForBlock(
@@ -2210,7 +2221,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             ...(isRenderedPresentation ? {
               lineHeight: lineHeightCss,
               minHeight: 'var(--ft-line-number-row-height)',
-              paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.12)`,
             } : {}),
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
@@ -2313,9 +2323,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
             ...getRenderedMarkdownListLineLayoutStyle(),
-            ...(isRenderedPresentation ? {
-              paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.04)`,
-            } : {}),
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
             ...getRenderedMarkdownListMarkerLayoutStyle(),
