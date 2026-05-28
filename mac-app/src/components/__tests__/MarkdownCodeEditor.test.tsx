@@ -56,6 +56,7 @@ import {
   getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
+  getMarkdownCodeEditorSelectionWithoutTrailingLineStart,
   getMarkdownCodeEditorSourcePosition,
   getMarkdownListArrowRightBoundaryEdit,
   getMarkdownListMarkerProtectedDeleteBackwardEdit,
@@ -124,6 +125,28 @@ describe('MarkdownCodeEditor cursor blink', () => {
 
     expect(hasMarkdownCodeEditorRangeSelection(cursorState)).toBe(false);
     expect(hasMarkdownCodeEditorRangeSelection(rangeState)).toBe(true);
+  });
+
+  it('keeps full-line selections from including the next line start', () => {
+    const state = EditorState.create({
+      doc: 'my name is andrew\n- ',
+      selection: EditorSelection.range(0, 'my name is andrew\n'.length),
+    });
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
+
+    expect(selection?.main.from).toBe(0);
+    expect(selection?.main.to).toBe('my name is andrew'.length);
+  });
+
+  it('keeps reversed full-line selections from including the next line start', () => {
+    const state = EditorState.create({
+      doc: 'my name is andrew\n- ',
+      selection: EditorSelection.range('my name is andrew\n'.length, 0),
+    });
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
+
+    expect(selection?.main.anchor).toBe('my name is andrew'.length);
+    expect(selection?.main.head).toBe(0);
   });
 });
 
