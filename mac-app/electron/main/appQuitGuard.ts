@@ -18,13 +18,13 @@ export interface QuitBlockingActivitySnapshot {
   hotMicActive?: boolean;
   localLlmActive?: boolean;
   agentRunCount?: number;
-  codexTerminalSessions?: Pick<CodexTerminalSessionSummary, 'exitedAt'>[];
+  codexTerminalSessions?: Pick<CodexTerminalSessionSummary, 'exitedAt' | 'modelRunActive'>[];
 }
 
-export function getActiveCodexTerminalSessionCount(
-  sessions: Pick<CodexTerminalSessionSummary, 'exitedAt'>[] = [],
+export function getActiveCodexTerminalModelRunCount(
+  sessions: Pick<CodexTerminalSessionSummary, 'exitedAt' | 'modelRunActive'>[] = [],
 ): number {
-  return sessions.filter((session) => !session.exitedAt).length;
+  return sessions.filter((session) => !session.exitedAt && session.modelRunActive).length;
 }
 
 export function collectQuitBlockingActivities(snapshot: QuitBlockingActivitySnapshot): QuitBlockingActivity[] {
@@ -59,13 +59,13 @@ export function collectQuitBlockingActivities(snapshot: QuitBlockingActivitySnap
     });
   }
 
-  const terminalCount = getActiveCodexTerminalSessionCount(snapshot.codexTerminalSessions);
+  const terminalCount = getActiveCodexTerminalModelRunCount(snapshot.codexTerminalSessions);
   if (terminalCount > 0) {
     activities.push({
       kind: 'codex-terminal',
       label: terminalCount === 1
-        ? 'One embedded Codex terminal session is still running.'
-        : `${terminalCount} embedded Codex terminal sessions are still running.`,
+        ? 'One embedded Codex model turn is still running.'
+        : `${terminalCount} embedded Codex model turns are still running.`,
     });
   }
 

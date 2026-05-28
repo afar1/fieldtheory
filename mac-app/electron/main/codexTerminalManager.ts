@@ -34,6 +34,7 @@ export interface CodexTerminalSessionSummary {
   exitedAt: string | null;
   exitCode: number | null;
   restored: boolean;
+  modelRunActive: boolean;
   transcriptPath: string;
   attachedContexts: CodexTerminalAttachedContext[];
 }
@@ -373,6 +374,16 @@ export function isCodexTerminalPromptReady(output: string, cwd: string): boolean
   return /(?:[$%#❯➜›])\s*$/.test(lastLine);
 }
 
+export function isCodexTerminalModelRunActive(output: string): boolean {
+  const visible = stripTerminalControlSequences(output).replace(/\r/g, '\n');
+  const statusMatches = Array.from(visible.matchAll(/(?:[•·]\s*)?(Ready|Working|Running|Composing|Editing)(?:\s*[·(]|\s+\d+(?:\.\d+)?[Kk]?\s+(?:tokens?|in|out)|\s+\.\.\.)/g));
+  const latestStatus = statusMatches.at(-1)?.[1] ?? null;
+  return latestStatus === 'Working'
+    || latestStatus === 'Running'
+    || latestStatus === 'Composing'
+    || latestStatus === 'Editing';
+}
+
 export class CodexTerminalManager {
   private readonly sessions = new Map<string, CodexTerminalSession>();
   private readonly defaultCwd: string;
@@ -434,6 +445,7 @@ export class CodexTerminalManager {
       attachedContexts: [],
       process: child,
       outputBuffer: '',
+      modelRunActive: false,
       codexLaunchTimer: null,
       pendingLaunchEcho: null,
     };
@@ -461,6 +473,7 @@ export class CodexTerminalManager {
       const displayData = stripCodexInputPlaceholders(echoResult.value);
       if (!displayData) return;
       session.outputBuffer = this.appendToBuffer(session.outputBuffer, displayData);
+      session.modelRunActive = isCodexTerminalModelRunActive(session.outputBuffer);
       try {
         fs.appendFileSync(transcriptPath, displayData, 'utf8');
       } catch {
@@ -478,6 +491,7 @@ export class CodexTerminalManager {
       }
       session.exitedAt = new Date().toISOString();
       session.exitCode = exitCode;
+      session.modelRunActive = false;
       this.persistSessionState();
       broadcast(CodexTerminalIPCChannels.EXIT, this.toSummary(session));
     });
@@ -652,8 +666,8 @@ export class CodexTerminalManager {
   }
 
   private toSummary(session: CodexTerminalSession): CodexTerminalSessionSummary {
-    const { id, title, cwd, engine, createdAt, exitedAt, exitCode, restored, transcriptPath, attachedContexts } = session;
-    return { id, title, cwd, engine, createdAt, exitedAt, exitCode, restored, transcriptPath, attachedContexts };
+    const { id, title, cwd, engine, createdAt, exitedAt, exitCode, restored, modelRunActive, transcriptPath, attachedContexts } = session;
+    return { id, title, cwd, engine, createdAt, exitedAt, exitCode, restored, modelRunActive, transcriptPath, attachedContexts };
   }
 
   private appendToBuffer(existing: string, chunk: string): string {

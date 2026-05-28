@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexTerminalManager, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
+import { CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -280,6 +280,24 @@ describe('CodexTerminalManager', () => {
   it('detects prompt readiness from the visible cwd prompt text', () => {
     expect(isCodexTerminalPromptReady(`\x1b[0m${basename(process.cwd())} › `, process.cwd())).toBe(true);
     expect(isCodexTerminalPromptReady('codex\r\ncodex\r\n', process.cwd())).toBe(false);
+  });
+
+  it('detects Codex model work from the latest terminal status', () => {
+    expect(isCodexTerminalModelRunActive('› Fix this experimental · Working · 5h 99%')).toBe(true);
+    expect(isCodexTerminalModelRunActive('⠠⠛ Running  3.11k tokens')).toBe(true);
+    expect(isCodexTerminalModelRunActive('› Fix this experimental · Ready · 5h 99%')).toBe(false);
+  });
+
+  it('exposes active model work without treating an idle terminal as running work', () => {
+    const { manager, ptys } = createManager();
+    const session = manager.createSession();
+
+    expect(manager.listSessions()[0]?.modelRunActive).toBe(false);
+    ptys[0].emit('data', '› Fix this experimental · Working · 5h 99%');
+    expect(manager.listSessions()[0]?.modelRunActive).toBe(true);
+    ptys[0].emit('data', '› Fix this experimental · Ready · 5h 99%');
+    expect(manager.listSessions()[0]?.modelRunActive).toBe(false);
+    expect(manager.listSessions()[0]?.id).toBe(session.id);
   });
 
   it('keeps only the bounded tail of terminal output', () => {
