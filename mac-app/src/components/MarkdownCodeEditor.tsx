@@ -2207,7 +2207,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-line': {
             padding: '0',
             cursor: 'text',
-            ...(isRenderedPresentation ? { paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.12)` } : {}),
+            ...(isRenderedPresentation ? {
+              lineHeight: lineHeightCss,
+              minHeight: 'var(--ft-line-number-row-height)',
+              paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.12)`,
+            } : {}),
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
             opacity: 0.68,
