@@ -15,6 +15,7 @@ import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalP
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
+import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   EMBER_ITEM_ID,
@@ -8979,6 +8980,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   textOverflow: 'ellipsis',
                 }}
               />
+            )}
+            {activeReading && (
+              <div
+                title={`Updated ${new Date(activeReading.mtime).toLocaleString()}`}
+                style={{
+                  flex: '0 0 auto',
+                  margin: contentMode === 'markdown' ? '-12px 0 14px 0' : '-16px 0 18px 0',
+                  fontSize: '10px',
+                  lineHeight: 1.2,
+                  color: theme.textSecondary,
+                  opacity: 0.52,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                  userSelect: 'none',
+                }}
+              >
+                Updated {formatRelativeTime(activeReading.mtime)}
+              </div>
             )}
             {contentMode === 'markdown' || activeIsSourceOnlyDocument ? (
               /* Markdown edit mode */
