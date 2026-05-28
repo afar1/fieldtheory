@@ -148,6 +148,7 @@ import {
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import { setMarkdownArchivedState, stampMarkdownContentEditIfBodyChanged } from '../shared/markdownFrontmatter';
+import { resolveUpdaterStatusTransition, type UpdateStatus } from '../shared/updaterState';
 import {
   FIELD_THEORY_URL_SCHEME,
   fieldTheoryProtocolClientArgs,
@@ -2376,9 +2377,23 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 }
 
 // Track pending update state so windows can query it when they open.
-let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null = null;
+type PendingUpdateStatus = Extract<UpdateStatus, 'available' | 'downloading' | 'ready' | 'installing'>;
+
+let pendingUpdateInfo: { status: PendingUpdateStatus; version: string } | null = null;
+
+function shouldApplyUpdaterStatus(next: UpdateStatus): boolean {
+  const current = pendingUpdateInfo?.status ?? 'idle';
+  return resolveUpdaterStatusTransition(current, next) === next;
+}
+
+function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string): boolean {
+  if (!shouldApplyUpdaterStatus(status)) return false;
+  pendingUpdateInfo = { status, version: version ?? pendingUpdateInfo?.version ?? '' };
+  return true;
+}
 
 function sendUpdateNotAvailable(): void {
+  if (!shouldApplyUpdaterStatus('uptodate')) return;
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:updateNotAvailable');
@@ -2387,6 +2402,7 @@ function sendUpdateNotAvailable(): void {
 }
 
 function sendUpdaterErrorMessage(message: string): void {
+  if (!shouldApplyUpdaterStatus('error')) return;
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:error', message);
@@ -12598,6 +12614,7 @@ if (!gotTheLock) {
 
       // Auto-updater event handlers - send to renderer for in-app notification UI.
       autoUpdater.on('checking-for-update', () => {
+        if (!shouldApplyUpdaterStatus('checking')) return;
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:checkingForUpdate');
@@ -12606,7 +12623,7 @@ if (!gotTheLock) {
       });
 
       autoUpdater.on('update-available', (info) => {
-        pendingUpdateInfo = { status: 'available', version: info.version };
+        if (!setPendingUpdateStatus('available', info.version)) return;
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:updateAvailable', { version: info.version });
@@ -12625,9 +12642,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('download-progress', (progress) => {
         const percent = Math.round(progress.percent);
-        if (pendingUpdateInfo) {
-          pendingUpdateInfo.status = 'downloading';
-        }
+        if (pendingUpdateInfo && !setPendingUpdateStatus('downloading')) return;
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:downloadProgress', percent);
@@ -12636,7 +12651,7 @@ if (!gotTheLock) {
       });
 
       autoUpdater.on('update-downloaded', (info) => {
-        pendingUpdateInfo = { status: 'ready', version: info.version };
+        if (!setPendingUpdateStatus('ready', info.version)) return;
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:updateDownloaded', { version: info.version });
@@ -12665,9 +12680,7 @@ if (!gotTheLock) {
 
     ipcMain.handle('updater:installUpdate', () => {
       if (!isAutoUpdaterEnabled) return;
-      if (pendingUpdateInfo) {
-        pendingUpdateInfo.status = 'installing';
-      }
+      if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:installing');
