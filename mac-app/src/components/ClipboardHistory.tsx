@@ -1127,7 +1127,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   });
   
   // Update notification state.
-  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'uptodate';
+  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error' | 'uptodate';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -1539,6 +1539,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       window.updaterAPI.onUpdateDownloaded((info) => {
         setUpdateStatus('ready');
         setUpdateVersion(info.version);
+        setUpdateError(null);
+      }),
+      window.updaterAPI.onInstalling(() => {
+        setUpdateStatus('installing');
         setUpdateError(null);
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
@@ -7417,7 +7421,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
                 <span style={{ fontSize: '9px', color: theme.text }}>
-                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : 'Update available'}
+                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'installing' ? 'Installing...' : 'Update available'}
                 </span>
                 {/* Shimmer overlay */}
                 <div style={{
@@ -7431,7 +7435,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   pointerEvents: 'none',
                 }} />
               </div>
-              {updateStatus !== 'checking' && updateStatus !== 'downloading' && (
+              {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'installing' && (
                 <>
                   <button
                     onClick={() => {
@@ -7453,8 +7457,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   <button
                     onClick={() => {
                       if (updateStatus === 'ready') {
+                        setUpdateStatus('installing');
                         window.updaterAPI?.installUpdate();
                       } else {
+                        setUpdateStatus('downloading');
                         window.updaterAPI?.downloadUpdate();
                       }
                     }}

@@ -2275,7 +2275,7 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 }
 
 // Track pending update state so windows can query it when they open.
-let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null = null;
 
 function sendUpdateNotAvailable(): void {
   BrowserWindow.getAllWindows().forEach((window) => {
@@ -12486,7 +12486,17 @@ if (!gotTheLock) {
 
     ipcMain.handle('updater:installUpdate', () => {
       if (!isAutoUpdaterEnabled) return;
-      getAutoUpdater().quitAndInstall();
+      if (pendingUpdateInfo) {
+        pendingUpdateInfo.status = 'installing';
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:installing');
+        }
+      });
+      setTimeout(() => {
+        getAutoUpdater().quitAndInstall();
+      }, 250);
     });
 
     ipcMain.handle('updater:dismissUpdate', () => {

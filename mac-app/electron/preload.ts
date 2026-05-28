@@ -227,6 +227,7 @@ const UpdaterIPCChannels = {
   UPDATE_NOT_AVAILABLE: 'updater:updateNotAvailable',
   DOWNLOAD_PROGRESS: 'updater:downloadProgress',
   UPDATE_DOWNLOADED: 'updater:updateDownloaded',
+  INSTALLING: 'updater:installing',
   UPDATE_ERROR: 'updater:error',
 } as const;
 
@@ -2164,7 +2165,7 @@ const updaterAPI = {
     return ipcRenderer.sendSync('updater:isEnabled');
   },
 
-  getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null> => {
+  getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null> => {
     return ipcRenderer.invoke('updater:getStatus');
   },
 
@@ -2212,6 +2213,12 @@ const updaterAPI = {
     const handler = (_event: Electron.IpcRendererEvent, info: UpdateInfo) => callback(info);
     ipcRenderer.on(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
     return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
+  },
+
+  onInstalling: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(UpdaterIPCChannels.INSTALLING, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.INSTALLING, handler);
   },
 
   onError: (callback: (error: string) => void): (() => void) => {
