@@ -32,6 +32,7 @@ function session(input: { id: string; title?: string; cwd?: string }) {
     exitedAt: null,
     exitCode: null,
     restored: false,
+    modelRunActive: false,
     transcriptPath: `/tmp/${input.id}.ansi`,
     attachedContexts: [],
   };

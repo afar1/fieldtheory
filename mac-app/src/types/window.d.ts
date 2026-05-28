@@ -2794,6 +2794,7 @@ interface CodexTerminalSessionSummary {
   exitedAt: string | null;
   exitCode: number | null;
   restored: boolean;
+  modelRunActive: boolean;
   transcriptPath: string;
   attachedContexts: CodexTerminalAttachedContext[];
 }
