@@ -4043,7 +4043,7 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:share', input),
   unshare: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('sharedFiles:unshare', filePath),
-  sync: (): Promise<{ written: number; removed: number; errors: string[] }> =>
+  sync: (): Promise<{ written: number; removed: number; created: number; errors: string[] }> =>
     ipcRenderer.invoke('sharedFiles:sync'),
   updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null): Promise<SharedFileUpdateResult> =>
     ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision, documentPath),

@@ -2782,7 +2782,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (available) {
         void window.sharedFilesAPI?.sync?.()
           .then((result) => {
-            if (result && (result.written > 0 || result.removed > 0)) {
+            if (result && (result.written > 0 || result.removed > 0 || result.created > 0)) {
               window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
             }
           })

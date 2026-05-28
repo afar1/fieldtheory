@@ -172,6 +172,30 @@ describe('SharedSyncService cache behavior', () => {
     });
   });
 
+  it('makes River available for pending invitees under the owner team scope', async () => {
+    const authManager = {
+      getSupabaseClient: () => ({}),
+      getSession: () => ({ user: { id: 'user-2', email: 'jamie@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: false,
+        members: [{ contactId: 'contact-1', userId: 'owner-1', email: '', role: 'owner', teamScopeUserId: 'owner-1' }],
+        pendingIncoming: [{ contactId: 'contact-1', ownerUserId: 'owner-1', contactUserId: 'user-2', email: 'jamie@example.com', direction: 'incoming' }],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
+      available: true,
+      hasTeamMembers: true,
+      reason: undefined,
+      currentTeamScopeUserId: 'owner-1',
+    });
+  });
+
   it('creates the River cache directory when a team scope is active', async () => {
     const supabase = {
       from: () => ({
@@ -202,6 +226,7 @@ describe('SharedSyncService cache behavior', () => {
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
       written: 0,
       removed: 0,
+      created: 1,
       errors: [],
     });
     expect(fs.existsSync(sharedFilesRoot())).toBe(true);
@@ -269,6 +294,7 @@ describe('SharedSyncService cache behavior', () => {
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
       written: 1,
       removed: 0,
+      created: 1,
       errors: [],
     });
 

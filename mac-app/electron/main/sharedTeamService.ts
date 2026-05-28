@@ -278,6 +278,7 @@ export class SharedTeamService {
     const pendingOutgoing: SharedTeamInvite[] = [];
     const members: SharedTeamMember[] = [];
     const teamScopeUserIds = new Set<string>();
+    const pendingIncomingTeamScopeUserIds = new Set<string>();
 
     for (const row of rows) {
       const isOwner = row.owner_user_id === userId;
@@ -286,7 +287,10 @@ export class SharedTeamService {
       if (row.status === 'pending') {
         const invite = this.inviteFromRow(row, isOwner ? 'outgoing' : 'incoming');
         if (isOwner) pendingOutgoing.push(invite);
-        else if (isContact) pendingIncoming.push(invite);
+        else if (isContact) {
+          pendingIncoming.push(invite);
+          pendingIncomingTeamScopeUserIds.add(row.owner_user_id);
+        }
         continue;
       }
 
@@ -327,6 +331,34 @@ export class SharedTeamService {
 
     const [currentTeamScopeUserId] = Array.from(teamScopeUserIds);
     if (!currentTeamScopeUserId) {
+      if (pendingIncomingTeamScopeUserIds.size > 1) {
+        return {
+          available: false,
+          currentTeamScopeUserId: null,
+          reason: 'ambiguous_team_scope',
+          isOwner: false,
+          members,
+          pendingIncoming,
+          pendingOutgoing,
+        };
+      }
+      const [pendingIncomingTeamScopeUserId] = Array.from(pendingIncomingTeamScopeUserIds);
+      if (pendingIncomingTeamScopeUserId) {
+        return {
+          available: true,
+          currentTeamScopeUserId: pendingIncomingTeamScopeUserId,
+          isOwner: false,
+          members: [{
+            contactId: pendingIncoming[0]?.contactId ?? pendingIncomingTeamScopeUserId,
+            userId: pendingIncomingTeamScopeUserId,
+            email: '',
+            role: 'owner',
+            teamScopeUserId: pendingIncomingTeamScopeUserId,
+          }],
+          pendingIncoming,
+          pendingOutgoing,
+        };
+      }
       if (pendingOutgoing.length) {
         return {
           available: true,

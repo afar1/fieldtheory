@@ -365,14 +365,17 @@ export class SharedSyncService extends EventEmitter {
     return true;
   }
 
-  async syncOnce(): Promise<{ written: number; removed: number; errors: string[] }> {
+  async syncOnce(): Promise<{ written: number; removed: number; created: number; errors: string[] }> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
-    const result = { written: 0, removed: 0, errors: [] as string[] };
+    const result = { written: 0, removed: 0, created: 0, errors: [] as string[] };
     if (!supabase || !session?.user?.id) return result;
     const teamState = await this.getActiveTeamState();
     if (!teamState?.currentTeamScopeUserId) return result;
-    ensureDir(sharedFilesRoot());
+    const root = sharedFilesRoot();
+    const createdRoot = !fs.existsSync(root);
+    ensureDir(root);
+    if (createdRoot) result.created = 1;
 
     const { data, error } = await supabase
       .from('team_documents')

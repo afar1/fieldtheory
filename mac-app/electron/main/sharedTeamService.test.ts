@@ -129,7 +129,7 @@ describe('SharedTeamService', () => {
     }]);
   });
 
-  it('keeps pending incoming invites separate from team availability', async () => {
+  it('lets pending invitees read River from the owner team scope', async () => {
     const { authManager } = makeAuthManager({
       contacts: [{
         id: 'contact-1',
@@ -143,13 +143,51 @@ describe('SharedTeamService', () => {
 
     const state = await new SharedTeamService(authManager).getTeamState();
 
-    expect(state.available).toBe(false);
-    expect(state.reason).toBe('pending_only');
+    expect(state.available).toBe(true);
+    expect(state.currentTeamScopeUserId).toBe('owner-1');
+    expect(state.isOwner).toBe(false);
+    expect(state.reason).toBeUndefined();
+    expect(state.members).toEqual([{
+      contactId: 'contact-1',
+      userId: 'owner-1',
+      email: '',
+      role: 'owner',
+      teamScopeUserId: 'owner-1',
+    }]);
     expect(state.pendingIncoming[0]).toMatchObject({
       contactId: 'contact-1',
       ownerUserId: 'owner-1',
       direction: 'incoming',
     });
+  });
+
+  it('returns an explicit unsupported state for multiple pending incoming team scopes', async () => {
+    const { authManager } = makeAuthManager({
+      contacts: [
+        {
+          id: 'contact-1',
+          owner_user_id: 'owner-1',
+          contact_email: 'af@example.com',
+          contact_user_id: null,
+          relationship_type: 'team',
+          status: 'pending',
+        },
+        {
+          id: 'contact-2',
+          owner_user_id: 'owner-2',
+          contact_email: 'af@example.com',
+          contact_user_id: null,
+          relationship_type: 'team',
+          status: 'pending',
+        },
+      ],
+    });
+
+    const state = await new SharedTeamService(authManager).getTeamState();
+
+    expect(state.available).toBe(false);
+    expect(state.currentTeamScopeUserId).toBeNull();
+    expect(state.reason).toBe('ambiguous_team_scope');
   });
 
   it('resolves the owner user as team scope after an accepted owned contact exists', async () => {

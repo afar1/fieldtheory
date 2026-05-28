@@ -4993,9 +4993,9 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('sharedFiles:sync', async () => {
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, errors: [sharedFeaturesDisabledError()] };
+    if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
     const result = await sharedSyncService.syncOnce();
-    if (result.written > 0 || result.removed > 0) librarianManager?.emit('library:changed');
+    if (result.written > 0 || result.removed > 0 || result.created > 0) librarianManager?.emit('library:changed');
     return result;
   });
 

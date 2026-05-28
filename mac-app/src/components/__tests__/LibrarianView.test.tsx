@@ -1069,7 +1069,7 @@ describe('LibrarianView render', () => {
     let sessionChanged: ((session: unknown | null) => void) | null = null;
     let available = false;
     const getAvailability = vi.fn(async () => ({ available, hasTeamMembers: available }));
-    const sync = vi.fn(async () => ({ written: 0, removed: 0, errors: [] }));
+    const sync = vi.fn(async () => ({ written: 0, removed: 0, created: 0, errors: [] }));
     Object.defineProperty(window, 'sharedFilesAPI', {
       configurable: true,
       value: {
@@ -2046,7 +2046,9 @@ describe('LibrarianView render', () => {
   });
 
   it('syncs River once when shared files become available', async () => {
-    const sync = vi.fn(async () => ({ written: 0, removed: 0, errors: [] }));
+    const sync = vi.fn(async () => ({ written: 0, removed: 0, created: 1, errors: [] }));
+    const riverChanged = vi.fn();
+    window.addEventListener('fieldtheory:river-changed-local', riverChanged);
     Object.defineProperty(window, 'sharedFilesAPI', {
       configurable: true,
       value: {
@@ -2063,6 +2065,10 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(sync).toHaveBeenCalledTimes(1);
     });
+    await waitFor(() => {
+      expect(riverChanged).toHaveBeenCalledTimes(1);
+    });
+    window.removeEventListener('fieldtheory:river-changed-local', riverChanged);
   });
 
   it('retries River background sync after a failed rendered editor save sync', async () => {
