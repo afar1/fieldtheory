@@ -276,6 +276,7 @@ describe('SharedSyncService cache behavior', () => {
     const cachedContent = fs.readFileSync(cachePath, 'utf-8');
     expect(cachedContent).toContain('title: "brief"');
     expect(cachedContent).toContain('shared_author_callsign: "afar"');
+    expect(cachedContent).toContain('shared_updated_at: "2026-01-01T00:00:00Z"');
   });
 
   it('does not create a shared row for solo users', async () => {

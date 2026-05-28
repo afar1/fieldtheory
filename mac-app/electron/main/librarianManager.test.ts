@@ -324,6 +324,7 @@ describe('recursive wiki tree scan', () => {
   it('uses shared frontmatter title and full callsign for River cache nodes', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    const updatedAt = '2026-05-28T12:00:00.000Z';
     fs.writeFileSync(path.join(root, 'River (shared)', 'plain AM.md'), [
       '---',
       'title: plain',
@@ -333,6 +334,7 @@ describe('recursive wiki tree scan', () => {
       'shared_original_source_path: Commands/plain.md',
       'shared_author_initials: AM',
       'shared_author_callsign: afar',
+      `shared_updated_at: "${updatedAt}"`,
       '---',
       '',
       'Body',
@@ -347,8 +349,43 @@ describe('recursive wiki tree scan', () => {
     if (shared.kind !== 'file') return;
     expect(shared.name).toBe('plain AM');
     expect(shared.title).toBe('plain');
+    expect(shared.lastUpdated).toBe(Date.parse(updatedAt));
     expect(shared.sharedOriginalSourcePath).toBe('Commands/plain.md');
     expect(shared.sharedAuthorCallsign).toBe('afar');
+  });
+
+  it('uses shared updated metadata when opening a River cache page', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    const updatedAt = '2026-05-28T12:00:00.000Z';
+    fs.writeFileSync(path.join(root, 'River (shared)', 'plain AM.md'), [
+      '---',
+      'title: plain',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: command',
+      'shared_original_source_path: Commands/plain.md',
+      'shared_author_callsign: afar',
+      `shared_updated_at: "${updatedAt}"`,
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiPage: (relPath: string) => {
+        lastUpdated: number;
+        sharedOriginalSourcePath?: string;
+        sharedAuthorCallsign?: string;
+      } | null;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    expect(manager.getWikiPage('River (shared)/plain AM')).toEqual(expect.objectContaining({
+      lastUpdated: Date.parse(updatedAt),
+      sharedOriginalSourcePath: 'Commands/plain.md',
+      sharedAuthorCallsign: 'afar',
+    }));
   });
 
   it('does not derive River cache titles from initials-suffixed filenames', () => {
