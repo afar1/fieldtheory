@@ -17,6 +17,7 @@ import {
   buildBookmarkPostLauncherItems,
   buildCommandDirectoriesForLauncher,
   buildLauncherFileItems,
+  commandPathToLauncherLibraryOpenTarget,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   getLauncherFileSearchQuery,
   getLauncherInvocationVisibilityPolicy,
@@ -825,6 +826,25 @@ describe('flattenLibraryRootsForLauncher', () => {
       sharedAuthorCallsign: 'AMB-MAC',
     });
     expect(item.keywords).toContain('AMB-MAC');
+  });
+});
+
+describe('commandPathToLauncherLibraryOpenTarget', () => {
+  it('opens reserved built-in command files as external Library documents', () => {
+    expect(commandPathToLauncherLibraryOpenTarget(
+      '/Users/afar/.fieldtheory/library/Commands/workflow.md',
+      [{ path: '/Users/afar/.fieldtheory/library', builtin: true }],
+    )).toEqual({
+      kind: 'external',
+      path: '/Users/afar/.fieldtheory/library/Commands/workflow.md',
+    });
+  });
+
+  it('keeps normal built-in Library files as wiki targets', () => {
+    expect(commandPathToLauncherLibraryOpenTarget(
+      '/Users/afar/.fieldtheory/library/scratchpad/note.md',
+      [{ path: '/Users/afar/.fieldtheory/library', builtin: true }],
+    )).toEqual({ kind: 'wiki', path: 'scratchpad/note' });
   });
 });
 

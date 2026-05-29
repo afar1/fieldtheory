@@ -457,6 +457,11 @@ export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem 
   keywords?: string[];
 }
 
+export interface LauncherLibraryRootPath {
+  path: string;
+  builtin: boolean;
+}
+
 export type LauncherUsageMap = Record<string, { count: number; lastUsedAt: number }>;
 
 export interface LauncherUsageScoreItem {
@@ -1033,6 +1038,31 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   }
 
   return items.sort(compareLauncherItemsByRecency);
+}
+
+function normalizeFsPathForLauncherMatch(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+export function commandPathToLauncherLibraryOpenTarget(
+  commandPath: string,
+  libraryRoots: LauncherLibraryRootPath[] | undefined,
+): LauncherFieldTheoryMarkdownTarget {
+  const normalizedCommandPath = normalizeFsPathForLauncherMatch(commandPath);
+  const builtinRoot = libraryRoots?.find((root) => {
+    if (!root.builtin) return false;
+    const normalizedRoot = normalizeFsPathForLauncherMatch(root.path);
+    return normalizedCommandPath === normalizedRoot || normalizedCommandPath.startsWith(`${normalizedRoot}/`);
+  });
+
+  if (builtinRoot) {
+    const normalizedRoot = normalizeFsPathForLauncherMatch(builtinRoot.path);
+    const relPath = normalizedCommandPath.slice(normalizedRoot.length + 1).replace(/\.md$/i, '');
+    const topLevelFolder = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+    if (relPath && topLevelFolder !== 'commands') return { kind: 'wiki', path: relPath };
+  }
+
+  return { kind: 'external', path: commandPath };
 }
 
 export function getLauncherNativeIconPathForItem(item: LauncherNativeIconPathCandidate | undefined | null): string | null {
