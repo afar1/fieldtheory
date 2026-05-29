@@ -2896,6 +2896,7 @@ export class LibrarianManager extends EventEmitter {
     currentDir = rootPath,
     seenRealPaths = new Set<string>(),
     includeLibraryTextDocuments = false,
+    options: { excludeWikiReservedFolders?: boolean } = {},
   ): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
@@ -2930,12 +2931,12 @@ export class LibrarianManager extends EventEmitter {
 
       if (stats.isDirectory()) {
         const relPath = this.toPortableRelPath(path.relative(rootPath, absPath));
-        if (rootPath === this.wikiDir && isWikiReservedRelPath(relPath)) continue;
+        if (options.excludeWikiReservedFolders && rootPath === this.wikiDir && isWikiReservedRelPath(relPath)) continue;
         nodes.push({
           kind: 'dir',
           name: entry.name,
           relPath,
-          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments),
+          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments, options),
         });
         continue;
       }
@@ -3186,7 +3187,9 @@ export class LibrarianManager extends EventEmitter {
 
   private getCachedWikiTree(): WikiNode[] {
     if (!this.wikiTreeCache) {
-      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir);
+      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir, this.wikiDir, new Set<string>(), false, {
+        excludeWikiReservedFolders: true,
+      });
     }
     return this.wikiTreeCache;
   }
