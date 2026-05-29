@@ -3223,6 +3223,24 @@ export class LibrarianManager extends EventEmitter {
     return roots;
   }
 
+  getLibraryRootPaths(): string[] {
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    const addRoot = (rootPath: string): void => {
+      const normalizedRoot = this.normalizePath(rootPath);
+      const key = this.libraryRootKey(normalizedRoot);
+      if (seen.has(key)) return;
+      seen.add(key);
+      roots.push(normalizedRoot);
+    };
+
+    addRoot(this.wikiDir);
+    for (const savedRoot of this.getSafeLibraryRootPaths()) {
+      addRoot(savedRoot);
+    }
+    return roots;
+  }
+
   addLibraryRoot(dirPath: string): LibraryRoot | null {
     const canonicalPath = this.resolveExistingDirectoryPath(dirPath);
     if (!canonicalPath) return null;

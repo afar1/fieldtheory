@@ -500,6 +500,28 @@ describe('recursive wiki tree scan', () => {
     expect(externalPages()).toEqual(['alpha', 'beta', 'report.html', 'styles.css']);
   });
 
+  it('returns library root paths without scanning root trees', () => {
+    const tempDir = makeTempDir();
+    const wikiRoot = path.join(tempDir, 'wiki');
+    const externalRoot = path.join(tempDir, 'external');
+    fs.mkdirSync(path.join(wikiRoot, 'entries'), { recursive: true });
+    fs.mkdirSync(path.join(externalRoot, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(wikiRoot, 'entries', 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(externalRoot, 'reports', 'beta.md'), '# Beta\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      getLibraryRootPaths: () => string[];
+      scanMarkdownTree: () => WikiNode[];
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    manager.settings = { libraryRoots: [externalRoot, wikiRoot] };
+    manager.scanMarkdownTree = vi.fn();
+
+    expect(manager.getLibraryRootPaths()).toEqual([wikiRoot, externalRoot]);
+    expect(manager.scanMarkdownTree).not.toHaveBeenCalled();
+  });
+
   it('emits wiki:changed immediately after saving a wiki page', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
