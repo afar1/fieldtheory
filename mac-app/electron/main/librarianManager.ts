@@ -1429,7 +1429,7 @@ export function defaultScratchpadNameWithTime(date: Date): string {
 }
 
 export function isHiddenWikiFolderName(name: string): boolean {
-  return name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
+  return name === 'Codex Context' || name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
 }
 
 export function isHiddenWikiFileName(name: string): boolean {
