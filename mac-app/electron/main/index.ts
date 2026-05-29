@@ -1539,7 +1539,7 @@ function sharedFeaturesDisabledError(): string {
 
 function refreshFieldTheorySyncServices(): void {
   if (!canUseSharedFeatures()) {
-    void sharedSyncService?.clearPresence();
+    void sharedSyncService?.dispose();
     sharedSyncService = null;
     sharedTeamService = null;
   } else {
@@ -1549,7 +1549,11 @@ function refreshFieldTheorySyncServices(): void {
     if (!sharedSyncService && authManager) {
       sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
       sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
+      sharedSyncService.on('cacheChanged', () => {
+        librarianManager?.emit('library:changed');
+      });
     }
+    void sharedSyncService?.startRemoteChangeSync();
   }
 
   if (!canUseFieldTheorySync()) {
@@ -13001,7 +13005,7 @@ if (!gotTheLock) {
     libraryDocumentWindowManager?.destroy();
 
     librarySyncService?.dispose();
-    void sharedSyncService?.clearPresence();
+    void sharedSyncService?.dispose();
     commandSyncService?.destroy();
     todoStore?.destroy();
     localLlmManager?.stop();
