@@ -31,6 +31,27 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+export function resolveStartupThemePreference(input: {
+  localSaved: string | null;
+  mainIsDark: boolean;
+  currentIsDark: boolean;
+}): { nextIsDark: boolean; syncMainToDark: boolean | null; writeLocalStorage: boolean } {
+  if (input.localSaved !== null) {
+    const localIsDark = input.localSaved === 'true';
+    return {
+      nextIsDark: localIsDark,
+      syncMainToDark: input.mainIsDark === localIsDark ? null : localIsDark,
+      writeLocalStorage: false,
+    };
+  }
+
+  return {
+    nextIsDark: input.mainIsDark,
+    syncMainToDark: null,
+    writeLocalStorage: input.mainIsDark !== input.currentIsDark,
+  };
+}
+
 // Helper to interpolate between two colors based on intensity
 function interpolateColor(color1: string, color2: string, factor: number): string {
   const c1 = parseInt(color1.replace('#', ''), 16);
@@ -167,11 +188,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('darkMode', String(newIsDark));
     });
 
-    // Get initial theme from main process
+    // Prefer renderer localStorage on startup. The main-process preference can
+    // lag behind during dev restarts, so sync main to the renderer when the
+    // renderer already has an explicit choice.
     window.themeAPI.getTheme?.().then((savedIsDark: boolean) => {
-      if (savedIsDark !== isDark) {
-        setIsDark(savedIsDark);
-        localStorage.setItem('darkMode', String(savedIsDark));
+      const resolved = resolveStartupThemePreference({
+        localSaved: localStorage.getItem('darkMode'),
+        mainIsDark: savedIsDark,
+        currentIsDark: isDark,
+      });
+      if (resolved.syncMainToDark !== null) {
+        void window.themeAPI?.setTheme?.(resolved.syncMainToDark);
+      }
+      if (resolved.nextIsDark !== isDark) {
+        setIsDark(resolved.nextIsDark);
+      }
+      if (resolved.writeLocalStorage) {
+        localStorage.setItem('darkMode', String(resolved.nextIsDark));
       }
     });
 
