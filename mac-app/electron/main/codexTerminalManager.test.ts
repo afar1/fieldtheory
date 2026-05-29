@@ -3,11 +3,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
+import { CodexTerminalIPCChannels, CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
+
+const { sentMessages } = vi.hoisted(() => ({ sentMessages: [] as Array<{ channel: string; payload: any }> }));
 
 vi.mock('electron', () => ({
   BrowserWindow: {
-    getAllWindows: () => [],
+    getAllWindows: () => [{
+      isDestroyed: () => false,
+      webContents: { send: (channel: string, payload: any) => { sentMessages.push({ channel, payload }); } },
+    }],
   },
 }));
 
@@ -89,6 +94,22 @@ describe('CodexTerminalManager', () => {
     ptys[0].emit('data', 'codex');
 
     expect(manager.getBuffer(session.id)).toBe('hello codex');
+  });
+
+  it('disables zsh partial-line prompt markers in integrated terminal sessions', () => {
+    const { manager, spawnPty } = createManager();
+
+    manager.createSession();
+
+    expect(spawnPty).toHaveBeenCalledWith(
+      expect.any(String),
+      ['-l'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PROMPT_EOL_MARK: '',
+        }),
+      }),
+    );
   });
 
   it('persists PTY output to a transcript file', () => {
@@ -349,6 +370,64 @@ describe('CodexTerminalManager', () => {
     ptys[0].emit('data', 'ghij');
 
     expect(manager.getBuffer(session.id)).toBe('efghij');
+  });
+
+  it('coalesces rapid PTY chunks into a single DATA broadcast per tick', () => {
+    const { manager, ptys } = createManager();
+    const session = manager.createSession();
+    sentMessages.length = 0;
+
+    // Many chunks arriving in one tick (a TUI repaint / streamed output burst).
+    for (let i = 0; i < 50; i++) ptys[0].emit('data', `chunk${i} `);
+
+    const dataMsgs = () => sentMessages.filter((m) => m.channel === CodexTerminalIPCChannels.DATA);
+    // Broadcast is deferred — nothing sent synchronously...
+    expect(dataMsgs()).toHaveLength(0);
+    // ...but the buffer is updated synchronously regardless of batching.
+    expect(manager.getBuffer(session.id)).toContain('chunk49');
+
+    vi.runAllTimers(); // flush the setImmediate
+
+    // ...and the whole burst goes out as exactly one IPC message.
+    expect(dataMsgs()).toHaveLength(1);
+    expect(dataMsgs()[0].payload).toMatchObject({ id: session.id });
+    expect(dataMsgs()[0].payload.data).toContain('chunk0');
+    expect(dataMsgs()[0].payload.data).toContain('chunk49');
+  });
+
+  it('sends a separate DATA broadcast for each tick (resets between flushes)', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession();
+    sentMessages.length = 0;
+    const dataMsgs = () => sentMessages.filter((m) => m.channel === CodexTerminalIPCChannels.DATA);
+
+    ptys[0].emit('data', 'tick-one-a ');
+    ptys[0].emit('data', 'tick-one-b');
+    vi.runAllTimers();
+    ptys[0].emit('data', 'tick-two');
+    vi.runAllTimers();
+
+    expect(dataMsgs()).toHaveLength(2);
+    expect(dataMsgs()[0].payload.data).toBe('tick-one-a tick-one-b');
+    expect(dataMsgs()[1].payload.data).toBe('tick-two');
+  });
+
+  it('flushes pending output as a DATA broadcast before the EXIT event', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession();
+    sentMessages.length = 0;
+
+    ptys[0].emit('data', 'final output'); // deferred; setImmediate not yet run
+    expect(sentMessages.filter((m) => m.channel === CodexTerminalIPCChannels.DATA)).toHaveLength(0);
+
+    ptys[0].emit('exit', { exitCode: 0 }); // must flush DATA, then send EXIT
+
+    const channels = sentMessages.map((m) => m.channel);
+    const dataIdx = channels.indexOf(CodexTerminalIPCChannels.DATA);
+    const exitIdx = channels.indexOf(CodexTerminalIPCChannels.EXIT);
+    expect(dataIdx).toBeGreaterThanOrEqual(0);
+    expect(exitIdx).toBeGreaterThan(dataIdx); // ordering preserved: DATA before EXIT
+    expect(sentMessages[dataIdx].payload.data).toBe('final output');
   });
 
   it('bounds getBuffer to the cap whether or not the internal buffer has been trimmed', () => {
