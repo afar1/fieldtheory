@@ -500,4 +500,51 @@ describe('BookmarksManager.getSnapshot', () => {
     expect(snap.bookmarks[0].images[0].localFilename).toBeUndefined();
     expect(snap.bookmarks[0].images[0].localVideoFilename).toBe('vid1-video.mp4');
   });
+
+  it('gates reload on all inputs: skips big reads when unchanged, rebuilds when any input bumps', () => {
+    const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
+    fs.writeFileSync(jsonl, JSON.stringify({ tweetId: 'a', text: 'first', postedAt: '2026-01-01T00:00:00.000Z' }) + '\n');
+
+    // First process: build + persist the snapshot cache.
+    const first = new BookmarksManager();
+    const firstSnap = first.getSnapshot();
+    expect(firstSnap.bookmarks.map((b) => b.id)).toEqual(['a']);
+    expect(fs.existsSync(path.join(tmpDir, 'snapshot-cache.json'))).toBe(true);
+
+    // Second process: nothing changed → cold getSnapshot reuses the cache and
+    // never reads the big jsonl. Snapshot deep-equals the first.
+    const second = new BookmarksManager();
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    const secondSnap = second.getSnapshot();
+    const jsonlReads = readSpy.mock.calls.filter(([p]) => p === jsonl).length;
+    expect(jsonlReads).toBe(0);
+    expect(secondSnap).toEqual(firstSnap);
+    readSpy.mockRestore();
+
+    // Bump bookmarks.jsonl → that input is re-read and the change is reflected.
+    fs.writeFileSync(jsonl, JSON.stringify({ tweetId: 'b', text: 'second', postedAt: '2026-01-02T00:00:00.000Z' }) + '\n');
+    const third = new BookmarksManager();
+    const readSpy2 = vi.spyOn(fs, 'readFileSync');
+    const thirdSnap = third.getSnapshot();
+    expect(readSpy2.mock.calls.filter(([p]) => p === jsonl).length).toBeGreaterThan(0);
+    expect(thirdSnap.bookmarks.map((b) => b.id)).toEqual(['b']);
+    readSpy2.mockRestore();
+  });
+
+  it('rebuilds when only the folders input changes', () => {
+    const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
+    fs.writeFileSync(jsonl, JSON.stringify({ tweetId: 'a', text: 'first', postedAt: '2026-01-01T00:00:00.000Z' }) + '\n');
+
+    const first = new BookmarksManager();
+    expect(first.getSnapshot().bookmarks[0].folders).toEqual([]);
+
+    // Only folders-data.json changes; bookmarks.jsonl untouched. The gate must
+    // still rebuild because folders is one of the gated inputs.
+    fs.writeFileSync(
+      path.join(tmpDir, 'folders-data.json'),
+      JSON.stringify({ folders: [{ name: 'Reading' }], folderMap: { a: ['Reading'] } }),
+    );
+    const second = new BookmarksManager();
+    expect(second.getSnapshot().bookmarks[0].folders).toEqual(['Reading']);
+  });
 });

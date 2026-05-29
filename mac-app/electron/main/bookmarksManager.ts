@@ -172,6 +172,85 @@ function webIndexPath(): string {
   return path.join(webDir(), 'index.jsonl');
 }
 
+function snapshotCachePath(): string {
+  return path.join(bookmarksDir(), 'snapshot-cache.json');
+}
+
+const SNAPSHOT_CACHE_VERSION = 1;
+
+/**
+ * (mtimeMs + size) for a single input file, or null when absent.
+ */
+type FileGate = { mtimeMs: number; size: number } | null;
+
+function fileGate(filePath: string): FileGate {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    return { mtimeMs: Math.floor(stat.mtimeMs), size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Signature of the media/ directory listing: renderable file count + newest
+ * mtime. Cheaper and safer than hashing every name; a rename/add/delete or a
+ * touched file shifts one of these. Gating on the listing cleanly is awkward,
+ * so we gate on file count + newest mtime per the spec's fallback.
+ */
+function mediaDirGate(): { count: number; newestMtimeMs: number } {
+  const dir = mediaDir();
+  let count = 0;
+  let newestMtimeMs = 0;
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(path.join(dir, name));
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      count += 1;
+      const mtimeMs = Math.floor(stat.mtimeMs);
+      if (mtimeMs > newestMtimeMs) newestMtimeMs = mtimeMs;
+    }
+  } catch {
+    // Dir absent → count 0, newest 0.
+  }
+  return { count, newestMtimeMs };
+}
+
+/**
+ * Gate over EVERY input reload() touches: folders-data.json, bookmarks.jsonl,
+ * media-manifest.json, the media/ dir listing, and web/index.jsonl. If all are
+ * unchanged the cached snapshot is reused; otherwise reload() rebuilds.
+ */
+interface SnapshotGate {
+  folders: FileGate;
+  bookmarks: FileGate;
+  mediaManifest: FileGate;
+  mediaDir: { count: number; newestMtimeMs: number };
+  webIndex: FileGate;
+}
+
+interface SnapshotCacheFile {
+  version: number;
+  gate: SnapshotGate;
+  snapshot: BookmarksSnapshot;
+}
+
+function computeSnapshotGate(): SnapshotGate {
+  return {
+    folders: fileGate(foldersPath()),
+    bookmarks: fileGate(jsonlPath()),
+    mediaManifest: fileGate(mediaManifestPath()),
+    mediaDir: mediaDirGate(),
+    webIndex: fileGate(webIndexPath()),
+  };
+}
+
 interface RawMediaManifestEntry {
   tweetId?: string;
   sourceUrl?: string;
@@ -484,12 +563,51 @@ export class BookmarksManager extends EventEmitter {
 
   reloadAndEmitChanged(): BookmarksSnapshot {
     this.cached = null;
-    const snapshot = this.reload();
+    const snapshot = this.reload(true);
     this.emit('bookmarks:changed');
     return snapshot;
   }
 
-  private reload(): BookmarksSnapshot {
+  /**
+   * Read the persisted snapshot cache when its gate matches every current input.
+   * Returns null on missing/corrupt cache or any changed input.
+   */
+  private loadCachedSnapshot(gate: SnapshotGate): BookmarksSnapshot | null {
+    try {
+      const cachePath = snapshotCachePath();
+      if (!fs.existsSync(cachePath)) return null;
+      const data = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as SnapshotCacheFile;
+      if (data.version !== SNAPSHOT_CACHE_VERSION || !data.gate || !data.snapshot) return null;
+      if (JSON.stringify(data.gate) !== JSON.stringify(gate)) return null;
+      return data.snapshot;
+    } catch (err) {
+      log.warn('Failed to read bookmarks snapshot cache:', err);
+      return null;
+    }
+  }
+
+  private saveCachedSnapshot(gate: SnapshotGate, snapshot: BookmarksSnapshot): void {
+    try {
+      const payload: SnapshotCacheFile = { version: SNAPSHOT_CACHE_VERSION, gate, snapshot };
+      fs.mkdirSync(bookmarksDir(), { recursive: true });
+      fs.writeFileSync(snapshotCachePath(), JSON.stringify(payload));
+    } catch (err) {
+      log.warn('Failed to write bookmarks snapshot cache:', err);
+    }
+  }
+
+  private reload(forceRebuild = false): BookmarksSnapshot {
+    // Gate on ALL inputs. When unchanged, reuse the persisted snapshot so the
+    // cold first getSnapshot() per process skips the big jsonl read + parse.
+    const gate = computeSnapshotGate();
+    if (!forceRebuild) {
+      const cachedSnapshot = this.loadCachedSnapshot(gate);
+      if (cachedSnapshot) {
+        this.cached = cachedSnapshot;
+        return this.cached;
+      }
+    }
+
     const { folders, folderMap } = loadFolders();
     const mediaIndex = indexMediaByTweetSource();
 
@@ -529,6 +647,7 @@ export class BookmarksManager extends EventEmitter {
     });
 
     this.cached = { bookmarks, folders, xLastSyncedAt: xBookmarksLastSyncedAt() };
+    this.saveCachedSnapshot(gate, this.cached);
     return this.cached;
   }
 
