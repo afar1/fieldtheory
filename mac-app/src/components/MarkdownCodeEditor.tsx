@@ -56,13 +56,12 @@ import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
-import { DEFAULT_RENDERED_TEXT_CURSOR_STYLE, type RenderedTextCursorStyle } from '../utils/editorShortcuts';
+import { DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY, DEFAULT_RENDERED_TEXT_CURSOR_STYLE, type RenderedTextCursorStyle } from '../utils/editorShortcuts';
 import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEditor';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS = 1200;
-export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY = 0.68;
-export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT = '1lh';
+export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT = '1.18em';
 export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH = '0.62em';
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
@@ -76,7 +75,11 @@ export const RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS = 'cm-rendered-markdown-un
 export const RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS = 'cm-rendered-markdown-strike';
 export const RENDERED_MARKDOWN_EDITOR_CODE_CLASS = 'cm-rendered-markdown-code';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS = 'cm-rendered-markdown-image';
+export const RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS = 'cm-rendered-markdown-drawing-image';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS = 'cm-rendered-markdown-image-frame';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS = 'cm-rendered-markdown-image-caption';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS = 'cm-rendered-markdown-image-caption-text';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS = 'cm-rendered-markdown-image-edit';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR = 'data-cm-rendered-markdown-image-src';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR = 'data-cm-rendered-markdown-image-alt';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS = 'cm-rendered-markdown-image-line';
@@ -100,6 +103,7 @@ export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
+const DRAWING_ALT_PREFIX = 'Drawing: ';
 
 export type MarkdownCodeEditorPresentation = 'source' | 'rendered';
 
@@ -173,6 +177,45 @@ export interface MarkdownCodeEditorImagePreview {
   sourceTo: number | null;
 }
 
+export function isRenderedMarkdownDrawingAlt(alt: string): boolean {
+  return alt === 'Drawing' || alt.startsWith(DRAWING_ALT_PREFIX);
+}
+
+export function getRenderedMarkdownDrawingTitle(alt: string): string {
+  return alt.startsWith(DRAWING_ALT_PREFIX) ? alt.slice(DRAWING_ALT_PREFIX.length) : alt || 'Drawing';
+}
+
+function formatRenderedMarkdownDrawingAlt(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed || trimmed === 'Drawing') return 'Drawing';
+  return `${DRAWING_ALT_PREFIX}${trimmed}`;
+}
+
+function escapeMarkdownImageAlt(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
+}
+
+function getMarkdownImageAltEditAtSource(
+  markdown: string,
+  sourceFrom: number,
+  sourceTo: number,
+  nextAlt: string,
+): { from: number; to: number; insert: string } | null {
+  if (sourceFrom < 0 || sourceTo <= sourceFrom || sourceTo > markdown.length) return null;
+  const source = markdown.slice(sourceFrom, sourceTo);
+  const match = /^!\[((?:[^\]\\]|\\.)*)\]\(/.exec(source);
+  if (!match) return null;
+  const from = sourceFrom + 2;
+  const to = from + match[1].length;
+  return { from, to, insert: escapeMarkdownImageAlt(nextAlt) };
+}
+
+export function replaceMarkdownImageAltAtSource(markdown: string, sourceFrom: number, sourceTo: number, nextAlt: string): string | null {
+  const edit = getMarkdownImageAltEditAtSource(markdown, sourceFrom, sourceTo, nextAlt);
+  if (!edit) return null;
+  return `${markdown.slice(0, edit.from)}${edit.insert}${markdown.slice(edit.to)}`;
+}
+
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
@@ -195,6 +238,7 @@ interface MarkdownCodeEditorProps {
   lineNumbersMode?: 'hidden' | 'visible' | 'faded';
   blinkCursor?: boolean;
   cursorStyle?: RenderedTextCursorStyle;
+  blockCursorOpacity?: number;
   placeholder?: string;
   readOnly?: boolean;
   spellCheck?: boolean;
@@ -750,6 +794,7 @@ function parseNullableMarkdownSourceOffset(value: string | null): number | null 
 
 export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarget | null): MarkdownCodeEditorImagePreview | null {
   if (!(target instanceof Element)) return null;
+  if (target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`)) return null;
   const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
   if (!(image instanceof HTMLElement)) return null;
   if (target === image) return null;
@@ -765,12 +810,71 @@ export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarg
 
 export function getRenderedMarkdownImageSelectionFromEventTarget(target: EventTarget | null): { from: number; to: number } | null {
   if (!(target instanceof Element)) return null;
+  if (target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}, .${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS}`)) return null;
   const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
   if (!(image instanceof HTMLElement) || target !== image) return null;
   const sourceFrom = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
   const sourceTo = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
   if (sourceFrom === null || sourceTo === null || sourceTo <= sourceFrom) return null;
   return { from: sourceFrom, to: sourceTo };
+}
+
+function commitRenderedMarkdownDrawingCaption(view: EditorView, target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const captionText = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`);
+  if (!(captionText instanceof HTMLElement)) return false;
+  const image = captionText.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
+  if (!(image instanceof HTMLElement)) return false;
+  const sourceFrom = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
+  const sourceTo = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
+  if (sourceFrom === null || sourceTo === null) return false;
+  const currentAlt = image.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR) || 'Drawing';
+  if (!isRenderedMarkdownDrawingAlt(currentAlt)) return false;
+  const nextTitle = captionText.textContent?.trim() || 'Drawing';
+  const nextAlt = formatRenderedMarkdownDrawingAlt(nextTitle);
+  if (nextAlt === currentAlt) return false;
+  const edit = getMarkdownImageAltEditAtSource(view.state.doc.toString(), sourceFrom, sourceTo, nextAlt);
+  if (!edit) return false;
+  view.dispatch({
+    changes: edit,
+    selection: { anchor: edit.from + edit.insert.length },
+    annotations: Transaction.userEvent.of('input'),
+  });
+  return true;
+}
+
+function createRenderedMarkdownDrawingEditIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  const paper = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  paper.setAttribute('d', 'M5 4h10l4 4v12H5z');
+  paper.setAttribute('fill', 'none');
+  paper.setAttribute('stroke', 'currentColor');
+  paper.setAttribute('stroke-width', '1.8');
+  paper.setAttribute('stroke-linejoin', 'round');
+
+  const fold = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  fold.setAttribute('d', 'M15 4v4h4');
+  fold.setAttribute('fill', 'none');
+  fold.setAttribute('stroke', 'currentColor');
+  fold.setAttribute('stroke-width', '1.8');
+  fold.setAttribute('stroke-linejoin', 'round');
+
+  const pen = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  pen.setAttribute('d', 'M8 16.5l.7-3.1 6.8-6.8 2.4 2.4-6.8 6.8z');
+  pen.setAttribute('fill', 'none');
+  pen.setAttribute('stroke', 'currentColor');
+  pen.setAttribute('stroke-width', '1.8');
+  pen.setAttribute('stroke-linecap', 'round');
+  pen.setAttribute('stroke-linejoin', 'round');
+
+  svg.appendChild(paper);
+  svg.appendChild(fold);
+  svg.appendChild(pen);
+  return svg;
 }
 
 class RenderedMarkdownImageWidget extends WidgetType {
@@ -793,7 +897,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
   }
 
   ignoreEvent(event: Event): boolean {
-    return event.type !== 'click' && event.type !== 'mousedown';
+    return !['click', 'mousedown', 'keydown', 'focusout'].includes(event.type);
   }
 
   toDOM(): HTMLElement {
@@ -804,20 +908,51 @@ class RenderedMarkdownImageWidget extends WidgetType {
 
     const src = normalizeMarkdownImageUrl(this.destination, this.documentPath);
     const alt = this.alt || 'Image';
+    const isDrawing = isRenderedMarkdownDrawingAlt(alt);
     if (src) {
+      if (isDrawing) image.classList.add(RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS);
       image.setAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR, src);
       image.setAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR, alt);
       image.setAttribute('role', 'button');
-      image.setAttribute('aria-label', `Preview ${alt}`);
+      image.setAttribute('aria-label', isDrawing ? 'Edit drawing' : `Preview ${alt}`);
       const preview = document.createElement('img');
       preview.src = src;
       preview.alt = alt;
-      image.appendChild(preview);
+      if (isDrawing) {
+        const frame = document.createElement('span');
+        frame.className = RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS;
+        frame.appendChild(preview);
+        image.appendChild(frame);
+      } else {
+        image.appendChild(preview);
+      }
     }
 
     const caption = document.createElement('span');
     caption.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS;
-    caption.textContent = alt;
+    const captionText = document.createElement('span');
+    captionText.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS;
+    captionText.textContent = isDrawing ? getRenderedMarkdownDrawingTitle(alt) : alt;
+    if (isDrawing) {
+      captionText.contentEditable = 'true';
+      captionText.spellcheck = false;
+      captionText.setAttribute('role', 'textbox');
+      captionText.setAttribute('aria-label', 'Drawing name');
+      captionText.setAttribute('data-placeholder', 'Drawing');
+      if (src) {
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS;
+        editButton.appendChild(createRenderedMarkdownDrawingEditIcon());
+        editButton.setAttribute('aria-label', 'Edit drawing');
+        caption.appendChild(captionText);
+        caption.appendChild(editButton);
+      } else {
+        caption.appendChild(captionText);
+      }
+    } else {
+      caption.appendChild(captionText);
+    }
     image.appendChild(caption);
 
     return image;
@@ -2015,6 +2150,7 @@ export function getMarkdownCodeEditorCursorShapeStyle(
   cursorStyle: RenderedTextCursorStyle,
   caretColor: string | undefined,
   fallbackColor: string,
+  blockCursorOpacity = DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY,
 ): React.CSSProperties {
   if (cursorStyle !== 'block') {
     return {
@@ -2031,7 +2167,7 @@ export function getMarkdownCodeEditorCursorShapeStyle(
     height: `${MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT} !important`,
     marginLeft: '0',
     minWidth: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH,
-    opacity: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY,
+    opacity: blockCursorOpacity,
     width: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH,
   };
 }
@@ -2092,6 +2228,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       lineNumbersMode = 'hidden',
       blinkCursor = true,
       cursorStyle = DEFAULT_RENDERED_TEXT_CURSOR_STYLE,
+      blockCursorOpacity = DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY,
       placeholder,
       readOnly = false,
       spellCheck = true,
@@ -2187,6 +2324,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         cursorStyle,
         caretColor,
         color,
+        blockCursorOpacity,
       );
       return Prec.highest(EditorView.theme(
         {
@@ -2231,6 +2369,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           '.cm-cursor, .cm-dropCursor': {
             borderLeftColor: caretColor ?? color,
+          },
+          '.cm-cursorLayer': {
+            zIndex: 3,
           },
           '&.cm-focused > .cm-scroller > .cm-cursorLayer, &.cm-focused .cm-cursorLayer': {
             ...cursorAnimationStyle,
@@ -2432,6 +2573,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`]: {
             display: 'flex',
+            position: 'relative',
             flexDirection: 'column',
             alignItems: 'flex-start',
             gap: '0.25em',
@@ -2441,6 +2583,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             verticalAlign: 'top',
             cursor: 'zoom-in',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}:has(.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS})`]: {
+            cursor: 'default',
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
             display: 'block',
             width: 'auto',
@@ -2448,13 +2593,57 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             height: 'auto',
             borderRadius: '8px',
             objectFit: 'contain',
-            boxShadow: theme.isDark ? '0 8px 28px rgba(0, 0, 0, 0.26)' : '0 8px 28px rgba(15, 23, 42, 0.12)',
+            border: `1px solid ${theme.border}`,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS} .${RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS}`]: {
+            display: 'block',
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '12px',
+            borderRadius: '8px',
+            border: `1px solid ${theme.border}`,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS} img`]: {
+            maxWidth: '100%',
+            border: 0,
+            borderRadius: '5px',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS}`]: {
+            width: '22px',
+            height: '22px',
+            padding: 0,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '5px',
+            color: theme.text,
+            backgroundColor: 'transparent',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS} svg`]: {
+            display: 'block',
+            width: '14px',
+            height: '14px',
+            margin: '0 auto',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}`]: {
-            display: 'block',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
             color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.62)' : 'rgba(17,17,17,0.62)'),
             fontSize: '0.88em',
             lineHeight: 1.35,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`]: {
+            minWidth: '1ch',
+            outline: 'none',
+            borderRadius: '4px',
+            padding: '1px 3px',
+            marginLeft: '-3px',
+            cursor: 'text',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}:focus`]: {
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.055)',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
             ...getRenderedMarkdownTaskMarkerLayoutStyle(),
@@ -2471,6 +2660,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     }, [
       background,
       blinkCursor,
+      blockCursorOpacity,
       caretColor,
       color,
       bottomRoomPx,
@@ -2631,6 +2821,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               return false;
             },
             mousedown: (event, view) => {
+              if (presentation === 'rendered' && event.target instanceof Element && event.target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`)) {
+                return false;
+              }
               const blankSpaceSelectionCleanup = startMarkdownCodeEditorBlankSpaceSelection(
                 view,
                 event,
@@ -2672,6 +2865,28 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               event.stopPropagation();
               onImagePreviewRef.current(preview);
               return true;
+            },
+            keydown: (event, view) => {
+              if (presentation !== 'rendered' || !(event.target instanceof Element) || !event.target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`)) return false;
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitRenderedMarkdownDrawingCaption(view, event.target);
+                (event.target as HTMLElement).blur();
+                return true;
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                const image = event.target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
+                const alt = image?.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR) || 'Drawing';
+                (event.target as HTMLElement).textContent = getRenderedMarkdownDrawingTitle(alt);
+                (event.target as HTMLElement).blur();
+                return true;
+              }
+              return false;
+            },
+            focusout: (event, view) => {
+              if (presentation !== 'rendered') return false;
+              return commitRenderedMarkdownDrawingCaption(view, event.target);
             },
             paste: (event) => onPasteRef.current?.(event as ClipboardEvent) === true,
             focus: () => {

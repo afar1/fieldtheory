@@ -28,12 +28,15 @@ import { SETTINGS_CARD_GAP, getSettingsDividerColor, getSettingsSurfaceStyle } f
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
   RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   type RenderedTextCursorStyle,
+  persistRenderedBlockCursorOpacity,
   persistSharedFileToggleHotkey,
   persistRenderedTextCursorStyle,
   persistTextCursorBlink,
+  restoreRenderedBlockCursorOpacity,
   restoreSharedFileToggleHotkey,
   restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
@@ -603,6 +606,9 @@ export default function SettingsPanel({
   const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
     restoreRenderedTextCursorStyle(localStorage)
   ));
+  const [renderedBlockCursorOpacity, setRenderedBlockCursorOpacity] = useState(() => (
+    restoreRenderedBlockCursorOpacity(localStorage)
+  ));
 
   // Dynamic Island auto-hide toggle.
   const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
@@ -920,6 +926,12 @@ export default function SettingsPanel({
     setRenderedTextCursorStyle(nextStyle);
     persistRenderedTextCursorStyle(localStorage, nextStyle);
     window.dispatchEvent(new Event(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT));
+  };
+
+  const handleRenderedBlockCursorOpacityChange = (nextOpacity: number) => {
+    setRenderedBlockCursorOpacity(nextOpacity);
+    persistRenderedBlockCursorOpacity(localStorage, nextOpacity);
+    window.dispatchEvent(new Event(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT));
   };
 
   const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
@@ -1617,6 +1629,31 @@ export default function SettingsPanel({
             })}
           </div>
         </div>
+
+        {renderedTextCursorStyle === 'block' && (
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={styles.rowLabel}>Block cursor opacity</span>
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                Tune how much text shows beneath the block cursor
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '150px' }}>
+              <input
+                type="range"
+                min="20"
+                max="100"
+                step="5"
+                value={Math.round(renderedBlockCursorOpacity * 100)}
+                onChange={(event) => handleRenderedBlockCursorOpacityChange(Number(event.currentTarget.value) / 100)}
+                style={{ width: '116px', accentColor: theme.accent }}
+              />
+              <span style={{ width: '32px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary }}>
+                {Math.round(renderedBlockCursorOpacity * 100)}%
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Accent Color Presets */}
         <div style={styles.row}>
