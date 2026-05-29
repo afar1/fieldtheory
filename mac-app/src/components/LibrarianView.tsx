@@ -3,7 +3,7 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, lazy, Suspense } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
@@ -34,6 +34,7 @@ import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureF
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
   RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   type RenderedTextCursorStyle,
@@ -50,6 +51,7 @@ import {
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
   isSharedFileToggleShortcut,
+  restoreRenderedBlockCursorOpacity,
   restoreSharedFileToggleHotkey,
   restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
@@ -96,11 +98,13 @@ import {
   type MarkdownUrlPasteKind,
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import { getMarkdownDrawCommandEdit, insertMarkdownBlockAt } from '../utils/markdownSlashCommands';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
+  isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
   type MarkdownCodeEditorSelectionSnapshot,
@@ -140,12 +144,27 @@ import {
   type WikiLinkTarget,
 } from '../utils/wikiLinks';
 
+const SketchView = lazy(() => import('./SketchView'));
+
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: MarkdownContentMode;
   selectionStart?: number;
   selectionEnd?: number;
+};
+
+type InlineDrawInsertion = {
+  mode: 'markdown' | 'rendered';
+  documentPath: string;
+  insertionStart: number;
+  replaceFrom?: number;
+  replaceTo?: number;
+  backgroundImage?: {
+    dataUrl: string;
+    width: number;
+    height: number;
+  } | null;
 };
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
@@ -2623,6 +2642,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
     restoreRenderedTextCursorStyle(localStorage)
   ));
+  const [renderedBlockCursorOpacity, setRenderedBlockCursorOpacity] = useState(() => (
+    restoreRenderedBlockCursorOpacity(localStorage)
+  ));
   const [lineNumbersMode, setLineNumbersMode] = useState<'hidden' | 'visible' | 'faded'>(() => {
     const saved = localStorage.getItem(LINE_NUMBERS_STORAGE_KEY);
     return saved === 'visible' || saved === 'faded' ? saved : 'hidden';
@@ -3389,6 +3411,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
   const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
+  const [inlineDrawInsertion, setInlineDrawInsertion] = useState<InlineDrawInsertion | null>(null);
+  const [inlineDrawSaving, setInlineDrawSaving] = useState(false);
   const [activeMeetingSession, setActiveMeetingSession] = useState<MeetingToolbarSession | null>(null);
   const [meetingToolbarBusy, setMeetingToolbarBusy] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
@@ -3594,6 +3618,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       window.removeEventListener('storage', syncRenderedTextCursorStyle);
       window.removeEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncRenderedBlockCursorOpacity = () => setRenderedBlockCursorOpacity(restoreRenderedBlockCursorOpacity(localStorage));
+    window.addEventListener('storage', syncRenderedBlockCursorOpacity);
+    window.addEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, syncRenderedBlockCursorOpacity);
+    return () => {
+      window.removeEventListener('storage', syncRenderedBlockCursorOpacity);
+      window.removeEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, syncRenderedBlockCursorOpacity);
     };
   }, []);
 
@@ -5530,6 +5564,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const drawEdit = getMarkdownDrawCommandEdit(value, selection.start, selection.end);
+      if (drawEdit) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyRenderedEditorBody(drawEdit.nextValue, {
+          selectionStart: drawEdit.selectionStart,
+          selectionEnd: drawEdit.selectionEnd,
+        });
+        pendingRenderedEditorSelectionRef.current = {
+          start: drawEdit.selectionStart,
+          end: drawEdit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+        setInlineDrawInsertion({
+          mode: 'rendered',
+          documentPath: activeReading.path,
+          insertionStart: drawEdit.selectionStart,
+        });
+        return true;
+      }
+
       const enterEdit = getRenderedMarkdownEnterEdit(value, selection.start, selection.end);
       if (enterEdit) return applyRenderedShortcutEdit(enterEdit);
     }
@@ -5937,6 +5992,124 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       nextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const handleInlineDrawClose = useCallback(() => {
+    setInlineDrawInsertion(null);
+    setInlineDrawSaving(false);
+    if (contentMode === 'markdown') {
+      requestAnimationFrame(() => markdownCodeEditorRef.current?.focus({ preventScroll: true }));
+    } else {
+      focusRenderedEditor();
+    }
+  }, [contentMode, focusRenderedEditor]);
+
+  const handleInlineDrawSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
+    const insertion = inlineDrawInsertion;
+    if (!insertion || inlineDrawSaving) return;
+    setInlineDrawSaving(true);
+    try {
+      const copied = await window.markdownImagesAPI?.copyImageDataUrlForDocument(
+        insertion.documentPath,
+        imageData.dataUrl,
+        'Drawing',
+      );
+      if (!copied?.markdown) {
+        alert('Failed to save drawing. Please try again.');
+        setInlineDrawSaving(false);
+        return;
+      }
+
+      if (insertion.mode === 'rendered') {
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const edit = typeof insertion.replaceFrom === 'number' && typeof insertion.replaceTo === 'number'
+          ? {
+              nextValue: `${currentValue.slice(0, insertion.replaceFrom)}${copied.markdown}${currentValue.slice(insertion.replaceTo)}`,
+              selectionStart: insertion.replaceFrom + copied.markdown.length,
+              selectionEnd: insertion.replaceFrom + copied.markdown.length,
+            }
+          : insertMarkdownBlockAt(currentValue, insertion.insertionStart, copied.markdown);
+        applyRenderedEditorBody(edit.nextValue, {
+          selectionStart: edit.selectionStart,
+          selectionEnd: edit.selectionEnd,
+        });
+        pendingRenderedEditorSelectionRef.current = {
+          start: edit.selectionStart,
+          end: edit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      } else {
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const edit = typeof insertion.replaceFrom === 'number' && typeof insertion.replaceTo === 'number'
+          ? {
+              nextValue: `${currentValue.slice(0, insertion.replaceFrom)}${copied.markdown}${currentValue.slice(insertion.replaceTo)}`,
+              selectionStart: insertion.replaceFrom + copied.markdown.length,
+              selectionEnd: insertion.replaceFrom + copied.markdown.length,
+            }
+          : insertMarkdownBlockAt(currentValue, insertion.insertionStart, copied.markdown);
+        applyMarkdownCodeEditorTextEdit(edit);
+      }
+
+      setInlineDrawInsertion(null);
+      setInlineDrawSaving(false);
+    } catch {
+      alert('Failed to save drawing. Please try again.');
+      setInlineDrawSaving(false);
+    }
+  }, [
+    applyMarkdownCodeEditorTextEdit,
+    applyRenderedEditorBody,
+    displaySourceBody,
+    editContent,
+    focusRenderedEditor,
+    inlineDrawInsertion,
+    inlineDrawSaving,
+  ]);
+
+  const openRenderedDrawingEditor = useCallback(async (preview: MarkdownCodeEditorImagePreview): Promise<boolean> => {
+    if (!isRenderedMarkdownDrawingAlt(preview.alt) || !activeReading?.path || preview.sourceFrom === null || preview.sourceTo === null) return false;
+    try {
+      const response = await fetch(preview.src);
+      const blob = await response.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth || 800, height: img.naturalHeight || 600 });
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+      setRenderedImagePreview(null);
+      setInlineDrawInsertion({
+        mode: 'rendered',
+        documentPath: activeReading.path,
+        insertionStart: preview.sourceFrom,
+        replaceFrom: preview.sourceFrom,
+        replaceTo: preview.sourceTo,
+        backgroundImage: {
+          dataUrl,
+          width: dimensions.width,
+          height: dimensions.height,
+        },
+      });
+      return true;
+    } catch {
+      alert('Failed to open drawing. Please try again.');
+      return true;
+    }
+  }, [activeReading?.path]);
+
+  const handleRenderedImageAction = useCallback((preview: MarkdownCodeEditorImagePreview) => {
+    void (async () => {
+      const handled = await openRenderedDrawingEditor(preview);
+      if (!handled) setRenderedImagePreview(preview);
+    })();
+  }, [openRenderedDrawingEditor]);
 
   const updateMarkdownCodeEditorWikiLinkCompletion = useCallback((
     snapshot: MarkdownCodeEditorSelectionSnapshot,
@@ -6422,6 +6595,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (event.key === 'Enter') {
+      const drawEdit = getMarkdownDrawCommandEdit(value, selection.start, selection.end);
+      if (drawEdit && activeReading?.path) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyMarkdownCodeEditorTextEdit(drawEdit);
+        setInlineDrawInsertion({
+          mode: 'markdown',
+          documentPath: activeReading.path,
+          insertionStart: drawEdit.selectionStart,
+        });
+        return true;
+      }
+
       const carrotEdit = getCarrotListEnterEdit(value, selection.start, selection.end);
       if (carrotEdit) {
         event.preventDefault();
@@ -6450,6 +6636,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     return false;
   }, [
+    activeReading,
     applyMarkdownCodeEditorTextEdit,
     applyMarkdownWikiLinkSuggestion,
     editContent,
@@ -8098,6 +8285,55 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSidebarHoverExpanded(false);
   }, [sidebarTemporarilyExpanded]);
 
+  const inlineDrawDialog = inlineDrawInsertion ? (
+    <div
+      role="dialog"
+      aria-label="Draw"
+      style={{
+        position: 'absolute',
+        top: '42px',
+        bottom: '32px',
+        left: 0,
+        right: 0,
+        zIndex: 40,
+        display: 'flex',
+        overflow: 'hidden',
+        borderRadius: '8px',
+        border: `1px solid ${theme.border}`,
+        backgroundColor: theme.isDark ? '#111' : '#fff',
+        boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(0,0,0,0.22)',
+      }}
+    >
+      {inlineDrawSaving && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: '10px',
+            right: '12px',
+            zIndex: 2,
+            padding: '4px 8px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: theme.textSecondary,
+            backgroundColor: theme.isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.8)',
+            border: `1px solid ${theme.border}`,
+          }}
+        >
+          Saving...
+        </div>
+      )}
+      <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary }}>Loading...</div>}>
+        <SketchView
+          onSave={handleInlineDrawSave}
+          onClose={handleInlineDrawClose}
+          existingSketch={null}
+          backgroundImage={inlineDrawInsertion.backgroundImage ?? null}
+        />
+      </Suspense>
+    </div>
+  ) : null;
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -9067,6 +9303,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
                     cursorStyle={renderedTextCursorStyle}
+                    blockCursorOpacity={renderedBlockCursorOpacity}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
 	                    dataAttributes={{
@@ -9206,7 +9443,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     onKeyDown={handleRenderedEditorKeyDown}
                     onMouseDown={handleRenderedEditorMouseDown}
                     onPaste={handleRenderedEditorPaste}
-                    onImagePreview={setRenderedImagePreview}
+                    onImagePreview={handleRenderedImageAction}
                     onFocus={() => {
                       deactivateSidebarKeyboard();
                       commitTitleEditIfActive();
@@ -9236,6 +9473,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
                     cursorStyle={renderedTextCursorStyle}
+                    blockCursorOpacity={renderedBlockCursorOpacity}
                     placeholder="Rendered text editor"
                     documentPath={activeReading.path}
                     dataAttributes={{
@@ -9438,6 +9676,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
         />
         </div>
+        {inlineDrawDialog}
         </div>
         )}
         <CodexTerminalPanel

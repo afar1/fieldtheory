@@ -206,12 +206,15 @@ export type RenderedEditClickMode = 'click' | 'command-click';
 export type RenderedTextCursorStyle = 'bar' | 'block';
 
 export const DEFAULT_RENDERED_TEXT_CURSOR_STYLE: RenderedTextCursorStyle = 'block';
+export const DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY = 0.5;
 export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-click-mode';
 export const RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT = 'fieldtheory:rendered-edit-click-mode-changed';
 export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
 export const TEXT_CURSOR_BLINK_CHANGED_EVENT = 'fieldtheory:text-cursor-blink-changed';
 export const RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY = 'fieldtheory-rendered-text-cursor-style';
 export const RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT = 'fieldtheory:rendered-text-cursor-style-changed';
+export const RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY = 'fieldtheory-rendered-block-cursor-opacity';
+export const RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT = 'fieldtheory:rendered-block-cursor-opacity-changed';
 export const LINE_NUMBERS_STORAGE_KEY = 'fieldtheory-line-numbers';
 
 export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>): RenderedEditClickMode {
@@ -237,6 +240,15 @@ export function restoreRenderedTextCursorStyle(storage: Pick<Storage, 'getItem'>
 
 export function persistRenderedTextCursorStyle(storage: Pick<Storage, 'setItem'>, style: RenderedTextCursorStyle): void {
   storage.setItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY, style);
+}
+
+export function restoreRenderedBlockCursorOpacity(storage: Pick<Storage, 'getItem'>): number {
+  const saved = Number.parseFloat(storage.getItem(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY) ?? '');
+  return Number.isFinite(saved) ? Math.max(0.2, Math.min(1, saved)) : DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY;
+}
+
+export function persistRenderedBlockCursorOpacity(storage: Pick<Storage, 'setItem'>, opacity: number): void {
+  storage.setItem(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY, String(Math.max(0.2, Math.min(1, opacity))));
 }
 
 /** True when a click on the rendered markdown body should switch to edit

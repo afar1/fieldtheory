@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { consolidateMarkdownAssetsForLibraryRoot, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable, makeMarkdownImagesSharePortable } from './portableMarkdownImages';
+import { consolidateMarkdownAssetsForLibraryRoot, copyImageDataUrlForMarkdownDocument, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable, makeMarkdownImagesSharePortable } from './portableMarkdownImages';
 
 function sha256Name(bytes: Buffer, ext = '.png'): string {
   return `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}${ext}`;
@@ -33,6 +33,21 @@ describe('portable markdown images main helpers', () => {
     expect(result?.markdown).toBe(`![Reference screenshot](<../.assets/${assetName}>)`);
     expect(result?.copiedPath).toBe(path.join(tmpDir, '.assets', assetName));
     expect(fs.existsSync(result!.copiedPath)).toBe(true);
+  });
+
+  it('copies a drawing data URL into the library asset store', () => {
+    const documentPath = path.join(tmpDir, 'Drawings.md');
+    const bytes = Buffer.from([1, 2, 3, 4]);
+    const result = copyImageDataUrlForMarkdownDocument(
+      documentPath,
+      `data:image/png;base64,${bytes.toString('base64')}`,
+      'Drawing',
+      { libraryRoots: [tmpDir] },
+    );
+
+    const assetName = sha256Name(bytes);
+    expect(result?.markdown).toBe(`![Drawing](<./.assets/${assetName}>)`);
+    expect(fs.existsSync(path.join(tmpDir, '.assets', assetName))).toBe(true);
   });
 
   it('reuses the content-hash asset for duplicate image content', () => {

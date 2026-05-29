@@ -4711,6 +4711,12 @@ const markdownImagesAPI = {
     alt?: string,
   ): Promise<{ markdown: string; destination: string; copiedPath: string } | null> =>
     ipcRenderer.invoke('markdownImages:copyImageForDocument', documentPath, imagePath, alt),
+  copyImageDataUrlForDocument: (
+    documentPath: string,
+    dataUrl: string,
+    alt?: string,
+  ): Promise<{ markdown: string; destination: string; copiedPath: string } | null> =>
+    ipcRenderer.invoke('markdownImages:copyImageDataUrlForDocument', documentPath, dataUrl, alt),
   makeImagesPortable: (
     documentPath: string,
     content: string,

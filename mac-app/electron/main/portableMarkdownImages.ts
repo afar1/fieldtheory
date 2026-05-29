@@ -225,6 +225,18 @@ export function copyImageForMarkdownDocument(
   return copyImageBytesForMarkdownDocument(documentPath, fs.readFileSync(imagePath), path.extname(imagePath) || '.png', alt, options);
 }
 
+export function copyImageDataUrlForMarkdownDocument(
+  documentPath: string,
+  dataUrl: string,
+  alt = 'Image',
+  options: PortableMarkdownImageOptions = {},
+): PortableMarkdownImageCopyResult | null {
+  const dataMatch = rawMarkdownDestination(dataUrl).match(DATA_IMAGE_RE);
+  if (!dataMatch) return null;
+  const bytes = Buffer.from(dataMatch[2].replace(/\s+/g, ''), 'base64');
+  return copyImageBytesForMarkdownDocument(documentPath, bytes, extensionForMimeType(dataMatch[1]), alt, options);
+}
+
 export function makeMarkdownImagesPortable(
   documentPath: string,
   content: string,

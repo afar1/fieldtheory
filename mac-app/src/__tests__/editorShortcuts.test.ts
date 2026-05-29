@@ -3,6 +3,8 @@ import {
   COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
   COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
   DEFAULT_SHARED_FILE_TOGGLE_HOTKEY,
+  DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY,
+  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
   RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
   RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
   SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
@@ -27,10 +29,12 @@ import {
   isThemeToggleShortcut,
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   persistSharedFileToggleHotkey,
+  persistRenderedBlockCursorOpacity,
   persistRenderedEditClickMode,
   persistRenderedTextCursorStyle,
   persistTextCursorBlink,
   restoreSharedFileToggleHotkey,
+  restoreRenderedBlockCursorOpacity,
   restoreRenderedEditClickMode,
   restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
@@ -375,6 +379,23 @@ describe('shared file toggle shortcut', () => {
     persistRenderedTextCursorStyle(storage, 'block');
     expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('block');
     expect(restoreRenderedTextCursorStyle(storage)).toBe('block');
+  });
+
+  it('restores, clamps, and persists rendered block cursor opacity', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY);
+    persistRenderedBlockCursorOpacity(storage, 0.75);
+    expect(store.get(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY)).toBe('0.75');
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(0.75);
+    persistRenderedBlockCursorOpacity(storage, 3);
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(1);
+    persistRenderedBlockCursorOpacity(storage, 0);
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(0.2);
   });
 });
 
