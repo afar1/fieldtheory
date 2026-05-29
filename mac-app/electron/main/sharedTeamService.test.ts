@@ -6,7 +6,7 @@ interface MockContactRow {
   id: string;
   owner_user_id: string;
   contact_email: string | null;
-  contact_user_id: string | null;
+  contact_user_id?: string | null;
   relationship_type: string | null;
   status: string | null;
   created_at?: string | null;
@@ -17,31 +17,46 @@ interface MockSupabaseOptions {
   profileUserId?: string | null;
   existingOwnedContact?: Pick<MockContactRow, 'id' | 'relationship_type' | 'status'> | null;
   mutationReturnsNoRows?: boolean;
+  missingContactUserId?: boolean;
   error?: { message: string } | null;
 }
 
 function makeAuthManager(options: MockSupabaseOptions = {}) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
   const contacts = options.contacts ?? [];
+  const missingContactUserIdError = { message: 'column contacts.contact_user_id does not exist' };
 
   function record(table: string, method: string, args: unknown[]) {
     calls.push({ table, method, args });
   }
 
-  function makeMutationQuery(table: string) {
+  function hasContactUserId(value: unknown): boolean {
+    return JSON.stringify(value).includes('contact_user_id');
+  }
+
+  function makeMutationQuery(table: string, startsWithContactUserId = false) {
+    let usesContactUserId = startsWithContactUserId;
+
+    function currentError() {
+      if (options.missingContactUserId && table === 'contacts' && usesContactUserId) {
+        return missingContactUserIdError;
+      }
+      return options.error ?? null;
+    }
+
     return {
-      error: options.error ?? null,
-      select(...args: unknown[]) { record(table, 'select', args); return this; },
+      error: currentError(),
+      select(...args: unknown[]) { record(table, 'select', args); usesContactUserId ||= hasContactUserId(args); return this; },
       eq(...args: unknown[]) { record(table, 'eq', args); return this; },
-      or(...args: unknown[]) { record(table, 'or', args); return this; },
+      or(...args: unknown[]) { record(table, 'or', args); usesContactUserId ||= hasContactUserId(args); return this; },
       ilike(...args: unknown[]) { record(table, 'ilike', args); return this; },
       maybeSingle: vi.fn(async () => ({
         data: table === 'profiles'
           ? (options.profileUserId ? { id: options.profileUserId } : null)
           : (options.mutationReturnsNoRows ? null : { id: 'contact-1' }),
-        error: null,
+        error: currentError(),
       })),
-      single: vi.fn(async () => ({ data: null, error: options.error ?? null })),
+      single: vi.fn(async () => ({ data: null, error: currentError() })),
     };
   }
 
@@ -49,24 +64,33 @@ function makeAuthManager(options: MockSupabaseOptions = {}) {
     from(table: string) {
       record(table, 'from', []);
       if (table === 'contacts') {
+        let usesContactUserId = false;
+
+        function currentError() {
+          if (options.missingContactUserId && usesContactUserId) {
+            return missingContactUserIdError;
+          }
+          return options.error ?? null;
+        }
+
         return {
-          error: options.error ?? null,
-          select(...args: unknown[]) { record(table, 'select', args); return this; },
+          error: currentError(),
+          select(...args: unknown[]) { record(table, 'select', args); usesContactUserId ||= hasContactUserId(args); return this; },
           eq(...args: unknown[]) { record(table, 'eq', args); return this; },
-          or(...args: unknown[]) { record(table, 'or', args); return this; },
+          or(...args: unknown[]) { record(table, 'or', args); usesContactUserId ||= hasContactUserId(args); return this; },
           ilike(...args: unknown[]) { record(table, 'ilike', args); return this; },
-          maybeSingle: vi.fn(async () => ({ data: options.existingOwnedContact ?? null, error: options.error ?? null })),
+          maybeSingle: vi.fn(async () => ({ data: options.existingOwnedContact ?? null, error: currentError() })),
           order: vi.fn(async (...args: unknown[]) => {
             record(table, 'order', args);
-            return { data: contacts, error: options.error ?? null };
+            return { data: contacts, error: currentError() };
           }),
           insert: vi.fn((payload: unknown) => {
             record(table, 'insert', [payload]);
-            return { error: options.error ?? null };
+            return { error: options.missingContactUserId && hasContactUserId(payload) ? missingContactUserIdError : options.error ?? null };
           }),
           update: vi.fn((payload: unknown) => {
             record(table, 'update', [payload]);
-            return makeMutationQuery(table);
+            return makeMutationQuery(table, hasContactUserId(payload));
           }),
           delete: vi.fn(() => {
             record(table, 'delete', []);
@@ -127,6 +151,34 @@ describe('SharedTeamService', () => {
       direction: 'outgoing',
       createdAt: '2026-01-01T00:00:00Z',
     }]);
+  });
+
+  it('falls back to email lookups when the contacts table lacks contact_user_id', async () => {
+    const { authManager, calls } = makeAuthManager({
+      missingContactUserId: true,
+      contacts: [{
+        id: 'contact-1',
+        owner_user_id: 'owner-1',
+        contact_email: 'af@example.com',
+        relationship_type: 'team',
+        status: 'pending',
+      }],
+    });
+
+    const state = await new SharedTeamService(authManager).getTeamState();
+
+    expect(state.available).toBe(true);
+    expect(state.currentTeamScopeUserId).toBe('owner-1');
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['owner_user_id.eq.user-1,contact_user_id.eq.user-1,contact_email.ilike.af@example.com'],
+    });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['owner_user_id.eq.user-1,contact_email.ilike.af@example.com'],
+    });
   });
 
   it('lets pending invitees read River from the owner team scope', async () => {
@@ -262,6 +314,31 @@ describe('SharedTeamService', () => {
     });
   });
 
+  it('keeps team invite creation dependent on contact_user_id when the invited user exists', async () => {
+    const { authManager, calls } = makeAuthManager({
+      missingContactUserId: true,
+      profileUserId: 'user-2',
+    });
+
+    await expect(new SharedTeamService(authManager).inviteMember('jamie@example.com')).resolves.toEqual({
+      ok: false,
+      error: 'column contacts.contact_user_id does not exist',
+    });
+
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'insert',
+      args: [{
+        owner_user_id: 'user-1',
+        contact_email: 'jamie@example.com',
+        contact_user_id: 'user-2',
+        relationship_type: 'team',
+        status: 'pending',
+      }],
+    });
+    expect(calls.filter((call) => call.table === 'contacts' && call.method === 'insert')).toHaveLength(1);
+  });
+
   it('treats an existing team contact as an already-created invite', async () => {
     const { authManager, calls } = makeAuthManager({
       existingOwnedContact: {
@@ -319,6 +396,28 @@ describe('SharedTeamService', () => {
     expect(calls).toContainEqual({ table: 'contacts', method: 'select', args: ['id'] });
   });
 
+  it('accepts incoming team invites by email on older contacts schemas', async () => {
+    const { authManager, calls } = makeAuthManager({ missingContactUserId: true });
+
+    await expect(new SharedTeamService(authManager).respondToInvite('contact-1', true)).resolves.toEqual({ ok: true });
+
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'update',
+      args: [{ status: 'accepted', contact_user_id: 'user-1' }],
+    });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'update',
+      args: [{ status: 'accepted' }],
+    });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['contact_email.ilike.af@example.com'],
+    });
+  });
+
   it('returns an error when accepting an invite updates no rows', async () => {
     const { authManager } = makeAuthManager({ mutationReturnsNoRows: true });
 
@@ -336,6 +435,24 @@ describe('SharedTeamService', () => {
     expect(calls).toContainEqual({ table: 'contacts', method: 'delete', args: [] });
     expect(calls).toContainEqual({ table: 'contacts', method: 'eq', args: ['id', 'contact-1'] });
     expect(calls).toContainEqual({ table: 'contacts', method: 'eq', args: ['relationship_type', 'team'] });
+  });
+
+  it('declines incoming team invites by email on older contacts schemas', async () => {
+    const { authManager, calls } = makeAuthManager({ missingContactUserId: true });
+
+    await expect(new SharedTeamService(authManager).respondToInvite('contact-1', false)).resolves.toEqual({ ok: true });
+
+    expect(calls).toContainEqual({ table: 'contacts', method: 'delete', args: [] });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['contact_user_id.eq.user-1,contact_email.ilike.af@example.com'],
+    });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['contact_email.ilike.af@example.com'],
+    });
   });
 
   it('lets the owner remove a team member by contact id', async () => {
@@ -361,6 +478,23 @@ describe('SharedTeamService', () => {
       table: 'contacts',
       method: 'or',
       args: ['contact_user_id.eq.user-1,contact_email.ilike.af@example.com'],
+    });
+  });
+
+  it('lets a member leave accepted teams by email on older contacts schemas', async () => {
+    const { authManager, calls } = makeAuthManager({ missingContactUserId: true });
+
+    await expect(new SharedTeamService(authManager).leaveTeam()).resolves.toEqual({ ok: true });
+
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['contact_user_id.eq.user-1,contact_email.ilike.af@example.com'],
+    });
+    expect(calls).toContainEqual({
+      table: 'contacts',
+      method: 'or',
+      args: ['contact_email.ilike.af@example.com'],
     });
   });
 

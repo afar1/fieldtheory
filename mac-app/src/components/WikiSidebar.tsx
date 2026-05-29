@@ -48,6 +48,7 @@ const POSSIBLE_TOP_NAV_AVAILABLE = false;
 export const LIBRARY_DEFAULT_FOLDER_IDS = [
   'artifacts',
   SCRATCHPAD_FOLDER_NAME,
+  RIVER_SHARED_FOLDER_NAME,
   'debates',
   'Plans',
   BOOKMARKS_SHORTCUT_FOLDER_ID,
@@ -1040,6 +1041,7 @@ function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
 
 function getDefaultFolderId(node: SidebarNode): LibraryDefaultFolderId | null {
   const folderId = getLibraryFolderVisibilityId(node);
+  if (folderId === RIVER_SHARED_FOLDER_NAME) return null;
   return folderId && LIBRARY_DEFAULT_FOLDER_ID_SET.has(folderId) ? (folderId as LibraryDefaultFolderId) : null;
 }
 
@@ -1061,7 +1063,7 @@ export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFold
         continue;
       }
       const folderId = getLibraryFolderVisibilityId(node);
-      if (folderId && hidden.has(folderId)) {
+      if (folderId && folderId !== RIVER_SHARED_FOLDER_NAME && hidden.has(folderId)) {
         changed = true;
         continue;
       }
