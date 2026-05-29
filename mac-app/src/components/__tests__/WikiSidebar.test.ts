@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
+  getSidebarShortcutVisibility,
   splitRiverShortcutNode,
 } from '../WikiSidebar';
 
@@ -74,5 +75,17 @@ describe('WikiSidebar River root helpers', () => {
 
     expect(riverShortcutNode).toBe(river);
     expect(visibleRoots).toEqual([scratchpad]);
+  });
+
+  it('shows the River shortcut even when Bookmarks is absent', () => {
+    expect(getSidebarShortcutVisibility({
+      isSearching: false,
+      hasBookmarksActionItem: false,
+      hasRiverShortcutNode: true,
+    })).toEqual({
+      showBookmarks: false,
+      showRiver: true,
+      hasShortcutRows: true,
+    });
   });
 });
