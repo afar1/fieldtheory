@@ -234,6 +234,29 @@ export function estimateCodexTerminalSize(input: { width: number; height: number
   };
 }
 
+export function getTerminalResizeDimension(input: {
+  dockSide: CodexTerminalDockSide;
+  startBottomHeight: number;
+  startRightWidth: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  windowWidth: number;
+  windowHeight: number;
+}): { bottomHeight?: number; rightWidth?: number } {
+  if (input.dockSide === 'bottom') {
+    const max = Math.floor(input.windowHeight * MAX_BOTTOM_HEIGHT_RATIO);
+    return {
+      bottomHeight: Math.max(MIN_BOTTOM_HEIGHT, Math.min(max, input.startBottomHeight + input.startY - input.currentY)),
+    };
+  }
+  const max = Math.floor(input.windowWidth * MAX_RIGHT_WIDTH_RATIO);
+  return {
+    rightWidth: Math.max(MIN_RIGHT_WIDTH, Math.min(max, input.startRightWidth + input.startX - input.currentX)),
+  };
+}
+
 export function resolveCodexTerminalDockSide(input: { dockSide: CodexTerminalDockSide; dockSideOverride?: CodexTerminalDockSide }): CodexTerminalDockSide {
   return input.dockSideOverride ?? input.dockSide;
 }
@@ -291,6 +314,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
+  const fitFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     onResizeActiveChange?.(isResizing);
@@ -384,6 +408,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   }, []);
 
   const fitActiveTerminal = useCallback(() => {
+    fitFrameRef.current = null;
     if (!activeSessionId) return;
     const handle = terminalHandlesRef.current.get(activeSessionId);
     if (!handle) return;
@@ -397,6 +422,19 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       // Resize can race while the panel is hidden or changing dock sides.
     }
   }, [activeSessionId]);
+
+  const scheduleFitActiveTerminal = useCallback(() => {
+    if (fitFrameRef.current !== null) return;
+    fitFrameRef.current = window.requestAnimationFrame(fitActiveTerminal);
+  }, [fitActiveTerminal]);
+
+  useEffect(() => (
+    () => {
+      if (fitFrameRef.current === null) return;
+      window.cancelAnimationFrame(fitFrameRef.current);
+      fitFrameRef.current = null;
+    }
+  ), []);
 
   const focusActiveTerminal = useCallback(() => {
     if (!activeSessionId) return false;
@@ -603,11 +641,11 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     const handleResize = () => {
       setBottomHeight((current) => clampBottomHeight(current));
       setRightWidth((current) => clampRightWidth(current));
-      fitActiveTerminal();
+      scheduleFitActiveTerminal();
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [fitActiveTerminal]);
+  }, [scheduleFitActiveTerminal]);
 
   useEffect(() => {
     const appearance = terminalAppearanceOptions(theme.isDark);
@@ -623,9 +661,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   }, [theme.isDark]);
 
   useEffect(() => {
-    const timer = window.setTimeout(fitActiveTerminal, 60);
-    return () => window.clearTimeout(timer);
-  }, [effectiveDockSide, fitActiveTerminal, visible]);
+    scheduleFitActiveTerminal();
+  }, [effectiveDockSide, scheduleFitActiveTerminal, visible]);
 
   useEffect(() => {
     if (!shouldFocusTerminalForRequest({ visible, focusRequestKey })) return;
@@ -897,13 +934,19 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     document.body.style.cursor = effectiveDockSide === 'bottom' ? 'row-resize' : 'col-resize';
     document.body.style.userSelect = 'none';
     const onMove = (moveEvent: MouseEvent) => {
-      if (effectiveDockSide === 'bottom') {
-        const max = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_RATIO);
-        setBottomHeight(Math.max(MIN_BOTTOM_HEIGHT, Math.min(max, startBottomHeight + startY - moveEvent.clientY)));
-      } else {
-        const max = Math.floor(window.innerWidth * MAX_RIGHT_WIDTH_RATIO);
-        setRightWidth(Math.max(MIN_RIGHT_WIDTH, Math.min(max, startRightWidth + startX - moveEvent.clientX)));
-      }
+      const resizeDimension = getTerminalResizeDimension({
+        dockSide: effectiveDockSide,
+        startBottomHeight,
+        startRightWidth,
+        startX,
+        startY,
+        currentX: moveEvent.clientX,
+        currentY: moveEvent.clientY,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+      });
+      if (typeof resizeDimension.bottomHeight === 'number') setBottomHeight(resizeDimension.bottomHeight);
+      if (typeof resizeDimension.rightWidth === 'number') setRightWidth(resizeDimension.rightWidth);
     };
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
