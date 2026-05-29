@@ -35,12 +35,26 @@ const MAX_BOTTOM_HEIGHT_RATIO = 0.72;
 const MAX_RIGHT_WIDTH_RATIO = 0.68;
 const TERMINAL_VIEWPORT_TOP_PADDING = 8;
 const TERMINAL_DOCK_DIVIDER_SIZE = 2;
+const TERMINAL_TOOLBAR_HEIGHT = 36;
+const TERMINAL_FONT_FAMILY = 'Berkeley Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+const TERMINAL_FONT_SIZE = 12.5;
+const TERMINAL_LINE_HEIGHT = 1.28;
+const TERMINAL_APPROX_CHAR_WIDTH = 7.2;
+const TERMINAL_PADDING_X = 24;
+const TERMINAL_PADDING_Y = 20;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 const HISTORY_OVERLAY_WIDTH = 420;
+const INITIAL_REPLAY_RESIZE_SUPPRESSION_MS = 600;
+const INITIAL_REPLAY_ECHO_DEDUPE_MS = 900;
+const GHOSTTY_DARK_BACKGROUND = '#0F1115';
+const GHOSTTY_DARK_FOREGROUND = '#E6EAF0';
 
 interface TerminalHandle {
   term: Terminal;
   fit: FitAddon;
+  replayingInitialBuffer: boolean;
+  initialReplayEchoTail: string;
+  initialReplayEchoUntil: number;
 }
 
 export function mergeCodexTerminalSessions(
@@ -86,34 +100,75 @@ export function shouldFocusTerminalForRequest(input: { visible: boolean; focusRe
   return input.visible && input.focusRequestKey > 0;
 }
 
+export function shouldSendBackendResize(input: { replayingInitialBuffer: boolean; now: number; suppressUntil: number }): boolean {
+  return !input.replayingInitialBuffer && input.now >= input.suppressUntil;
+}
+
+export function getUnreplayedInitialData(buffer: string, pendingChunks: string[]): string {
+  const pending = pendingChunks.join('');
+  if (!buffer || !pending) return pending;
+  const maxOverlap = Math.min(buffer.length, pending.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (buffer.endsWith(pending.slice(0, length))) {
+      return pending.slice(length);
+    }
+  }
+  return pending;
+}
+
+function appendTerminalEchoTail(existing: string, data: string): string {
+  return (existing + data).slice(-4096);
+}
+
+export function getTerminalDataAfterInitialReplayEcho(input: {
+  data: string;
+  initialReplayEchoTail: string;
+  initialReplayEchoUntil: number;
+  now: number;
+}): { data: string; initialReplayEchoTail: string } {
+  if (!input.initialReplayEchoTail || input.now >= input.initialReplayEchoUntil) {
+    return { data: input.data, initialReplayEchoTail: '' };
+  }
+  const data = getUnreplayedInitialData(input.initialReplayEchoTail, [input.data]);
+  return {
+    data,
+    initialReplayEchoTail: data
+      ? appendTerminalEchoTail(input.initialReplayEchoTail, data)
+      : input.initialReplayEchoTail,
+  };
+}
+
 export function terminalViewportStyleCss(terminalBackground: string): string {
   return `.codex-terminal-host {
   overflow: hidden;
-}
-.codex-terminal-host .xterm,
-.codex-terminal-host .xterm .xterm-screen,
-.codex-terminal-host .xterm .xterm-viewport {
+  padding: ${TERMINAL_PADDING_Y}px ${TERMINAL_PADDING_X}px;
+  box-sizing: border-box;
   background-color: ${terminalBackground} !important;
 }
-.codex-terminal-host .xterm .xterm-viewport {
+.codex-terminal-mount {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.codex-terminal-mount .xterm,
+.codex-terminal-mount .xterm .xterm-screen,
+.codex-terminal-mount .xterm .xterm-viewport {
+  background-color: ${terminalBackground} !important;
+}
+.codex-terminal-mount .xterm .xterm-viewport {
   scrollbar-width: none !important;
   scrollbar-color: transparent transparent !important;
   scrollbar-gutter: auto !important;
 }
-.codex-terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+.codex-terminal-mount .xterm .xterm-viewport::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none !important;
 }
-.codex-terminal-host .xterm .xterm-scrollable-element > .scrollbar {
+.codex-terminal-mount .xterm .xterm-scrollable-element > .scrollbar {
   display: none !important;
   width: 0 !important;
 }`;
-}
-
-function pathBasename(input: string): string {
-  const parts = input.split('/').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : input;
 }
 
 export function formatTerminalCwdLabel(input: string): string {
@@ -122,26 +177,28 @@ export function formatTerminalCwdLabel(input: string): string {
 
 export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
-    background: isDark ? '#101113' : '#f7f2e8',
-    foreground: isDark ? '#e8e3d8' : '#111827',
-    cursor: isDark ? '#10b981' : '#047857',
-    selectionBackground: isDark ? '#2f4a43' : '#b7d9cb',
-    black: isDark ? '#111315' : '#111827',
-    red: isDark ? '#ef4444' : '#991b1b',
-    green: isDark ? '#10b981' : '#047857',
-    yellow: isDark ? '#f59e0b' : '#92400e',
-    blue: isDark ? '#60a5fa' : '#1d4ed8',
-    magenta: isDark ? '#a78bfa' : '#6d28d9',
-    cyan: isDark ? '#22d3ee' : '#0e7490',
-    white: isDark ? '#e8e3d8' : '#374151',
-    brightBlack: isDark ? '#6b7280' : '#4b5563',
-    brightRed: isDark ? '#f87171' : '#b91c1c',
-    brightGreen: isDark ? '#34d399' : '#047857',
-    brightYellow: isDark ? '#fbbf24' : '#a16207',
-    brightBlue: isDark ? '#93c5fd' : '#1d4ed8',
-    brightMagenta: isDark ? '#c4b5fd' : '#6d28d9',
-    brightCyan: isDark ? '#67e8f9' : '#0f766e',
-    brightWhite: isDark ? '#ffffff' : '#111827',
+    background: isDark ? GHOSTTY_DARK_BACKGROUND : '#f7f2e8',
+    foreground: isDark ? GHOSTTY_DARK_FOREGROUND : '#111827',
+    cursor: isDark ? '#7AA2F7' : '#047857',
+    cursorAccent: isDark ? GHOSTTY_DARK_BACKGROUND : undefined,
+    selectionBackground: isDark ? '#ffffff' : '#b7d9cb',
+    selectionForeground: isDark ? GHOSTTY_DARK_BACKGROUND : undefined,
+    black: isDark ? '#1D2026' : '#111827',
+    red: isDark ? '#F7768E' : '#991b1b',
+    green: isDark ? '#9ECE6A' : '#047857',
+    yellow: isDark ? '#E0AF68' : '#92400e',
+    blue: isDark ? '#7AA2F7' : '#1d4ed8',
+    magenta: isDark ? '#BB9AF7' : '#6d28d9',
+    cyan: isDark ? '#7DCFFF' : '#0e7490',
+    white: isDark ? '#C0CAF5' : '#374151',
+    brightBlack: isDark ? '#414868' : '#4b5563',
+    brightRed: isDark ? '#FF899D' : '#b91c1c',
+    brightGreen: isDark ? '#B9F27C' : '#047857',
+    brightYellow: isDark ? '#F5C97A' : '#a16207',
+    brightBlue: isDark ? '#89B4FA' : '#1d4ed8',
+    brightMagenta: isDark ? '#CBA6F7' : '#6d28d9',
+    brightCyan: isDark ? '#89DDFF' : '#0f766e',
+    brightWhite: isDark ? GHOSTTY_DARK_FOREGROUND : '#111827',
   };
 }
 
@@ -149,10 +206,28 @@ export function terminalContrastRatio(isDark: boolean): number {
   return isDark ? 1 : 4.5;
 }
 
-export function terminalAppearanceOptions(isDark: boolean): Pick<ITerminalOptions, 'minimumContrastRatio' | 'theme'> {
+export function terminalAppearanceOptions(isDark: boolean): Pick<ITerminalOptions, 'cursorBlink' | 'cursorStyle' | 'cursorWidth' | 'fontFamily' | 'fontSize' | 'fontWeight' | 'fontWeightBold' | 'letterSpacing' | 'lineHeight' | 'minimumContrastRatio' | 'theme'> {
   return {
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    cursorWidth: 1,
+    fontFamily: TERMINAL_FONT_FAMILY,
+    fontSize: TERMINAL_FONT_SIZE,
+    fontWeight: 'normal',
+    fontWeightBold: 'bold',
+    letterSpacing: 0,
+    lineHeight: TERMINAL_LINE_HEIGHT,
     minimumContrastRatio: terminalContrastRatio(isDark),
     theme: terminalTheme(isDark),
+  };
+}
+
+export function estimateCodexTerminalSize(input: { width: number; height: number; toolbarTopInset?: number }): { cols: number; rows: number } {
+  const bodyWidth = Math.max(0, input.width - (TERMINAL_PADDING_X * 2));
+  const bodyHeight = Math.max(0, input.height - TERMINAL_TOOLBAR_HEIGHT - (input.toolbarTopInset ?? 0) - (TERMINAL_PADDING_Y * 2));
+  return {
+    cols: Math.max(20, Math.floor(bodyWidth / TERMINAL_APPROX_CHAR_WIDTH)),
+    rows: Math.max(5, Math.floor(bodyHeight / (TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT))),
   };
 }
 
@@ -203,6 +278,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const panelRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
+  const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
   const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
@@ -295,6 +371,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     if (!handle) return;
     try {
       handle.fit.fit();
+      const suppressUntil = suppressBackendResizeUntilRef.current.get(activeSessionId) ?? 0;
+      if (!shouldSendBackendResize({ replayingInitialBuffer: handle.replayingInitialBuffer, now: Date.now(), suppressUntil })) return;
+      suppressBackendResizeUntilRef.current.delete(activeSessionId);
       void window.codexTerminalAPI?.resize(activeSessionId, handle.term.cols, handle.term.rows);
     } catch {
       // Resize can race while the panel is hidden or changing dock sides.
@@ -309,18 +388,29 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     return true;
   }, [activeSessionId]);
 
+  const getInitialTerminalSize = useCallback(() => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return {};
+    return estimateCodexTerminalSize({
+      width: rect.width,
+      height: rect.height,
+      toolbarTopInset: dockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0,
+    });
+  }, [dockSide, extendToViewportTop]);
+
   const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean; launchCommand?: string }) => {
     const session = await window.codexTerminalAPI?.create({
       title: input?.title ?? `Terminal ${sessions.length + 1}`,
       cwd: input?.cwd,
       auto: input?.auto,
       launchCommand: input?.launchCommand,
+      ...getInitialTerminalSize(),
     });
     if (!session) return;
     setSessions((current) => mergeCodexTerminalSessions(current, [session]));
     setActiveSessionId(session.id);
     window.setTimeout(() => terminalHandlesRef.current.get(session.id)?.term.focus(), 80);
-  }, [sessions.length]);
+  }, [getInitialTerminalSize, sessions.length]);
 
   const resumeHistoryEntry = useCallback(async (entry: CodexTerminalHistoryEntry) => {
     if (!entry.threadId) {
@@ -435,15 +525,43 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [dockSide, extendToViewportTop, visible]);
 
   useEffect(() => {
-    if (visible && sessions.length === 0) {
-      void createSession({ auto: true });
-    }
+    if (!visible || sessions.length !== 0) return;
+    let cancelled = false;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (!cancelled) void createSession({ auto: true });
+      });
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
   }, [createSession, sessions.length, visible]);
 
   useEffect(() => {
     const offData = window.codexTerminalAPI?.onData(({ id, data }) => {
       const handle = terminalHandlesRef.current.get(id);
       if (handle) {
+        if (handle.replayingInitialBuffer) {
+          const pending = pendingDataRef.current.get(id) ?? [];
+          pending.push(data);
+          pendingDataRef.current.set(id, pending);
+          return;
+        }
+        if (handle.initialReplayEchoTail) {
+          const deduped = getTerminalDataAfterInitialReplayEcho({
+            data,
+            initialReplayEchoTail: handle.initialReplayEchoTail,
+            initialReplayEchoUntil: handle.initialReplayEchoUntil,
+            now: Date.now(),
+          });
+          handle.initialReplayEchoTail = deduped.initialReplayEchoTail;
+          if (!deduped.data) return;
+          handle.term.write(deduped.data);
+          return;
+        }
         handle.term.write(data);
         return;
       }
@@ -480,8 +598,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   useEffect(() => {
     const appearance = terminalAppearanceOptions(theme.isDark);
     for (const handle of terminalHandlesRef.current.values()) {
-      handle.term.options.theme = appearance.theme;
-      handle.term.options.minimumContrastRatio = appearance.minimumContrastRatio;
+      // Assign only the appearance keys. Spreading handle.term.options back in
+      // would re-include the readonly cols/rows, which xterm rejects after
+      // construction ("Option 'cols' can only be set in the constructor"),
+      // throwing inside this effect and crashing the panel. xterm merges the
+      // provided keys into the existing options, so a partial object is correct.
+      handle.term.options = { ...appearance };
       handle.term.refresh(0, Math.max(0, handle.term.rows - 1));
     }
   }, [theme.isDark]);
@@ -567,18 +689,20 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     const term = new Terminal({
-      cursorBlink: true,
       convertEol: true,
-      fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      fontSize: 12,
-      lineHeight: 1.18,
       scrollback: 8000,
       ...terminalAppearanceOptions(theme.isDark),
     });
     term.loadAddon(fit);
     term.loadAddon(webLinks);
     term.open(element);
-    terminalHandlesRef.current.set(sessionId, { term, fit });
+    terminalHandlesRef.current.set(sessionId, {
+      term,
+      fit,
+      replayingInitialBuffer: true,
+      initialReplayEchoTail: '',
+      initialReplayEchoUntil: 0,
+    });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
       if (isTerminalPanelVisibilityToggleSequence(event)) {
@@ -603,26 +727,45 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       return false;
     });
     void window.codexTerminalAPI?.getBuffer(sessionId).then((buffer) => {
-      if (buffer && terminalHandlesRef.current.get(sessionId)?.term === term) {
+      const handle = terminalHandlesRef.current.get(sessionId);
+      if (handle?.term !== term) return;
+      const pending = pendingDataRef.current.get(sessionId) ?? [];
+      let replayedData = '';
+      if (buffer) {
         term.write(buffer);
+        replayedData = buffer;
+        const unreplayedPending = getUnreplayedInitialData(buffer, pending);
+        if (unreplayedPending) {
+          term.write(unreplayedPending);
+          replayedData = appendTerminalEchoTail(replayedData, unreplayedPending);
+        }
+        suppressBackendResizeUntilRef.current.set(sessionId, Date.now() + INITIAL_REPLAY_RESIZE_SUPPRESSION_MS);
+      } else {
+        if (pending?.length) {
+          for (const chunk of pending) {
+            term.write(chunk);
+            replayedData = appendTerminalEchoTail(replayedData, chunk);
+          }
+        }
       }
+      pendingDataRef.current.delete(sessionId);
+      handle.replayingInitialBuffer = false;
+      handle.initialReplayEchoTail = replayedData;
+      handle.initialReplayEchoUntil = handle.initialReplayEchoTail ? Date.now() + INITIAL_REPLAY_ECHO_DEDUPE_MS : 0;
+      window.setTimeout(() => {
+        fit.fit();
+        if (!buffer) {
+          void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
+        }
+        if (terminalFocusRequestedRef.current && sessionId === activeSessionId) {
+          term.focus();
+          terminalFocusRequestedRef.current = false;
+        }
+      }, 30);
     });
     term.onData((data) => {
       void window.codexTerminalAPI?.input(sessionId, data);
     });
-    const pending = pendingDataRef.current.get(sessionId);
-    if (pending?.length) {
-      for (const chunk of pending) term.write(chunk);
-      pendingDataRef.current.delete(sessionId);
-    }
-    window.setTimeout(() => {
-      fit.fit();
-      void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
-      if (terminalFocusRequestedRef.current && sessionId === activeSessionId) {
-        term.focus();
-        terminalFocusRequestedRef.current = false;
-      }
-    }, 30);
   }, [activeSessionId, onTerminalFocusChange, onVisibleChange, theme.isDark]);
 
   const closeSession = useCallback(async (sessionId: string) => {
@@ -720,7 +863,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     };
   const activeCwd = activeSession?.cwd ?? '';
   const activeCwdLabel = formatTerminalCwdLabel(activeCwd);
-  const terminalBackground = theme.isDark ? '#101113' : '#f0eadf';
+  const terminalBackground = theme.isDark ? GHOSTTY_DARK_BACKGROUND : '#f0eadf';
   const terminalChrome = theme.isDark ? '#15181e' : '#ebe3d6';
   const terminalSoftBorder = theme.isDark ? '#242832' : '#ded3c2';
   const terminalMutedText = theme.isDark ? '#8a8f99' : '#635f58';
@@ -891,7 +1034,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
               >
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
-                <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pathBasename(session.cwd)}</span>
+                <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
               </button>
               <button
                 type="button"
@@ -1088,13 +1231,17 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           <div
             key={session.id}
             className="codex-terminal-host"
-            ref={(element) => setTerminalHost(session.id, element)}
             style={{
               position: 'absolute',
               inset: 0,
               display: session.id === activeSession?.id ? 'block' : 'none',
             }}
-          />
+          >
+            <div
+              className="codex-terminal-mount"
+              ref={(element) => setTerminalHost(session.id, element)}
+            />
+          </div>
         ))}
       </div>
     </div>

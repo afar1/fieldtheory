@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatTerminalCwdLabel,
+  estimateCodexTerminalSize,
+  getTerminalDataAfterInitialReplayEcho,
+  getUnreplayedInitialData,
   isTerminalFocusToggleSequence,
   isTerminalPanelVisibilityToggleSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
+  shouldSendBackendResize,
   shouldFocusTerminalForRequest,
   terminalAppearanceOptions,
   terminalContrastRatio,
@@ -118,16 +122,78 @@ describe('shouldFocusTerminalForRequest', () => {
   });
 });
 
+describe('shouldSendBackendResize', () => {
+  it('does not resize the backend while the initial terminal buffer is replaying', () => {
+    expect(shouldSendBackendResize({ replayingInitialBuffer: true, now: 1000, suppressUntil: 0 })).toBe(false);
+  });
+
+  it('waits until the startup resize suppression window has expired', () => {
+    expect(shouldSendBackendResize({ replayingInitialBuffer: false, now: 1000, suppressUntil: 1200 })).toBe(false);
+    expect(shouldSendBackendResize({ replayingInitialBuffer: false, now: 1200, suppressUntil: 1200 })).toBe(true);
+  });
+});
+
+describe('getUnreplayedInitialData', () => {
+  it('returns queued chunks that are not already included in the replay buffer', () => {
+    expect(getUnreplayedInitialData('prompt', [' then ', 'more'])).toBe(' then more');
+  });
+
+  it('drops queued chunks already present at the end of the replay buffer', () => {
+    expect(getUnreplayedInitialData('prompt then ', [' then ', 'more'])).toBe('more');
+    expect(getUnreplayedInitialData('prompt then more', [' then ', 'more'])).toBe('');
+  });
+});
+
+describe('getTerminalDataAfterInitialReplayEcho', () => {
+  it('drops delayed startup data that was already written from the initial buffer', () => {
+    expect(getTerminalDataAfterInitialReplayEcho({
+      data: 'fieldtheory experimental › ',
+      initialReplayEchoTail: 'fieldtheory experimental › ',
+      initialReplayEchoUntil: 2000,
+      now: 1000,
+    })).toEqual({
+      data: '',
+      initialReplayEchoTail: 'fieldtheory experimental › ',
+    });
+  });
+
+  it('keeps only the unreplayed suffix when delayed startup data overlaps the buffer', () => {
+    expect(getTerminalDataAfterInitialReplayEcho({
+      data: 'experimental › next',
+      initialReplayEchoTail: 'fieldtheory experimental › ',
+      initialReplayEchoUntil: 2000,
+      now: 1000,
+    })).toEqual({
+      data: 'next',
+      initialReplayEchoTail: 'fieldtheory experimental › next',
+    });
+  });
+
+  it('passes data through after the startup dedupe window expires', () => {
+    expect(getTerminalDataAfterInitialReplayEcho({
+      data: 'fieldtheory experimental › ',
+      initialReplayEchoTail: 'fieldtheory experimental › ',
+      initialReplayEchoUntil: 1000,
+      now: 2000,
+    })).toEqual({
+      data: 'fieldtheory experimental › ',
+      initialReplayEchoTail: '',
+    });
+  });
+});
+
 describe('terminalTheme', () => {
-  it('uses visible ANSI white values for both light and dark backgrounds', () => {
+  it('uses the Ghostty dark palette and visible light ANSI values', () => {
     expect(terminalTheme(false)?.background).toBe('#f7f2e8');
     expect(terminalTheme(false)?.foreground).toBe('#111827');
     expect(terminalTheme(false)?.white).toBe('#374151');
     expect(terminalTheme(false)?.brightBlack).toBe('#4b5563');
     expect(terminalTheme(false)?.brightWhite).toBe('#111827');
-    expect(terminalTheme(true)?.background).toBe('#101113');
-    expect(terminalTheme(true)?.white).toBe('#e8e3d8');
-    expect(terminalTheme(true)?.brightWhite).toBe('#ffffff');
+    expect(terminalTheme(true)?.background).toBe('#0F1115');
+    expect(terminalTheme(true)?.foreground).toBe('#E6EAF0');
+    expect(terminalTheme(true)?.cursor).toBe('#7AA2F7');
+    expect(terminalTheme(true)?.white).toBe('#C0CAF5');
+    expect(terminalTheme(true)?.brightWhite).toBe('#E6EAF0');
   });
 
   it('raises light terminal contrast for diff backgrounds', () => {
@@ -137,14 +203,39 @@ describe('terminalTheme', () => {
 });
 
 describe('terminalAppearanceOptions', () => {
-  it('keeps terminal theme and contrast together for live theme changes', () => {
-    expect(terminalAppearanceOptions(true)).toEqual({
+  it('keeps Ghostty-style terminal appearance together for live theme changes', () => {
+    expect(terminalAppearanceOptions(true)).toMatchObject({
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      cursorWidth: 1,
+      fontFamily: 'Berkeley Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontSize: 12.5,
+      fontWeight: 'normal',
+      fontWeightBold: 'bold',
+      letterSpacing: 0,
+      lineHeight: 1.28,
       minimumContrastRatio: terminalContrastRatio(true),
       theme: terminalTheme(true),
     });
-    expect(terminalAppearanceOptions(false)).toEqual({
+    expect(terminalAppearanceOptions(false)).toMatchObject({
       minimumContrastRatio: terminalContrastRatio(false),
       theme: terminalTheme(false),
+    });
+  });
+});
+
+describe('estimateCodexTerminalSize', () => {
+  it('estimates PTY dimensions from the visible terminal panel', () => {
+    expect(estimateCodexTerminalSize({ width: 720, height: 360 })).toEqual({
+      cols: 93,
+      rows: 17,
+    });
+  });
+
+  it('accounts for the extended top toolbar inset', () => {
+    expect(estimateCodexTerminalSize({ width: 720, height: 380, toolbarTopInset: 8 })).toEqual({
+      cols: 93,
+      rows: 18,
     });
   });
 });
@@ -153,6 +244,12 @@ describe('terminalViewportStyleCss', () => {
   it('hides xterm viewport scrollbars against global app scrollbar styling', () => {
     const css = terminalViewportStyleCss('#f0eadf');
     expect(css).toContain('.codex-terminal-host {\n  overflow: hidden;');
+    expect(css).toContain('padding: 20px 24px;');
+    expect(css).toContain('background-color: #f0eadf !important');
+    expect(css).toContain('.codex-terminal-mount {');
+    expect(css).toContain('width: 100%;');
+    expect(css).toContain('height: 100%;');
+    expect(css).not.toContain('calc(100% -');
     expect(css).toContain('scrollbar-width: none !important');
     expect(css).toContain('scrollbar-color: transparent transparent !important');
     expect(css).toContain('display: none !important');

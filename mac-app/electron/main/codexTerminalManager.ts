@@ -102,6 +102,12 @@ interface CodexTerminalSession extends CodexTerminalSessionSummary {
   // whole outputBuffer on every PTY chunk. A redrawing TUI emits many chunks
   // per keystroke, so an O(buffer) scan per chunk pegs the main thread.
   scanTail: string;
+  // Pending terminal output awaiting a coalesced broadcast. node-pty delivers a
+  // single repaint as many small chunks within one event-loop tick; we batch
+  // them into one IPC message per tick instead of serializing+sending each one,
+  // which is the dominant main-process cost when a CLI streams output.
+  pendingBroadcastData: string;
+  broadcastScheduled: boolean;
   codexLaunchTimer: ReturnType<typeof setTimeout> | null;
   transcriptFlushTimer: ReturnType<typeof setTimeout> | null;
   pendingTranscriptData: string;
@@ -465,10 +471,11 @@ export class CodexTerminalManager {
       rows: input.rows ?? 28,
       cwd,
       env: {
-          ...process.env,
-          PATH: commonInteractivePath(),
+        ...process.env,
+        PATH: commonInteractivePath(),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
+        PROMPT_EOL_MARK: '',
       },
     });
 
@@ -486,6 +493,8 @@ export class CodexTerminalManager {
       process: child,
       outputBuffer: '',
       scanTail: '',
+      pendingBroadcastData: '',
+      broadcastScheduled: false,
       modelRunActive: false,
       codexLaunchTimer: null,
       transcriptFlushTimer: null,
@@ -521,7 +530,7 @@ export class CodexTerminalManager {
       session.scanTail = clampTail(session.scanTail + displayData, PROMPT_READY_SCAN_BYTES);
       session.modelRunActive = isCodexTerminalModelRunActive(session.scanTail);
       this.queueTranscriptWrite(session, displayData);
-      broadcast(CodexTerminalIPCChannels.DATA, { id, data: displayData });
+      this.queueDataBroadcast(session, displayData);
       if (launchCommand && !didLaunchCodex && isCodexTerminalPromptReady(session.scanTail, cwd)) {
         launchCodex();
       }
@@ -531,6 +540,7 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
+      this.flushDataBroadcast(session);
       this.flushTranscript(session);
       session.exitedAt = new Date().toISOString();
       session.exitCode = exitCode;
@@ -648,6 +658,7 @@ export class CodexTerminalManager {
       clearTimeout(session.codexLaunchTimer);
       session.codexLaunchTimer = null;
     }
+    this.flushDataBroadcast(session);
     this.flushTranscript(session);
     if (!session.exitedAt && session.process) session.process.kill();
     this.sessions.delete(id);
@@ -721,6 +732,7 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
+      this.flushDataBroadcast(session);
       this.flushTranscript(session);
       if (session.process) session.process.kill();
       session.process = null;
@@ -742,6 +754,25 @@ export class CodexTerminalManager {
     // visible result to maxBufferBytes, so callers still see a bounded buffer.
     if (next.length <= this.maxBufferBytes * 2) return next;
     return clampTail(next, this.maxBufferBytes);
+  }
+
+  // Batch terminal output into one DATA broadcast per event-loop tick. All
+  // onData chunks that arrive in the same tick are concatenated and sent once,
+  // collapsing N IPC serializations (the dominant cost when a CLI streams) into
+  // one. Model-agnostic: it operates on raw bytes with no knowledge of the CLI.
+  private queueDataBroadcast(session: CodexTerminalSession, data: string): void {
+    session.pendingBroadcastData += data;
+    if (session.broadcastScheduled) return;
+    session.broadcastScheduled = true;
+    setImmediate(() => this.flushDataBroadcast(session));
+  }
+
+  private flushDataBroadcast(session: CodexTerminalSession): void {
+    session.broadcastScheduled = false;
+    const data = session.pendingBroadcastData;
+    if (!data) return;
+    session.pendingBroadcastData = '';
+    broadcast(CodexTerminalIPCChannels.DATA, { id: session.id, data });
   }
 
   private queueTranscriptWrite(session: CodexTerminalSession, data: string): void {
