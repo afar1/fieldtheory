@@ -97,12 +97,19 @@ export interface CodexTerminalHistoryPreview {
 interface CodexTerminalSession extends CodexTerminalSessionSummary {
   process: pty.IPty | null;
   outputBuffer: string;
+  // Rolling tail (last PROMPT_READY_SCAN_BYTES of raw output) kept so the
+  // per-chunk status scans don't have to re-slice — and thus re-flatten — the
+  // whole outputBuffer on every PTY chunk. A redrawing TUI emits many chunks
+  // per keystroke, so an O(buffer) scan per chunk pegs the main thread.
+  scanTail: string;
   codexLaunchTimer: ReturnType<typeof setTimeout> | null;
+  transcriptFlushTimer: ReturnType<typeof setTimeout> | null;
+  pendingTranscriptData: string;
   pendingLaunchEcho: PendingLaunchEcho | null;
   launchedCommand: string;
 }
 
-type CodexHistoryFileEntry = { filePath: string; updatedAt: string; sizeBytes: number };
+type CodexHistoryFileEntry = { filePath: string; updatedAt: string; mtimeMs: number; sizeBytes: number };
 export type PendingLaunchEcho = { commandRemaining: string; stripLineEnding: boolean };
 
 interface CodexTerminalManagerOptions {
@@ -114,9 +121,12 @@ interface CodexTerminalManagerOptions {
   sessionStateFilePath?: string;
   transcriptDirPath?: string;
   codexSessionsDirPath?: string;
+  historyScanLimit?: number;
 }
 
 const DEFAULT_MAX_BUFFER_BYTES = 512 * 1024;
+const PROMPT_READY_SCAN_BYTES = 4096;
+const TRANSCRIPT_FLUSH_DELAY_MS = 100;
 const MAX_PERSISTED_SESSIONS = 24;
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 200;
@@ -124,6 +134,10 @@ const HISTORY_SUMMARY_BYTES = 64 * 1024;
 const DEFAULT_HISTORY_PREVIEW_BYTES = 128 * 1024;
 const MAX_HISTORY_PREVIEW_BYTES = 512 * 1024;
 const HISTORY_FILE_CACHE_MS = 2000;
+// Upper bound on how many of the most-recent session files we read/parse for
+// the history overlay. The overlay is a recent-sessions picker, not a full-text
+// index, so we never walk the entire (unbounded, multi-GB) sessions tree.
+const HISTORY_SCAN_LIMIT = 250;
 const CODEX_COMMAND = 'codex';
 const CODEX_LAUNCH_FALLBACK_MS = 1200;
 const SAFE_CODEX_LAUNCH_COMMAND_PATTERN = /^codex(?: resume [A-Za-z0-9_-]+)?$/;
@@ -132,6 +146,12 @@ const CODEX_INPUT_PLACEHOLDERS = [
   'Run /review on my current changes',
   'Write tests for @filename',
 ] as const;
+
+// Keep only the trailing `maxBytes` characters. `existing` is itself already
+// clamped, so the input stays small and the slice never flattens a large rope.
+function clampTail(value: string, maxBytes: number): string {
+  return value.length > maxBytes ? value.slice(value.length - maxBytes) : value;
+}
 
 function broadcast(channel: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -324,6 +344,18 @@ function formatHistoryPreview(records: Array<{ role: string; text: string }>, ma
   return preview.length > maxChars ? preview.slice(preview.length - maxChars).trimStart() : preview;
 }
 
+function historyEntryMatchesQuery(entry: CodexTerminalHistoryEntry, query: string): boolean {
+  const haystack = [
+    entry.filePath,
+    entry.fileName,
+    entry.threadId ?? '',
+    entry.title,
+    entry.cwd ?? '',
+    entry.preview,
+  ].join('\n').toLocaleLowerCase();
+  return haystack.includes(query);
+}
+
 function formatHistoryTitle(records: Array<{ role: string; text: string }>): string {
   const userRecord = records.find((record) => record.role === 'user' && record.text.trim());
   const firstRecord = userRecord ?? records.find((record) => record.text.trim());
@@ -396,7 +428,12 @@ export class CodexTerminalManager {
   private readonly sessionStateFilePath: string;
   private readonly transcriptDirPath: string;
   private readonly codexSessionsDirPath: string;
+  private readonly historyScanLimit: number;
   private historyFileCache: { scannedAt: number; files: CodexHistoryFileEntry[] } | null = null;
+  // Parsed history entries keyed by file path. Reused while the file's mtime and
+  // size are unchanged so repeated listHistory calls (e.g. typing in the search
+  // box) filter in memory instead of re-reading and re-parsing files from disk.
+  private readonly historyEntryCache = new Map<string, { mtimeMs: number; sizeBytes: number; entry: CodexTerminalHistoryEntry }>();
 
   constructor(options: CodexTerminalManagerOptions) {
     this.defaultCwd = options.defaultCwd;
@@ -407,6 +444,7 @@ export class CodexTerminalManager {
     this.sessionStateFilePath = options.sessionStateFilePath ?? path.join(this.contextDirPath, 'session-state.json');
     this.transcriptDirPath = options.transcriptDirPath ?? path.join(this.contextDirPath, 'transcripts');
     this.codexSessionsDirPath = options.codexSessionsDirPath ?? defaultCodexSessionsDirPath();
+    this.historyScanLimit = options.historyScanLimit ?? HISTORY_SCAN_LIMIT;
     this.loadPersistedSessions();
   }
 
@@ -447,8 +485,11 @@ export class CodexTerminalManager {
       attachedContexts: [],
       process: child,
       outputBuffer: '',
+      scanTail: '',
       modelRunActive: false,
       codexLaunchTimer: null,
+      transcriptFlushTimer: null,
+      pendingTranscriptData: '',
       pendingLaunchEcho: null,
       launchedCommand: launchCommand ?? 'shell',
     };
@@ -477,14 +518,11 @@ export class CodexTerminalManager {
       const displayData = stripCodexInputPlaceholders(echoResult.value);
       if (!displayData) return;
       session.outputBuffer = this.appendToBuffer(session.outputBuffer, displayData);
-      session.modelRunActive = isCodexTerminalModelRunActive(session.outputBuffer);
-      try {
-        fs.appendFileSync(transcriptPath, displayData, 'utf8');
-      } catch {
-        // Terminal output should keep flowing even if transcript persistence fails.
-      }
+      session.scanTail = clampTail(session.scanTail + displayData, PROMPT_READY_SCAN_BYTES);
+      session.modelRunActive = isCodexTerminalModelRunActive(session.scanTail);
+      this.queueTranscriptWrite(session, displayData);
       broadcast(CodexTerminalIPCChannels.DATA, { id, data: displayData });
-      if (isCodexTerminalPromptReady(session.outputBuffer, cwd)) {
+      if (launchCommand && !didLaunchCodex && isCodexTerminalPromptReady(session.scanTail, cwd)) {
         launchCodex();
       }
     });
@@ -493,6 +531,7 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
+      this.flushTranscript(session);
       session.exitedAt = new Date().toISOString();
       session.exitCode = exitCode;
       session.modelRunActive = false;
@@ -510,27 +549,45 @@ export class CodexTerminalManager {
   listHistory(input: CodexTerminalHistoryListInput = {}): CodexTerminalHistoryEntry[] {
     const limit = clampInteger(input.limit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT);
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
-    const files = this.findHistoryFiles()
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const recent = this.findHistoryFiles()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, this.historyScanLimit);
+    this.pruneHistoryEntryCache(recent);
     const entries: CodexTerminalHistoryEntry[] = [];
 
-    for (const file of files) {
-      const entry = this.readHistoryEntry(file.filePath, file.updatedAt, file.sizeBytes);
+    for (const file of recent) {
+      const entry = this.getHistoryEntry(file);
       if (!entry) continue;
-      const haystack = [
-        entry.filePath,
-        entry.fileName,
-        entry.threadId ?? '',
-        entry.title,
-        entry.cwd ?? '',
-        entry.preview,
-      ].join('\n').toLocaleLowerCase();
-      if (query && !haystack.includes(query)) continue;
+      if (query && !historyEntryMatchesQuery(entry, query)) continue;
       entries.push(entry);
       if (entries.length >= limit) break;
     }
 
     return entries;
+  }
+
+  // Returns the parsed entry for a file, reusing the cached parse when the
+  // file's mtime and size are unchanged so search stays off the disk.
+  private getHistoryEntry(file: CodexHistoryFileEntry): CodexTerminalHistoryEntry | null {
+    const cached = this.historyEntryCache.get(file.filePath);
+    if (cached && cached.mtimeMs === file.mtimeMs && cached.sizeBytes === file.sizeBytes) {
+      return cached.entry;
+    }
+    const entry = this.readHistoryEntry(file.filePath, file.updatedAt, file.sizeBytes);
+    if (entry) {
+      this.historyEntryCache.set(file.filePath, { mtimeMs: file.mtimeMs, sizeBytes: file.sizeBytes, entry });
+    }
+    return entry;
+  }
+
+  // Drops cache entries for files no longer in the scanned set so the cache
+  // can't outgrow the recent-sessions window.
+  private pruneHistoryEntryCache(files: CodexHistoryFileEntry[]): void {
+    if (this.historyEntryCache.size <= files.length) return;
+    const live = new Set(files.map((file) => file.filePath));
+    for (const key of this.historyEntryCache.keys()) {
+      if (!live.has(key)) this.historyEntryCache.delete(key);
+    }
   }
 
   readHistoryPreview(filePath: string, input: CodexTerminalHistoryPreviewInput = {}): CodexTerminalHistoryPreview | null {
@@ -563,7 +620,9 @@ export class CodexTerminalManager {
   }
 
   getBuffer(id: string): string | null {
-    return this.sessions.get(id)?.outputBuffer ?? null;
+    const buffer = this.sessions.get(id)?.outputBuffer;
+    if (buffer == null) return null;
+    return clampTail(buffer, this.maxBufferBytes);
   }
 
   writeInput(id: string, data: string): boolean {
@@ -589,6 +648,7 @@ export class CodexTerminalManager {
       clearTimeout(session.codexLaunchTimer);
       session.codexLaunchTimer = null;
     }
+    this.flushTranscript(session);
     if (!session.exitedAt && session.process) session.process.kill();
     this.sessions.delete(id);
     this.persistSessionState();
@@ -661,6 +721,7 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
+      this.flushTranscript(session);
       if (session.process) session.process.kill();
       session.process = null;
       session.restored = true;
@@ -676,8 +737,34 @@ export class CodexTerminalManager {
 
   private appendToBuffer(existing: string, chunk: string): string {
     const next = `${existing}${chunk}`;
-    if (next.length <= this.maxBufferBytes) return next;
-    return next.slice(next.length - this.maxBufferBytes);
+    // Trim lazily: tolerate up to 2x the cap so we copy back to the cap at most
+    // once per cap-worth of output, not on every chunk. getBuffer() clamps the
+    // visible result to maxBufferBytes, so callers still see a bounded buffer.
+    if (next.length <= this.maxBufferBytes * 2) return next;
+    return clampTail(next, this.maxBufferBytes);
+  }
+
+  private queueTranscriptWrite(session: CodexTerminalSession, data: string): void {
+    session.pendingTranscriptData += data;
+    if (session.transcriptFlushTimer) return;
+    session.transcriptFlushTimer = setTimeout(() => {
+      this.flushTranscript(session);
+    }, TRANSCRIPT_FLUSH_DELAY_MS);
+  }
+
+  private flushTranscript(session: CodexTerminalSession): void {
+    if (session.transcriptFlushTimer) {
+      clearTimeout(session.transcriptFlushTimer);
+      session.transcriptFlushTimer = null;
+    }
+    const data = session.pendingTranscriptData;
+    if (!data) return;
+    session.pendingTranscriptData = '';
+    try {
+      fs.appendFileSync(session.transcriptPath, data, 'utf8');
+    } catch {
+      // Terminal output should keep flowing even if transcript persistence fails.
+    }
   }
 
   private findHistoryFiles(): CodexHistoryFileEntry[] {
@@ -703,7 +790,7 @@ export class CodexTerminalManager {
         if (!entry.isFile() || !entry.name.startsWith('rollout-') || !entry.name.endsWith('.jsonl')) continue;
         try {
           const stat = fs.statSync(candidate);
-          files.push({ filePath: candidate, updatedAt: stat.mtime.toISOString(), sizeBytes: stat.size });
+          files.push({ filePath: candidate, updatedAt: stat.mtime.toISOString(), mtimeMs: stat.mtimeMs, sizeBytes: stat.size });
         } catch {
           // A session file can disappear while Codex is writing or pruning it.
         }

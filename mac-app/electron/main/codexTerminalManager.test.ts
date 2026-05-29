@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -46,6 +46,7 @@ function createManager(maxBufferBytes = 1024, input?: {
   sessionStateFilePath?: string;
   transcriptDirPath?: string;
   codexSessionsDirPath?: string;
+  historyScanLimit?: number;
 }) {
   const ptys: FakePty[] = [];
   const spawnPty = vi.fn(() => {
@@ -61,6 +62,7 @@ function createManager(maxBufferBytes = 1024, input?: {
     sessionStateFilePath: input?.sessionStateFilePath,
     transcriptDirPath: input?.transcriptDirPath,
     codexSessionsDirPath: input?.codexSessionsDirPath,
+    historyScanLimit: input?.historyScanLimit,
     spawnPty: spawnPty as any,
   });
   return { manager, ptys, spawnPty };
@@ -100,10 +102,31 @@ describe('CodexTerminalManager', () => {
 
     try {
       ptys[0].emit('data', 'persist me');
+      vi.advanceTimersByTime(100);
 
       expect(existsSync(session.transcriptPath)).toBe(true);
       expect(readFileSync(session.transcriptPath, 'utf8')).toBe('persist me');
     } finally {
+      rmSync(libraryDir, { recursive: true, force: true });
+    }
+  });
+
+  it('flushes pending transcript output when a session exits', () => {
+    const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
+    const { manager, ptys } = createManager(1024, {
+      contextDirPath: join(libraryDir, 'Codex Context'),
+      transcriptDirPath: join(libraryDir, 'Codex Context', 'transcripts'),
+      sessionStateFilePath: join(libraryDir, 'Codex Context', 'session-state.json'),
+    });
+    const session = manager.createSession();
+
+    try {
+      ptys[0].emit('data', 'exit flush');
+      ptys[0].emit('exit', { exitCode: 0 });
+
+      expect(readFileSync(session.transcriptPath, 'utf8')).toBe('exit flush');
+    } finally {
+      manager.destroy();
       rmSync(libraryDir, { recursive: true, force: true });
     }
   });
@@ -326,6 +349,32 @@ describe('CodexTerminalManager', () => {
     ptys[0].emit('data', 'ghij');
 
     expect(manager.getBuffer(session.id)).toBe('efghij');
+  });
+
+  it('bounds getBuffer to the cap whether or not the internal buffer has been trimmed', () => {
+    const { manager, ptys } = createManager(4);
+    const session = manager.createSession();
+
+    // 12 chars > 2x cap -> internal buffer trims to the last 4.
+    ptys[0].emit('data', 'abcdefghijkl');
+    expect(manager.getBuffer(session.id)).toBe('ijkl');
+
+    // 'ijklmn' (6) stays under the 2x tolerance, so getBuffer still clamps it.
+    ptys[0].emit('data', 'mn');
+    expect(manager.getBuffer(session.id)).toBe('klmn');
+  });
+
+  it('detects model run state from the rolling tail after output exceeds the buffer cap', () => {
+    const { manager, ptys } = createManager(6);
+    manager.createSession();
+
+    // Far more idle output than the buffer cap, then a live status line. The
+    // status scan must read the recent tail, not a trimmed-away buffer.
+    ptys[0].emit('data', 'x'.repeat(500));
+    ptys[0].emit('data', '› Fix this experimental · Working · 5h 99%');
+    expect(manager.listSessions()[0]?.modelRunActive).toBe(true);
+    ptys[0].emit('data', '› Fix this experimental · Ready · 5h 99%');
+    expect(manager.listSessions()[0]?.modelRunActive).toBe(false);
   });
 
   it('writes page context prompts into the active PTY', () => {
@@ -670,6 +719,73 @@ describe('CodexTerminalManager', () => {
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
       rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it('reuses parsed history entries until a file changes, then refreshes', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'codex-sessions-'));
+    const dayDir = join(sessionsDir, '2026', '05', '26');
+    mkdirSync(dayDir, { recursive: true });
+    const historyPath = join(dayDir, 'rollout-2026-05-26T10-00-00-thread.jsonl');
+    const meta = JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'thread-1', timestamp: '2026-05-26T10:00:00.000Z', cwd: '/tmp' },
+    });
+    // Same byte length so only the mtime distinguishes the two versions.
+    const message = (text: string) => JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: text } });
+    const fixedMtime = new Date('2026-05-26T10:00:00.000Z');
+
+    try {
+      writeFileSync(historyPath, [meta, message('AAAA')].join('\n'), 'utf8');
+      utimesSync(historyPath, fixedMtime, fixedMtime);
+
+      const { manager } = createManager(1024, { codexSessionsDirPath: sessionsDir });
+      expect(manager.listHistory()[0]?.title).toBe('AAAA');
+
+      // Rewrite the content but restore the exact mtime and size. After the 2s
+      // file-list cache window expires the file is re-stat'd, but the unchanged
+      // mtime+size means the parsed entry is served from cache (no re-read).
+      writeFileSync(historyPath, [meta, message('BBBB')].join('\n'), 'utf8');
+      utimesSync(historyPath, fixedMtime, fixedMtime);
+      vi.advanceTimersByTime(2001);
+      expect(manager.listHistory()[0]?.title).toBe('AAAA');
+
+      // Bumping the mtime invalidates the cache, so the new content is parsed.
+      const bumped = new Date(fixedMtime.getTime() + 5000);
+      utimesSync(historyPath, bumped, bumped);
+      vi.advanceTimersByTime(2001);
+      expect(manager.listHistory()[0]?.title).toBe('BBBB');
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('only scans the most-recent files up to the scan limit', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'codex-sessions-'));
+    const dayDir = join(sessionsDir, '2026', '05', '26');
+    mkdirSync(dayDir, { recursive: true });
+
+    const writeSession = (name: string, thread: string, message: string, mtime: Date) => {
+      const filePath = join(dayDir, name);
+      writeFileSync(filePath, [
+        JSON.stringify({ type: 'session_meta', payload: { id: thread, timestamp: mtime.toISOString(), cwd: '/tmp' } }),
+        JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message } }),
+      ].join('\n'), 'utf8');
+      utimesSync(filePath, mtime, mtime);
+    };
+    writeSession('rollout-2026-05-26T09-00-00-old.jsonl', 'old', 'older session', new Date('2026-05-26T09:00:00.000Z'));
+    writeSession('rollout-2026-05-26T10-00-00-new.jsonl', 'new', 'newer session', new Date('2026-05-26T10:00:00.000Z'));
+
+    try {
+      const { manager } = createManager(1024, { codexSessionsDirPath: sessionsDir, historyScanLimit: 1 });
+
+      // Only the single most-recent file is read, so the older one is invisible
+      // even to a query that would otherwise match it.
+      expect(manager.listHistory().map((entry) => entry.title)).toEqual(['newer session']);
+      expect(manager.listHistory({ query: 'older session' })).toHaveLength(0);
+      expect(manager.listHistory({ query: 'newer session' }).map((entry) => entry.title)).toEqual(['newer session']);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
     }
   });
 });
