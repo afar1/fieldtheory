@@ -915,6 +915,20 @@ export function splitRiverShortcutNode(
   };
 }
 
+export function getSidebarShortcutVisibility(input: {
+  isSearching: boolean;
+  hasBookmarksActionItem: boolean;
+  hasRiverShortcutNode: boolean;
+}): { showBookmarks: boolean; showRiver: boolean; hasShortcutRows: boolean } {
+  const showBookmarks = !input.isSearching && input.hasBookmarksActionItem;
+  const showRiver = !input.isSearching && input.hasRiverShortcutNode;
+  return {
+    showBookmarks,
+    showRiver,
+    hasShortcutRows: showBookmarks || showRiver,
+  };
+}
+
 export function normalizeRiverSharedSourcePath(sourcePath: string | undefined): string | null {
   const normalized = sourcePath?.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   if (!normalized) return null;
@@ -1218,7 +1232,7 @@ function isReservedBuiltinLibraryRelPath(relPath: string | undefined): boolean {
 export function getBuiltinLibraryDocumentType(input: {
   builtin: boolean;
   relPath?: string;
-  documentKind?: WikiNode['documentKind'];
+  documentKind?: Extract<WikiNode, { kind: 'file' }>['documentKind'];
 }): 'wiki' | 'external' {
   if (!input.builtin) return 'external';
   if (isReservedBuiltinLibraryRelPath(input.relPath)) return 'external';
@@ -2150,6 +2164,11 @@ function WikiSidebar({
     return node?.kind === 'file' ? node : null;
   }, [filteredSidebarRoots]);
   const bookmarksActionItem = bookmarksActionNode?.item ?? null;
+  const sidebarShortcutVisibility = getSidebarShortcutVisibility({
+    isSearching,
+    hasBookmarksActionItem: Boolean(bookmarksActionItem),
+    hasRiverShortcutNode: Boolean(riverShortcutNode),
+  });
   const [bookmarkCount, setBookmarkCount] = useState<number | null>(() => peekBookmarks()?.bookmarks.length ?? null);
   useEffect(() => {
     if (!bookmarksActionItem) return;
@@ -3102,11 +3121,11 @@ function WikiSidebar({
               timestamp: 0,
             })
           }
-          showTrailingDivider={!bookmarksActionItem}
+          showTrailingDivider={!sidebarShortcutVisibility.hasShortcutRows}
         />
       )}
 
-      {!isSearching && bookmarksActionItem && (
+      {sidebarShortcutVisibility.showBookmarks && bookmarksActionItem && (
         <>
           <SidebarShortcutRow
             icon={<SidebarBookmarkIcon color={getSidebarIconColor(BOOKMARKS_ITEM_ID, theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)} />}
@@ -3123,67 +3142,69 @@ function WikiSidebar({
               if (bookmarksActionNode) openContextMenu(event, bookmarksActionNode);
             }}
           />
-          {riverShortcutNode && (
-            <>
-              <SidebarShortcutRow
-                icon={<SidebarRiverIcon color={getSidebarIconColor(riverShortcutNode.id, theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)} />}
-                title={RIVER_SHORTCUT_LABEL}
-                titleAttr={riverShortcutNode.label}
-                count={countSidebarItems(riverShortcutNode.children)}
-                isSelected={selectedId === riverShortcutNode.id}
-                theme={theme}
-                indent={LIBRARY_SIDEBAR_EDGE_PADDING}
-                fontWeight={500}
-                rowId={riverShortcutNode.id}
-                trailing={<SidebarPeopleChipIcon color={theme.textSecondary} />}
-                onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
-                onOpen={() => toggleFolder(riverShortcutNode.id)}
-                onContextMenu={(event) => openContextMenu(event, riverShortcutNode)}
-              />
-              {expandedFolders.has(riverShortcutNode.id) && riverShortcutNode.children.map((child) => (
-                <TreeNode
-                  key={child.id}
-                  node={child}
-                  depth={1}
-                  isSearching={isSearching}
-                  expandedFolders={expandedFolders}
-                  toggleFolder={toggleFolder}
-                  creating={creating}
-                  newName={newName}
-                  setNewName={setNewName}
-                  createInputRef={createInputRef}
-                  submitCreate={submitCreate}
-                  cancelCreate={cancelCreate}
-                  beginCreateFile={beginCreateFile}
-                  selectedId={selectedId}
-                  selectedKeyboardActive={selectedKeyboardActive}
-                  selectedItemRef={selectedItemRef}
-                  dropTargetId={dropTargetId}
-                  setDropTargetId={setDropTargetId}
-                  onMoveLibraryItem={moveLibraryItem}
-                  theme={theme}
-                  onSelectItem={selectSidebarFileItem}
-                  onToggleItemSelection={toggleSidebarItemSelection}
-                  selectedFileIds={selectedFileIds}
-                  collapsingFileIds={collapsingFileIds}
-                  contextActiveNodeId={contextActiveNodeId}
-                  renameRequestId={renameRequestId}
-                  onRenameRequestConsumed={() => setRenameRequestId(null)}
-                  onContextMenu={openContextMenu}
-                  onKeyboardScopeActive={onKeyboardScopeActive}
-                  pinnedItemIds={pinnedItemIds}
-                  pinnedFolderFadeIds={pinnedFolderFadeIds}
-                  getSidebarIconColor={getSidebarIconColor}
-                  getSidebarIconColorIndex={getSidebarIconColorIndex}
-                  onOpenIconColorPicker={openSidebarIconColorPicker}
-                  inheritedIconColorIndex={getSidebarIconColorIndex(riverShortcutNode.id)}
-                />
-              ))}
-            </>
-          )}
-          <SidebarDivider theme={theme} />
         </>
       )}
+
+      {sidebarShortcutVisibility.showRiver && riverShortcutNode && (
+        <>
+          <SidebarShortcutRow
+            icon={<SidebarRiverIcon color={getSidebarIconColor(riverShortcutNode.id, theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)} />}
+            title={RIVER_SHORTCUT_LABEL}
+            titleAttr={riverShortcutNode.label}
+            count={countSidebarItems(riverShortcutNode.children)}
+            isSelected={selectedId === riverShortcutNode.id}
+            theme={theme}
+            indent={LIBRARY_SIDEBAR_EDGE_PADDING}
+            fontWeight={500}
+            rowId={riverShortcutNode.id}
+            trailing={<SidebarPeopleChipIcon color={theme.textSecondary} />}
+            onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
+            onOpen={() => toggleFolder(riverShortcutNode.id)}
+            onContextMenu={(event) => openContextMenu(event, riverShortcutNode)}
+          />
+          {expandedFolders.has(riverShortcutNode.id) && riverShortcutNode.children.map((child) => (
+            <TreeNode
+              key={child.id}
+              node={child}
+              depth={1}
+              isSearching={isSearching}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              creating={creating}
+              newName={newName}
+              setNewName={setNewName}
+              createInputRef={createInputRef}
+              submitCreate={submitCreate}
+              cancelCreate={cancelCreate}
+              beginCreateFile={beginCreateFile}
+              selectedId={selectedId}
+              selectedKeyboardActive={selectedKeyboardActive}
+              selectedItemRef={selectedItemRef}
+              dropTargetId={dropTargetId}
+              setDropTargetId={setDropTargetId}
+              onMoveLibraryItem={moveLibraryItem}
+              theme={theme}
+              onSelectItem={selectSidebarFileItem}
+              onToggleItemSelection={toggleSidebarItemSelection}
+              selectedFileIds={selectedFileIds}
+              collapsingFileIds={collapsingFileIds}
+              contextActiveNodeId={contextActiveNodeId}
+              renameRequestId={renameRequestId}
+              onRenameRequestConsumed={() => setRenameRequestId(null)}
+              onContextMenu={openContextMenu}
+              onKeyboardScopeActive={onKeyboardScopeActive}
+              pinnedItemIds={pinnedItemIds}
+              pinnedFolderFadeIds={pinnedFolderFadeIds}
+              getSidebarIconColor={getSidebarIconColor}
+              getSidebarIconColorIndex={getSidebarIconColorIndex}
+              onOpenIconColorPicker={openSidebarIconColorPicker}
+              inheritedIconColorIndex={getSidebarIconColorIndex(riverShortcutNode.id)}
+            />
+          ))}
+        </>
+      )}
+
+      {sidebarShortcutVisibility.hasShortcutRows && <SidebarDivider theme={theme} />}
 
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
