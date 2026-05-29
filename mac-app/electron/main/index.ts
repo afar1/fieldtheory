@@ -9311,7 +9311,7 @@ function setupClipboardIPCHandlers(): void {
           kind: 'handoff',
           fileName,
           filePath,
-          mode: 'text-reference',
+          mode: 'wiki-link',
           markdownContent: '',
         });
         if (insertTextIntoActiveFieldTheoryMarkdown(handoffText)) {
@@ -9461,7 +9461,7 @@ function setupClipboardIPCHandlers(): void {
           kind: 'command',
           name: command.name,
           filePath: command.filePath,
-          mode: 'text-reference',
+          mode: 'wiki-link',
           markdownContent: '',
         });
         if (insertTextIntoActiveFieldTheoryMarkdown(commandText)) {
