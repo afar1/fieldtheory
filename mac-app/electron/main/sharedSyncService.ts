@@ -169,6 +169,12 @@ export class SharedSyncService extends EventEmitter {
   private sharedTeamService: SharedTeamService;
   private presenceChannel: any | null = null;
   private activePresenceSharedId: string | null = null;
+  private teamDocumentsChannel: any | null = null;
+  private teamDocumentsChannelScopeUserId: string | null = null;
+  private remoteChangeSetupInFlight: Promise<void> | null = null;
+  private remoteSyncInFlight = false;
+  private remoteSyncQueued = false;
+  private disposed = false;
 
   constructor(authManager: AuthManager, sharedTeamService = new SharedTeamService(authManager)) {
     super();
@@ -221,6 +227,99 @@ export class SharedSyncService extends EventEmitter {
       await supabase.removeChannel(channel);
     } catch {
       // Presence cleanup should never block navigation or app shutdown.
+    }
+  }
+
+  async startRemoteChangeSync(): Promise<void> {
+    if (this.disposed) return;
+    if (this.remoteChangeSetupInFlight) return this.remoteChangeSetupInFlight;
+    this.remoteChangeSetupInFlight = this.startRemoteChangeSyncNow().finally(() => {
+      this.remoteChangeSetupInFlight = null;
+    });
+    return this.remoteChangeSetupInFlight;
+  }
+
+  private async startRemoteChangeSyncNow(): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (this.disposed || !supabase || !session?.user?.id) {
+      await this.stopRemoteChangeSync();
+      return;
+    }
+
+    const teamState = await this.getActiveTeamState();
+    const teamScopeUserId = teamState?.currentTeamScopeUserId ?? null;
+    if (this.disposed || !teamScopeUserId) {
+      await this.stopRemoteChangeSync();
+      return;
+    }
+    if (this.teamDocumentsChannel && this.teamDocumentsChannelScopeUserId === teamScopeUserId) return;
+
+    await this.stopRemoteChangeSync();
+    if (this.disposed) return;
+    this.teamDocumentsChannelScopeUserId = teamScopeUserId;
+    this.teamDocumentsChannel = supabase
+      .channel(`shared-team-documents:${teamScopeUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'team_documents',
+          filter: `team_scope_user_id=eq.${teamScopeUserId}`,
+        },
+        () => {
+          void this.syncFromRemoteChange();
+        },
+      )
+      .subscribe((status: string, err?: unknown) => {
+        if (err) log.warn('River realtime subscription error:', err);
+        if (status === 'SUBSCRIBED') {
+          void this.syncFromRemoteChange();
+        }
+      });
+  }
+
+  async stopRemoteChangeSync(): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    const channel = this.teamDocumentsChannel;
+    this.teamDocumentsChannel = null;
+    this.teamDocumentsChannelScopeUserId = null;
+    if (!channel || !supabase) return;
+    try {
+      await supabase.removeChannel(channel);
+    } catch (err) {
+      log.warn('River realtime teardown failed:', err);
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.clearPresence();
+    await this.stopRemoteChangeSync();
+  }
+
+  private async syncFromRemoteChange(): Promise<void> {
+    if (this.disposed) return;
+    if (this.remoteSyncInFlight) {
+      this.remoteSyncQueued = true;
+      return;
+    }
+
+    this.remoteSyncInFlight = true;
+    try {
+      const result = await this.syncOnce();
+      if (result.written > 0 || result.removed > 0 || result.created > 0) {
+        this.emit('cacheChanged', result);
+      }
+    } catch (err) {
+      log.warn('River realtime sync failed:', err);
+    } finally {
+      this.remoteSyncInFlight = false;
+      if (!this.disposed && this.remoteSyncQueued) {
+        this.remoteSyncQueued = false;
+        void this.syncFromRemoteChange();
+      }
     }
   }
 
