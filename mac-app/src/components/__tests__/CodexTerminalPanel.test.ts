@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   formatTerminalCwdLabel,
   estimateCodexTerminalSize,
+  getTerminalResizeDimension,
   getTerminalDataAfterInitialReplayEcho,
   getUnreplayedInitialData,
   isTerminalFocusToggleSequence,
   isTerminalPanelVisibilityToggleSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
+  resolveCodexTerminalDockSide,
   shouldSendBackendResize,
   shouldFocusTerminalForRequest,
+  shouldUseCompactRightDockToolbar,
   terminalAppearanceOptions,
   terminalContrastRatio,
   terminalTheme,
@@ -237,6 +240,62 @@ describe('estimateCodexTerminalSize', () => {
       cols: 93,
       rows: 18,
     });
+  });
+});
+
+describe('getTerminalResizeDimension', () => {
+  it('calculates bottom-dock drag height within the allowed panel range', () => {
+    expect(getTerminalResizeDimension({
+      dockSide: 'bottom',
+      startBottomHeight: 300,
+      startRightWidth: 500,
+      startX: 0,
+      startY: 500,
+      currentX: 0,
+      currentY: 450,
+      windowWidth: 1200,
+      windowHeight: 800,
+    })).toEqual({ bottomHeight: 350 });
+  });
+
+  it('clamps right-dock drag width within the allowed panel range', () => {
+    expect(getTerminalResizeDimension({
+      dockSide: 'right',
+      startBottomHeight: 300,
+      startRightWidth: 500,
+      startX: 700,
+      startY: 0,
+      currentX: 100,
+      currentY: 0,
+      windowWidth: 1000,
+      windowHeight: 800,
+    })).toEqual({ rightWidth: 680 });
+  });
+});
+
+describe('resolveCodexTerminalDockSide', () => {
+  it('uses the persisted user dock side when there is no responsive override', () => {
+    expect(resolveCodexTerminalDockSide({ dockSide: 'right' })).toBe('right');
+  });
+
+  it('uses a responsive override for rendering without changing the user dock side input', () => {
+    const userDockSide = 'right';
+    expect(resolveCodexTerminalDockSide({ dockSide: userDockSide, dockSideOverride: 'bottom' })).toBe('bottom');
+    expect(userDockSide).toBe('right');
+  });
+});
+
+describe('shouldUseCompactRightDockToolbar', () => {
+  it('compacts cramped right-docked toolbars', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'right', rightWidth: 420 })).toBe(true);
+  });
+
+  it('does not compact bottom-docked toolbars', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'bottom', rightWidth: 360 })).toBe(false);
+  });
+
+  it('uses the responsive override when deciding whether the toolbar is right-docked', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'bottom', dockSideOverride: 'right', rightWidth: 420 })).toBe(true);
   });
 });
 

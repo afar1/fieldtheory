@@ -642,6 +642,87 @@ export function getFocusChromeContentCenterX(input: {
   return Math.round(input.readerLeft + ((contentRight - input.readerLeft) / 2));
 }
 
+const RESPONSIVE_PANEL_MIN_EDITOR_WIDTH = 560;
+const RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH = 360;
+const RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT = 220;
+const RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL = 360;
+const RESPONSIVE_PANEL_SIDEBAR_GAP = 4;
+const RESPONSIVE_PANEL_RESTORE_BAND = 36;
+
+export type ResponsivePanelState = {
+  autoCollapseSidebar: boolean;
+  autoDockTerminalBottom: boolean;
+  autoHideTerminal: boolean;
+  reason: 'unmeasured' | 'wide' | 'sidebar' | 'terminal-bottom' | 'terminal-hidden' | 'forced-sidebar';
+};
+
+export function getResponsivePanelState(input: {
+  containerWidth: number;
+  containerHeight: number;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  sidebarForcedVisible: boolean;
+  terminalVisible: boolean;
+  terminalDockSide: CodexTerminalDockSide;
+  userResizing?: boolean;
+  previous?: ResponsivePanelState;
+}): ResponsivePanelState {
+  if (input.userResizing && input.previous) {
+    return input.previous;
+  }
+
+  if (input.containerWidth <= 0 || input.containerHeight <= 0) {
+    return { autoCollapseSidebar: false, autoDockTerminalBottom: false, autoHideTerminal: false, reason: 'unmeasured' };
+  }
+
+  const sidebarThreshold = input.sidebarWidth
+    + RESPONSIVE_PANEL_SIDEBAR_GAP
+    + RESPONSIVE_PANEL_MIN_EDITOR_WIDTH
+    + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const sidebarRestoreThreshold = sidebarThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
+  const autoCollapseSidebar = !input.sidebarCollapsed
+    && !input.sidebarForcedVisible
+    && (input.containerWidth < sidebarThreshold
+      || (input.previous?.autoCollapseSidebar === true && input.containerWidth < sidebarRestoreThreshold));
+  const effectiveSidebarCollapsed = input.sidebarCollapsed || autoCollapseSidebar;
+  const readerWidth = input.containerWidth - (effectiveSidebarCollapsed ? 0 : input.sidebarWidth + RESPONSIVE_PANEL_SIDEBAR_GAP);
+  const rightDockThreshold = RESPONSIVE_PANEL_MIN_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const rightDockRestoreThreshold = rightDockThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
+  const canUseBottomDock = input.containerHeight >= (
+    RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL + RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT
+  );
+  const autoDockTerminalBottom = input.terminalVisible
+    && input.terminalDockSide === 'right'
+    && canUseBottomDock
+    && (readerWidth < rightDockThreshold
+      || (input.previous?.autoDockTerminalBottom === true && readerWidth < rightDockRestoreThreshold));
+  const effectiveTerminalDockSide = autoDockTerminalBottom ? 'bottom' : input.terminalDockSide;
+  const autoHideTerminal = input.terminalVisible
+    && (
+      readerWidth < RESPONSIVE_PANEL_MIN_EDITOR_WIDTH
+      || (effectiveTerminalDockSide === 'bottom' && !canUseBottomDock)
+    );
+
+  const reason: ResponsivePanelState['reason'] =
+    input.sidebarForcedVisible ? 'forced-sidebar' :
+    autoHideTerminal ? 'terminal-hidden' :
+    autoDockTerminalBottom ? 'terminal-bottom' :
+    autoCollapseSidebar ? 'sidebar' :
+    'wide';
+
+  return { autoCollapseSidebar, autoDockTerminalBottom, autoHideTerminal, reason };
+}
+
+export function shouldAnimateResponsiveSidebar(input: {
+  responsivePanelState: Pick<ResponsivePanelState, 'autoCollapseSidebar' | 'autoDockTerminalBottom' | 'autoHideTerminal'>;
+  userResizing: boolean;
+}): boolean {
+  return !input.userResizing
+    && !input.responsivePanelState.autoCollapseSidebar
+    && !input.responsivePanelState.autoDockTerminalBottom
+    && !input.responsivePanelState.autoHideTerminal;
+}
+
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -2733,11 +2814,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sidebarTodoStateOverrides, setSidebarTodoStateOverrides] = useState<Record<string, MarkdownTodoState | null>>({});
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
-  useEffect(() => {
-    if (sidebarToggleRequestKey > 0 && sidebarCollapsed && !isFullScreen) {
-      setSidebarHoverExpanded((expanded) => !expanded);
-    }
-  }, [isFullScreen, sidebarCollapsed, sidebarToggleRequestKey]);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const wikiArchiveRef = useRef<WikiArchiveController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
@@ -2879,6 +2955,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
+  const [responsivePanelSize, setResponsivePanelSize] = useState({ width: 0, height: 0 });
+  const responsivePanelStateRef = useRef<ResponsivePanelState | undefined>(undefined);
+  const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
+  const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
+  const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
+  const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
+  const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
+  const responsivePanelState = getResponsivePanelState({
+    containerWidth: responsivePanelSize.width,
+    containerHeight: responsivePanelSize.height,
+    sidebarWidth,
+    sidebarCollapsed,
+    sidebarForcedVisible: sidebarForcedVisibleForEmptySelection,
+    terminalVisible: codexTerminalVisible,
+    terminalDockSide: codexTerminalDockSide,
+    userResizing: isResizing || codexTerminalResizing,
+    previous: responsivePanelStateRef.current,
+  });
+  responsivePanelStateRef.current = responsivePanelState;
+  const effectiveSidebarCollapsed = sidebarCollapsed
+    || (responsivePanelState.autoCollapseSidebar && !suppressAutoCollapseSidebar);
+  const effectiveCodexTerminalDockSide: CodexTerminalDockSide =
+    responsivePanelState.autoDockTerminalBottom ? 'bottom' : codexTerminalDockSide;
+  const effectiveCodexTerminalVisible = codexTerminalVisible
+    && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
+  const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
+    responsivePanelState,
+    userResizing: isResizing || codexTerminalResizing,
+  });
+  useEffect(() => {
+    if (sidebarToggleRequestKey > 0 && effectiveSidebarCollapsed && !isFullScreen) {
+      setSidebarHoverExpanded((expanded) => !expanded);
+    }
+  }, [effectiveSidebarCollapsed, isFullScreen, sidebarToggleRequestKey]);
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -3275,7 +3385,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setRenderedEditingActive(true);
   }, []);
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
-  const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
+  const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && effectiveSidebarCollapsed && contentMode === 'markdown';
   const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
     active,
     selectedItemType,
@@ -3287,7 +3397,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     isLibrarianDocumentFocusChromeActive({
       canUseFocusImmersive,
       isFullScreen,
-      sidebarCollapsed,
+      sidebarCollapsed: effectiveSidebarCollapsed,
       focusImmersive,
       isFocusedWritingMode,
       writingChromeHidden,
@@ -3799,6 +3909,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [isFocusedWritingMode]);
 
   useEffect(() => {
+    const previous = previousSidebarCollapsedRef.current;
+    if (previous !== sidebarCollapsed) {
+      if (!sidebarCollapsed && responsivePanelState.autoCollapseSidebar) {
+        setSuppressAutoCollapseSidebar(true);
+      }
+      if (sidebarCollapsed) {
+        setSuppressAutoCollapseSidebar(false);
+      }
+      previousSidebarCollapsedRef.current = sidebarCollapsed;
+      return;
+    }
+    if (!responsivePanelState.autoCollapseSidebar) {
+      setSuppressAutoCollapseSidebar(false);
+    }
+  }, [responsivePanelState.autoCollapseSidebar, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!responsivePanelState.autoHideTerminal) {
+      setSuppressAutoHideTerminal(false);
+    }
+  }, [responsivePanelState.autoHideTerminal]);
+
+  useEffect(() => {
     if (!canUseFocusImmersive && focusChromeEnabled === undefined) setFocusImmersive(false);
   }, [canUseFocusImmersive, focusChromeEnabled, setFocusImmersive]);
 
@@ -3807,14 +3940,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useLayoutEffect(() => {
-    if (!active || !focusChromeActive) {
-      onFocusChromeContentCenterChange?.(null);
-      return;
-    }
-    const readerPane = readerPaneRef.current;
-    if (!readerPane) return;
-
+    const updateResponsivePanelSize = () => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+      setResponsivePanelSize((previous) => {
+        if (previous.width === containerRect.width && previous.height === containerRect.height) return previous;
+        return { width: containerRect.width, height: containerRect.height };
+      });
+    };
     const updateCenter = () => {
+      updateResponsivePanelSize();
+      if (!active || !focusChromeActive) {
+        onFocusChromeContentCenterChange?.(null);
+        return;
+      }
+      const readerPane = readerPaneRef.current;
+      if (!readerPane) return;
       const readerRect = readerPane.getBoundingClientRect();
       const terminalRect = readerPane
         .querySelector<HTMLElement>('[data-ft-codex-terminal-panel="true"]')
@@ -3823,16 +3964,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         readerLeft: readerRect.left,
         readerRight: readerRect.right,
         terminalLeft: terminalRect?.left ?? null,
-        terminalDockedRight: codexTerminalDockSide === 'right',
-        terminalVisible: codexTerminalVisible,
+        terminalDockedRight: effectiveCodexTerminalDockSide === 'right',
+        terminalVisible: effectiveCodexTerminalVisible,
       }));
     };
 
     updateCenter();
     const frame = window.requestAnimationFrame(updateCenter);
     const resizeObserver = new ResizeObserver(updateCenter);
-    resizeObserver.observe(readerPane);
-    for (const element of readerPane.querySelectorAll<HTMLElement>('[data-ft-codex-terminal-panel="true"]')) {
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
+    if (readerPaneRef.current) resizeObserver.observe(readerPaneRef.current);
+    for (const element of readerPaneRef.current?.querySelectorAll<HTMLElement>('[data-ft-codex-terminal-panel="true"]') ?? []) {
       resizeObserver.observe(element);
     }
     window.addEventListener('resize', updateCenter);
@@ -3841,7 +3983,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateCenter);
     };
-  }, [active, codexTerminalDockSide, codexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -5195,6 +5337,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activateRenderedTextEditing(selection);
   }, [activateRenderedTextEditing, deactivateSidebarKeyboard, displaySourceBody.length]);
 
+  const handleCodexTerminalVisibleChange = useCallback((nextVisible: boolean) => {
+    if (nextVisible && responsivePanelState.autoHideTerminal) {
+      setSuppressAutoHideTerminal(true);
+    }
+    if (!nextVisible) {
+      setSuppressAutoHideTerminal(false);
+    }
+    setCodexTerminalVisible(nextVisible);
+  }, [responsivePanelState.autoHideTerminal]);
+
   const toggleTerminalEditorFocus = useCallback((options?: { restoreEditorFocus?: boolean }) => {
     if (shouldRestoreEditorWhenTogglingTerminalFocus({
       terminalVisible: codexTerminalVisible,
@@ -5206,17 +5358,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     captureTerminalReturnEditorSelection();
-    setCodexTerminalVisible(true);
+    handleCodexTerminalVisibleChange(true);
     setCodexTerminalFocusRequestKey((key) => key + 1);
   }, [
     captureTerminalReturnEditorSelection,
     codexTerminalFocused,
     codexTerminalVisible,
+    handleCodexTerminalVisibleChange,
     restoreTerminalReturnEditorSelection,
   ]);
 
   const closeCodexTerminalPanel = useCallback((options?: { restoreEditorFocus?: boolean }) => {
     setCodexTerminalFocused(false);
+    setSuppressAutoHideTerminal(false);
     setCodexTerminalVisible(false);
     if (options?.restoreEditorFocus) {
       window.requestAnimationFrame(() => restoreTerminalReturnEditorSelection());
@@ -5237,8 +5391,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     captureTerminalReturnEditorSelection();
-    setCodexTerminalVisible(true);
-  }, [captureTerminalReturnEditorSelection, closeCodexTerminalPanel, codexTerminalFocused, codexTerminalVisible]);
+    handleCodexTerminalVisibleChange(true);
+  }, [captureTerminalReturnEditorSelection, closeCodexTerminalPanel, codexTerminalFocused, codexTerminalVisible, handleCodexTerminalVisibleChange]);
 
   const handleCodexTerminalLauncherTargetSessionChange = useCallback((sessionId: string | null) => {
     void window.codexTerminalAPI?.setLauncherTargetSession?.(sessionId);
@@ -8295,9 +8449,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
-  const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && !activeReading && !isFullScreen;
-  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisibleForEmptySelection;
-  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisibleForEmptySelection;
+  const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !activeReading && !isFullScreen);
+  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisible;
+  const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!sidebarTemporarilyExpanded) return;
     const target = event.target;
@@ -8376,7 +8530,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }}
     >
       <ScrollDiagnosticsHUD />
-      {sidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisibleForEmptySelection && (
+      {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
         <div
           aria-hidden="true"
           data-fieldtheory-collapsed-sidebar-hover-strip="true"
@@ -8418,7 +8572,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           flexShrink: 0,
           zIndex: sidebarTemporarilyExpanded ? 30 : undefined,
           boxShadow: sidebarTemporarilyExpanded ? (theme.isDark ? '12px 0 24px rgba(0,0,0,0.36)' : '12px 0 24px rgba(0,0,0,0.12)') : undefined,
-          transition: isResizing ? 'none' : 'width 0.18s ease, min-width 0.18s ease',
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease' : 'none',
         }}
       >
         <div
@@ -8465,7 +8619,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
           borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
-          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease' : 'background-color 0.15s ease',
           flexShrink: 0,
           display: sidebarHidden ? 'none' : 'block',
           pointerEvents: sidebarVisible ? 'auto' : 'none',
@@ -8490,8 +8644,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: codexTerminalVisible && codexTerminalDockSide === 'right' ? 'row' : 'column',
-          overflow: focusChromeActive && codexTerminalVisible && codexTerminalDockSide === 'right' ? 'visible' : 'hidden',
+          flexDirection: effectiveCodexTerminalVisible && effectiveCodexTerminalDockSide === 'right' ? 'row' : 'column',
+          overflow: focusChromeActive && effectiveCodexTerminalVisible && effectiveCodexTerminalDockSide === 'right' ? 'visible' : 'hidden',
           minHeight: 0, // Required for flex child to shrink below content size
           position: 'relative',
         }}
@@ -9698,16 +9852,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </div>
         )}
         <CodexTerminalPanel
-          visible={codexTerminalVisible}
+          visible={effectiveCodexTerminalVisible}
+          visibleIntent={codexTerminalVisible}
           pageContext={codexTerminalPageContext}
-          extendToViewportTop={focusChromeActive && codexTerminalDockSide === 'right'}
+          dockSideOverride={effectiveCodexTerminalDockSide !== codexTerminalDockSide ? effectiveCodexTerminalDockSide : undefined}
+          extendToViewportTop={focusChromeActive && effectiveCodexTerminalDockSide === 'right'}
           focusRequestKey={codexTerminalFocusRequestKey}
           onDockSideChange={setCodexTerminalDockSide}
           onFocusToggleShortcut={toggleTerminalEditorFocus}
           onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
           onTerminalFocusChange={setCodexTerminalFocused}
+          onResizeActiveChange={setCodexTerminalResizing}
           onVisibilityToggleShortcut={toggleCodexTerminalPanel}
-          onVisibleChange={setCodexTerminalVisible}
+          onVisibleChange={handleCodexTerminalVisibleChange}
         />
       </div>
 

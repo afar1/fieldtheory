@@ -10,13 +10,16 @@ type CodexTerminalPageContext = Parameters<NonNullable<Window['codexTerminalAPI'
 
 interface CodexTerminalPanelProps {
   visible: boolean;
+  visibleIntent?: boolean;
   pageContext: CodexTerminalPageContext | null;
+  dockSideOverride?: CodexTerminalDockSide;
   extendToViewportTop?: boolean;
   focusRequestKey?: number;
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
   onFocusToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onTerminalFocusChange?: (focused: boolean) => void;
   onLauncherTargetSessionChange?: (sessionId: string | null) => void;
+  onResizeActiveChange?: (resizing: boolean) => void;
   onVisibilityToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onVisibleChange: (visible: boolean) => void;
 }
@@ -231,6 +234,38 @@ export function estimateCodexTerminalSize(input: { width: number; height: number
   };
 }
 
+export function getTerminalResizeDimension(input: {
+  dockSide: CodexTerminalDockSide;
+  startBottomHeight: number;
+  startRightWidth: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  windowWidth: number;
+  windowHeight: number;
+}): { bottomHeight?: number; rightWidth?: number } {
+  if (input.dockSide === 'bottom') {
+    const max = Math.floor(input.windowHeight * MAX_BOTTOM_HEIGHT_RATIO);
+    return {
+      bottomHeight: Math.max(MIN_BOTTOM_HEIGHT, Math.min(max, input.startBottomHeight + input.startY - input.currentY)),
+    };
+  }
+  const max = Math.floor(input.windowWidth * MAX_RIGHT_WIDTH_RATIO);
+  return {
+    rightWidth: Math.max(MIN_RIGHT_WIDTH, Math.min(max, input.startRightWidth + input.startX - input.currentX)),
+  };
+}
+
+export function resolveCodexTerminalDockSide(input: { dockSide: CodexTerminalDockSide; dockSideOverride?: CodexTerminalDockSide }): CodexTerminalDockSide {
+  return input.dockSideOverride ?? input.dockSide;
+}
+
+export function shouldUseCompactRightDockToolbar(input: { dockSide: CodexTerminalDockSide; rightWidth: number; dockSideOverride?: CodexTerminalDockSide }): boolean {
+  const effectiveDockSide = resolveCodexTerminalDockSide(input);
+  return effectiveDockSide === 'right' && input.rightWidth <= MIN_RIGHT_WIDTH + 72;
+}
+
 function readStoredNumber(key: string, fallback: number): number {
   const value = Number.parseInt(localStorage.getItem(key) ?? '', 10);
   return Number.isFinite(value) ? value : fallback;
@@ -252,7 +287,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -279,6 +314,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
+  const fitFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    onResizeActiveChange?.(isResizing);
+  }, [isResizing, onResizeActiveChange]);
   const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
@@ -295,8 +335,10 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
 
   const updateDockSide = useCallback((nextDockSide: CodexTerminalDockSide) => {
     setDockSide(nextDockSide);
+    localStorage.setItem(CODEX_TERMINAL_DOCK_STORAGE_KEY, nextDockSide);
     onDockSideChange?.(nextDockSide);
   }, [onDockSideChange]);
+  const effectiveDockSide = resolveCodexTerminalDockSide({ dockSide, dockSideOverride });
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null,
     [activeSessionId, sessions],
@@ -314,7 +356,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
 
   const updateHistoryOverlayRect = useCallback(() => {
     const panel = panelRef.current;
-    if (!panel || dockSide !== 'right') {
+    if (!panel || effectiveDockSide !== 'right') {
       setHistoryOverlayRect(null);
       return;
     }
@@ -328,7 +370,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       width: `${width}px`,
       height: `${rect.height}px`,
     });
-  }, [dockSide]);
+  }, [effectiveDockSide]);
 
   const refreshHistory = useCallback(async (query: string) => {
     setHistoryLoading(true);
@@ -366,6 +408,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, []);
 
   const fitActiveTerminal = useCallback(() => {
+    fitFrameRef.current = null;
     if (!activeSessionId) return;
     const handle = terminalHandlesRef.current.get(activeSessionId);
     if (!handle) return;
@@ -379,6 +422,19 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       // Resize can race while the panel is hidden or changing dock sides.
     }
   }, [activeSessionId]);
+
+  const scheduleFitActiveTerminal = useCallback(() => {
+    if (fitFrameRef.current !== null) return;
+    fitFrameRef.current = window.requestAnimationFrame(fitActiveTerminal);
+  }, [fitActiveTerminal]);
+
+  useEffect(() => (
+    () => {
+      if (fitFrameRef.current === null) return;
+      window.cancelAnimationFrame(fitFrameRef.current);
+      fitFrameRef.current = null;
+    }
+  ), []);
 
   const focusActiveTerminal = useCallback(() => {
     if (!activeSessionId) return false;
@@ -394,9 +450,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     return estimateCodexTerminalSize({
       width: rect.width,
       height: rect.height,
-      toolbarTopInset: dockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0,
+      toolbarTopInset: effectiveDockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0,
     });
-  }, [dockSide, extendToViewportTop]);
+  }, [effectiveDockSide, extendToViewportTop]);
 
   const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean; launchCommand?: string }) => {
     const session = await window.codexTerminalAPI?.create({
@@ -478,12 +534,8 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [historyOpen]);
 
   useEffect(() => {
-    localStorage.setItem(CODEX_TERMINAL_DOCK_STORAGE_KEY, dockSide);
-  }, [dockSide]);
-
-  useEffect(() => {
-    localStorage.setItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY, String(visible));
-  }, [visible]);
+    localStorage.setItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY, String(visibleIntent));
+  }, [visibleIntent]);
 
   useEffect(() => {
     if (activeSessionId) {
@@ -502,7 +554,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [rightWidth]);
 
   useLayoutEffect(() => {
-    if (!visible || dockSide !== 'right' || !extendToViewportTop) {
+    if (!visible || effectiveDockSide !== 'right' || !extendToViewportTop) {
       topExtensionRef.current = 0;
       setTopExtension(0);
       return;
@@ -522,7 +574,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', updateTopExtension);
     };
-  }, [dockSide, extendToViewportTop, visible]);
+  }, [effectiveDockSide, extendToViewportTop, visible]);
 
   useEffect(() => {
     if (!visible || sessions.length !== 0) return;
@@ -589,11 +641,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     const handleResize = () => {
       setBottomHeight((current) => clampBottomHeight(current));
       setRightWidth((current) => clampRightWidth(current));
-      fitActiveTerminal();
+      scheduleFitActiveTerminal();
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [fitActiveTerminal]);
+  }, [scheduleFitActiveTerminal]);
 
   useEffect(() => {
     const appearance = terminalAppearanceOptions(theme.isDark);
@@ -609,9 +661,8 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [theme.isDark]);
 
   useEffect(() => {
-    const timer = window.setTimeout(fitActiveTerminal, 60);
-    return () => window.clearTimeout(timer);
-  }, [dockSide, fitActiveTerminal, visible]);
+    scheduleFitActiveTerminal();
+  }, [effectiveDockSide, scheduleFitActiveTerminal, visible]);
 
   useEffect(() => {
     if (!shouldFocusTerminalForRequest({ visible, focusRequestKey })) return;
@@ -853,7 +904,8 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     };
   }, [activeSession, pageContext]);
 
-  const panelSize: CSSProperties = dockSide === 'bottom'
+  const compactRightDockToolbar = shouldUseCompactRightDockToolbar({ dockSide, dockSideOverride, rightWidth });
+  const panelSize: CSSProperties = effectiveDockSide === 'bottom'
     ? { height: `${bottomHeight}px`, minHeight: `${MIN_BOTTOM_HEIGHT}px`, width: '100%' }
     : {
       height: topExtension > 0 ? `calc(100% + ${topExtension}px)` : '100%',
@@ -867,7 +919,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const terminalChrome = theme.isDark ? '#15181e' : '#ebe3d6';
   const terminalSoftBorder = theme.isDark ? '#242832' : '#ded3c2';
   const terminalMutedText = theme.isDark ? '#8a8f99' : '#635f58';
-  const toolbarTopInset = dockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0;
+  const toolbarTopInset = effectiveDockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0;
   const toolbarItemOffset: CSSProperties | undefined = toolbarTopInset > 0 ? { marginTop: `${toolbarTopInset}px` } : undefined;
 
   const startResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
@@ -879,16 +931,22 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     const startRightWidth = rightWidth;
     const previousCursor = document.body.style.cursor;
     const previousUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = dockSide === 'bottom' ? 'row-resize' : 'col-resize';
+    document.body.style.cursor = effectiveDockSide === 'bottom' ? 'row-resize' : 'col-resize';
     document.body.style.userSelect = 'none';
     const onMove = (moveEvent: MouseEvent) => {
-      if (dockSide === 'bottom') {
-        const max = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_RATIO);
-        setBottomHeight(Math.max(MIN_BOTTOM_HEIGHT, Math.min(max, startBottomHeight + startY - moveEvent.clientY)));
-      } else {
-        const max = Math.floor(window.innerWidth * MAX_RIGHT_WIDTH_RATIO);
-        setRightWidth(Math.max(MIN_RIGHT_WIDTH, Math.min(max, startRightWidth + startX - moveEvent.clientX)));
-      }
+      const resizeDimension = getTerminalResizeDimension({
+        dockSide: effectiveDockSide,
+        startBottomHeight,
+        startRightWidth,
+        startX,
+        startY,
+        currentX: moveEvent.clientX,
+        currentY: moveEvent.clientY,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+      });
+      if (typeof resizeDimension.bottomHeight === 'number') setBottomHeight(resizeDimension.bottomHeight);
+      if (typeof resizeDimension.rightWidth === 'number') setRightWidth(resizeDimension.rightWidth);
     };
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
@@ -900,7 +958,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [bottomHeight, dockSide, fitActiveTerminal, rightWidth]);
+  }, [bottomHeight, effectiveDockSide, fitActiveTerminal, rightWidth]);
 
   return (
     <div
@@ -922,14 +980,14 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     >
       <div
         onMouseDown={startResize}
-        title={dockSide === 'bottom' ? 'Resize terminal height' : 'Resize terminal width'}
+        title={effectiveDockSide === 'bottom' ? 'Resize terminal height' : 'Resize terminal width'}
         style={{
           position: 'absolute',
-          top: dockSide === 'bottom' ? '-5px' : 0,
-          left: dockSide === 'right' ? '-5px' : 0,
-          width: dockSide === 'right' ? '9px' : '100%',
-          height: dockSide === 'bottom' ? '9px' : '100%',
-          cursor: dockSide === 'bottom' ? 'row-resize' : 'col-resize',
+          top: effectiveDockSide === 'bottom' ? '-5px' : 0,
+          left: effectiveDockSide === 'right' ? '-5px' : 0,
+          width: effectiveDockSide === 'right' ? '9px' : '100%',
+          height: effectiveDockSide === 'bottom' ? '9px' : '100%',
+          cursor: effectiveDockSide === 'bottom' ? 'row-resize' : 'col-resize',
           zIndex: 4,
           background: isResizing
             ? (theme.isDark ? 'rgba(16,185,129,0.18)' : 'rgba(16,185,129,0.14)')
@@ -939,10 +997,10 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       <div
         style={{
           position: 'absolute',
-          top: dockSide === 'bottom' ? 0 : undefined,
-          left: dockSide === 'right' ? 0 : undefined,
-          width: dockSide === 'right' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
-          height: dockSide === 'bottom' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
+          top: effectiveDockSide === 'bottom' ? 0 : undefined,
+          left: effectiveDockSide === 'right' ? 0 : undefined,
+          width: effectiveDockSide === 'right' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
+          height: effectiveDockSide === 'bottom' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
           backgroundColor: isResizing ? '#10b981' : terminalSoftBorder,
           pointerEvents: 'none',
           zIndex: 6,
@@ -995,7 +1053,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
               key={session.id}
               style={{
                 height: '24px',
-                maxWidth: '168px',
+                maxWidth: compactRightDockToolbar ? '112px' : '168px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 overflow: 'hidden',
@@ -1021,8 +1079,8 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
                   minWidth: 0,
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  padding: '0 7px',
+                  gap: compactRightDockToolbar ? '5px' : '6px',
+                  padding: compactRightDockToolbar ? '0 5px' : '0 7px',
                   border: 0,
                   backgroundColor: 'transparent',
                   color: 'inherit',
@@ -1034,7 +1092,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
               >
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
-                <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
+                {!compactRightDockToolbar && (
+                  <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
+                )}
               </button>
               <button
                 type="button"
@@ -1069,7 +1129,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         <button type="button" onClick={() => void createSession()} title="New terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
           +
         </button>
-        {activeCwd && dockSide === 'bottom' && (
+        {activeCwd && effectiveDockSide === 'bottom' && (
           <span
             title={activeCwd}
             style={{

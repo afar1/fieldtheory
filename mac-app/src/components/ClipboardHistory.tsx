@@ -22,6 +22,7 @@ import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getAgentKickoffFooterStatus } from '../utils/agentKickoffStatus';
+import { commandPathToLauncherLibraryOpenTarget } from '../commandLauncherUtils';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -220,30 +221,6 @@ function shouldRestoreLibrarianImmersive(storage: Pick<Storage, 'getItem'>): boo
     && restoreLibrarianSelection(storage)?.type === 'bookmarks';
 }
 
-function normalizeFsPathForMatch(value: string): string {
-  return value.replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-function commandPathToLibraryOpenTarget(
-  commandPath: string,
-  libraryRoots: Array<{ path: string; builtin: boolean }> | undefined,
-): FieldTheoryMarkdownTarget {
-  const normalizedCommandPath = normalizeFsPathForMatch(commandPath);
-  const builtinRoot = libraryRoots?.find((root) => {
-    if (!root.builtin) return false;
-    const normalizedRoot = normalizeFsPathForMatch(root.path);
-    return normalizedCommandPath === normalizedRoot || normalizedCommandPath.startsWith(`${normalizedRoot}/`);
-  });
-
-  if (builtinRoot) {
-    const normalizedRoot = normalizeFsPathForMatch(builtinRoot.path);
-    const relPath = normalizedCommandPath.slice(normalizedRoot.length + 1).replace(/\.md$/i, '');
-    if (relPath) return { kind: 'wiki', path: relPath };
-  }
-
-  return { kind: 'external', path: commandPath };
-}
-
 function cssTimeToMs(value: string): number {
   const trimmed = value.trim();
   if (!trimmed) return 0;
@@ -268,7 +245,7 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 }
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_TOP_PX = 48;
+const FOCUS_CHROME_ICON_TOP_PX = 28;
 const FOCUS_CHROME_ICON_OPACITY = 0.62;
 const FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX = 220;
 const FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX = 160;
@@ -807,7 +784,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     setViewMode('librarian');
     void (async () => {
       const roots = await window.libraryAPI?.getRoots?.().catch(() => undefined);
-      setPendingLibraryOpenTarget(commandPathToLibraryOpenTarget(path, roots));
+      setPendingLibraryOpenTarget(commandPathToLauncherLibraryOpenTarget(path, roots));
     })();
   }, []);
   const handleLibrarianOpenCommandPath = useCallback((path: string) => {
@@ -2875,7 +2852,9 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       // Let Cmd+H pass through to menu for app hiding.
       if (key === 'h' && hasMeta) return;
 
-      const appNavigationDirection = getAppBracketNavigationDirection(e);
+      const appNavigationDirection = showSettings || librarianSurfaceVisible
+        ? null
+        : getAppBracketNavigationDirection(e);
       if (appNavigationDirection !== null && navigateAppHistory(appNavigationDirection)) {
         e.preventDefault();
         e.stopPropagation();
@@ -3733,7 +3712,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
