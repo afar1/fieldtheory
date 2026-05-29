@@ -47,7 +47,7 @@ interface ContactRow {
   id: string;
   owner_user_id: string;
   contact_email: string | null;
-  contact_user_id: string | null;
+  contact_user_id?: string | null;
   relationship_type: string | null;
   status: string | null;
   created_at?: string | null;
@@ -69,6 +69,14 @@ function emptyState(reason: SharedTeamUnavailableReason): SharedTeamState {
   };
 }
 
+function isMissingContactUserIdError(error: unknown): boolean {
+  const message = (typeof error === 'object' && error && 'message' in error
+    ? String((error as { message?: unknown }).message ?? '')
+    : String(error ?? '')).toLowerCase();
+  return message.includes('contact_user_id')
+    && (message.includes('does not exist') || message.includes('schema cache'));
+}
+
 export class SharedTeamService {
   constructor(private readonly authManager: AuthManager) {}
 
@@ -81,16 +89,23 @@ export class SharedTeamService {
     if (!supabase || !userId) return emptyState('not_authenticated');
 
     try {
-      const orFilter = userEmail
-        ? `owner_user_id.eq.${userId},contact_user_id.eq.${userId},contact_email.ilike.${userEmail}`
-        : `owner_user_id.eq.${userId},contact_user_id.eq.${userId}`;
-
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('contacts')
         .select('*')
         .eq('relationship_type', 'team')
-        .or(orFilter)
+        .or(this.teamLookupFilter(userId, userEmail, true))
         .order('created_at', { ascending: false });
+
+      if (error && isMissingContactUserIdError(error)) {
+        const fallback = await supabase
+          .from('contacts')
+          .select('*')
+          .eq('relationship_type', 'team')
+          .or(this.teamLookupFilter(userId, userEmail, false))
+          .order('created_at', { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (error) {
         log.warn('Team state lookup failed:', error);
@@ -185,10 +200,6 @@ export class SharedTeamService {
     if (!contactId) return { ok: false, error: 'Invite is required' };
 
     try {
-      const targetFilter = userEmail
-        ? `contact_user_id.eq.${userId},contact_email.ilike.${userEmail}`
-        : `contact_user_id.eq.${userId}`;
-
       const query = accept
         ? supabase
           .from('contacts')
@@ -196,16 +207,37 @@ export class SharedTeamService {
           .eq('id', contactId)
           .eq('relationship_type', 'team')
           .eq('status', 'pending')
-          .or(targetFilter)
+          .or(this.inviteTargetFilter(userId, userEmail, true))
         : supabase
           .from('contacts')
           .delete()
           .eq('id', contactId)
           .eq('relationship_type', 'team')
           .eq('status', 'pending')
-          .or(targetFilter);
+          .or(this.inviteTargetFilter(userId, userEmail, true));
 
-      const { data, error } = await query.select('id').maybeSingle();
+      let { data, error } = await query.select('id').maybeSingle();
+      if (error && userEmail && isMissingContactUserIdError(error)) {
+        const fallbackQuery = accept
+          ? supabase
+            .from('contacts')
+            .update({ status: 'accepted' })
+            .eq('id', contactId)
+            .eq('relationship_type', 'team')
+            .eq('status', 'pending')
+            .or(this.inviteTargetFilter(userId, userEmail, false))
+          : supabase
+            .from('contacts')
+            .delete()
+            .eq('id', contactId)
+            .eq('relationship_type', 'team')
+            .eq('status', 'pending')
+            .or(this.inviteTargetFilter(userId, userEmail, false));
+        const fallback = await fallbackQuery.select('id').maybeSingle();
+        data = fallback.data;
+        error = fallback.error;
+      }
+
       if (error) return { ok: false, error: error.message ?? 'Invite response failed' };
       if (!data) return { ok: false, error: 'Invite response failed because no invite row was updated' };
       return { ok: true };
@@ -251,18 +283,27 @@ export class SharedTeamService {
     if (!supabase || !userId) return { ok: false, error: 'Not authenticated' };
 
     try {
-      const targetFilter = userEmail
-        ? `contact_user_id.eq.${userId},contact_email.ilike.${userEmail}`
-        : `contact_user_id.eq.${userId}`;
-
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('contacts')
         .delete()
         .eq('relationship_type', 'team')
         .eq('status', 'accepted')
-        .or(targetFilter)
+        .or(this.inviteTargetFilter(userId, userEmail, true))
         .select('id')
         .maybeSingle();
+
+      if (error && userEmail && isMissingContactUserIdError(error)) {
+        const fallback = await supabase
+          .from('contacts')
+          .delete()
+          .eq('relationship_type', 'team')
+          .eq('status', 'accepted')
+          .or(this.inviteTargetFilter(userId, userEmail, false))
+          .select('id')
+          .maybeSingle();
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (error) return { ok: false, error: error.message ?? 'Leave team failed' };
       if (!data) return { ok: false, error: 'Leave team failed because no team row was removed' };
@@ -271,6 +312,19 @@ export class SharedTeamService {
       log.warn('Leave team failed:', err);
       return { ok: false, error: 'Leave team failed' };
     }
+  }
+
+  private teamLookupFilter(userId: string, userEmail: string, includeContactUserId: boolean): string {
+    const filters = [`owner_user_id.eq.${userId}`];
+    if (includeContactUserId) filters.push(`contact_user_id.eq.${userId}`);
+    if (userEmail) filters.push(`contact_email.ilike.${userEmail}`);
+    return filters.join(',');
+  }
+
+  private inviteTargetFilter(userId: string, userEmail: string, includeContactUserId: boolean): string {
+    const filters = includeContactUserId ? [`contact_user_id.eq.${userId}`] : [];
+    if (userEmail) filters.push(`contact_email.ilike.${userEmail}`);
+    return filters.join(',');
   }
 
   private stateFromRows(rows: ContactRow[], userId: string, userEmail: string): SharedTeamState {
@@ -300,7 +354,7 @@ export class SharedTeamService {
         teamScopeUserIds.add(userId);
         members.push({
           contactId: row.id,
-          userId: row.contact_user_id,
+          userId: row.contact_user_id ?? null,
           email: normalizeEmail(row.contact_email),
           role: 'member',
           teamScopeUserId: userId,
@@ -394,7 +448,7 @@ export class SharedTeamService {
     return {
       contactId: row.id,
       ownerUserId: row.owner_user_id,
-      contactUserId: row.contact_user_id,
+      contactUserId: row.contact_user_id ?? null,
       email: normalizeEmail(row.contact_email),
       direction,
       createdAt: row.created_at ?? null,
