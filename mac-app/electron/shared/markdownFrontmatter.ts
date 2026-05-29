@@ -7,6 +7,12 @@ export type ParsedMarkdownFrontmatter = {
   meta: Record<string, string>;
 };
 
+export type MarkdownEditActor = {
+  type: 'human' | 'model' | 'system';
+  name: string;
+  detail?: string;
+};
+
 function stripYamlScalar(value: string): string {
   const trimmed = value.trim();
   if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
@@ -30,6 +36,67 @@ export function parseMarkdownFrontmatter(content: string): ParsedMarkdownFrontma
   }
 
   return { body: match[2].replace(/^\n+/, ''), raw, lines, meta };
+}
+
+function normalizeEditActorType(value: string | undefined): MarkdownEditActor['type'] | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'human' || normalized === 'person' || normalized === 'user') return 'human';
+  if (normalized === 'model' || normalized === 'ai' || normalized === 'assistant' || normalized === 'agent') return 'model';
+  if (normalized === 'system' || normalized === 'automation') return 'system';
+  return null;
+}
+
+function firstFrontmatterValue(meta: Record<string, string>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = meta[key]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+export function getMarkdownEditActor(meta: Record<string, string>): MarkdownEditActor | null {
+  const rawType = firstFrontmatterValue(meta, [
+    'last_editor_type',
+    'last_edited_by_type',
+    'edit_actor_type',
+    'updated_by_type',
+  ]);
+  const type = normalizeEditActorType(rawType);
+  const modelName = firstFrontmatterValue(meta, [
+    'last_editor_model',
+    'last_edited_by_model',
+    'edit_actor_model',
+    'updated_by_model',
+  ]);
+  const name = firstFrontmatterValue(meta, [
+    'last_editor_name',
+    'last_edited_by',
+    'edit_actor_name',
+    'updated_by',
+  ]) ?? modelName;
+  const inferredType = type ?? (modelName ? 'model' : null);
+  if (!inferredType || !name) return null;
+
+  const reasoning = firstFrontmatterValue(meta, [
+    'last_editor_reasoning',
+    'last_editor_reasoning_level',
+    'last_edited_by_reasoning',
+    'reasoning_level',
+  ]);
+  const detail = reasoning
+    ? (/reason/i.test(reasoning) ? reasoning : `${reasoning} reasoning`)
+    : firstFrontmatterValue(meta, [
+      'last_editor_detail',
+      'last_edited_by_detail',
+      'edit_actor_detail',
+      'updated_by_detail',
+    ]);
+
+  return detail ? { type: inferredType, name, detail } : { type: inferredType, name };
+}
+
+export function parseMarkdownEditActor(content: string): MarkdownEditActor | null {
+  return getMarkdownEditActor(parseMarkdownFrontmatter(content).meta);
 }
 
 function normalizeMarkdownTodoState(value: string | undefined): MarkdownTodoState | null {
