@@ -157,7 +157,7 @@ import {
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
-import { consolidateMarkdownAssetsForLibraryRoot, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
+import { consolidateMarkdownAssetsForLibraryRoot, copyImageDataUrlForMarkdownDocument, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
@@ -4079,6 +4079,14 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: currentLibraryRootPaths() });
+  });
+
+  ipcMain.handle('markdownImages:copyImageDataUrlForDocument', (_event, documentPath: string, dataUrl: string, alt?: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
+    return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: currentLibraryRootPaths() });
   });
 
   ipcMain.handle('markdownImages:makeImagesPortable', (_event, documentPath: string, content: string) => {

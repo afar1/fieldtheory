@@ -16,11 +16,15 @@ import {
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS,
+  RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR,
   RENDERED_MARKDOWN_EDITOR_HEADING_CLASS,
   RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
@@ -64,6 +68,9 @@ import {
   hasMarkdownCodeEditorRangeSelection,
   getRenderedMarkdownImageSelectionFromEventTarget,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownDrawingTitle,
+  isRenderedMarkdownDrawingAlt,
+  replaceMarkdownImageAltAtSource,
   getRenderedMarkdownArrowLeftEdit,
   getRenderedMarkdownOptionArrowEdit,
   getRenderedMarkdownArrowRightEdit,
@@ -257,16 +264,20 @@ describe('MarkdownCodeEditor cursor shape', () => {
     });
   });
 
-  it('uses a filled block cursor style when requested', () => {
+  it('uses a translucent overlay block cursor that does not replace text', () => {
     expect(getMarkdownCodeEditorCursorShapeStyle('block', '#10b981', '#111')).toEqual({
       backgroundColor: '#10b981',
       borderLeft: 'none',
-      height: '1lh !important',
+      height: '1.18em !important',
       marginLeft: '0',
       minWidth: '0.62em',
-      opacity: 0.68,
+      opacity: 0.5,
       width: '0.62em',
     });
+  });
+
+  it('uses the configured block cursor opacity', () => {
+    expect(getMarkdownCodeEditorCursorShapeStyle('block', '#10b981', '#111', 0.75).opacity).toBe(0.75);
   });
 });
 
@@ -905,6 +916,52 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('renders drawing images with padded frames, editable names, and caption edit buttons', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = '![Drawing: Architecture](<file:///tmp/Drawing.png>)';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension('/tmp/Note.md')],
+      }),
+      parent,
+    });
+
+    const renderedImage = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`) as HTMLElement | null;
+    const frame = renderedImage?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS}`) ?? null;
+    const captionText = renderedImage?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`) as HTMLElement | null;
+    const editButton = renderedImage?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS}`) as HTMLButtonElement | null;
+
+    expect(renderedImage?.classList.contains(RENDERED_MARKDOWN_EDITOR_DRAWING_IMAGE_CLASS)).toBe(true);
+    expect(frame?.querySelector('img')?.getAttribute('src')).toBe('ftlocalfile:///tmp/Drawing.png');
+    expect(captionText?.textContent).toBe('Architecture');
+    expect(captionText?.contentEditable).toBe('true');
+    expect(editButton?.getAttribute('aria-label')).toBe('Edit drawing');
+    expect(editButton?.querySelector('svg')).not.toBeNull();
+    expect(getRenderedMarkdownImagePreviewFromEventTarget(editButton)).toMatchObject({
+      src: 'ftlocalfile:///tmp/Drawing.png',
+      alt: 'Drawing: Architecture',
+    });
+    expect(getRenderedMarkdownImagePreviewFromEventTarget(captionText)).toBeNull();
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('formats and renames drawing image alt text while preserving the drawing marker', () => {
+    expect(isRenderedMarkdownDrawingAlt('Drawing')).toBe(true);
+    expect(isRenderedMarkdownDrawingAlt('Drawing: Architecture')).toBe(true);
+    expect(isRenderedMarkdownDrawingAlt('Image')).toBe(false);
+    expect(getRenderedMarkdownDrawingTitle('Drawing: Architecture')).toBe('Architecture');
+    expect(replaceMarkdownImageAltAtSource(
+      'before\n![Drawing](<./.assets/drawing.png>)\nafter',
+      7,
+      42,
+      'Drawing: Architecture',
+    )).toBe('before\n![Drawing: Architecture](<./.assets/drawing.png>)\nafter');
   });
 
 	  it('hides empty inline formatting placeholders while keeping the typing position', () => {

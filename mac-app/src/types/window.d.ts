@@ -2280,6 +2280,11 @@ declare global {
       imagePath: string,
       alt?: string,
     ) => Promise<{ markdown: string; destination: string; copiedPath: string } | null>;
+    copyImageDataUrlForDocument: (
+      documentPath: string,
+      dataUrl: string,
+      alt?: string,
+    ) => Promise<{ markdown: string; destination: string; copiedPath: string } | null>;
     makeImagesPortable: (
       documentPath: string,
       content: string,
