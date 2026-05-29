@@ -17,6 +17,7 @@ import {
   buildBookmarkPostLauncherItems,
   buildCommandDirectoriesForLauncher,
   buildLauncherFileItems,
+  commandPathToLauncherLibraryOpenTarget,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   getLauncherFileSearchQuery,
   getLauncherInvocationVisibilityPolicy,
@@ -669,11 +670,16 @@ describe('shouldIncludeLauncherRecentFile', () => {
 });
 
 describe('shouldIncludeLauncherLibraryMarkdownItem', () => {
-  it('removes wiki rows for portable command files', () => {
+  it('removes command files unless the Library row is explicitly openable', () => {
     expect(shouldIncludeLauncherLibraryMarkdownItem({
       filePath: '/Users/afar/.fieldtheory/library/Commands/write-goal.md',
       commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
     })).toBe(false);
+    expect(shouldIncludeLauncherLibraryMarkdownItem({
+      filePath: '/Users/afar/.fieldtheory/library/Commands/write-goal.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+      allowCommandFile: true,
+    })).toBe(true);
   });
 
   it('keeps wiki rows for non-command markdown files', () => {
@@ -694,6 +700,7 @@ describe('flattenLibraryRootsForLauncher', () => {
         tree: [
           { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 1 },
           { kind: 'file', relPath: 'reports/summary.html', absPath: '/wiki/reports/summary.html', name: 'summary.html', title: 'summary.html', lastUpdated: 3, documentKind: 'html' },
+          { kind: 'file', relPath: 'Commands/workflow', absPath: '/wiki/Commands/workflow.md', name: 'workflow', title: 'workflow', lastUpdated: 4 },
         ],
       },
       {
@@ -713,11 +720,13 @@ describe('flattenLibraryRootsForLauncher', () => {
       },
     ]);
 
-    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'markdown-file', 'wiki-page']);
-    expect(items[0]).toMatchObject({ displayName: 'summary.html — Wiki', filePath: '/wiki/reports/summary.html', relPath: undefined });
-    expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
-    expect(items[2]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
-    expect(items[1].keywords).toContain('docs');
+    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'markdown-file', 'markdown-file', 'wiki-page']);
+    expect(items[0]).toMatchObject({ displayName: 'workflow — Commands', filePath: '/wiki/Commands/workflow.md', relPath: undefined });
+    expect(items[0].keywords).toContain('commands');
+    expect(items[1]).toMatchObject({ displayName: 'summary.html — Wiki', filePath: '/wiki/reports/summary.html', relPath: undefined });
+    expect(items[2]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
+    expect(items[3]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
+    expect(items[2].keywords).toContain('docs');
   });
 
   it('indexes a readable form of slugged wiki filenames', () => {
@@ -817,6 +826,25 @@ describe('flattenLibraryRootsForLauncher', () => {
       sharedAuthorCallsign: 'AMB-MAC',
     });
     expect(item.keywords).toContain('AMB-MAC');
+  });
+});
+
+describe('commandPathToLauncherLibraryOpenTarget', () => {
+  it('opens reserved built-in command files as external Library documents', () => {
+    expect(commandPathToLauncherLibraryOpenTarget(
+      '/Users/afar/.fieldtheory/library/Commands/workflow.md',
+      [{ path: '/Users/afar/.fieldtheory/library', builtin: true }],
+    )).toEqual({
+      kind: 'external',
+      path: '/Users/afar/.fieldtheory/library/Commands/workflow.md',
+    });
+  });
+
+  it('keeps normal built-in Library files as wiki targets', () => {
+    expect(commandPathToLauncherLibraryOpenTarget(
+      '/Users/afar/.fieldtheory/library/scratchpad/note.md',
+      [{ path: '/Users/afar/.fieldtheory/library', builtin: true }],
+    )).toEqual({ kind: 'wiki', path: 'scratchpad/note' });
   });
 });
 

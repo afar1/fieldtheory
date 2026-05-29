@@ -1597,7 +1597,11 @@ function CommandLauncher() {
 
   const libraryMarkdownSearchItems = useMemo(() => (
     libraryMarkdownItems.filter((item) => (
-      shouldIncludeLauncherLibraryMarkdownItem({ filePath: item.filePath, commandFilePaths })
+      shouldIncludeLauncherLibraryMarkdownItem({
+        filePath: item.filePath,
+        commandFilePaths,
+        allowCommandFile: item.type === 'markdown-file',
+      })
     )).map(item => ({
       ...item,
       isPinned: isLibraryMarkdownLauncherItemPinned(item, pinnedItemIds),
