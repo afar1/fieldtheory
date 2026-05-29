@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatTerminalCwdLabel,
   estimateCodexTerminalSize,
+  getTerminalResizeDimension,
   getTerminalDataAfterInitialReplayEcho,
   getUnreplayedInitialData,
   isTerminalFocusToggleSequence,
@@ -239,6 +240,36 @@ describe('estimateCodexTerminalSize', () => {
       cols: 93,
       rows: 18,
     });
+  });
+});
+
+describe('getTerminalResizeDimension', () => {
+  it('calculates bottom-dock drag height within the allowed panel range', () => {
+    expect(getTerminalResizeDimension({
+      dockSide: 'bottom',
+      startBottomHeight: 300,
+      startRightWidth: 500,
+      startX: 0,
+      startY: 500,
+      currentX: 0,
+      currentY: 450,
+      windowWidth: 1200,
+      windowHeight: 800,
+    })).toEqual({ bottomHeight: 350 });
+  });
+
+  it('clamps right-dock drag width within the allowed panel range', () => {
+    expect(getTerminalResizeDimension({
+      dockSide: 'right',
+      startBottomHeight: 300,
+      startRightWidth: 500,
+      startX: 700,
+      startY: 0,
+      currentX: 100,
+      currentY: 0,
+      windowWidth: 1000,
+      windowHeight: 800,
+    })).toEqual({ rightWidth: 680 });
   });
 });
 
