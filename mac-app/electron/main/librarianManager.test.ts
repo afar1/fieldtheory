@@ -1248,7 +1248,7 @@ describe('hidden default library folders', () => {
       emit: typeof emit;
       wikiDir: string;
     };
-    manager.settings = { hiddenDefaultFolders: ['entries', '../bad'] };
+    manager.settings = { hiddenDefaultFolders: ['entries', 'River (shared)', '../bad'] };
     manager.saveSettings = saveSettings;
     manager.emit = emit;
     Object.defineProperty(manager, 'wikiDir', { value: '/wiki' });

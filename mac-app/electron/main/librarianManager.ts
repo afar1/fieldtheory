@@ -54,9 +54,11 @@ const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
 const WIKI_RESERVED_FOLDER_NAMES = new Set(['commands']);
 const LIBRARIAN_INDEX_VERSION = 2;
+const RIVER_SHARED_FOLDER_ID = 'River (shared)';
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'artifacts',
   'scratchpad',
+  RIVER_SHARED_FOLDER_ID,
   'debates',
   'Plans',
   'bookmarks-shortcut',
@@ -303,8 +305,8 @@ export function normalizeHiddenDefaultFolders(value: unknown): string[] {
       .filter((item): item is string => item !== null)
   );
   return [
-    ...DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => requested.has(folderId)),
-    ...[...requested].filter((folderId) => !DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)),
+    ...DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => folderId !== RIVER_SHARED_FOLDER_ID && requested.has(folderId)),
+    ...[...requested].filter((folderId) => folderId !== RIVER_SHARED_FOLDER_ID && !DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)),
   ];
 }
 
