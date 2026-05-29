@@ -3765,7 +3765,7 @@ function setupThemeIPCHandlers(): void {
  */
 function syncTaggedDocsRootsFromLibrary(): void {
   if (!taggedDocsManager) return;
-  taggedDocsManager.setRoots(librarianManager?.getLibraryRoots().map((root) => root.path) ?? []);
+  taggedDocsManager.setRoots(librarianManager?.getLibraryRootPaths() ?? []);
 }
 
 /**
