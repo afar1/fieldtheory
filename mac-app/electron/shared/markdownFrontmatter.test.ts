@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getMarkdownTodoState,
+  parseMarkdownEditActor,
   parseMarkdownFrontmatter,
   parseMarkdownArchivedState,
   parseMarkdownTodoState,
@@ -31,6 +32,19 @@ describe('markdownFrontmatter', () => {
     expect(parseMarkdownTodoState('---\ntask: true\ntask_state: done\n---\n# Task')).toBe('done');
     expect(parseMarkdownTodoState('---\ntodo: false\n---\n# Note')).toBeNull();
     expect(getMarkdownTodoState({ todo: 'yes' })).toBe('open');
+  });
+
+  it('reads model-agnostic edit actor metadata', () => {
+    expect(parseMarkdownEditActor('---\nlast_editor_model: GPT-5.5\nlast_editor_reasoning: high\n---\n# Note')).toEqual({
+      type: 'model',
+      name: 'GPT-5.5',
+      detail: 'high reasoning',
+    });
+    expect(parseMarkdownEditActor('---\nedit_actor_type: assistant\nedit_actor_name: Claude Sonnet 4\nedit_actor_detail: extended thinking\n---\n# Note')).toEqual({
+      type: 'model',
+      name: 'Claude Sonnet 4',
+      detail: 'extended thinking',
+    });
   });
 
   it('sets and removes todo state while preserving unrelated frontmatter lines', () => {
