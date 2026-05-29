@@ -8,6 +8,7 @@ import LibrarianView, {
   getLocalFileUrl,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
+  getResponsivePanelState,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -87,6 +88,105 @@ describe('LibrarianView render', () => {
       terminalDockedRight: false,
       terminalVisible: true,
     })).toBe(600);
+  });
+
+  it.each([
+    {
+      name: 'keeps wide layouts unchanged',
+      containerWidth: 1200,
+      expected: {
+        autoCollapseSidebar: false,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+        reason: 'wide',
+      },
+    },
+    {
+      name: 'auto-collapses the sidebar before reshaping the terminal',
+      containerWidth: 1040,
+      expected: {
+        autoCollapseSidebar: true,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+        reason: 'sidebar',
+      },
+    },
+    {
+      name: 'auto-docks the terminal bottom after the sidebar is collapsed',
+      containerWidth: 880,
+      expected: {
+        autoCollapseSidebar: true,
+        autoDockTerminalBottom: true,
+        autoHideTerminal: false,
+        reason: 'terminal-bottom',
+      },
+    },
+  ])('derives responsive panel state: $name', ({ containerWidth, expected }) => {
+    expect(getResponsivePanelState({
+      containerWidth,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+    })).toMatchObject(expected);
+  });
+
+  it('keeps responsive panel state stable near restore thresholds', () => {
+    const previous = getResponsivePanelState({
+      containerWidth: 1040,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+    });
+
+    expect(getResponsivePanelState({
+      containerWidth: 1120,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      previous,
+    })).toMatchObject({
+      autoCollapseSidebar: true,
+      reason: 'sidebar',
+    });
+  });
+
+  it('does not auto-collapse the sidebar when it is needed for empty selection', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 880,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: true,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+    })).toMatchObject({
+      autoCollapseSidebar: false,
+      reason: 'forced-sidebar',
+    });
+  });
+
+  it('auto-hides the terminal only as the narrowest responsive fallback', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 520,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: true,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+    })).toMatchObject({
+      autoHideTerminal: true,
+      reason: 'terminal-hidden',
+    });
   });
 
   it('opens a command-clicked sidebar file in a document window and clears the source selection', async () => {
