@@ -52,6 +52,7 @@ const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n
 const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
 const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
+const WIKI_RESERVED_FOLDER_NAMES = new Set(['commands']);
 const LIBRARIAN_INDEX_VERSION = 2;
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'artifacts',
@@ -108,6 +109,11 @@ function normalizeDefaultReadmeContent(content: string): string {
 function isWikiSkipFileName(fileName: string): boolean {
   return WIKI_SKIP_FILE_NAMES.has(fileName)
     || WIKI_SKIP_FILE_NAMES.has(`${stripMarkdownFileExtension(fileName)}.md`);
+}
+
+function isWikiReservedRelPath(relPath: string): boolean {
+  const firstPart = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+  return Boolean(firstPart && WIKI_RESERVED_FOLDER_NAMES.has(firstPart));
 }
 
 function buildDefaultReadmeWithHelp(content: string): string {
@@ -2924,6 +2930,7 @@ export class LibrarianManager extends EventEmitter {
 
       if (stats.isDirectory()) {
         const relPath = this.toPortableRelPath(path.relative(rootPath, absPath));
+        if (rootPath === this.wikiDir && isWikiReservedRelPath(relPath)) continue;
         nodes.push({
           kind: 'dir',
           name: entry.name,
@@ -3299,6 +3306,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private resolveExistingWikiPagePath(relPath: string): string | null {
+    if (isWikiReservedRelPath(relPath)) return null;
     const candidates = [
       path.resolve(this.wikiDir, `${relPath}.md`),
       path.resolve(this.wikiDir, `${relPath}.markdown`),
