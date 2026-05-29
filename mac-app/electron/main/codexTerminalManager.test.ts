@@ -457,10 +457,10 @@ describe('CodexTerminalManager', () => {
   });
 
   it('writes page context prompts into the active PTY', () => {
-    const previousLibraryDir = process.env.FT_LIBRARY_DIR;
-    const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
-    process.env.FT_LIBRARY_DIR = libraryDir;
-    const { manager, ptys } = createManager();
+    const contextDirPath = mkdtempSync(join(tmpdir(), 'codex-terminal-context-'));
+    const { manager, ptys } = createManager(1024, {
+      contextDirPath,
+    });
     const session = manager.createSession();
 
     try {
@@ -473,16 +473,16 @@ describe('CodexTerminalManager', () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.filePath).toBe(join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'));
-      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Use Codex here.');
-      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'recent.md'), 'utf8')).toBe('');
+      expect(result.filePath).toBe(join(contextDirPath, 'sessions', session.id, 'context.json'));
+      expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Use Codex here.');
+      expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'recent.md'), 'utf8')).toBe('');
       expect(JSON.parse(readFileSync(result.filePath!, 'utf8'))).toMatchObject({
         activeDocument: {
           title: 'Panel idea',
           path: '/tmp/panel.md',
           kind: 'external',
           contentMode: 'rendered',
-          contentPath: join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'),
+          contentPath: join(contextDirPath, 'sessions', session.id, 'active.md'),
         },
         selection: null,
         recent: [],
@@ -507,16 +507,11 @@ describe('CodexTerminalManager', () => {
 
       expect(updatedResult.filePath).toBe(result.filePath);
       expect(updatedResult.prompt).toBeUndefined();
-      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
+      expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(ptys[0].written).toHaveLength(1);
     } finally {
-      if (previousLibraryDir === undefined) {
-        delete process.env.FT_LIBRARY_DIR;
-      } else {
-        process.env.FT_LIBRARY_DIR = previousLibraryDir;
-      }
-      rmSync(libraryDir, { recursive: true, force: true });
+      rmSync(contextDirPath, { recursive: true, force: true });
     }
   });
 

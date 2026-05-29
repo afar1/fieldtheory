@@ -52,6 +52,7 @@ const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n
 const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
 const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
+const WIKI_RESERVED_FOLDER_NAMES = new Set(['commands']);
 const LIBRARIAN_INDEX_VERSION = 2;
 const RIVER_SHARED_FOLDER_ID = 'River (shared)';
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
@@ -110,6 +111,11 @@ function normalizeDefaultReadmeContent(content: string): string {
 function isWikiSkipFileName(fileName: string): boolean {
   return WIKI_SKIP_FILE_NAMES.has(fileName)
     || WIKI_SKIP_FILE_NAMES.has(`${stripMarkdownFileExtension(fileName)}.md`);
+}
+
+function isWikiReservedRelPath(relPath: string): boolean {
+  const firstPart = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+  return Boolean(firstPart && WIKI_RESERVED_FOLDER_NAMES.has(firstPart));
 }
 
 function buildDefaultReadmeWithHelp(content: string): string {
@@ -1431,7 +1437,7 @@ export function defaultScratchpadNameWithTime(date: Date): string {
 }
 
 export function isHiddenWikiFolderName(name: string): boolean {
-  return name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
+  return name === 'Codex Context' || name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
 }
 
 export function isHiddenWikiFileName(name: string): boolean {
@@ -2892,6 +2898,7 @@ export class LibrarianManager extends EventEmitter {
     currentDir = rootPath,
     seenRealPaths = new Set<string>(),
     includeLibraryTextDocuments = false,
+    options: { excludeWikiReservedFolders?: boolean } = {},
   ): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
@@ -2926,11 +2933,12 @@ export class LibrarianManager extends EventEmitter {
 
       if (stats.isDirectory()) {
         const relPath = this.toPortableRelPath(path.relative(rootPath, absPath));
+        if (options.excludeWikiReservedFolders && rootPath === this.wikiDir && isWikiReservedRelPath(relPath)) continue;
         nodes.push({
           kind: 'dir',
           name: entry.name,
           relPath,
-          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments),
+          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments, options),
         });
         continue;
       }
@@ -3181,7 +3189,9 @@ export class LibrarianManager extends EventEmitter {
 
   private getCachedWikiTree(): WikiNode[] {
     if (!this.wikiTreeCache) {
-      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir);
+      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir, this.wikiDir, new Set<string>(), false, {
+        excludeWikiReservedFolders: true,
+      });
     }
     return this.wikiTreeCache;
   }
@@ -3301,6 +3311,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private resolveExistingWikiPagePath(relPath: string): string | null {
+    if (isWikiReservedRelPath(relPath)) return null;
     const candidates = [
       path.resolve(this.wikiDir, `${relPath}.md`),
       path.resolve(this.wikiDir, `${relPath}.markdown`),
