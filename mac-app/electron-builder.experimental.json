@@ -17,6 +17,29 @@
     "repo": "oscar",
     "private": true
   },
+  "fileAssociations": [
+    {
+      "ext": "md",
+      "name": "Markdown",
+      "description": "Markdown document",
+      "role": "Editor",
+      "rank": "Alternate"
+    },
+    {
+      "ext": "markdown",
+      "name": "Markdown",
+      "description": "Markdown document",
+      "role": "Editor",
+      "rank": "Alternate"
+    },
+    {
+      "ext": "mdx",
+      "name": "MDX",
+      "description": "MDX document",
+      "role": "Editor",
+      "rank": "Alternate"
+    }
+  ],
   "mac": {
     "category": "public.app-category.productivity",
     "notarize": false,
