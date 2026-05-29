@@ -1208,6 +1208,23 @@ function normalizeTaggedPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
 
+function isReservedBuiltinLibraryRelPath(relPath: string | undefined): boolean {
+  const firstPart = relPath?.split(/[\\/]/, 1)[0]?.toLowerCase();
+  return firstPart === 'commands';
+}
+
+export function getBuiltinLibraryDocumentType(input: {
+  builtin: boolean;
+  relPath?: string;
+  documentKind?: WikiNode['documentKind'];
+}): 'wiki' | 'external' {
+  if (!input.builtin) return 'external';
+  if (isReservedBuiltinLibraryRelPath(input.relPath)) return 'external';
+  return input.documentKind === undefined || input.documentKind === 'markdown'
+    ? 'wiki'
+    : 'external';
+}
+
 function sidebarNodeHasUnread(node: SidebarNode): boolean {
   return node.kind === 'file' ? node.item.hasUnread === true : node.hasUnread === true;
 }
@@ -1286,7 +1303,11 @@ function wikiNodeToSidebarNode(
   taggedDocByPath: Map<string, TaggedDocListItem>
 ): SidebarNode {
   if (node.kind === 'file') {
-    const isWikiMarkdown = root.builtin && (node.documentKind === undefined || node.documentKind === 'markdown');
+    const isWikiMarkdown = getBuiltinLibraryDocumentType({
+      builtin: root.builtin,
+      relPath: node.relPath,
+      documentKind: node.documentKind,
+    }) === 'wiki';
     const type = isWikiMarkdown ? 'wiki' : 'external';
     const id = isWikiMarkdown ? `wiki:${node.relPath}` : `external:${node.absPath}`;
     const taggedDoc = taggedDocByPath.get(normalizeTaggedPath(node.absPath));
