@@ -68,6 +68,7 @@ import {
 } from '../utils/renderedMarkdownEditor';
 import {
   getMarkdownTodoState,
+  parseMarkdownEditActor,
   parseMarkdownFrontmatter,
   setMarkdownTodoState as setFrontmatterMarkdownTodoState,
   type MarkdownTodoState,
@@ -216,8 +217,25 @@ export function getLocalFileUrl(filePath: string): string {
   return `file://${prefixed.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
 }
 
-export function getReadingUpdatedByline(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign'>): string {
+function getEditActorDisplay(actor: MarkdownEditActor | undefined): string | null {
+  const name = actor?.name.trim();
+  if (!name) return null;
+  const detail = actor?.detail?.trim();
+  return detail ? `${name} (${detail})` : name;
+}
+
+export function getReadingUpdatedByline(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign' | 'editActor'>): string {
   const updated = `Updated ${formatRelativeTime(reading.mtime)}`;
+  const editActor = getEditActorDisplay(reading.editActor);
+  if (editActor) return `${updated} by ${editActor}`;
+  const callsign = reading.sharedAuthorCallsign?.trim();
+  return callsign ? `${updated} by ${callsign}` : updated;
+}
+
+export function getReadingUpdatedTitle(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign' | 'editActor'>): string {
+  const updated = `Updated ${new Date(reading.mtime).toLocaleString()}`;
+  const editActor = getEditActorDisplay(reading.editActor);
+  if (editActor) return `${updated} by ${editActor}`;
   const callsign = reading.sharedAuthorCallsign?.trim();
   return callsign ? `${updated} by ${callsign}` : updated;
 }
@@ -285,6 +303,7 @@ function readingFromWikiPage(page: WikiPage): Reading {
     todoState: page.todoState,
     sharedOriginalSourcePath: page.sharedOriginalSourcePath,
     sharedAuthorCallsign: page.sharedAuthorCallsign,
+    editActor: page.editActor,
     documentVersion: page.documentVersion,
   };
 }
@@ -300,6 +319,7 @@ function readingFromExternalMarkdownFile(file: ExternalMarkdownFile): Reading {
     modelSignature: null,
     createdAt: file.mtime,
     mtime: file.mtime,
+    editActor: parseMarkdownEditActor(file.content) ?? undefined,
     documentVersion: file.documentVersion,
   };
 }
@@ -9228,9 +9248,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             )}
             {activeReading && (
               <div
-                title={activeReading.sharedAuthorCallsign?.trim()
-                  ? `Updated ${new Date(activeReading.mtime).toLocaleString()} by ${activeReading.sharedAuthorCallsign.trim()}`
-                  : `Updated ${new Date(activeReading.mtime).toLocaleString()}`}
+                title={getReadingUpdatedTitle(activeReading)}
                 style={{
                   flex: '0 0 auto',
                   margin: contentMode === 'markdown' ? '-12px 0 14px 0' : '-16px 0 18px 0',
