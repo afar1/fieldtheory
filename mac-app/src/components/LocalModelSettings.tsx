@@ -53,7 +53,7 @@ function getGemmaDownloadCommand(model: LocalModelInfo | undefined): string {
 
 function getGemmaLinkCommand(model: LocalModelInfo | undefined): string {
   const filename = model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf';
-  return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && ln -sf "/path/to/${filename}" ${getFieldTheoryModelPath(filename)}`;
+  return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && test -f "<paste-your-existing-gguf-path-here>" && ln -sf "<paste-your-existing-gguf-path-here>" ${getFieldTheoryModelPath(filename)}`;
 }
 
 export default function LocalModelSettings() {
@@ -334,7 +334,7 @@ export default function LocalModelSettings() {
             Terminal setup
           </div>
           <div style={{ fontSize: '11px', lineHeight: 1.45, color: theme.textSecondary }}>
-            Field Theory checks {getFieldTheoryModelPath(model?.filename)} automatically. Download Gemma 4 there, or link an existing GGUF file to that path.
+            Field Theory checks {getFieldTheoryModelPath(model?.filename)} automatically. Download Gemma 4 there, or replace the placeholder before linking an existing GGUF file to that path.
           </div>
           <TerminalCommand
             label="Download Gemma 4"
