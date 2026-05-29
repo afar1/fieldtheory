@@ -449,7 +449,7 @@ describe('recursive wiki tree scan', () => {
     ]);
   });
 
-  it('keeps portable command files out of the wiki tree', () => {
+  it('keeps portable command files visible in Library but out of the wiki tree', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Commands'), { recursive: true });
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
@@ -458,12 +458,16 @@ describe('recursive wiki tree scan', () => {
 
     const manager = Object.create(LibrarianManager.prototype) as {
       getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string }> }>;
+      getLibraryRoots: () => Array<{ path: string; tree: WikiNode[] }>;
       getWikiPage: (relPath: string) => unknown;
       startWikiWatcher: () => void;
+      settings: { libraryRoots: string[] };
     };
     Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.settings = { libraryRoots: [] };
     manager.startWikiWatcher = vi.fn();
 
+    expect(flatten(manager.getLibraryRoots()[0]?.tree ?? [])).toEqual(['Commands/workflow', 'entries/note']);
     expect(manager.getWikiTree().map((folder) => folder.name)).toEqual(['entries']);
     expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/note']);
     expect(manager.getWikiPage('Commands/workflow')).toBeNull();
