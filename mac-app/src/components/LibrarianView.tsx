@@ -664,8 +664,13 @@ export function getResponsivePanelState(input: {
   sidebarForcedVisible: boolean;
   terminalVisible: boolean;
   terminalDockSide: CodexTerminalDockSide;
+  userResizing?: boolean;
   previous?: ResponsivePanelState;
 }): ResponsivePanelState {
+  if (input.userResizing && input.previous) {
+    return input.previous;
+  }
+
   if (input.containerWidth <= 0 || input.containerHeight <= 0) {
     return { autoCollapseSidebar: false, autoDockTerminalBottom: false, autoHideTerminal: false, reason: 'unmeasured' };
   }
@@ -2944,6 +2949,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const responsivePanelStateRef = useRef<ResponsivePanelState | undefined>(undefined);
   const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
   const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
+  const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
@@ -2954,6 +2960,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     sidebarForcedVisible: sidebarForcedVisibleForEmptySelection,
     terminalVisible: codexTerminalVisible,
     terminalDockSide: codexTerminalDockSide,
+    userResizing: isResizing || codexTerminalResizing,
     previous: responsivePanelStateRef.current,
   });
   responsivePanelStateRef.current = responsivePanelState;
@@ -9841,6 +9848,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           onFocusToggleShortcut={toggleTerminalEditorFocus}
           onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
           onTerminalFocusChange={setCodexTerminalFocused}
+          onResizeActiveChange={setCodexTerminalResizing}
           onVisibilityToggleShortcut={toggleCodexTerminalPanel}
           onVisibleChange={handleCodexTerminalVisibleChange}
         />
