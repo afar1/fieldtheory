@@ -2852,7 +2852,9 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       // Let Cmd+H pass through to menu for app hiding.
       if (key === 'h' && hasMeta) return;
 
-      const appNavigationDirection = getAppBracketNavigationDirection(e);
+      const appNavigationDirection = showSettings || librarianSurfaceVisible
+        ? null
+        : getAppBracketNavigationDirection(e);
       if (appNavigationDirection !== null && navigateAppHistory(appNavigationDirection)) {
         e.preventDefault();
         e.stopPropagation();
@@ -3710,7 +3712,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   

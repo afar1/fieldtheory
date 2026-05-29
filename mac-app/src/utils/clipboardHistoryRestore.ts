@@ -111,6 +111,7 @@ export function pushAppNavigationHistory(
   next: AppNavigationSurface,
 ): AppNavigationSurface[] {
   if (current === next) return backHistory;
+  if (current === 'settings' || next === 'settings') return backHistory;
   return [...backHistory, current].slice(-APP_NAVIGATION_HISTORY_LIMIT);
 }
 
@@ -123,11 +124,13 @@ export function popAppBackHistory(input: {
   backHistory: AppNavigationSurface[];
   forwardHistory: AppNavigationSurface[];
 } {
-  const target = input.backHistory[input.backHistory.length - 1] ?? null;
+  const lastNavigableIndex = input.backHistory.findLastIndex((surface) => surface !== 'settings');
+  const target = lastNavigableIndex >= 0 ? input.backHistory[lastNavigableIndex] : null;
   if (!target) return { ...input, target: null };
+  const backHistory = input.backHistory.slice(0, lastNavigableIndex);
   return {
     target,
-    backHistory: input.backHistory.slice(0, -1),
+    backHistory,
     forwardHistory: [input.current, ...input.forwardHistory].slice(0, APP_NAVIGATION_HISTORY_LIMIT),
   };
 }
@@ -141,8 +144,10 @@ export function popAppForwardHistory(input: {
   backHistory: AppNavigationSurface[];
   forwardHistory: AppNavigationSurface[];
 } {
-  const [target = null, ...restForward] = input.forwardHistory;
+  const firstNavigableIndex = input.forwardHistory.findIndex((surface) => surface !== 'settings');
+  const target = firstNavigableIndex >= 0 ? input.forwardHistory[firstNavigableIndex] : null;
   if (!target) return { ...input, target: null };
+  const restForward = input.forwardHistory.slice(firstNavigableIndex + 1);
   return {
     target,
     backHistory: [...input.backHistory, input.current].slice(-APP_NAVIGATION_HISTORY_LIMIT),
