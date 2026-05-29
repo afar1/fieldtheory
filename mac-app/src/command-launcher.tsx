@@ -540,6 +540,7 @@ const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE = 400;
+const LAUNCHER_SEARCH_CACHE_AUTO_WARM_MAX_ITEMS = 1000;
 const COMMAND_LAUNCHER_RADIUS = 16;
 
 // =============================================================================
@@ -860,6 +861,7 @@ function CommandLauncher() {
   const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
   const launcherBackgroundRefreshTimeoutRef = useRef<number | null>(null);
+  const launcherBackgroundRefreshIdleRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
@@ -1229,13 +1231,12 @@ function CommandLauncher() {
       loadLibraryMarkdown(),
       loadArtifacts(),
       loadBookmarkAuthors(),
-      loadBookmarkPosts(),
       loadActiveWebPage(),
     ]);
     traceLauncherLoad('load-launcher-background-data', startedAt, {
       rejectedCount: results.filter(result => result.status === 'rejected').length,
     });
-  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
+  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadLibraryMarkdown, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
@@ -1265,6 +1266,11 @@ function CommandLauncher() {
   const scheduleLauncherBackgroundRefresh = useCallback(() => {
     if (launcherBackgroundRefreshTimeoutRef.current !== null) {
       window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
+      launcherBackgroundRefreshTimeoutRef.current = null;
+    }
+    if (launcherBackgroundRefreshIdleRef.current !== null) {
+      window.cancelIdleCallback?.(launcherBackgroundRefreshIdleRef.current);
+      launcherBackgroundRefreshIdleRef.current = null;
     }
 
     const runBackgroundRefresh = () => {
@@ -1280,7 +1286,17 @@ function CommandLauncher() {
       }
 
       launcherBackgroundRefreshTimeoutRef.current = null;
-      void loadLauncherBackgroundData();
+      const loadWhenIdle = () => {
+        launcherBackgroundRefreshIdleRef.current = null;
+        void loadLauncherBackgroundData();
+      };
+      if (window.requestIdleCallback) {
+        launcherBackgroundRefreshIdleRef.current = window.requestIdleCallback(loadWhenIdle, {
+          timeout: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+        });
+        return;
+      }
+      loadWhenIdle();
     };
 
     launcherBackgroundRefreshTimeoutRef.current = window.setTimeout(
@@ -1365,7 +1381,6 @@ function CommandLauncher() {
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
     void loadLauncherData({ includeBackground: false });
-    scheduleLauncherBackgroundRefresh();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
@@ -1415,7 +1430,6 @@ function CommandLauncher() {
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
       loadBookmarkAuthors();
-      loadBookmarkPosts();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
       const namespace = bookmarkNamespaceRef.current;
@@ -1437,6 +1451,10 @@ function CommandLauncher() {
       if (launcherBackgroundRefreshTimeoutRef.current !== null) {
         window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
         launcherBackgroundRefreshTimeoutRef.current = null;
+      }
+      if (launcherBackgroundRefreshIdleRef.current !== null) {
+        window.cancelIdleCallback?.(launcherBackgroundRefreshIdleRef.current);
+        launcherBackgroundRefreshIdleRef.current = null;
       }
       unsubscribe();
       unsubscribeFocusInput?.();
@@ -1689,6 +1707,13 @@ function CommandLauncher() {
     clearWarmTimeout();
     launcherSearchCacheWarmIndexRef.current = 0;
     if (allItems.length === 0) return;
+    if (allItems.length > LAUNCHER_SEARCH_CACHE_AUTO_WARM_MAX_ITEMS) {
+      traceLauncher('search-cache-warm-skipped-large-set', {
+        itemCount: allItems.length,
+        maxItemCount: LAUNCHER_SEARCH_CACHE_AUTO_WARM_MAX_ITEMS,
+      });
+      return;
+    }
     const startedAt = performance.now();
 
     const warmSearchCache = () => {
