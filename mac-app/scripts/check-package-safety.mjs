@@ -91,6 +91,27 @@ if (!Array.isArray(files)) {
   failures.push('build.files must exclude node_modules/electron so the raw Electron app is never bundled');
 }
 
+const requiredFileAssociations = [
+  ['md', 'Markdown'],
+  ['markdown', 'Markdown'],
+  ['mdx', 'MDX'],
+];
+const fileAssociations = buildConfig.fileAssociations;
+if (!Array.isArray(fileAssociations)) {
+  failures.push('missing fileAssociations for markdown document opening');
+} else {
+  for (const [ext, name] of requiredFileAssociations) {
+    const association = fileAssociations.find((item) => item?.ext === ext);
+    if (!association) {
+      failures.push(`missing ${ext} file association`);
+      continue;
+    }
+    if (association.name !== name || association.role !== 'Editor' || association.rank !== 'Alternate') {
+      failures.push(`${ext} file association must keep name=${name}, role=Editor, and rank=Alternate`);
+    }
+  }
+}
+
 const extraResources = JSON.stringify(buildConfig.mac?.extraResources ?? []);
 if (extraResources.includes('node_modules/electron') || extraResources.includes('Electron.app')) {
   failures.push('mac.extraResources must not copy the raw Electron runtime app');
