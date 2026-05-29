@@ -1539,7 +1539,7 @@ function sharedFeaturesDisabledError(): string {
 
 function refreshFieldTheorySyncServices(): void {
   if (!canUseSharedFeatures()) {
-    void sharedSyncService?.clearPresence();
+    void sharedSyncService?.dispose();
     sharedSyncService = null;
     sharedTeamService = null;
   } else {
@@ -1549,7 +1549,11 @@ function refreshFieldTheorySyncServices(): void {
     if (!sharedSyncService && authManager) {
       sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
       sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
+      sharedSyncService.on('cacheChanged', () => {
+        librarianManager?.emit('library:changed');
+      });
     }
+    void sharedSyncService?.startRemoteChangeSync();
   }
 
   if (!canUseFieldTheorySync()) {
@@ -5002,7 +5006,7 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('sharedFiles:getAvailability', async () => {
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, hasTeamMembers: false, reason: 'not_authenticated' };
+    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
     return sharedSyncService.getAvailability();
   });
 
@@ -9307,7 +9311,7 @@ function setupClipboardIPCHandlers(): void {
           kind: 'handoff',
           fileName,
           filePath,
-          mode: 'text-reference',
+          mode: 'wiki-link',
           markdownContent: '',
         });
         if (insertTextIntoActiveFieldTheoryMarkdown(handoffText)) {
@@ -9457,7 +9461,7 @@ function setupClipboardIPCHandlers(): void {
           kind: 'command',
           name: command.name,
           filePath: command.filePath,
-          mode: 'text-reference',
+          mode: 'wiki-link',
           markdownContent: '',
         });
         if (insertTextIntoActiveFieldTheoryMarkdown(commandText)) {
@@ -13001,7 +13005,7 @@ if (!gotTheLock) {
     libraryDocumentWindowManager?.destroy();
 
     librarySyncService?.dispose();
-    void sharedSyncService?.clearPresence();
+    void sharedSyncService?.dispose();
     commandSyncService?.destroy();
     todoStore?.destroy();
     localLlmManager?.stop();
