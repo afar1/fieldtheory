@@ -9,6 +9,7 @@ import LibrarianView, {
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
   getResponsivePanelState,
+  shouldAnimateResponsiveSidebar,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -157,6 +158,50 @@ describe('LibrarianView render', () => {
       autoCollapseSidebar: true,
       reason: 'sidebar',
     });
+  });
+
+  it('keeps responsive panel state stable while the user is resizing a panel', () => {
+    const previous = getResponsivePanelState({
+      containerWidth: 1200,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+    });
+
+    expect(getResponsivePanelState({
+      containerWidth: 880,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      userResizing: true,
+      previous,
+    })).toEqual(previous);
+  });
+
+  it('does not animate the sidebar during responsive panel rearrange', () => {
+    expect(shouldAnimateResponsiveSidebar({
+      responsivePanelState: {
+        autoCollapseSidebar: false,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+      },
+      userResizing: false,
+    })).toBe(true);
+
+    expect(shouldAnimateResponsiveSidebar({
+      responsivePanelState: {
+        autoCollapseSidebar: true,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+      },
+      userResizing: false,
+    })).toBe(false);
   });
 
   it('does not auto-collapse the sidebar when it is needed for empty selection', () => {

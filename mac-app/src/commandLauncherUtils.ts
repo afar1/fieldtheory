@@ -457,6 +457,11 @@ export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem 
   keywords?: string[];
 }
 
+export interface LauncherLibraryRootPath {
+  path: string;
+  builtin: boolean;
+}
+
 export type LauncherUsageMap = Record<string, { count: number; lastUsedAt: number }>;
 
 export interface LauncherUsageScoreItem {
@@ -709,10 +714,11 @@ export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeIte
 interface LauncherCommandFileFilterInput {
   filePath?: string | null;
   commandFilePaths: ReadonlySet<string>;
+  allowCommandFile?: boolean;
 }
 
 function shouldIncludeLauncherNonCommandFile(input: LauncherCommandFileFilterInput): boolean {
-  return !input.filePath || !input.commandFilePaths.has(input.filePath);
+  return input.allowCommandFile === true || !input.filePath || !input.commandFilePaths.has(input.filePath);
 }
 
 export function shouldIncludeLauncherRecentFile(input: LauncherCommandFileFilterInput): boolean {
@@ -977,6 +983,10 @@ export function buildCommandDirectoriesForLauncher(directories: LauncherCommandD
 export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherLibraryMarkdownItem[] {
   const items: LauncherLibraryMarkdownItem[] = [];
 
+  const isBuiltinCommandLibraryFile = (relPath: string | undefined): boolean => (
+    relPath?.split(/[\\/]/, 1)[0]?.toLowerCase() === 'commands'
+  );
+
   const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
     if (node.kind === 'dir') {
       for (const child of node.children) visit(root, child);
@@ -984,9 +994,13 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     }
     if (!shouldIndexLibraryNodeForLauncher(root, node)) return;
 
-    const isWikiMarkdown = root.builtin && (node.documentKind === undefined || node.documentKind === 'markdown');
+    const isCommandLibraryFile = root.builtin && isBuiltinCommandLibraryFile(node.relPath);
+    const isWikiMarkdown = root.builtin
+      && !isCommandLibraryFile
+      && (node.documentKind === undefined || node.documentKind === 'markdown');
     const type = isWikiMarkdown ? 'wiki-page' : 'markdown-file';
-    const rootLabel = root.builtin ? 'wiki' : root.label;
+    const rootLabel = isCommandLibraryFile ? 'commands' : root.builtin ? 'wiki' : root.label;
+    const displayRootLabel = isCommandLibraryFile ? 'Commands' : root.label;
     const sharedAuthorCallsign = node.sharedAuthorCallsign?.trim();
     const isSharedRiverFile = root.label === 'River (shared)' || Boolean(node.sharedOriginalSourcePath || sharedAuthorCallsign);
     const readableName = node.name.replace(/[-_]+/g, ' ');
@@ -997,7 +1011,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       id: `${type}-${root.path}-${node.relPath}`,
       type,
       name: node.name,
-      displayName: isWikiMarkdown ? node.title : `${node.title} — ${root.label}`,
+      displayName: isWikiMarkdown ? node.title : `${node.title} — ${displayRootLabel}`,
       keywords: [
         node.name,
         readableName,
@@ -1024,6 +1038,31 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   }
 
   return items.sort(compareLauncherItemsByRecency);
+}
+
+function normalizeFsPathForLauncherMatch(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+export function commandPathToLauncherLibraryOpenTarget(
+  commandPath: string,
+  libraryRoots: LauncherLibraryRootPath[] | undefined,
+): LauncherFieldTheoryMarkdownTarget {
+  const normalizedCommandPath = normalizeFsPathForLauncherMatch(commandPath);
+  const builtinRoot = libraryRoots?.find((root) => {
+    if (!root.builtin) return false;
+    const normalizedRoot = normalizeFsPathForLauncherMatch(root.path);
+    return normalizedCommandPath === normalizedRoot || normalizedCommandPath.startsWith(`${normalizedRoot}/`);
+  });
+
+  if (builtinRoot) {
+    const normalizedRoot = normalizeFsPathForLauncherMatch(builtinRoot.path);
+    const relPath = normalizedCommandPath.slice(normalizedRoot.length + 1).replace(/\.md$/i, '');
+    const topLevelFolder = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+    if (relPath && topLevelFolder !== 'commands') return { kind: 'wiki', path: relPath };
+  }
+
+  return { kind: 'external', path: commandPath };
 }
 
 export function getLauncherNativeIconPathForItem(item: LauncherNativeIconPathCandidate | undefined | null): string | null {

@@ -159,6 +159,29 @@ describe('clipboardHistoryRestore', () => {
     expect(forward.forwardHistory).toEqual([]);
   });
 
+  it('does not add settings to app-level bracket navigation history', () => {
+    expect(pushAppNavigationHistory(['clipboard'], 'librarian', 'settings')).toEqual(['clipboard']);
+    expect(pushAppNavigationHistory(['clipboard'], 'settings', 'librarian')).toEqual(['clipboard']);
+  });
+
+  it('skips stale settings entries in app-level bracket navigation history', () => {
+    const back = popAppBackHistory({
+      backHistory: ['clipboard', 'settings', 'librarian'],
+      forwardHistory: [],
+      current: 'todo',
+    });
+    expect(back.target).toBe('librarian');
+    expect(back.backHistory).toEqual(['clipboard', 'settings']);
+
+    const forward = popAppForwardHistory({
+      backHistory: [],
+      forwardHistory: ['settings', 'clipboard'],
+      current: 'librarian',
+    });
+    expect(forward.target).toBe('clipboard');
+    expect(forward.forwardHistory).toEqual([]);
+  });
+
   it('tracks sketch as an overlay that can return to the previous surface', () => {
     const back = popAppBackHistory({
       backHistory: ['librarian'],
