@@ -3758,6 +3758,17 @@ function setupThemeIPCHandlers(): void {
 }
 
 /**
+ * Point the tagged-docs scanner/watcher at exactly the directories the user
+ * added to their library (left nav). Called whenever that set can change so we
+ * only ever scan/watch what the user is actually looking at — never whole
+ * cloud-storage trees.
+ */
+function syncTaggedDocsRootsFromLibrary(): void {
+  if (!taggedDocsManager) return;
+  taggedDocsManager.setRoots(librarianManager?.getLibraryRoots().map((root) => root.path) ?? []);
+}
+
+/**
  * Set up IPC handlers for Librarian (reading collection) functionality.
  */
 function setupLibrarianIPCHandlers(): void {
@@ -3873,7 +3884,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.addLibraryRoot(dirPath);
+    const added = librarianManager.addLibraryRoot(dirPath);
+    syncTaggedDocsRootsFromLibrary();
+    return added;
   });
 
   ipcMain.handle('library:removeRoot', (_event, dirPath: string): boolean => {
@@ -3882,7 +3895,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return false;
     }
-    return librarianManager.removeLibraryRoot(dirPath);
+    const removed = librarianManager.removeLibraryRoot(dirPath);
+    syncTaggedDocsRootsFromLibrary();
+    return removed;
   });
 
   ipcMain.handle('library:createFile', (_event, rootPath: string, folderRelPath: string, fileName: string): WikiPage | null => {
@@ -11402,6 +11417,7 @@ async function initTranscriberSystem(): Promise<void> {
     refreshFieldTheorySyncServices();
     if (taggedDocsManager && userDataManager) {
       taggedDocsManager.setDatabasePath(userDataManager.getUserDataPath('tagged.db'));
+      syncTaggedDocsRootsFromLibrary();
       void taggedDocsManager.rescan();
     }
     // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)

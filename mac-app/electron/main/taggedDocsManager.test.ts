@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TaggedDocsManager, discoverTaggedDocsSyncRoots, parseFrontmatter } from './taggedDocsManager';
+import { TaggedDocsManager, discoverTaggedDocsSyncRoots, parseFrontmatter, scanRoots } from './taggedDocsManager';
 
 vi.mock('./logger', () => ({
   createLogger: () => ({
@@ -30,7 +30,10 @@ vi.mock('better-sqlite3', () => {
   class Statement {
     constructor(private db: FakeDatabase, private sql: string) {}
 
-    all(): Row[] {
+    all(): any[] {
+      if (/scanned_files/.test(this.sql)) {
+        return Array.from(this.db.scanned.values());
+      }
       return Array.from(this.db.rows.values())
         .sort((a, b) => {
           if (b.unread_sort !== a.unread_sort) return b.unread_sort - a.unread_sort;
@@ -42,8 +45,11 @@ vi.mock('better-sqlite3', () => {
         .map(({ unread_sort: _unreadSort, ...row }) => row as Row);
     }
 
-    get(ulid: string): Row | { file_hash: string } | undefined {
-      const row = this.db.rows.get(ulid.toUpperCase());
+    get(key: string): any {
+      if (/scanned_files/.test(this.sql)) {
+        return this.db.scanned.get(key);
+      }
+      const row = this.db.rows.get(key.toUpperCase());
       if (!row) return undefined;
       if (/SELECT file_hash FROM tagged_docs/.test(this.sql)) {
         return { file_hash: row.file_hash };
@@ -53,6 +59,17 @@ vi.mock('better-sqlite3', () => {
     }
 
     run(...args: unknown[]): { changes: number } {
+      if (/INSERT INTO scanned_files/.test(this.sql)) {
+        const [path, mtimeMs, size] = args as [string, number, number];
+        this.db.scanned.set(path, { path, mtime_ms: mtimeMs, size });
+        return { changes: 1 };
+      }
+
+      if (/DELETE FROM scanned_files WHERE path = \?/.test(this.sql)) {
+        const [path] = args as [string];
+        return { changes: this.db.scanned.delete(path) ? 1 : 0 };
+      }
+
       if (/INSERT INTO tagged_docs/.test(this.sql)) {
         const [ulid, filePath, title, taggedBy, taggedAt, frontmatterUpdatedAt, fileHash] = args as [
           string,
@@ -139,11 +156,16 @@ vi.mock('better-sqlite3', () => {
 
   class FakeDatabase {
     rows = new Map<string, Row>();
+    scanned = new Map<string, { path: string; mtime_ms: number; size: number }>();
     pragma(): void {}
     exec(): void {}
     close(): void {}
     prepare(sql: string): Statement {
       return new Statement(this, sql);
+    }
+    // better-sqlite3 transactions are synchronous; a pass-through is faithful for tests.
+    transaction<T extends (...args: unknown[]) => unknown>(fn: T): T {
+      return ((...args: unknown[]) => fn(...args)) as T;
     }
   }
 
@@ -183,11 +205,45 @@ tagged_by:
     expect(parsed?.data.tagged_by).toEqual({ email: 'sender@example.com', name: 'Sender' });
   });
 
-  it('throws for malformed frontmatter', () => {
-    expect(() => parseFrontmatter(doc(`
+  it('returns null for malformed frontmatter instead of throwing', () => {
+    // A scan reads thousands of files; the parser must skip bad input gracefully,
+    // not throw (and not log) per file.
+    expect(parseFrontmatter(doc(`
 ulid: ${firstUlid}
 not valid yaml
-`))).toThrow(/Invalid frontmatter line/);
+`))).toBeNull();
+    // Opens with --- but never closes the block.
+    expect(parseFrontmatter('---\nulid: x\nno closing delimiter\n')).toBeNull();
+  });
+});
+
+describe('scanRoots (pure scan core, runs in the worker)', () => {
+  it('reads+parses on a cold ledger and skips unchanged files on a warm one', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-scanroots-'));
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, doc(`
+ulid: ${firstUlid}
+title: Scanned
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+    try {
+      const cold = await scanRoots({ roots: [dir], email: userEmail, ledger: new Map() });
+      expect(cold.read).toBe(1);
+      expect(cold.seenPaths).toContain(file);
+      expect(cold.results).toHaveLength(1);
+      expect(cold.results[0].parsed?.title).toBe('Scanned');
+      expect(cold.results[0].parsed?.taggedForCurrentEmail).toBe(true);
+
+      const st = fs.statSync(file);
+      const ledger = new Map([[file, { mtimeMs: Math.floor(st.mtimeMs), size: st.size }]]);
+      const warm = await scanRoots({ roots: [dir], email: userEmail, ledger });
+      expect(warm.read).toBe(0); // stat-gated: no re-read
+      expect(warm.results).toHaveLength(0);
+      expect(warm.seenPaths).toContain(file); // still seen, for vanished detection
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -223,6 +279,111 @@ describe('TaggedDocsManager', () => {
       googleRoot,
       cloudRoot,
     ]);
+  });
+
+  it('scans nothing by default and only picks up directories added via setRoots', async () => {
+    const target = path.join(rootDir, 'scoped.md');
+    fs.writeFileSync(target, doc(`
+ulid: ${firstUlid}
+title: Scoped Doc
+to: [Reader <${userEmail}>]
+tagged_by: sender@example.com
+tagged_at: 2026-04-20T12:00:00Z
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+
+    // No roots by default — must not auto-discover/scan whole cloud-storage trees.
+    const scoped = new TaggedDocsManager({
+      dbPath: path.join(tempDir, 'scoped.db'),
+      watch: false,
+    });
+    try {
+      scoped.setIdentity(userEmail);
+      await scoped.rescan();
+      expect(scoped.list()).toHaveLength(0);
+
+      // User adds the directory to their library → its existing tagged docs appear.
+      scoped.setRoots([rootDir]);
+      await scoped.rescan();
+      expect(scoped.list().map((d) => d.title)).toEqual(['Scoped Doc']);
+    } finally {
+      scoped.destroy();
+    }
+  });
+
+  it('does zero file reads on a rescan when nothing changed (stat-gate)', async () => {
+    const target = path.join(rootDir, 'note.md');
+    fs.writeFileSync(target, doc(`
+ulid: ${firstUlid}
+title: Tagged
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+    manager.setIdentity(userEmail);
+    await manager.rescan(); // first pass populates the scanned_files ledger
+    expect(manager.list()).toHaveLength(1);
+
+    const readSpy = vi.spyOn(fs.promises, 'readFile');
+    try {
+      await manager.rescan(); // nothing changed on disk
+      expect(readSpy).not.toHaveBeenCalled(); // the whole point: no re-reading
+      expect(manager.list()).toHaveLength(1); // and the indexed doc is unchanged
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it('re-reads only files whose mtime/size changed', async () => {
+    const target = path.join(rootDir, 'note.md');
+    const stable = path.join(rootDir, 'stable.md');
+    fs.writeFileSync(target, doc(`
+ulid: ${firstUlid}
+title: First Title
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+    fs.writeFileSync(stable, doc(`
+ulid: ${secondUlid}
+title: Stable
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+    manager.setIdentity(userEmail);
+    await manager.rescan();
+
+    fs.writeFileSync(target, doc(`
+ulid: ${firstUlid}
+title: A Much Longer Second Title
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-21T12:05:00Z
+`));
+
+    const readSpy = vi.spyOn(fs.promises, 'readFile');
+    try {
+      await manager.rescan();
+      expect(readSpy).toHaveBeenCalledTimes(1); // only the changed file
+      expect(readSpy).toHaveBeenCalledWith(target, 'utf-8');
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(manager.list().find((d) => d.ulid === firstUlid)?.title).toBe('A Much Longer Second Title');
+  });
+
+  it('removes the indexed doc when its file vanishes', async () => {
+    const target = path.join(rootDir, 'note.md');
+    fs.writeFileSync(target, doc(`
+ulid: ${firstUlid}
+title: Tagged
+to: [Reader <${userEmail}>]
+frontmatter_updated_at: 2026-04-20T12:05:00Z
+`));
+    manager.setIdentity(userEmail);
+    await manager.rescan();
+    expect(manager.list()).toHaveLength(1);
+
+    fs.rmSync(target);
+    await manager.rescan();
+    expect(manager.list()).toHaveLength(0);
   });
 
   it('lists tagged markdown for the current email only', async () => {

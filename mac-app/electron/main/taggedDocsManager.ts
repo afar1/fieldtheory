@@ -1,17 +1,38 @@
 import Database from 'better-sqlite3';
-import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import * as chokidar from 'chokidar';
 import { createLogger } from './logger';
+import {
+  SCAN_MAX_READ_BYTES,
+  ULID_PATTERN,
+  isMarkdownPath,
+  normalizeEmail,
+  isCommonIgnoredDir,
+  parseTaggedDocFields,
+  scanRoots,
+  type ParsedTaggedDoc,
+  type ScanLedgerEntry,
+  type ScanOutput,
+} from './taggedDocsScan';
+
+// Re-export the pure scan-core public API so existing importers of
+// './taggedDocsManager' keep resolving after the core moved to ./taggedDocsScan.
+export {
+  isMarkdownPath,
+  parseFrontmatter,
+  parseTaggedDocFields,
+  walkMarkdownFiles,
+  scanRoots,
+  type ParsedTaggedDoc,
+  type ScanLedgerEntry,
+  type ScanFileResult,
+  type ScanOutput,
+} from './taggedDocsScan';
 
 const log = createLogger('TaggedDocs');
-
-const MARKDOWN_EXTENSIONS = new Set(['.md']);
-const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
-const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 
 export const TaggedDocsIPCChannels = {
   LIST: 'taggedDocs:list',
@@ -44,26 +65,6 @@ export interface TaggedDocsScanProgress {
   error?: string;
 }
 
-type ParsedYamlValue =
-  | string
-  | number
-  | boolean
-  | null
-  | ParsedYamlValue[]
-  | { [key: string]: ParsedYamlValue };
-
-type ParsedFrontmatter = Record<string, ParsedYamlValue>;
-
-interface ParsedTaggedDoc {
-  ulid: string;
-  title: string;
-  taggedBy: string | null;
-  taggedAt: number | null;
-  frontmatterUpdatedAt: number;
-  fileHash: string;
-  taggedForCurrentEmail: boolean;
-}
-
 interface TaggedDocRow {
   ulid: string;
   path: string;
@@ -86,336 +87,6 @@ interface TaggedDocsManagerOptions {
 interface ProcessFileOptions {
   emitUpdated?: boolean;
   removeWhenUntagged?: boolean;
-}
-
-export function isMarkdownPath(filePath: string): boolean {
-  return MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
-function normalizeEmail(email: string | null | undefined): string | null {
-  const trimmed = email?.trim().toLowerCase();
-  return trimmed || null;
-}
-
-function isCommonIgnoredDir(name: string): boolean {
-  return name === '.git' ||
-    name === 'node_modules' ||
-    name === '.Trash' ||
-    name === '.DS_Store';
-}
-
-function stripInlineComment(value: string): string {
-  let quote: string | null = null;
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
-    if ((char === '"' || char === "'") && value[i - 1] !== '\\') {
-      quote = quote === char ? null : quote ?? char;
-      continue;
-    }
-    if (char === '#' && !quote && (i === 0 || /\s/.test(value[i - 1]))) {
-      return value.slice(0, i).trimEnd();
-    }
-  }
-  return value;
-}
-
-function splitTopLevel(input: string, separator: string): string[] {
-  const parts: string[] = [];
-  let current = '';
-  let quote: string | null = null;
-  let depth = 0;
-
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i];
-    if ((char === '"' || char === "'") && input[i - 1] !== '\\') {
-      quote = quote === char ? null : quote ?? char;
-      current += char;
-      continue;
-    }
-    if (!quote) {
-      if (char === '[' || char === '{') depth += 1;
-      if (char === ']' || char === '}') depth -= 1;
-      if (char === separator && depth === 0) {
-        parts.push(current.trim());
-        current = '';
-        continue;
-      }
-    }
-    current += char;
-  }
-
-  if (current.trim().length > 0) {
-    parts.push(current.trim());
-  }
-  return parts;
-}
-
-function unquote(value: string): string {
-  const trimmed = value.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function parseInlineValue(rawValue: string): ParsedYamlValue {
-  const value = stripInlineComment(rawValue).trim();
-  if (value === '' || value === '~' || value.toLowerCase() === 'null') return null;
-  if (value.toLowerCase() === 'true') return true;
-  if (value.toLowerCase() === 'false') return false;
-
-  if (value.startsWith('[') && value.endsWith(']')) {
-    const inner = value.slice(1, -1).trim();
-    if (!inner) return [];
-    return splitTopLevel(inner, ',').map(parseInlineValue);
-  }
-
-  if (value.startsWith('{') && value.endsWith('}')) {
-    const inner = value.slice(1, -1).trim();
-    const object: Record<string, ParsedYamlValue> = {};
-    if (!inner) return object;
-
-    for (const entry of splitTopLevel(inner, ',')) {
-      const colonIndex = entry.indexOf(':');
-      if (colonIndex <= 0) {
-        throw new Error(`Invalid inline object entry: ${entry}`);
-      }
-      const key = entry.slice(0, colonIndex).trim();
-      object[key] = parseInlineValue(entry.slice(colonIndex + 1));
-    }
-    return object;
-  }
-
-  if (/^-?\d+(\.\d+)?$/.test(value)) {
-    return Number(value);
-  }
-
-  return unquote(value);
-}
-
-function getIndent(line: string): number {
-  const match = line.match(/^ */);
-  return match ? match[0].length : 0;
-}
-
-function findTopLevelColon(line: string): number {
-  let quote: string | null = null;
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if ((char === '"' || char === "'") && line[i - 1] !== '\\') {
-      quote = quote === char ? null : quote ?? char;
-      continue;
-    }
-    if (char === ':' && !quote) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function parseYamlBlock(lines: string[], startIndex: number): { value: ParsedYamlValue; nextIndex: number } {
-  const firstLine = lines[startIndex];
-  const baseIndent = getIndent(firstLine);
-  const firstTrimmed = firstLine.trim();
-
-  if (firstTrimmed.startsWith('- ')) {
-    const items: ParsedYamlValue[] = [];
-    let index = startIndex;
-
-    while (index < lines.length) {
-      const line = lines[index];
-      const trimmed = line.trim();
-      if (!trimmed) {
-        index += 1;
-        continue;
-      }
-      const indent = getIndent(line);
-      if (indent < baseIndent || (indent === 0 && !trimmed.startsWith('- '))) break;
-      if (indent !== baseIndent || !trimmed.startsWith('- ')) {
-        throw new Error(`Invalid array item indentation: ${line}`);
-      }
-
-      const itemText = trimmed.slice(2).trim();
-      const colonIndex = findTopLevelColon(itemText);
-      if (colonIndex > 0 && !itemText.startsWith('{')) {
-        const object: Record<string, ParsedYamlValue> = {};
-        const key = itemText.slice(0, colonIndex).trim();
-        object[key] = parseInlineValue(itemText.slice(colonIndex + 1));
-        index += 1;
-
-        while (index < lines.length) {
-          const nextLine = lines[index];
-          const nextTrimmed = nextLine.trim();
-          if (!nextTrimmed) {
-            index += 1;
-            continue;
-          }
-          const nextIndent = getIndent(nextLine);
-          if (nextIndent <= baseIndent) break;
-          const nextColon = findTopLevelColon(nextTrimmed);
-          if (nextColon <= 0) {
-            throw new Error(`Invalid object entry: ${nextLine}`);
-          }
-          object[nextTrimmed.slice(0, nextColon).trim()] = parseInlineValue(nextTrimmed.slice(nextColon + 1));
-          index += 1;
-        }
-        items.push(object);
-        continue;
-      }
-
-      items.push(parseInlineValue(itemText));
-      index += 1;
-    }
-
-    return { value: items, nextIndex: index };
-  }
-
-  const object: Record<string, ParsedYamlValue> = {};
-  let index = startIndex;
-  while (index < lines.length) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    if (!trimmed) {
-      index += 1;
-      continue;
-    }
-    const indent = getIndent(line);
-    if (indent < baseIndent || indent === 0) break;
-    const colonIndex = findTopLevelColon(trimmed);
-    if (colonIndex <= 0) {
-      throw new Error(`Invalid object entry: ${line}`);
-    }
-    object[trimmed.slice(0, colonIndex).trim()] = parseInlineValue(trimmed.slice(colonIndex + 1));
-    index += 1;
-  }
-
-  return { value: object, nextIndex: index };
-}
-
-export function parseFrontmatter(content: string): { data: ParsedFrontmatter; body: string } | null {
-  if (!content.startsWith('---')) {
-    return null;
-  }
-
-  const normalized = content.replace(/\r\n/g, '\n');
-  if (!normalized.startsWith('---\n')) {
-    return null;
-  }
-
-  const endIndex = normalized.indexOf('\n---', 4);
-  if (endIndex === -1) {
-    throw new Error('Missing frontmatter closing delimiter');
-  }
-
-  const delimiterEnd = normalized.indexOf('\n', endIndex + 1);
-  const frontmatter = normalized.slice(4, endIndex);
-  const body = delimiterEnd === -1 ? '' : normalized.slice(delimiterEnd + 1);
-  const lines = frontmatter.split('\n');
-  const data: ParsedFrontmatter = {};
-
-  let index = 0;
-  while (index < lines.length) {
-    const rawLine = lines[index];
-    const line = stripInlineComment(rawLine).trimEnd();
-    const trimmed = line.trim();
-    if (!trimmed) {
-      index += 1;
-      continue;
-    }
-    if (getIndent(rawLine) !== 0) {
-      throw new Error(`Unexpected indented top-level line: ${rawLine}`);
-    }
-
-    const colonIndex = findTopLevelColon(trimmed);
-    if (colonIndex <= 0) {
-      throw new Error(`Invalid frontmatter line: ${rawLine}`);
-    }
-
-    const key = trimmed.slice(0, colonIndex).trim();
-    const rawValue = trimmed.slice(colonIndex + 1);
-    if (rawValue.trim().length > 0) {
-      data[key] = parseInlineValue(rawValue);
-      index += 1;
-      continue;
-    }
-
-    index += 1;
-    while (index < lines.length && lines[index].trim().length === 0) {
-      index += 1;
-    }
-    if (index >= lines.length || getIndent(lines[index]) === 0) {
-      data[key] = null;
-      continue;
-    }
-    const parsed = parseYamlBlock(lines, index);
-    data[key] = parsed.value;
-    index = parsed.nextIndex;
-  }
-
-  return { data, body };
-}
-
-function collectEmails(value: ParsedYamlValue | undefined, emails: Set<string>): void {
-  if (value === undefined || value === null) return;
-
-  if (typeof value === 'string') {
-    for (const match of value.matchAll(EMAIL_PATTERN)) {
-      const normalized = normalizeEmail(match[0]);
-      if (normalized) emails.add(normalized);
-    }
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectEmails(item, emails);
-    }
-    return;
-  }
-
-  if (typeof value === 'object') {
-    for (const nested of Object.values(value)) {
-      collectEmails(nested, emails);
-    }
-  }
-}
-
-function stringValue(value: ParsedYamlValue | undefined): string | null {
-  if (typeof value === 'string') return value.trim() || null;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return null;
-}
-
-function taggedByValue(value: ParsedYamlValue | undefined): string | null {
-  const direct = stringValue(value);
-  if (direct) return direct;
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const email = stringValue(value.email);
-    if (email) return email;
-    const name = stringValue(value.name) ?? stringValue(value.display_name);
-    if (name) return name;
-  }
-  return null;
-}
-
-function parseDateMs(value: ParsedYamlValue | undefined): number | null {
-  const raw = stringValue(value);
-  if (!raw) return null;
-  const timestamp = Date.parse(raw);
-  return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function headingTitle(body: string): string | null {
-  for (const line of body.split('\n')) {
-    const match = line.match(/^#\s+(.+)$/);
-    if (match?.[1]?.trim()) return match[1].trim();
-  }
-  return null;
-}
-
-function titleFromPath(filePath: string): string {
-  return path.basename(filePath, path.extname(filePath));
 }
 
 function rowToTaggedDoc(row: TaggedDocRow): TaggedDoc {
@@ -476,6 +147,10 @@ export class TaggedDocsManager extends EventEmitter {
   private currentEmail: string | null = null;
   private rescanInProgress: Promise<TaggedDoc[]> | null = null;
   private watchEnabled: boolean;
+  // Off-main-thread scan worker (lazily forked). Null when unavailable (e.g. in
+  // unit tests, or before first use) — the manager then scans in-process.
+  private worker: import('electron').UtilityProcess | null = null;
+  private scanJobId = 0;
 
   constructor(options: TaggedDocsManagerOptions = {}) {
     super();
@@ -483,7 +158,12 @@ export class TaggedDocsManager extends EventEmitter {
     if (options.dbPath) {
       this.setDatabasePath(options.dbPath);
     }
-    this.roots = options.roots ? this.normalizeRoots(options.roots) : discoverTaggedDocsSyncRoots(options.homeDir);
+    // Roots are scoped to the directories the user added to their library
+    // (left nav), supplied via setRoots(). We deliberately do NOT auto-discover
+    // entire cloud-storage trees (~/Google Drive, ~/Library/CloudStorage/*) —
+    // recursively scanning + watching those pegged the CPU because of their size
+    // and constant background-sync churn.
+    this.roots = options.roots ? this.normalizeRoots(options.roots) : [];
   }
 
   setDatabasePath(dbPath: string): void {
@@ -501,6 +181,10 @@ export class TaggedDocsManager extends EventEmitter {
     if (JSON.stringify(normalized) === JSON.stringify(this.roots)) return;
     this.roots = normalized;
     this.restartWatcher();
+    // The watcher uses ignoreInitial, so it won't surface existing tagged docs
+    // in a newly added root — rescan to pick them up. No-ops without a signed-in
+    // user (rescan returns early), and concurrent calls are de-duped.
+    void this.rescan();
   }
 
   setIdentity(email: string | null | undefined): void {
@@ -531,7 +215,12 @@ export class TaggedDocsManager extends EventEmitter {
   }
 
   async rescan(): Promise<TaggedDoc[]> {
-    if (this.rescanInProgress) return this.rescanInProgress;
+    // Never run overlapping passes. If one is already running (started against a
+    // possibly-stale roots snapshot), wait for it, then run exactly one fresh pass
+    // so this caller's result reflects state at-or-after their call.
+    if (this.rescanInProgress) {
+      return this.rescanInProgress.then(() => this.rescan());
+    }
 
     this.rescanInProgress = this.performRescan()
       .finally(() => {
@@ -573,11 +262,14 @@ export class TaggedDocsManager extends EventEmitter {
 
   destroy(): void {
     this.stopWatcher();
+    this.worker?.kill();
+    this.worker = null;
     this.db?.close();
     this.db = null;
     this.removeAllListeners();
   }
 
+  // Watcher path (add/change): read one file and reconcile its row immediately.
   async processMarkdownFile(filePath: string, options: ProcessFileOptions = {}): Promise<TaggedDoc | null> {
     if (!this.db || !this.currentEmail || !isMarkdownPath(filePath)) return null;
 
@@ -592,16 +284,27 @@ export class TaggedDocsManager extends EventEmitter {
       return null;
     }
 
-    const parsed = this.parseTaggedDoc(filePath, content, stat);
-    if (!parsed) return null;
+    // Keep the freshness ledger current so the next reconcile skips this file.
+    this.recordScannedFile(filePath, Math.floor(stat.mtimeMs), stat.size);
 
-    if (!parsed.taggedForCurrentEmail) {
+    const parsed = parseTaggedDocFields(filePath, content, Math.floor(stat.mtimeMs), this.currentEmail);
+    if (!parsed || !parsed.taggedForCurrentEmail) {
       if (options.removeWhenUntagged ?? true) {
         this.removePath(filePath, options.emitUpdated);
       }
       return null;
     }
 
+    this.applyParsedDoc(filePath, parsed);
+    const result = this.getByUlid(parsed.ulid);
+    if (options.emitUpdated) this.emitUpdated();
+    return result;
+  }
+
+  // Insert/update the tagged_docs row for a parsed, tagged-for-current-user doc.
+  // Synchronous (no FS, no emit) so it is safe to batch inside a db.transaction().
+  private applyParsedDoc(filePath: string, parsed: ParsedTaggedDoc): void {
+    if (!this.db) return;
     const existing = this.getRowByUlid(parsed.ulid);
     if (!existing) {
       this.db.prepare('DELETE FROM tagged_docs WHERE path = ?').run(filePath);
@@ -620,9 +323,7 @@ export class TaggedDocsManager extends EventEmitter {
           parsed.frontmatterUpdatedAt,
           parsed.fileHash,
         );
-      const inserted = this.getByUlid(parsed.ulid);
-      if (options.emitUpdated) this.emitUpdated();
-      return inserted;
+      return;
     }
 
     const samePath = existing.path === filePath;
@@ -653,12 +354,16 @@ export class TaggedDocsManager extends EventEmitter {
           parsed.fileHash,
           parsed.ulid,
         );
-      const updated = this.getByUlid(parsed.ulid);
-      if (options.emitUpdated) this.emitUpdated();
-      return updated;
     }
+  }
 
-    return rowToTaggedDoc(existing);
+  private recordScannedFile(filePath: string, mtimeMs: number, size: number): void {
+    this.db
+      ?.prepare(`
+        INSERT INTO scanned_files (path, mtime_ms, size) VALUES (?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET mtime_ms = excluded.mtime_ms, size = excluded.size
+      `)
+      .run(filePath, mtimeMs, size);
   }
 
   removePath(filePath: string, emitUpdated = true): void {
@@ -689,6 +394,15 @@ export class TaggedDocsManager extends EventEmitter {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_tagged_docs_path ON tagged_docs(path);
       CREATE INDEX IF NOT EXISTS idx_tagged_docs_unread_sort ON tagged_docs(unread_sort, frontmatter_updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tagged_docs_frontmatter_updated_at ON tagged_docs(frontmatter_updated_at DESC);
+
+      -- Freshness ledger: every markdown file we've stat'd, tagged or not. Lets a
+      -- rescan skip files whose mtime+size are unchanged (stat-gate) so we never
+      -- re-read+parse the whole tree on startup. Keyed by path (the only lookup).
+      CREATE TABLE IF NOT EXISTS scanned_files (
+        path TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
     `);
   }
 
@@ -709,56 +423,126 @@ export class TaggedDocsManager extends EventEmitter {
     return normalized;
   }
 
+  // Incremental reconcile. Two phases so we never block on a giant tree and never
+  // re-read unchanged files:
+  //   Phase A (async, no DB writes): walk + stat each file, skip anything whose
+  //     mtime+size matches the scanned_files ledger (zero reads), and only read +
+  //     parse changed/new files (skipping dataless cloud placeholders + oversized).
+  //   Phase B (one sync transaction): apply all tagged_docs + ledger writes and
+  //     remove vanished files. Keeps list() from ever seeing a half-written scan.
   private async performRescan(): Promise<TaggedDoc[]> {
     if (!this.db || !this.currentEmail) return [];
+    const db = this.db;
+    const roots = this.roots; // snapshot; roots changing mid-scan triggers a follow-up pass via rescan()
+    const email = this.currentEmail;
 
     let scanned = 0;
+    let read = 0;
     let matched = 0;
-    this.emitScanProgress({ phase: 'scanning', scanned, matched, roots: this.roots });
+    this.emitScanProgress({ phase: 'scanning', scanned, matched, roots });
 
     try {
-      for (const root of this.roots) {
-        for await (const filePath of this.walkMarkdownFiles(root)) {
-          scanned += 1;
-          const doc = await this.processMarkdownFile(filePath, { emitUpdated: false, removeWhenUntagged: true });
-          if (doc) matched += 1;
-          if (scanned % 25 === 0) {
-            this.emitScanProgress({ phase: 'scanning', scanned, matched, roots: this.roots, currentPath: filePath });
-          }
-        }
+      // Everything we currently know about, to detect files that vanished while closed.
+      const knownPaths = new Set<string>();
+      const ledger = new Map<string, ScanLedgerEntry>();
+      for (const r of db.prepare('SELECT path, mtime_ms, size FROM scanned_files').all() as Array<{ path: string; mtime_ms: number; size: number }>) {
+        knownPaths.add(r.path);
+        ledger.set(r.path, { mtimeMs: r.mtime_ms, size: r.size });
+      }
+      for (const r of db.prepare('SELECT path FROM tagged_docs').all() as Array<{ path: string }>) {
+        knownPaths.add(r.path);
       }
 
+      // Phase A: the file crawl (stat + read + parse). Off the main thread when a
+      // worker is available; in-process otherwise (tests, or worker unavailable).
+      const out = await this.runScan({ roots, email, ledger });
+      scanned = out.scanned;
+      read = out.read;
+      matched = out.matched;
+      const seen = new Set(out.seenPaths);
+      const vanished = [...knownPaths].filter((p) => !seen.has(p));
+
+      // Phase B: apply every write in one synchronous transaction.
+      const applyBatch = db.transaction(() => {
+        for (const p of out.results) {
+          this.recordScannedFile(p.path, p.mtimeMs, p.size);
+          if (p.ledgerOnly) continue;
+          if (p.parsed) this.applyParsedDoc(p.path, p.parsed);
+          else db.prepare('DELETE FROM tagged_docs WHERE path = ?').run(p.path);
+        }
+        for (const p of vanished) {
+          db.prepare('DELETE FROM tagged_docs WHERE path = ?').run(p);
+          db.prepare('DELETE FROM scanned_files WHERE path = ?').run(p);
+        }
+      });
+      applyBatch();
+
       const docs = this.list();
-      this.emitScanProgress({ phase: 'done', scanned, matched, roots: this.roots });
+      this.emitScanProgress({ phase: 'done', scanned, matched, roots });
       this.emit('updated', docs);
+      if (read > 0 || vanished.length > 0) {
+        log.info(`Tagged docs reconcile: ${scanned} scanned, ${read} read, ${matched} tagged, ${vanished.length} removed`);
+      }
       return docs;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.emitScanProgress({ phase: 'error', scanned, matched, roots: this.roots, error: message });
+      this.emitScanProgress({ phase: 'error', scanned, matched, roots, error: message });
       log.error('Tagged docs rescan failed:', err);
       return this.list();
     }
   }
 
-  private async *walkMarkdownFiles(root: string): AsyncGenerator<string> {
-    let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(root, { withFileTypes: true });
-    } catch (err) {
-      log.warn('Failed to read tagged docs root:', root, err);
-      return;
-    }
+  // Run Phase A on the worker if one can be forked; otherwise in-process. Any
+  // worker failure (fork error, crash, bad message) transparently falls back.
+  private async runScan(opts: { roots: string[]; email: string; ledger: Map<string, ScanLedgerEntry> }): Promise<ScanOutput> {
+    const worker = this.ensureWorker();
+    if (!worker) return scanRoots(opts);
+    return new Promise<ScanOutput>((resolve) => {
+      const jobId = ++this.scanJobId;
+      let done = false;
+      const finish = (value: ScanOutput) => {
+        if (done) return;
+        done = true;
+        worker.removeListener('message', onMessage);
+        worker.removeListener('exit', onExit);
+        resolve(value);
+      };
+      const onMessage = (msg: { type?: string; jobId?: number; out?: ScanOutput; message?: string }) => {
+        if (!msg || msg.jobId !== jobId) return;
+        if (msg.type === 'result' && msg.out) {
+          finish(msg.out);
+        } else {
+          log.warn('Tagged docs worker reported an error; scanning in-process:', msg.message);
+          void scanRoots(opts).then(finish);
+        }
+      };
+      const onExit = () => {
+        this.worker = null;
+        log.warn('Tagged docs worker exited mid-scan; scanning in-process');
+        void scanRoots(opts).then(finish);
+      };
+      worker.on('message', onMessage);
+      worker.once('exit', onExit);
+      worker.postMessage({ type: 'reconcile', jobId, roots: opts.roots, email: opts.email, ledger: opts.ledger, maxReadBytes: SCAN_MAX_READ_BYTES });
+    });
+  }
 
-    for (const entry of entries) {
-      const entryPath = path.join(root, entry.name);
-      if (entry.isDirectory()) {
-        if (isCommonIgnoredDir(entry.name)) continue;
-        yield* this.walkMarkdownFiles(entryPath);
-        continue;
-      }
-      if (entry.isFile() && isMarkdownPath(entryPath)) {
-        yield entryPath;
-      }
+  // Lazily fork the scan worker. Returns null when utilityProcess is unavailable
+  // (unit tests / non-Electron) or the compiled worker is missing — caller scans
+  // in-process. The worker entry resolves next to this file in electron-dist.
+  private ensureWorker(): import('electron').UtilityProcess | null {
+    if (this.worker) return this.worker;
+    try {
+      const electron = require('electron') as typeof import('electron');
+      if (!electron.utilityProcess?.fork) return null;
+      const workerPath = path.join(__dirname, 'taggedDocsWorker.js');
+      if (!fs.existsSync(workerPath)) return null;
+      this.worker = electron.utilityProcess.fork(workerPath, [], { serviceName: 'tagged-docs-scan' });
+      this.worker.once('exit', () => { this.worker = null; });
+      return this.worker;
+    } catch (err) {
+      log.warn('Tagged docs scan worker unavailable; scanning in-process:', err);
+      return null;
     }
   }
 
@@ -788,6 +572,7 @@ export class TaggedDocsManager extends EventEmitter {
     this.watcher.on('unlink', (filePath) => {
       if (isMarkdownPath(filePath)) {
         this.removePath(filePath);
+        this.db?.prepare('DELETE FROM scanned_files WHERE path = ?').run(filePath);
       }
     });
     this.watcher.on('error', (err) => log.error('Tagged docs watcher error:', err));
@@ -796,43 +581,6 @@ export class TaggedDocsManager extends EventEmitter {
   private stopWatcher(): void {
     this.watcher?.close();
     this.watcher = null;
-  }
-
-  private parseTaggedDoc(filePath: string, content: string, stat: fs.Stats): ParsedTaggedDoc | null {
-    let frontmatter: { data: ParsedFrontmatter; body: string } | null;
-    try {
-      frontmatter = parseFrontmatter(content);
-    } catch (err) {
-      log.warn('Skipping malformed tagged doc frontmatter:', filePath, err);
-      return null;
-    }
-    if (!frontmatter) return null;
-
-    const ulid = stringValue(frontmatter.data.id) ?? stringValue(frontmatter.data.ulid);
-    if (!ulid || !ULID_PATTERN.test(ulid)) {
-      return null;
-    }
-
-    const title = stringValue(frontmatter.data.title) ?? headingTitle(frontmatter.body) ?? titleFromPath(filePath);
-    const taggedAt = parseDateMs(frontmatter.data.created_at) ?? parseDateMs(frontmatter.data.tagged_at);
-    const frontmatterUpdatedAt =
-      parseDateMs(frontmatter.data.updated_at) ??
-      parseDateMs(frontmatter.data.frontmatter_updated_at) ??
-      taggedAt ??
-      Math.floor(stat.mtimeMs);
-    const taggedEmails = new Set<string>();
-    collectEmails(frontmatter.data.to, taggedEmails);
-    collectEmails(frontmatter.data.cc, taggedEmails);
-
-    return {
-      ulid: ulid.toUpperCase(),
-      title,
-      taggedBy: taggedByValue(frontmatter.data.from) ?? taggedByValue(frontmatter.data.tagged_by),
-      taggedAt,
-      frontmatterUpdatedAt,
-      fileHash: crypto.createHash('sha256').update(content).digest('hex'),
-      taggedForCurrentEmail: this.currentEmail !== null && taggedEmails.has(this.currentEmail),
-    };
   }
 
   private getRowByUlid(ulid: string): TaggedDocRow | null {
