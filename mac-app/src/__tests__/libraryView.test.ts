@@ -27,6 +27,7 @@ import {
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
   getReadingUpdatedByline,
+  getReadingUpdatedTitle,
   getLibrarianBracketNavigationDirection,
   getLibrarianContentBottomScrollSpace,
   getLibrarianContentTopPadding,
@@ -1081,6 +1082,23 @@ describe('getReadingUpdatedByline', () => {
     Date.now = () => 3 * 60 * 60 * 1000;
 
     expect(getReadingUpdatedByline({ mtime: 0, sharedAuthorCallsign: 'AMB-MAC' })).toBe('Updated 3 hours ago by AMB-MAC');
+  });
+
+  it('prefers model edit actor metadata over shared callsign', () => {
+    Date.now = () => 3 * 60 * 60 * 1000;
+
+    expect(getReadingUpdatedByline({
+      mtime: 0,
+      sharedAuthorCallsign: 'AMB-MAC',
+      editActor: { type: 'model', name: 'GPT-5.5', detail: 'high reasoning' },
+    })).toBe('Updated 3 hours ago by GPT-5.5 (high reasoning)');
+  });
+
+  it('uses the same edit actor text in the timestamp tooltip', () => {
+    expect(getReadingUpdatedTitle({
+      mtime: 0,
+      editActor: { type: 'model', name: 'GPT-5.5', detail: 'high reasoning' },
+    })).toContain(' by GPT-5.5 (high reasoning)');
   });
 });
 

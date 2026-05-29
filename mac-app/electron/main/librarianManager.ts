@@ -21,11 +21,14 @@ import {
   stripMarkdownFileExtension,
 } from './pathSafety';
 import {
+  getMarkdownEditActor,
   parseMarkdownFrontmatter,
   parseMarkdownArchivedState,
   parseMarkdownContentEditedAt,
+  parseMarkdownEditActor,
   parseMarkdownTodoState,
   stampMarkdownContentEditIfBodyChanged,
+  type MarkdownEditActor,
   type MarkdownTodoState,
 } from '../shared/markdownFrontmatter';
 
@@ -1376,6 +1379,7 @@ export interface ParsedMarkdownHeader {
   context: string | null;
   readingTime: string | null;
   modelSignature: string | null;
+  editActor: MarkdownEditActor | null;
 }
 
 export { parseMarkdownTodoState, type MarkdownTodoState };
@@ -1589,7 +1593,7 @@ export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
     }
   }
 
-  return { title, context, readingTime, modelSignature };
+  return { title, context, readingTime, modelSignature, editActor: parseMarkdownEditActor(content) };
 }
 
 /**
@@ -1630,6 +1634,7 @@ export interface WikiPageMeta {
   archived?: boolean;
   sharedOriginalSourcePath?: string;
   sharedAuthorCallsign?: string;
+  editActor?: MarkdownEditActor;
 }
 
 export interface WikiPage extends WikiPageMeta {
@@ -1643,10 +1648,10 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string; editActor?: MarkdownEditActor }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
-type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign'> & {
+type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign' | 'editActor'> & {
   contentEditedAt?: number;
 };
 
@@ -1681,6 +1686,7 @@ export interface ReadingMeta {
   modelSignature: string | null;
   createdAt: number;
   mtime: number;
+  editActor?: MarkdownEditActor;
 }
 
 /**
@@ -1750,6 +1756,7 @@ interface LibrarianIndex {
     modelSignature: string | null;
     createdAt: number;
     mtime: number;
+    editActor?: MarkdownEditActor;
   }>;
 }
 
@@ -2102,6 +2109,7 @@ export class LibrarianManager extends EventEmitter {
               modelSignature: meta.modelSignature ?? null,
               createdAt: meta.createdAt,
               mtime: meta.mtime,
+              editActor: meta.editActor,
             });
           }
         }
@@ -2129,6 +2137,7 @@ export class LibrarianManager extends EventEmitter {
           modelSignature: meta.modelSignature,
           createdAt: meta.createdAt,
           mtime: meta.mtime,
+          editActor: meta.editActor,
         };
       }
       fs.writeFileSync(this.indexPath, JSON.stringify(index, null, 2));
@@ -2235,7 +2244,7 @@ export class LibrarianManager extends EventEmitter {
     try {
       const stats = fs.statSync(filePath);
       const content = fs.readFileSync(filePath, 'utf-8');
-      const { title, context, readingTime, modelSignature } = this.parseMarkdownHeader(content);
+      const { title, context, readingTime, modelSignature, editActor } = this.parseMarkdownHeader(content);
 
       return {
         path: filePath,
@@ -2245,6 +2254,7 @@ export class LibrarianManager extends EventEmitter {
         modelSignature,
         createdAt: Math.floor(stats.birthtimeMs),
         mtime: Math.floor(stats.mtimeMs),
+        editActor: editActor ?? undefined,
       };
     } catch (error) {
       log.error(`Error parsing file ${filePath}:`, error);
@@ -2647,6 +2657,7 @@ export class LibrarianManager extends EventEmitter {
       archived: parseMarkdownArchivedState(content) || undefined,
       sharedOriginalSourcePath: frontmatter.shared_original_source_path,
       sharedAuthorCallsign: frontmatter.shared_author_callsign,
+      editActor: getMarkdownEditActor(frontmatter) ?? undefined,
       contentEditedAt: parseMarkdownContentEditedAt(content)
         ?? (Number.isFinite(sharedUpdatedAt) ? sharedUpdatedAt : undefined),
     };
@@ -2947,6 +2958,7 @@ export class LibrarianManager extends EventEmitter {
         archived: metadata.archived,
         sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
         sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
       });
     }
 
@@ -2971,6 +2983,7 @@ export class LibrarianManager extends EventEmitter {
           archived: node.archived,
           sharedOriginalSourcePath: node.sharedOriginalSourcePath,
           sharedAuthorCallsign: node.sharedAuthorCallsign,
+          editActor: node.editActor,
         }];
       }
       return this.flattenWikiFiles(node.children);
@@ -3008,6 +3021,7 @@ export class LibrarianManager extends EventEmitter {
         archived: metadata.archived,
         sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
         sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
       };
     } catch {
       return null;
@@ -3328,6 +3342,7 @@ export class LibrarianManager extends EventEmitter {
         archived: metadata.archived,
         sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
         sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
         content,
         documentVersion: readDocumentVersion(absPath),
       };

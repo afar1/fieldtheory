@@ -2017,6 +2017,7 @@ declare global {
     todoState?: MarkdownTodoState;
     sharedOriginalSourcePath?: string;
     sharedAuthorCallsign?: string;
+    editActor?: MarkdownEditActor;
   }
 
   /**
@@ -2039,6 +2040,11 @@ declare global {
   // ── Wiki viewer types ──────────────────────────────────────────────────
 
   type MarkdownTodoState = 'open' | 'done';
+  type MarkdownEditActor = {
+    type: 'human' | 'model' | 'system';
+    name: string;
+    detail?: string;
+  };
 
   interface WikiPageMeta {
     relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
@@ -2051,6 +2057,7 @@ declare global {
     archived?: boolean;
     sharedOriginalSourcePath?: string;
     sharedAuthorCallsign?: string;
+    editActor?: MarkdownEditActor;
   }
 
   interface WikiPage extends WikiPageMeta {
@@ -2064,7 +2071,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string; editActor?: MarkdownEditActor }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {
