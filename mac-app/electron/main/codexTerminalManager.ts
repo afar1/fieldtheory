@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import * as pty from 'node-pty';
-import { libraryDir } from './fieldTheoryPaths';
+import { fieldTheoryDir } from './fieldTheoryPaths';
 
 export const CodexTerminalIPCChannels = {
   CREATE: 'codexTerminal:create',
@@ -175,7 +175,7 @@ function commonInteractivePath(): string {
 }
 
 function defaultContextDirPath(): string {
-  return path.join(libraryDir(), 'Codex Context');
+  return path.join(fieldTheoryDir(), '.codex-context');
 }
 
 function defaultCodexSessionsDirPath(): string {
