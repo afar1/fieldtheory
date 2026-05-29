@@ -126,6 +126,7 @@ export interface SharedFilePresenceUser {
 
 export interface SharedFilesAvailability {
   available: boolean;
+  canWrite: boolean;
   hasTeamMembers: boolean;
   reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
@@ -162,6 +163,11 @@ function sharedPathForInput(input: SharedFileShareInput): string {
   const sourceKey = sourceKeyForFilePath(input.filePath);
   const prefix = type === 'command' ? 'Commands' : type === 'plan' ? 'Plans' : 'Docs';
   return `${prefix}/${sourceKey.replace(/^external\//, '')}`;
+}
+
+function canWriteTeamDocuments(teamState: SharedTeamState): boolean {
+  if (!teamState.available || !teamState.currentTeamScopeUserId) return false;
+  return teamState.isOwner || teamState.pendingIncoming.length === 0;
 }
 
 export class SharedSyncService extends EventEmitter {
@@ -336,6 +342,7 @@ export class SharedSyncService extends EventEmitter {
     const hasTeamMembers = teamState.available;
     return {
       available: teamState.available,
+      canWrite: canWriteTeamDocuments(teamState),
       hasTeamMembers,
       reason: teamState.available ? undefined : teamState.reason,
       currentTeamScopeUserId: teamState.currentTeamScopeUserId,
@@ -395,6 +402,7 @@ export class SharedSyncService extends EventEmitter {
     if (!supabase || !session?.user?.id) return { shared: false };
     const teamState = await this.getActiveTeamState();
     if (!teamState?.currentTeamScopeUserId) return { shared: false };
+    if (!canWriteTeamDocuments(teamState)) return { shared: false, error: 'Accept the team invite before sharing to River' };
 
     const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
     const sourceKey = sourceKeyForFilePath(input.filePath);

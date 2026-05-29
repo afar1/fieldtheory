@@ -4029,6 +4029,7 @@ type SharedFilePresenceUser = {
 
 type SharedFilesAvailability = {
   available: boolean;
+  canWrite: boolean;
   hasTeamMembers: boolean;
   reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;

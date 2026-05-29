@@ -5006,7 +5006,7 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('sharedFiles:getAvailability', async () => {
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, hasTeamMembers: false, reason: 'not_authenticated' };
+    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
     return sharedSyncService.getAvailability();
   });
 

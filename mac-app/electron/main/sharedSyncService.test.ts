@@ -142,6 +142,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: false,
+      canWrite: false,
       hasTeamMembers: false,
       reason: 'no_team_members',
       currentTeamScopeUserId: null,
@@ -166,6 +167,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: true,
+      canWrite: true,
       hasTeamMembers: true,
       reason: undefined,
       currentTeamScopeUserId: 'user-1',
@@ -190,6 +192,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: true,
+      canWrite: false,
       hasTeamMembers: true,
       reason: undefined,
       currentTeamScopeUserId: 'owner-1',
@@ -475,6 +478,41 @@ describe('SharedSyncService cache behavior', () => {
       created_by: 'user-2',
       updated_by: 'user-2',
     });
+  });
+
+  it('blocks pending invitees from sharing before hitting River RLS', async () => {
+    const fromCalls: string[] = [];
+    const supabase = {
+      from(table: string) {
+        fromCalls.push(table);
+        return {};
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: false,
+        members: [{ contactId: 'contact-1', userId: 'owner-1', email: '', role: 'owner', teamScopeUserId: 'owner-1' }],
+        pendingIncoming: [{ contactId: 'contact-1', ownerUserId: 'owner-1', contactUserId: 'user-2', email: 'js@example.com', direction: 'incoming' }],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+    })).resolves.toEqual({
+      shared: false,
+      error: 'Accept the team invite before sharing to River',
+    });
+    expect(fromCalls).toEqual([]);
   });
 
   it('uploads only image assets referenced by the shared file content', async () => {
