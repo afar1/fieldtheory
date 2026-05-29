@@ -2,7 +2,7 @@ import { clipboard, type NativeImage } from 'electron';
 
 export const COMMAND_CLIPBOARD_RESTORE_DELAY_MS = 1500;
 
-export type CommandFilePasteMode = 'text-reference' | 'markdown-content';
+export type CommandFilePasteMode = 'text-reference' | 'markdown-content' | 'wiki-link';
 export type CommandFilePasteDelivery = 'native-helper' | 'clipboard-paste';
 
 export type CommandFilePasteSource =
@@ -175,7 +175,15 @@ function formatCommandFileTextReference(source: CommandFilePasteSource): string 
   return `${source.fileName}\n${source.filePath} `;
 }
 
+function formatCommandFileWikiLink(source: CommandFilePasteSource): string {
+  const target = source.kind === 'command'
+    ? source.name
+    : source.fileName.replace(/\.(md|markdown)$/i, '');
+  return `[[${target.replace(/\]/g, '\\]')}]]`;
+}
+
 export function formatCommandFilePasteText(input: CommandFilePasteTextInput): string {
   if (input.mode === 'markdown-content') return input.markdownContent;
+  if (input.mode === 'wiki-link') return formatCommandFileWikiLink(input);
   return formatCommandFileTextReference(input);
 }
