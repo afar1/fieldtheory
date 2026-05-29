@@ -8,8 +8,10 @@ import {
   isTerminalPanelVisibilityToggleSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
+  resolveCodexTerminalDockSide,
   shouldSendBackendResize,
   shouldFocusTerminalForRequest,
+  shouldUseCompactRightDockToolbar,
   terminalAppearanceOptions,
   terminalContrastRatio,
   terminalTheme,
@@ -237,6 +239,32 @@ describe('estimateCodexTerminalSize', () => {
       cols: 93,
       rows: 18,
     });
+  });
+});
+
+describe('resolveCodexTerminalDockSide', () => {
+  it('uses the persisted user dock side when there is no responsive override', () => {
+    expect(resolveCodexTerminalDockSide({ dockSide: 'right' })).toBe('right');
+  });
+
+  it('uses a responsive override for rendering without changing the user dock side input', () => {
+    const userDockSide = 'right';
+    expect(resolveCodexTerminalDockSide({ dockSide: userDockSide, dockSideOverride: 'bottom' })).toBe('bottom');
+    expect(userDockSide).toBe('right');
+  });
+});
+
+describe('shouldUseCompactRightDockToolbar', () => {
+  it('compacts cramped right-docked toolbars', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'right', rightWidth: 420 })).toBe(true);
+  });
+
+  it('does not compact bottom-docked toolbars', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'bottom', rightWidth: 360 })).toBe(false);
+  });
+
+  it('uses the responsive override when deciding whether the toolbar is right-docked', () => {
+    expect(shouldUseCompactRightDockToolbar({ dockSide: 'bottom', dockSideOverride: 'right', rightWidth: 420 })).toBe(true);
   });
 });
 
