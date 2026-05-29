@@ -713,6 +713,16 @@ export function getResponsivePanelState(input: {
   return { autoCollapseSidebar, autoDockTerminalBottom, autoHideTerminal, reason };
 }
 
+export function shouldAnimateResponsiveSidebar(input: {
+  responsivePanelState: Pick<ResponsivePanelState, 'autoCollapseSidebar' | 'autoDockTerminalBottom' | 'autoHideTerminal'>;
+  userResizing: boolean;
+}): boolean {
+  return !input.userResizing
+    && !input.responsivePanelState.autoCollapseSidebar
+    && !input.responsivePanelState.autoDockTerminalBottom
+    && !input.responsivePanelState.autoHideTerminal;
+}
+
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -2970,6 +2980,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     responsivePanelState.autoDockTerminalBottom ? 'bottom' : codexTerminalDockSide;
   const effectiveCodexTerminalVisible = codexTerminalVisible
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
+  const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
+    responsivePanelState,
+    userResizing: isResizing || codexTerminalResizing,
+  });
   useEffect(() => {
     if (sidebarToggleRequestKey > 0 && effectiveSidebarCollapsed && !isFullScreen) {
       setSidebarHoverExpanded((expanded) => !expanded);
@@ -8558,7 +8572,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           flexShrink: 0,
           zIndex: sidebarTemporarilyExpanded ? 30 : undefined,
           boxShadow: sidebarTemporarilyExpanded ? (theme.isDark ? '12px 0 24px rgba(0,0,0,0.36)' : '12px 0 24px rgba(0,0,0,0.12)') : undefined,
-          transition: isResizing ? 'none' : 'width 0.18s ease, min-width 0.18s ease',
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease' : 'none',
         }}
       >
         <div
@@ -8605,7 +8619,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
           borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
-          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease' : 'background-color 0.15s ease',
           flexShrink: 0,
           display: sidebarHidden ? 'none' : 'block',
           pointerEvents: sidebarVisible ? 'auto' : 'none',

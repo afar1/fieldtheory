@@ -9,6 +9,7 @@ import LibrarianView, {
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
   getResponsivePanelState,
+  shouldAnimateResponsiveSidebar,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -181,6 +182,26 @@ describe('LibrarianView render', () => {
       userResizing: true,
       previous,
     })).toEqual(previous);
+  });
+
+  it('does not animate the sidebar during responsive panel rearrange', () => {
+    expect(shouldAnimateResponsiveSidebar({
+      responsivePanelState: {
+        autoCollapseSidebar: false,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+      },
+      userResizing: false,
+    })).toBe(true);
+
+    expect(shouldAnimateResponsiveSidebar({
+      responsivePanelState: {
+        autoCollapseSidebar: true,
+        autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+      },
+      userResizing: false,
+    })).toBe(false);
   });
 
   it('does not auto-collapse the sidebar when it is needed for empty selection', () => {
