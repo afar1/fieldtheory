@@ -2882,6 +2882,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [sharedFilesCanWrite, setSharedFilesCanWrite] = useState(false);
   const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
   const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
   const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
@@ -2896,7 +2897,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const loadAvailability = async () => {
       const availability = await window.sharedFilesAPI?.getAvailability?.();
       const available = availability?.available === true;
-      if (!cancelled) setSharedFilesAvailable(available);
+      if (!cancelled) {
+        setSharedFilesAvailable(available);
+        setSharedFilesCanWrite(availability?.canWrite === true);
+      }
       if (available) {
         void window.sharedFilesAPI?.sync?.()
           .then((result) => {
@@ -7377,6 +7381,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleToggleSharedFile = useCallback(async () => {
     if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+    if (!sharedFileStatus?.shared && !sharedFilesCanWrite) {
+      flashCopyFeedback('Accept team invite to share');
+      return;
+    }
 
     setIsTogglingSharedFile(true);
     try {
@@ -7414,7 +7422,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } finally {
       setIsTogglingSharedFile(false);
     }
-  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite]);
 
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
@@ -8024,7 +8032,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      if (sharedFilesAvailable && isSharedFileToggleShortcut(e, sharedFileToggleHotkey) && activeReading?.path && activeIsMarkdownDocument) {
+      if (sharedFilesAvailable && (sharedFilesCanWrite || sharedFileStatus?.shared) && isSharedFileToggleShortcut(e, sharedFileToggleHotkey) && activeReading?.path && activeIsMarkdownDocument) {
         e.preventDefault();
         void handleToggleSharedFile();
         return;
@@ -8281,7 +8289,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -9172,7 +9180,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               )}
 
               {/* Content mode toggle - raw markdown / rendered view */}
-              {focusToolbarControlsVisible && sharedFilesAvailable && activeIsMarkdownDocument && (
+              {focusToolbarControlsVisible && sharedFilesAvailable && (sharedFilesCanWrite || sharedFileStatus?.shared) && activeIsMarkdownDocument && (
                 <button
                   type="button"
                   onClick={handleToggleSharedFile}

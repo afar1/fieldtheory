@@ -329,4 +329,24 @@ describe('formatCommandFilePasteText', () => {
       markdownContent: '# Research note\nUse this note.',
     })).toBe('# Research note\nUse this note.');
   });
+
+  it('formats portable command md files as wiki links for Field Theory editor targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'command',
+      name: 'review',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
+      mode: 'wiki-link',
+      markdownContent: '# Review',
+    })).toBe('[[review]]');
+  });
+
+  it('formats handoff md files as wiki links for Field Theory editor targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'handoff',
+      fileName: 'Research note.md',
+      filePath: '/Users/afar/.fieldtheory/library/Research note.md',
+      mode: 'wiki-link',
+      markdownContent: '# Research note',
+    })).toBe('[[Research note]]');
+  });
 });

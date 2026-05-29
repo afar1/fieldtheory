@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthManager } from './authManager';
 import { sharedFilesRoot } from './sharedFiles';
 import { SharedSyncService } from './sharedSyncService';
@@ -142,6 +142,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: false,
+      canWrite: false,
       hasTeamMembers: false,
       reason: 'no_team_members',
       currentTeamScopeUserId: null,
@@ -166,6 +167,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: true,
+      canWrite: true,
       hasTeamMembers: true,
       reason: undefined,
       currentTeamScopeUserId: 'user-1',
@@ -190,6 +192,7 @@ describe('SharedSyncService cache behavior', () => {
 
     await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
       available: true,
+      canWrite: false,
       hasTeamMembers: true,
       reason: undefined,
       currentTeamScopeUserId: 'owner-1',
@@ -230,6 +233,84 @@ describe('SharedSyncService cache behavior', () => {
       errors: [],
     });
     expect(fs.existsSync(sharedFilesRoot())).toBe(true);
+  });
+
+  it('removes stale River cache files after a team document realtime change', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Removed AF.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-removed"',
+      'shared_type: "document"',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    let realtimeHandler: (() => void) | null = null;
+    const channel = {
+      on: vi.fn((_event: string, _config: unknown, handler: () => void) => {
+        realtimeHandler = handler;
+        return channel;
+      }),
+      subscribe: vi.fn(() => channel),
+    };
+    const supabase = {
+      channel: vi.fn(() => channel),
+      removeChannel: vi.fn(async () => undefined),
+      from: () => ({
+        select() { return this; },
+        eq() { return this; },
+        async is() {
+          return { data: [], error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const cacheChanged = vi.fn();
+    const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
+    service.on('cacheChanged', cacheChanged);
+
+    await service.startRemoteChangeSync();
+    expect(realtimeHandler).toEqual(expect.any(Function));
+    const handler = realtimeHandler as unknown as () => void;
+    handler();
+    await vi.waitFor(() => {
+      expect(fs.existsSync(cachePath)).toBe(false);
+    });
+
+    expect(supabase.channel).toHaveBeenCalledWith('shared-team-documents:user-1');
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'team_documents',
+        filter: 'team_scope_user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
+    expect(cacheChanged).toHaveBeenCalledWith({
+      written: 0,
+      removed: 1,
+      created: 0,
+      errors: [],
+    });
   });
 
   it('fills a missing current-user callsign while syncing cached River rows', async () => {
@@ -397,6 +478,41 @@ describe('SharedSyncService cache behavior', () => {
       created_by: 'user-2',
       updated_by: 'user-2',
     });
+  });
+
+  it('blocks pending invitees from sharing before hitting River RLS', async () => {
+    const fromCalls: string[] = [];
+    const supabase = {
+      from(table: string) {
+        fromCalls.push(table);
+        return {};
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: false,
+        members: [{ contactId: 'contact-1', userId: 'owner-1', email: '', role: 'owner', teamScopeUserId: 'owner-1' }],
+        pendingIncoming: [{ contactId: 'contact-1', ownerUserId: 'owner-1', contactUserId: 'user-2', email: 'js@example.com', direction: 'incoming' }],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+    })).resolves.toEqual({
+      shared: false,
+      error: 'Accept the team invite before sharing to River',
+    });
+    expect(fromCalls).toEqual([]);
   });
 
   it('uploads only image assets referenced by the shared file content', async () => {
