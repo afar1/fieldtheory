@@ -232,6 +232,7 @@ describe('wiki tree visibility helpers', () => {
     expect(isHiddenWikiFolderName('.system')).toBe(true);
     expect(isHiddenWikiFolderName('.assets')).toBe(true);
     expect(isHiddenWikiFolderName('Brief.assets')).toBe(true);
+    expect(isHiddenWikiFolderName('Codex Context')).toBe(true);
     expect(isHiddenWikiFolderName('debates')).toBe(false);
   });
 });
