@@ -110,6 +110,7 @@ import {
   filterUnifiedFolders,
   getLibraryDragData,
   getLibrarySidebarIconColor,
+  getBuiltinLibraryDocumentType,
   getRecentEntrySidebarId,
   getRecentEntryParentLabel,
   getRecentEntryParentPath,
@@ -185,6 +186,21 @@ describe('rankMarkdownWikiLinkSuggestions', () => {
     expect(results).toEqual([
       { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
     ]);
+  });
+});
+
+describe('getBuiltinLibraryDocumentType', () => {
+  it('opens Commands markdown as Library documents instead of wiki pages', () => {
+    expect(getBuiltinLibraryDocumentType({
+      builtin: true,
+      relPath: 'Commands/workflow',
+      documentKind: 'markdown',
+    })).toBe('external');
+    expect(getBuiltinLibraryDocumentType({
+      builtin: true,
+      relPath: 'entries/note',
+      documentKind: 'markdown',
+    })).toBe('wiki');
   });
 });
 
