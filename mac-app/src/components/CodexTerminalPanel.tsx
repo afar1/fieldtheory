@@ -19,6 +19,7 @@ interface CodexTerminalPanelProps {
   onFocusToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onTerminalFocusChange?: (focused: boolean) => void;
   onLauncherTargetSessionChange?: (sessionId: string | null) => void;
+  onResizeActiveChange?: (resizing: boolean) => void;
   onVisibilityToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onVisibleChange: (visible: boolean) => void;
 }
@@ -263,7 +264,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -290,6 +291,10 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    onResizeActiveChange?.(isResizing);
+  }, [isResizing, onResizeActiveChange]);
   const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
