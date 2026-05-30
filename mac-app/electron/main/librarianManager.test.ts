@@ -1384,18 +1384,18 @@ describe('default folder readmes', () => {
 });
 
 describe('librarian watcher cleanup', () => {
-  it('closes both reading watchers and library root watchers on destroy', () => {
-    const readingClose = vi.fn();
-    const libraryClose = vi.fn();
+  it('closes both reading watchers and library root watchers on destroy', async () => {
+    const readingClose = vi.fn(async () => undefined);
+    const libraryClose = vi.fn(async () => undefined);
     const manager = Object.create(LibrarianManager.prototype) as {
-      watchers: Map<string, { close: () => void }>;
-      libraryRootWatchers: Map<string, { close: () => void }>;
-      destroy: () => void;
+      watchers: Map<string, { close: () => Promise<void> }>;
+      libraryRootWatchers: Map<string, { close: () => Promise<void> }>;
+      destroy: () => Promise<void>;
     };
     manager.watchers = new Map([['/readings', { close: readingClose }]]);
     manager.libraryRootWatchers = new Map([['/library', { close: libraryClose }]]);
 
-    manager.destroy();
+    await manager.destroy();
 
     expect(readingClose).toHaveBeenCalledTimes(1);
     expect(libraryClose).toHaveBeenCalledTimes(1);

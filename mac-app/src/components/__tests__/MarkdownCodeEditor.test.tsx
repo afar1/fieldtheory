@@ -76,6 +76,9 @@ import {
   getRenderedMarkdownArrowRightEdit,
   getRenderedMarkdownSelectionInsideListBody,
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
+  getRenderedMarkdownBlockBodyClickPosition,
+  getRenderedMarkdownBlockBodyStart,
+  getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListBodyStartForLine,
@@ -785,6 +788,25 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('keeps rendered heading and quote prefixes out of the editing caret path', () => {
+    const doc = '# Resolved\n> Quoted';
+    const quoteLineStart = '# Resolved\n'.length;
+
+    expect(getRenderedMarkdownBlockBodyStartForLine(doc, 0)).toBe(2);
+    expect(getRenderedMarkdownBlockBodyStartForLine(doc, quoteLineStart)).toBe(quoteLineStart + 2);
+    expect(getRenderedMarkdownBlockBodyStart(doc, 0)).toBe(2);
+    expect(getRenderedMarkdownBlockBodyStart(doc, quoteLineStart)).toBe(quoteLineStart + 2);
+    expect(getRenderedMarkdownArrowRightEdit(doc, 0)).toEqual({ selection: 2 });
+    expect(getRenderedMarkdownArrowRightEdit(doc, '# Resolved'.length)).toEqual({
+      selection: quoteLineStart + 2,
+    });
+    expect(getRenderedMarkdownArrowLeftEdit(doc, 2)).toEqual({ selection: 2 });
+    expect(getRenderedMarkdownCommandArrowSelection(doc, 0, 'left')).toBe(2);
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, quoteLineStart)).toEqual({
+      selection: quoteLineStart + 2,
+    });
+  });
+
   it('preserves list markers on Command+Backspace', () => {
     expect(getMarkdownListMarkerProtectedDeleteBackwardEdit('- first item', '- first item'.length)).toEqual({
       from: 2,
@@ -1238,19 +1260,21 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
-  it('redirects typing from hidden list markers into the rendered list body', () => {
+  it('redirects typing from hidden block markers into the rendered body', () => {
     expect(getRenderedMarkdownListBodyStart('- make', 0)).toBe(2);
     expect(getRenderedMarkdownListBodyStart('10. make', 0)).toBe(4);
     expect(getRenderedMarkdownListBodyStart('  - [ ] make', 1)).toBe(8);
     expect(getRenderedMarkdownListBodyStart('- ', 2)).toBe(2);
     expect(getRenderedMarkdownListBodyStart('- make', 2)).toBeNull();
     expect(getRenderedMarkdownListBodyStart('> quote', 0)).toBeNull();
+    expect(getRenderedMarkdownBlockBodyStart('# Heading', 0)).toBe(2);
+    expect(getRenderedMarkdownBlockBodyStart('> quote', 0)).toBe(2);
 
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
       state: EditorState.create({
-        doc: '- make\n1. ordered\n- [ ] task',
+        doc: '- make\n1. ordered\n- [ ] task\n# Heading\n> quote',
         selection: EditorSelection.cursor(0),
         extensions: [renderedMarkdownEditorPresentationExtension],
       }),
@@ -1261,21 +1285,35 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       inputType: 'insertText',
       data: '"',
     }))).toBe(true);
-    expect(view.state.doc.toString()).toBe('- "make\n1. ordered\n- [ ] task');
+    expect(view.state.doc.toString()).toBe('- "make\n1. ordered\n- [ ] task\n# Heading\n> quote');
 
     view.dispatch({ selection: EditorSelection.cursor('- "make\n'.length) });
     expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
       inputType: 'insertText',
       data: '"',
     }))).toBe(true);
-    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] task');
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] task\n# Heading\n> quote');
 
     view.dispatch({ selection: EditorSelection.cursor('- "make\n1. "ordered\n'.length) });
     expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
       inputType: 'insertText',
       data: '"',
     }))).toBe(true);
-    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] "task');
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] "task\n# Heading\n> quote');
+
+    view.dispatch({ selection: EditorSelection.cursor('- "make\n1. "ordered\n- [ ] "task\n'.length) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: '"',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] "task\n# "Heading\n> quote');
+
+    view.dispatch({ selection: EditorSelection.cursor('- "make\n1. "ordered\n- [ ] "task\n# "Heading\n'.length) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: '"',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] "task\n# "Heading\n> "quote');
 
     view.destroy();
     parent.remove();
@@ -1291,6 +1329,8 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(getRenderedMarkdownListBodyClickPosition('1. ', 3, event)).toBe(3);
     expect(getRenderedMarkdownListBodyClickPosition('- [ ] ', 6, event)).toBe(6);
     expect(getRenderedMarkdownListBodyClickPosition('- make', 2, event)).toBeNull();
+    expect(getRenderedMarkdownBlockBodyClickPosition('# Heading', 0, event)).toBe(2);
+    expect(getRenderedMarkdownBlockBodyClickPosition('> quote', 0, event)).toBe(2);
     expect(getRenderedMarkdownListBodyClickPosition('- make', 0, new MouseEvent('mousedown', {
       button: 0,
       metaKey: true,

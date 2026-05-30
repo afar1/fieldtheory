@@ -29,6 +29,7 @@ import {
   getLauncherAreaActionIdForQuery,
   getLauncherClipboardSearchQuery,
   getLauncherClipboardSearchInputState,
+  getLauncherDefaultPanelItems,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
@@ -40,6 +41,7 @@ import {
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
   isGeneratedBookmarkTaxonomyPath,
+  isLauncherRiverItem,
   isLauncherPreviewToggleKey,
   nextLauncherArrowIndex,
   resolveHighlightedLauncherIndex,
@@ -55,6 +57,7 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
+  shouldShowLauncherItemInTypedSearch,
   shouldTraceLauncherRendererEvent,
   scoreLauncherText,
   warmLauncherSearchableItemCache,
@@ -103,6 +106,57 @@ describe('launcher visible result equality', () => {
       { id: 'one', type: 'command', name: 'one', displayName: 'One', hotkeyDisplay: '⌘ 1' },
       { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two', timeAgo: '2m ago' },
     ])).toBe(false);
+  });
+});
+
+describe('launcher default panel helpers', () => {
+  it('shows only the first five rows from the selected idle panel source', () => {
+    const recentItems = Array.from({ length: 7 }, (_, index) => ({ id: `recent-${index}` }));
+    const clipboardItems = Array.from({ length: 7 }, (_, index) => ({ id: `clipboard-${index}` }));
+
+    expect(getLauncherDefaultPanelItems({
+      expanded: true,
+      isRootIdle: true,
+      source: 'recents',
+      recentItems,
+      clipboardItems,
+    }).map(item => item.id)).toEqual(['recent-0', 'recent-1', 'recent-2', 'recent-3', 'recent-4']);
+
+    expect(getLauncherDefaultPanelItems({
+      expanded: true,
+      isRootIdle: true,
+      source: 'clipboard',
+      recentItems,
+      clipboardItems,
+    }).map(item => item.id)).toEqual(['clipboard-0', 'clipboard-1', 'clipboard-2', 'clipboard-3', 'clipboard-4']);
+  });
+
+  it('hides the default panel when collapsed or outside the root idle launcher', () => {
+    const recentItems = [{ id: 'recent' }];
+
+    expect(getLauncherDefaultPanelItems({
+      expanded: false,
+      isRootIdle: true,
+      source: 'recents',
+      recentItems,
+      clipboardItems: [],
+    })).toEqual([]);
+
+    expect(getLauncherDefaultPanelItems({
+      expanded: true,
+      isRootIdle: false,
+      source: 'recents',
+      recentItems,
+      clipboardItems: [],
+    })).toEqual([]);
+  });
+
+  it('keeps synthetic recents out of typed search and identifies River rows', () => {
+    expect(shouldShowLauncherItemInTypedSearch({ type: 'recent-file' })).toBe(false);
+    expect(shouldShowLauncherItemInTypedSearch({ type: 'markdown-file' })).toBe(true);
+    expect(isLauncherRiverItem({ source: 'shared' })).toBe(true);
+    expect(isLauncherRiverItem({ sourceLabel: 'River (shared)' })).toBe(true);
+    expect(isLauncherRiverItem({ source: 'private', sourceLabel: 'Library' })).toBe(false);
   });
 });
 
