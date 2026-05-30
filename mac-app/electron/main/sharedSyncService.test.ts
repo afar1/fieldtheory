@@ -35,19 +35,32 @@ describe('SharedSyncService cache behavior', () => {
 
   it('unshares an open River cache file by shared row id', async () => {
     const updates: Array<{ field: string; value: unknown }> = [];
+    const deletes: Array<{ field: string; value: unknown }> = [];
     const supabase = {
-      from: () => ({
-        update: () => ({
-          eq(field: string, value: unknown) {
-            updates.push({ field, value });
-            return this;
-          },
-          async is(field: string, value: unknown) {
-            updates.push({ field, value });
-            return { error: null };
-          },
-        }),
-      }),
+      from: (table: string) => {
+        if (table === 'team_document_pins') {
+          return {
+            delete: () => ({
+              async eq(field: string, value: unknown) {
+                deletes.push({ field, value });
+                return { error: null };
+              },
+            }),
+          };
+        }
+        return {
+          update: () => ({
+            eq(field: string, value: unknown) {
+              updates.push({ field, value });
+              return this;
+            },
+            async is(field: string, value: unknown) {
+              updates.push({ field, value });
+              return { error: null };
+            },
+          }),
+        };
+      },
     };
     const authManager = {
       getSupabaseClient: () => supabase,
@@ -65,21 +78,91 @@ describe('SharedSyncService cache behavior', () => {
       { field: 'id', value: 'shared-1' },
       { field: 'deleted_at', value: null },
     ]);
+    expect(deletes).toEqual([{ field: 'document_id', value: 'shared-1' }]);
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('removes shared pin rows when unsharing the original source file', async () => {
+    const deletes: Array<{ field: string; value: unknown }> = [];
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'team_document_pins') {
+          return {
+            delete: () => ({
+              async eq(field: string, value: unknown) {
+                deletes.push({ field, value });
+                return { error: null };
+              },
+            }),
+          };
+        }
+        return {
+          update: () => ({
+            eq() {
+              return this;
+            },
+            async is() {
+              return { error: null };
+            },
+          }),
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const sourcePath = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'Commands', 'brief.md');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, '# brief\n');
+    const cachePath = path.join(root, 'brief AM.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "command"',
+      'shared_original_source_path: "Commands/brief.md"',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const service = new SharedSyncService(authManager);
+    const pinsChanged = vi.fn();
+    service.on('pinsChanged', pinsChanged);
+
+    await expect(service.unshareFile(sourcePath)).resolves.toBe(true);
+
+    expect(deletes).toEqual([{ field: 'document_id', value: 'shared-1' }]);
+    expect(pinsChanged).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(cachePath)).toBe(false);
   });
 
   it('removes a River cache file immediately when unsharing the original source file', async () => {
     const supabase = {
-      from: () => ({
-        update: () => ({
-          eq() {
-            return this;
-          },
-          async is() {
-            return { error: null };
-          },
-        }),
-      }),
+      from: (table: string) => {
+        if (table === 'team_document_pins') {
+          return {
+            delete: () => ({
+              async eq() {
+                return { error: null };
+              },
+            }),
+          };
+        }
+        return {
+          update: () => ({
+            eq() {
+              return this;
+            },
+            async is() {
+              return { error: null };
+            },
+          }),
+        };
+      },
     };
     const authManager = {
       getSupabaseClient: () => supabase,
@@ -249,10 +332,10 @@ describe('SharedSyncService cache behavior', () => {
       'Body',
     ].join('\n'));
 
-    let realtimeHandler: (() => void) | null = null;
+    const realtimeHandlers: Record<string, (() => void) | undefined> = {};
     const channel = {
-      on: vi.fn((_event: string, _config: unknown, handler: () => void) => {
-        realtimeHandler = handler;
+      on: vi.fn((_event: string, config: { table?: string }, handler: () => void) => {
+        if (config.table) realtimeHandlers[config.table] = handler;
         return channel;
       }),
       subscribe: vi.fn(() => channel),
@@ -283,12 +366,15 @@ describe('SharedSyncService cache behavior', () => {
       }),
     };
     const cacheChanged = vi.fn();
+    const pinsChanged = vi.fn();
     const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
     service.on('cacheChanged', cacheChanged);
+    service.on('pinsChanged', pinsChanged);
 
     await service.startRemoteChangeSync();
-    expect(realtimeHandler).toEqual(expect.any(Function));
-    const handler = realtimeHandler as unknown as () => void;
+    expect(realtimeHandlers.team_documents).toEqual(expect.any(Function));
+    expect(realtimeHandlers.team_document_pins).toEqual(expect.any(Function));
+    const handler = realtimeHandlers.team_documents as () => void;
     handler();
     await vi.waitFor(() => {
       expect(fs.existsSync(cachePath)).toBe(false);
@@ -305,12 +391,464 @@ describe('SharedSyncService cache behavior', () => {
       },
       expect.any(Function),
     );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'team_document_pins',
+        filter: 'team_scope_user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
     expect(cacheChanged).toHaveBeenCalledWith({
       written: 0,
       removed: 1,
       created: 0,
       errors: [],
     });
+    expect(pinsChanged).toHaveBeenCalledTimes(1);
+    const pinHandler = realtimeHandlers.team_document_pins as () => void;
+    pinHandler();
+    expect(pinsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('resubscribes River realtime when the active team scope changes', async () => {
+    let currentTeamScopeUserId = 'team-1';
+    const channels: Array<{ name: string; on: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> }> = [];
+    const removedChannels: string[] = [];
+    const supabase = {
+      channel: vi.fn((name: string) => {
+        const channel = {
+          name,
+          on: vi.fn(() => channel),
+          subscribe: vi.fn(() => channel),
+        };
+        channels.push(channel);
+        return channel;
+      }),
+      removeChannel: vi.fn(async (channel: { name: string }) => {
+        removedChannels.push(channel.name);
+      }),
+      from: () => ({
+        select() { return this; },
+        eq() { return this; },
+        async is() {
+          return { data: [], error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId,
+        isOwner: currentTeamScopeUserId === 'user-1',
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
+
+    await service.startRemoteChangeSync();
+    currentTeamScopeUserId = 'team-2';
+    await service.startRemoteChangeSync();
+
+    expect(supabase.channel).toHaveBeenCalledWith('shared-team-documents:team-1');
+    expect(supabase.channel).toHaveBeenCalledWith('shared-team-documents:team-2');
+    expect(removedChannels).toEqual(['shared-team-documents:team-1']);
+    expect(channels).toHaveLength(2);
+  });
+
+  it('refreshes another local River cache and pin set from simulated team realtime events', async () => {
+    const senderRoot = path.join(tempRoot, 'sender-library');
+    const receiverRoot = path.join(tempRoot, 'receiver-library');
+    const senderRiverRoot = path.join(senderRoot, 'River (shared)');
+    const receiverRiverRoot = path.join(receiverRoot, 'River (shared)');
+    const receiverCachePath = path.join(receiverRiverRoot, 'Plan AF.md');
+    const currentRow = {
+      id: 'shared-1',
+      team_scope_user_id: 'team-1',
+      kind: 'document',
+      path: 'Docs/scratchpad/Plan.md',
+      title: 'Plan',
+      content: 'Old body\n',
+      content_hash: null,
+      client_id: 'shared-client',
+      client_created_at_ms: 1,
+      created_by: 'user-1',
+      updated_by: 'user-1',
+      deleted_at: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      original_source_path: 'scratchpad/Plan.md',
+      shared_name: 'Plan',
+      author_initials: 'AF',
+      author_callsign: 'afar',
+      revision: 1,
+    };
+    const server = {
+      row: { ...currentRow },
+      pins: new Set<string>(),
+      handlers: {} as Record<string, Array<() => void>>,
+      emit(table: string) {
+        for (const handler of this.handlers[table] ?? []) handler();
+      },
+      client() {
+        const serverRef = this;
+        return {
+          channel: () => {
+            const channel = {
+              on(_event: string, config: { table?: string }, handler: () => void) {
+                if (config.table) {
+                  serverRef.handlers[config.table] ??= [];
+                  serverRef.handlers[config.table].push(handler);
+                }
+                return channel;
+              },
+              subscribe: () => channel,
+            };
+            return channel;
+          },
+          removeChannel: vi.fn(async () => undefined),
+          from(table: string) {
+            if (table === 'team_document_pins') {
+              return {
+                select() {
+                  return {
+                    async eq() {
+                      return {
+                        data: [...serverRef.pins].map((document_id) => ({ document_id })),
+                        error: null,
+                      };
+                    },
+                  };
+                },
+                upsert(row: { document_id: string }) {
+                  serverRef.pins.add(row.document_id);
+                  return { error: null };
+                },
+              };
+            }
+            return {
+              select() {
+                return {
+                  eq() {
+                    return {
+                      is() {
+                        return {
+                          data: [serverRef.row],
+                          error: null,
+                          async single() {
+                            return { data: serverRef.row, error: null };
+                          },
+                        };
+                      },
+                    };
+                  },
+                };
+              },
+              update(row: Record<string, unknown>) {
+                serverRef.row = { ...serverRef.row, ...row, updated_at: '2026-01-01T00:00:01Z' };
+                return {
+                  eq() {
+                    return {
+                      is() {
+                        return {
+                          select() {
+                            return {
+                              async single() {
+                                return { data: serverRef.row, error: null };
+                              },
+                            };
+                          },
+                        };
+                      },
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'team-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const senderAuth = {
+      getSupabaseClient: () => server.client(),
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const receiverAuth = {
+      getSupabaseClient: () => server.client(),
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const sender = new SharedSyncService(senderAuth, teamService as unknown as SharedTeamService);
+    const receiver = new SharedSyncService(receiverAuth, teamService as unknown as SharedTeamService);
+    const receiverCacheChanged = vi.fn();
+    const receiverPinsChanged = vi.fn();
+    receiver.on('cacheChanged', receiverCacheChanged);
+    receiver.on('pinsChanged', receiverPinsChanged);
+
+    process.env.FT_LIBRARY_DIR = receiverRoot;
+    process.env.FT_SHARED_FILES_CACHE_DIR = receiverRiverRoot;
+    process.env.FT_SHARED_FILES_DIR = receiverRiverRoot;
+    fs.mkdirSync(receiverRiverRoot, { recursive: true });
+    await receiver.syncOnce();
+    await receiver.startRemoteChangeSync();
+    expect(fs.readFileSync(receiverCachePath, 'utf-8')).toContain('Old body');
+
+    process.env.FT_LIBRARY_DIR = senderRoot;
+    process.env.FT_SHARED_FILES_CACHE_DIR = senderRiverRoot;
+    process.env.FT_SHARED_FILES_DIR = senderRiverRoot;
+    await expect(sender.updateSharedContent('shared-1', 'New body\n', 1, path.join(senderRoot, 'scratchpad', 'Plan.md')))
+      .resolves.toMatchObject({ ok: true, revision: 2 });
+
+    process.env.FT_LIBRARY_DIR = receiverRoot;
+    process.env.FT_SHARED_FILES_CACHE_DIR = receiverRiverRoot;
+    process.env.FT_SHARED_FILES_DIR = receiverRiverRoot;
+    server.emit('team_documents');
+    await vi.waitFor(() => {
+      expect(fs.readFileSync(receiverCachePath, 'utf-8')).toContain('New body');
+    });
+    expect(receiverCacheChanged).toHaveBeenCalled();
+
+    process.env.FT_LIBRARY_DIR = senderRoot;
+    process.env.FT_SHARED_FILES_CACHE_DIR = senderRiverRoot;
+    process.env.FT_SHARED_FILES_DIR = senderRiverRoot;
+    await expect(sender.setPinned(path.join(senderRiverRoot, 'Plan AF.md'), true)).resolves.toEqual({ ok: true, pinned: true });
+    process.env.FT_LIBRARY_DIR = receiverRoot;
+    process.env.FT_SHARED_FILES_CACHE_DIR = receiverRiverRoot;
+    process.env.FT_SHARED_FILES_DIR = receiverRiverRoot;
+    server.emit('team_document_pins');
+    expect(receiverPinsChanged).toHaveBeenCalled();
+    await expect(receiver.getPinnedSidebarItemIds()).resolves.toEqual(['wiki:River (shared)/Plan AF']);
+  });
+
+  it('queues a second River realtime sync when another document event arrives mid-sync', async () => {
+    const root = sharedFilesRoot();
+    const cachePath = path.join(root, 'Plan AF.md');
+    const realtimeHandlers: Record<string, (() => void) | undefined> = {};
+    const releases: Array<() => void> = [];
+    let queryCount = 0;
+    let serverContent = 'Old body\n';
+    const channel = {
+      on: vi.fn((_event: string, config: { table?: string }, handler: () => void) => {
+        if (config.table) realtimeHandlers[config.table] = handler;
+        return channel;
+      }),
+      subscribe: vi.fn(() => channel),
+    };
+    const supabase = {
+      channel: vi.fn(() => channel),
+      removeChannel: vi.fn(async () => undefined),
+      from: () => ({
+        select() { return this; },
+        eq() { return this; },
+        async is() {
+          queryCount++;
+          const contentAtQueryStart = serverContent;
+          await new Promise<void>((resolve) => {
+            releases.push(resolve);
+          });
+          return {
+            data: [{
+              id: 'shared-1',
+              team_scope_user_id: 'team-1',
+              kind: 'document',
+              path: 'Docs/scratchpad/Plan.md',
+              title: 'Plan',
+              content: contentAtQueryStart,
+              content_hash: null,
+              client_id: 'shared-client',
+              client_created_at_ms: 1,
+              created_by: 'user-1',
+              updated_by: 'user-1',
+              deleted_at: null,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+              original_source_path: 'scratchpad/Plan.md',
+              shared_name: 'Plan',
+              author_initials: 'AF',
+              author_callsign: 'afar',
+              revision: queryCount,
+            }],
+            error: null,
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'team-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
+    const cacheChanged = vi.fn();
+    service.on('cacheChanged', cacheChanged);
+
+    await service.startRemoteChangeSync();
+    const handler = realtimeHandlers.team_documents as () => void;
+    handler();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+
+    serverContent = 'New body\n';
+    handler();
+    releases.shift()?.();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()?.();
+
+    await vi.waitFor(() => {
+      expect(fs.readFileSync(cachePath, 'utf-8')).toContain('New body');
+    });
+    expect(cacheChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps team River pins to sidebar item ids from the local cache', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const pinnedPath = path.join(root, 'Pinned AF.md');
+    const markdownPinnedPath = path.join(root, 'Markdown Pin AF.markdown');
+    const unpinnedPath = path.join(root, 'Unpinned AF.md');
+    fs.writeFileSync(pinnedPath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-pinned"',
+      'shared_type: "document"',
+      '---',
+      '',
+      'Pinned',
+    ].join('\n'));
+    fs.writeFileSync(markdownPinnedPath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-markdown-pinned"',
+      'shared_type: "document"',
+      '---',
+      '',
+      'Markdown pinned',
+    ].join('\n'));
+    fs.writeFileSync(unpinnedPath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-other"',
+      'shared_type: "document"',
+      '---',
+      '',
+      'Other',
+    ].join('\n'));
+
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        eq() {
+          return { data: [{ document_id: 'shared-pinned' }, { document_id: 'shared-markdown-pinned' }], error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getPinnedSidebarItemIds())
+      .resolves.toEqual(['wiki:River (shared)/Markdown Pin AF', 'wiki:River (shared)/Pinned AF']);
+  });
+
+  it('pins and unpins a River cache file through shared team state', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Pinned AF.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "document"',
+      '---',
+      '',
+      'Pinned',
+    ].join('\n'));
+
+    const upserts: Array<Record<string, unknown>> = [];
+    const deletes: Array<{ field: string; value: unknown }> = [];
+    const supabase = {
+      from: () => ({
+        upsert(row: Record<string, unknown>) {
+          upserts.push(row);
+          return { error: null };
+        },
+        delete() {
+          return {
+            eq(field: string, value: unknown) {
+              deletes.push({ field, value });
+              return this;
+            },
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'scope-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
+    const pinsChanged = vi.fn();
+    service.on('pinsChanged', pinsChanged);
+
+    await expect(service.setPinned(cachePath, true)).resolves.toEqual({ ok: true, pinned: true });
+    await expect(service.setPinned(cachePath, false)).resolves.toEqual({ ok: true, pinned: false });
+
+    expect(upserts).toEqual([{
+      team_scope_user_id: 'scope-1',
+      document_id: 'shared-1',
+      pinned_by: 'user-1',
+    }]);
+    expect(deletes).toEqual([
+      { field: 'team_scope_user_id', value: 'scope-1' },
+      { field: 'document_id', value: 'shared-1' },
+    ]);
+    expect(pinsChanged).toHaveBeenCalledTimes(2);
   });
 
   it('fills a missing current-user callsign while syncing cached River rows', async () => {
