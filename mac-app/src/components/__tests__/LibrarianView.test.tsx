@@ -6,6 +6,9 @@ import LibrarianView, {
   getLibraryDocumentViewKind,
   getHtmlPreviewSrcDoc,
   getLocalFileUrl,
+  LIBRARIAN_HTML_LAYOUT_STORAGE_KEY,
+  persistLibrarianHtmlLayoutByPath,
+  restoreLibrarianHtmlLayoutByPath,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
   getResponsivePanelState,
@@ -65,6 +68,29 @@ describe('LibrarianView render', () => {
     expect(getLocalFileUrl('/tmp/Field Theory/report summary.html')).toBe('file:///tmp/Field%20Theory/report%20summary.html');
     expect(getHtmlPreviewSrcDoc('<head><title>x</title></head>', '/tmp/Field Theory/report.html')).toContain(
       '<head><base href="file:///tmp/Field%20Theory/"><title>x</title>',
+    );
+  });
+
+  it('restores and persists html layout preferences by document path', () => {
+    const storage = {
+      getItem: vi.fn(() => JSON.stringify({
+        '/tmp/full.html': 'full',
+        '/tmp/contained.html': 'contained',
+        '/tmp/invalid.html': 'wide',
+      })),
+      setItem: vi.fn(),
+    };
+
+    expect(restoreLibrarianHtmlLayoutByPath(storage)).toEqual({
+      '/tmp/full.html': 'full',
+      '/tmp/contained.html': 'contained',
+    });
+
+    persistLibrarianHtmlLayoutByPath(storage, { '/tmp/report.html': 'contained' });
+
+    expect(storage.setItem).toHaveBeenCalledWith(
+      LIBRARIAN_HTML_LAYOUT_STORAGE_KEY,
+      JSON.stringify({ '/tmp/report.html': 'contained' }),
     );
   });
 
@@ -1808,10 +1834,49 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       const iframe = container.querySelector('iframe[data-ft-html-preview="true"]') as HTMLIFrameElement | null;
       expect(iframe?.getAttribute('srcdoc')).toContain('<base href="file:///Users/afar/.fieldtheory/library/reports/">');
+      expect(iframe?.getAttribute('sandbox')).toBe('');
+      expect(iframe?.dataset.ftHtmlLayout).toBe('full');
+      expect(iframe?.style.height).toBe('100%');
+      expect(container.querySelector('[data-ft-librarian-content-scroll="true"]')?.getAttribute('style')).toContain('width: 100%');
       expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBeNull();
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Use contained HTML layout' }));
+
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe[data-ft-html-preview="true"]') as HTMLIFrameElement | null;
+      expect(iframe?.dataset.ftHtmlLayout).toBe('contained');
+      expect(iframe?.style.height).toBe('72vh');
+      expect(iframe?.style.maxHeight).toBe('820px');
+      expect(screen.getByRole('button', { name: 'Use full-width HTML layout' })).toBeTruthy();
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        LIBRARIAN_HTML_LAYOUT_STORAGE_KEY,
+        JSON.stringify({ [htmlPath]: 'contained' }),
+      );
+    });
+
     unmount();
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === LIBRARIAN_HTML_LAYOUT_STORAGE_KEY
+        ? JSON.stringify({ [htmlPath]: 'contained' })
+        : null
+    ));
+
+    const restoredHtmlRender = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: htmlPath }}
+      />,
+    );
+
+    await waitFor(() => {
+      const iframe = restoredHtmlRender.container.querySelector('iframe[data-ft-html-preview="true"]') as HTMLIFrameElement | null;
+      expect(iframe?.dataset.ftHtmlLayout).toBe('contained');
+      expect(screen.getByRole('button', { name: 'Use full-width HTML layout' })).toBeTruthy();
+    });
+
+    restoredHtmlRender.unmount();
     const cssRender = render(
       <LibrarianView
         sidebarCollapsed={false}
