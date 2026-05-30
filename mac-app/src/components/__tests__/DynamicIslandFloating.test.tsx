@@ -19,6 +19,7 @@ describe('DynamicIsland floating pill', () => {
       hotmic: [],
       meter: [],
       resize: [],
+      escape: [],
     };
 
     const cancelSession = vi.fn();
@@ -28,6 +29,7 @@ describe('DynamicIsland floating pill', () => {
       onStackChanged: (cb: (count: number) => void) => callbacks.stack.push(cb),
       onHotMicUpdate: (cb: (data: unknown) => void) => callbacks.hotmic.push(cb),
       onHotMicFilterMeter: (cb: (data: unknown) => void) => callbacks.meter.push(cb),
+      onEscapeHint: (cb: () => void) => callbacks.escape.push(cb),
       onResize: (cb: (data: unknown) => void) => callbacks.resize.push(cb),
       cancelSession,
       removeAllListeners: vi.fn(),
@@ -79,6 +81,17 @@ describe('DynamicIsland floating pill', () => {
     expect((visibleSlots[0] as HTMLElement).style.getPropertyValue('--di-slot-w')).toBe('30px');
     expect((visibleSlots[0] as HTMLElement).style.justifyContent).toBe('center');
     expect((visibleSlots[1] as HTMLElement).style.getPropertyValue('--di-slot-w')).toBe('8px');
+
+    await act(async () => {
+      callbacks.escape.forEach((cb) => cb(undefined));
+    });
+
+    const escapeHint = container.querySelector('[data-dynamic-island-escape-hint="true"]') as HTMLElement;
+    expect(escapeHint.textContent).toBe('Press Esc');
+    expect(escapeHint.style.fontSize).toBe('8px');
+    expect(escapeHint.style.fontWeight).toBe('400');
+    expect(escapeHint.style.maxWidth).toBe('100%');
+
     await act(async () => {
       callbacks.resize.forEach((cb) => cb({ leftWidth: 80, rightWidth: 42 }));
     });

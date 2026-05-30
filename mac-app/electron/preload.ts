@@ -4035,6 +4035,13 @@ type SharedFilesAvailability = {
   currentTeamScopeUserId?: string | null;
 };
 
+type SharedFilePinResult = {
+  ok: boolean;
+  pinned?: boolean;
+  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  error?: string;
+};
+
 const sharedFilesAPI = {
   getAvailability: (): Promise<SharedFilesAvailability> =>
     ipcRenderer.invoke('sharedFiles:getAvailability'),
@@ -4050,10 +4057,19 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision, documentPath),
   setActivePresence: (sharedId: string | null): Promise<SharedFilePresenceUser[]> =>
     ipcRenderer.invoke('sharedFiles:setActivePresence', sharedId),
+  getPinnedItemIds: (): Promise<string[]> =>
+    ipcRenderer.invoke('sharedFiles:getPinnedItemIds'),
+  setPinned: (filePath: string, pinned: boolean): Promise<SharedFilePinResult> =>
+    ipcRenderer.invoke('sharedFiles:setPinned', filePath, pinned),
   onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { sharedId: string; users: SharedFilePresenceUser[] }) => callback(payload);
     ipcRenderer.on('sharedFiles:presenceChanged', handler);
     return () => ipcRenderer.removeListener('sharedFiles:presenceChanged', handler);
+  },
+  onPinsChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('sharedFiles:pinsChanged', handler);
+    return () => ipcRenderer.removeListener('sharedFiles:pinsChanged', handler);
   },
 };
 

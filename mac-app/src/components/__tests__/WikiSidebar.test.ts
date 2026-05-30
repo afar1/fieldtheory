@@ -3,6 +3,9 @@ import {
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
   getSidebarShortcutVisibility,
+  isRiverSidebarItemId,
+  isSharedRiverSidebarItem,
+  mergeSidebarPinnedItemIds,
   splitRiverShortcutNode,
 } from '../WikiSidebar';
 
@@ -87,5 +90,39 @@ describe('WikiSidebar River root helpers', () => {
       showRiver: true,
       hasShortcutRows: true,
     });
+  });
+
+  it('combines local pins with shared River pins for sidebar ordering', () => {
+    const localPins = new Set(['wiki:scratchpad/Note']);
+    const sharedPins = new Set(['wiki:River (shared)/Brief AF']);
+
+    const merged = mergeSidebarPinnedItemIds(localPins, sharedPins);
+
+    expect([...merged]).toEqual([
+      'wiki:scratchpad/Note',
+      'wiki:River (shared)/Brief AF',
+    ]);
+    expect(mergeSidebarPinnedItemIds(localPins, new Set())).toBe(localPins);
+  });
+
+  it('ignores older local River pins so team shared pins are the source of truth', () => {
+    const localPins = new Set([
+      'wiki:scratchpad/Note',
+      'wiki:River (shared)/Old Local AF',
+    ]);
+    const sharedPins = new Set(['wiki:River (shared)/Team Pin AF']);
+
+    expect([...mergeSidebarPinnedItemIds(localPins, sharedPins)]).toEqual([
+      'wiki:scratchpad/Note',
+      'wiki:River (shared)/Team Pin AF',
+    ]);
+    expect([...mergeSidebarPinnedItemIds(localPins, new Set())]).toEqual(['wiki:scratchpad/Note']);
+    expect(isRiverSidebarItemId('wiki:River (shared)/Old Local AF')).toBe(true);
+  });
+
+  it('recognizes River cache items even when older metadata is missing', () => {
+    expect(isSharedRiverSidebarItem({ relPath: 'River (shared)/Brief AF.md' })).toBe(true);
+    expect(isSharedRiverSidebarItem({ relPath: 'scratchpad/Brief.md' })).toBe(false);
+    expect(isSharedRiverSidebarItem({ relPath: 'scratchpad/Brief.md', sharedAuthorCallsign: 'AMB-MAC' })).toBe(true);
   });
 });

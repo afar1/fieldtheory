@@ -718,7 +718,6 @@ export function shouldAnimateResponsiveSidebar(input: {
   userResizing: boolean;
 }): boolean {
   return !input.userResizing
-    && !input.responsivePanelState.autoCollapseSidebar
     && !input.responsivePanelState.autoDockTerminalBottom
     && !input.responsivePanelState.autoHideTerminal;
 }
@@ -758,6 +757,7 @@ const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
 const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
+const LIBRARIAN_READER_SCROLLBAR_GUTTER_PX = 14;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const RENDERED_SAVE_INITIAL_DELAY_MS = 400;
 const RENDERED_SAVE_QUIET_DELAY_MS = 750;
@@ -9345,6 +9345,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: `${contentTopPadding}px 32px 0 32px`,
             scrollPaddingBottom: `${contentBottomScrollSpace}px`,
+            scrollbarGutter: contentMode === 'markdown' ? undefined : 'stable',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -9842,7 +9843,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             position: 'absolute',
             top: 0,
             left: 0,
-            right: 0,
+            right: `${LIBRARIAN_READER_SCROLLBAR_GUTTER_PX}px`,
             height: '30px',
             pointerEvents: 'none',
             background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 28%, transparent 100%)`,

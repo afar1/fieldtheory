@@ -184,7 +184,7 @@ describe('LibrarianView render', () => {
     })).toEqual(previous);
   });
 
-  it('does not animate the sidebar during responsive panel rearrange', () => {
+  it('animates sidebar auto-collapse unless the terminal also rearranges', () => {
     expect(shouldAnimateResponsiveSidebar({
       responsivePanelState: {
         autoCollapseSidebar: false,
@@ -198,6 +198,15 @@ describe('LibrarianView render', () => {
       responsivePanelState: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: false,
+        autoHideTerminal: false,
+      },
+      userResizing: false,
+    })).toBe(true);
+
+    expect(shouldAnimateResponsiveSidebar({
+      responsivePanelState: {
+        autoCollapseSidebar: true,
+        autoDockTerminalBottom: true,
         autoHideTerminal: false,
       },
       userResizing: false,
@@ -484,8 +493,10 @@ describe('LibrarianView render', () => {
     expect(container.querySelector('[data-ft-active-document-identity="true"]')?.textContent).toContain('scratchpad');
     const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
     expect(topFade.style.top).toBe('0px');
+    expect(topFade.style.right).toBe('14px');
     expect(topFade.style.height).toBe('30px');
     expect(topFade.style.opacity).toBe('0.72');
+    expect(scrollEl.style.scrollbarGutter).toBe('stable');
   });
 
   it('keeps the source selection when a document window fails to open', async () => {
@@ -1176,7 +1187,7 @@ describe('LibrarianView render', () => {
     Object.defineProperty(window, 'sharedFilesAPI', {
       configurable: true,
       value: {
-        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: true, hasTeamMembers: true })),
         getStatus: vi.fn(async () => ({ shared: false })),
         setActivePresence: vi.fn(async () => []),
         onPresenceChanged: vi.fn(() => () => {}),

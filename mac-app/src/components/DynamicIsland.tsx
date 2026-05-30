@@ -318,7 +318,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
           style={escapeHintActive ? rightStyles.escapeHintContainer : rightStyles.waveformContainer}
         >
           {escapeHintActive ? (
-            <span style={rightStyles.escapeHintText}>Press Esc</span>
+            <span data-dynamic-island-escape-hint="true" style={rightStyles.escapeHintText}>Press Esc</span>
           ) : (
             <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
           )}
@@ -360,8 +360,9 @@ const rightStyles: Record<string, React.CSSProperties> = {
     height: '14px',
   },
   escapeHintText: {
-    fontSize: '12px',
-    fontWeight: 650,
+    maxWidth: '100%',
+    fontSize: '8px',
+    fontWeight: 400,
     lineHeight: 1,
     letterSpacing: 0,
     whiteSpace: 'nowrap',
