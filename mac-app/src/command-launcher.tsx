@@ -11,7 +11,7 @@
  * - Escape to close
  */
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import ReactDOM from 'react-dom/client';
 import ScrollDiagnosticsHUD from './components/ScrollDiagnosticsHUD';
@@ -570,6 +570,10 @@ function getClipboardPreviewTitle(item: LauncherItem): string {
 const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_MAX_LIST_HEIGHT = 378;
+const LAUNCHER_LIST_VERTICAL_PADDING = 12;
+const LAUNCHER_LIST_ITEM_HEIGHT = 30;
+const LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT = 44;
+const LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS = 5;
 const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
@@ -938,6 +942,23 @@ function CommandLauncher() {
     });
   }, []);
 
+  const resizeLauncherForListHeight = useCallback((listHeight: number) => {
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT + Math.min(Math.ceil(listHeight), LAUNCHER_MAX_LIST_HEIGHT));
+  }, [resizeLauncher]);
+
+  const measureLauncherListContentHeight = useCallback((): number => {
+    const list = listRef.current;
+    if (!list) return 0;
+    const style = window.getComputedStyle(list);
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+    let itemHeight = 0;
+    for (const child of Array.from(list.children)) {
+      itemHeight += child.getBoundingClientRect().height;
+    }
+    return paddingTop + itemHeight + paddingBottom;
+  }, []);
+
   const applyTheme = useCallback((dark: boolean) => {
     setIsDarkMode(dark);
   }, []);
@@ -973,25 +994,21 @@ function CommandLauncher() {
     return true;
   }, []);
 
-  const toggleDefaultPanelSource = useCallback(() => {
-    setLauncherDefaultPanelSource((prev) => {
-      const next = prev === 'recents' ? 'clipboard' : 'recents';
-      writeLauncherDefaultPanelSource(next);
-      return next;
-    });
-  }, []);
-
-  const toggleDefaultPanelExpanded = useCallback(() => {
-    setLauncherDefaultPanelExpanded((prev) => {
-      const next = !prev;
-      writeLauncherDefaultPanelExpanded(next);
-      return next;
-    });
-  }, []);
+  const resetSoftSelection = useCallback(() => {
+    hasNavigatedRef.current = false;
+    hasExplicitSelectionRef.current = false;
+    setHasExplicitSelection(false);
+    selectIndex(0);
+  }, [selectIndex]);
 
   useEffect(() => {
     filteredRef.current = filtered;
   }, [filtered]);
+
+  useLayoutEffect(() => {
+    if (filtered.length === 0 || !listRef.current) return;
+    resizeLauncherForListHeight(measureLauncherListContentHeight());
+  }, [filtered, measureLauncherListContentHeight, resizeLauncherForListHeight]);
 
   const showLauncherMessage = useCallback((message: string) => {
     launcherInvocationInFlightRef.current = false;
@@ -1917,6 +1934,55 @@ function CommandLauncher() {
     });
   }, [clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
 
+  const getDefaultPanelItemsForSource = useCallback((source: LauncherDefaultPanelSource, expanded: boolean): LauncherItem[] => (
+    getLauncherDefaultPanelItems({
+      expanded,
+      isRootIdle: isRootIdleLauncher,
+      source,
+      recentItems: recentFileItems,
+      clipboardItems: clipboardLauncherItems,
+    })
+  ), [clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+
+  const resizeLauncherForDefaultPanel = useCallback((expanded: boolean) => {
+    resizeLauncherForListHeight(expanded
+      ? LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS * LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT + LAUNCHER_LIST_VERTICAL_PADDING
+      : 0);
+  }, [resizeLauncherForListHeight]);
+
+  const handleDefaultPanelToggleClick = useCallback(() => {
+    const nextExpanded = !launcherDefaultPanelExpanded;
+    writeLauncherDefaultPanelExpanded(nextExpanded);
+    setLauncherDefaultPanelExpanded(nextExpanded);
+    applyFilteredResults(getDefaultPanelItemsForSource(launcherDefaultPanelSource, nextExpanded));
+    resetSoftSelection();
+    resizeLauncherForDefaultPanel(nextExpanded);
+  }, [
+    applyFilteredResults,
+    getDefaultPanelItemsForSource,
+    launcherDefaultPanelExpanded,
+    launcherDefaultPanelSource,
+    resetSoftSelection,
+    resizeLauncherForDefaultPanel,
+  ]);
+
+  const switchDefaultPanelSource = useCallback(() => {
+    const nextSource = launcherDefaultPanelSource === 'recents' ? 'clipboard' : 'recents';
+    writeLauncherDefaultPanelSource(nextSource);
+    writeLauncherDefaultPanelExpanded(true);
+    setLauncherDefaultPanelSource(nextSource);
+    setLauncherDefaultPanelExpanded(true);
+    applyFilteredResults(getDefaultPanelItemsForSource(nextSource, true));
+    resetSoftSelection();
+    resizeLauncherForDefaultPanel(true);
+  }, [
+    applyFilteredResults,
+    getDefaultPanelItemsForSource,
+    launcherDefaultPanelSource,
+    resetSoftSelection,
+    resizeLauncherForDefaultPanel,
+  ]);
+
   const bookmarkForItem = useCallback((item: LauncherItem | undefined): Bookmark | null => {
     if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
     const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
@@ -2337,10 +2403,11 @@ function CommandLauncher() {
     const emptyStateHeight = 34;
     const maxListHeight = LAUNCHER_MAX_LIST_HEIGHT;
 
-    const resizeForResults = (resultCount: number, forceEmptyState = false) => {
-      const itemHeight = 30;
-      const listHeight = resultCount > 0
-        ? Math.min(resultCount * itemHeight + 10, maxListHeight)
+    const resizeForResults = (resultCount: number, forceEmptyState = false, options: { itemHeight?: number; minRows?: number } = {}) => {
+      const itemHeight = options.itemHeight ?? LAUNCHER_LIST_ITEM_HEIGHT;
+      const visibleRows = Math.max(resultCount, options.minRows ?? 0);
+      const listHeight = visibleRows > 0
+        ? Math.min(visibleRows * itemHeight + LAUNCHER_LIST_VERTICAL_PADDING, maxListHeight)
         : (forceEmptyState ? emptyStateHeight : 0);
       resizeLauncher(inputHeight + listHeight);
     };
@@ -2366,8 +2433,11 @@ function CommandLauncher() {
 
     if (isRootIdleLauncher) {
       applyFilteredResults(defaultPanelItems);
-      selectIndex(0);
-      resizeForResults(defaultPanelItems.length);
+      resetSoftSelection();
+      resizeForResults(defaultPanelItems.length, false, {
+        itemHeight: LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT,
+        minRows: launcherDefaultPanelExpanded ? LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS : 0,
+      });
       return;
     }
 
@@ -2560,7 +2630,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
+  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2918,10 +2988,7 @@ function CommandLauncher() {
       const currentIndex = selectedIndexRef.current;
 
       if (isRootIdleLauncher && !hasExplicitSelectionRef.current) {
-        setLauncherDefaultPanelExpanded(true);
-        writeLauncherDefaultPanelExpanded(true);
-        toggleDefaultPanelSource();
-        selectIndex(0);
+        switchDefaultPanelSource();
         return;
       }
 
@@ -3808,7 +3875,7 @@ function CommandLauncher() {
             title={`${launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'} (Tab switches)`}
             style={styles.defaultPanelToggle}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={toggleDefaultPanelExpanded}
+            onClick={handleDefaultPanelToggleClick}
           >
             <span>{launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}</span>
             <span style={styles.defaultPanelCaret} aria-hidden="true">
