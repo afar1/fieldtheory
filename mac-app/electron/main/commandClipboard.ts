@@ -170,9 +170,9 @@ export function shouldUseNativeCommandLauncherClipboardTextPaste(input: {
 
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {
   if (source.kind === 'command') {
-    return `[${source.name}.md]\n${source.filePath} `;
+    return `[${source.name}.md] ${source.filePath}\n`;
   }
-  return `${source.fileName}\n${source.filePath} `;
+  return `${source.fileName} ${source.filePath}\n`;
 }
 
 function formatCommandFileWikiLink(source: CommandFilePasteSource): string {

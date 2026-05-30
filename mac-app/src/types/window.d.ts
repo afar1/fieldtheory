@@ -1932,6 +1932,13 @@ interface SharedFilesAvailability {
   currentTeamScopeUserId?: string | null;
 }
 
+interface SharedFilePinResult {
+  ok: boolean;
+  pinned?: boolean;
+  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  error?: string;
+}
+
 interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
@@ -1940,7 +1947,10 @@ interface SharedFilesAPI {
   sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;
   updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => Promise<SharedFileUpdateResult>;
   setActivePresence: (sharedId: string | null) => Promise<SharedFilePresenceUser[]>;
+  getPinnedItemIds: () => Promise<string[]>;
+  setPinned: (filePath: string, pinned: boolean) => Promise<SharedFilePinResult>;
   onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void) => () => void;
+  onPinsChanged: (callback: () => void) => () => void;
 }
 
 type SharedTeamUnavailableReason =

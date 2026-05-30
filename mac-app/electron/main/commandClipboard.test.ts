@@ -297,7 +297,7 @@ describe('formatCommandFilePasteText', () => {
       filePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
       mode: 'text-reference',
       markdownContent: '# Review',
-    })).toBe('[review.md]\n/Users/afar/.fieldtheory/library/Commands/review.md ');
+    })).toBe('[review.md] /Users/afar/.fieldtheory/library/Commands/review.md\n');
   });
 
   it('formats handoff md files as file references for terminal-style targets', () => {
@@ -307,7 +307,7 @@ describe('formatCommandFilePasteText', () => {
       filePath: '/Users/afar/.fieldtheory/library/Research note.md',
       mode: 'text-reference',
       markdownContent: '# Research note',
-    })).toBe('Research note.md\n/Users/afar/.fieldtheory/library/Research note.md ');
+    })).toBe('Research note.md /Users/afar/.fieldtheory/library/Research note.md\n');
   });
 
   it('uses markdown content for portable command md files in rich composer targets', () => {
