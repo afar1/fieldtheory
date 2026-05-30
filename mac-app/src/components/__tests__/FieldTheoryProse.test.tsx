@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
 
@@ -123,5 +123,45 @@ describe('FieldTheoryProse', () => {
     );
 
     expect(screen.getByRole('img', { name: 'Unsafe' }).getAttribute('src')).toBe('');
+  });
+
+  it('renders fenced ft-html blocks as sandboxed inline previews', () => {
+    const { container } = render(
+      <FieldTheoryProse documentPath="/tmp/Field Theory/report.md">
+        {'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below'}
+      </FieldTheoryProse>
+    );
+
+    expect(screen.getByText('Prose above')).toBeTruthy();
+    expect(screen.getByText('Prose below')).toBeTruthy();
+    const iframe = container.querySelector('iframe[data-ft-inline-html-preview="true"]') as HTMLIFrameElement | null;
+    expect(iframe?.getAttribute('sandbox')).toBe('');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<base href="file:///tmp/Field%20Theory/">');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<section>Widget</section>');
+  });
+
+  it('keeps raw markdown HTML escaped outside explicit ft-html fences', () => {
+    const { container } = render(
+      <FieldTheoryProse>
+        {'<section>Raw HTML</section>'}
+      </FieldTheoryProse>
+    );
+
+    expect(container.querySelector('section')).toBeNull();
+    expect(screen.getByText('<section>Raw HTML</section>')).toBeTruthy();
+  });
+
+  it('toggles inline HTML blocks between contained and expanded display', () => {
+    const { container } = render(
+      <FieldTheoryProse>
+        {'```ft-html\n<section>Widget</section>\n```'}
+      </FieldTheoryProse>
+    );
+
+    const block = container.querySelector('[data-ft-inline-html-block="true"]');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand HTML block' }));
+    expect(block?.classList.contains('ft-inline-html-block-expanded')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse HTML block' }));
+    expect(block?.classList.contains('ft-inline-html-block-expanded')).toBe(false);
   });
 });
