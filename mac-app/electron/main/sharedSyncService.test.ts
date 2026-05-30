@@ -1326,4 +1326,58 @@ describe('SharedSyncService cache behavior', () => {
 
     expect(users).toEqual([{ userId: 'user-2', email: 'js@example.com', initials: 'JS' }]);
   });
+
+  it('does not throw when presence subscribe fails before the socket connects', async () => {
+    const channel = {
+      on: vi.fn(() => channel),
+      subscribe: vi.fn(() => {
+        throw new Error('WebSocket was closed before the connection was established');
+      }),
+      presenceState: vi.fn(() => ({})),
+    };
+    const supabase = {
+      channel: vi.fn(() => channel),
+      removeChannel: vi.fn(() => {
+        throw new Error('WebSocket was closed before the connection was established');
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager).setActivePresence('shared-1')).resolves.toEqual([]);
+    expect(supabase.removeChannel).toHaveBeenCalledWith(channel);
+  });
+
+  it('does not reject when presence track fails after subscribe', async () => {
+    let subscribeCallback: ((status: string, err?: unknown) => void) | null = null;
+    const channel = {
+      on: vi.fn(() => channel),
+      subscribe: vi.fn((callback: (status: string, err?: unknown) => void) => {
+        subscribeCallback = callback;
+        return channel;
+      }),
+      track: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+      presenceState: vi.fn(() => ({})),
+      untrack: vi.fn(async () => undefined),
+    };
+    const supabase = {
+      channel: vi.fn(() => channel),
+      removeChannel: vi.fn(async () => undefined),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    const service = new SharedSyncService(authManager);
+    await expect(service.setActivePresence('shared-1')).resolves.toEqual([]);
+    expect(subscribeCallback).toEqual(expect.any(Function));
+    expect(() => subscribeCallback?.('SUBSCRIBED')).not.toThrow();
+    await Promise.resolve();
+    expect(channel.track).toHaveBeenCalled();
+  });
 });

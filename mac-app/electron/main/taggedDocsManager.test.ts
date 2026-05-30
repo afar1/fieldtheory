@@ -263,8 +263,8 @@ describe('TaggedDocsManager', () => {
     });
   });
 
-  afterEach(() => {
-    manager.destroy();
+  afterEach(async () => {
+    await manager.destroy();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -307,7 +307,7 @@ frontmatter_updated_at: 2026-04-20T12:05:00Z
       await scoped.rescan();
       expect(scoped.list().map((d) => d.title)).toEqual(['Scoped Doc']);
     } finally {
-      scoped.destroy();
+      await scoped.destroy();
     }
   });
 

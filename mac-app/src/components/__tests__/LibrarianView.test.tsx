@@ -2201,6 +2201,105 @@ describe('LibrarianView render', () => {
     }, { timeout: 2600 });
   });
 
+  it('uses the River cache version after background sync rewrites the active file', async () => {
+    const relPath = 'River (shared)/recent-river-file';
+    const content = 'river first';
+    const syncedVersion = { mtimeMs: 3, size: 128, sha256: 'river-cache-after-sync' };
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'recent-river-file',
+      title: 'recent-river-file',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'river-initial-version' },
+    };
+    const updateContent = vi.fn(async () => ({ ok: true, revision: 2, cachePath: page.absPath }));
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save)
+      .mockResolvedValueOnce({
+        ok: true,
+        version: { mtimeMs: 2, size: content.length + 1, sha256: 'river-local-save-version' },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        version: { mtimeMs: 4, size: content.length + 2, sha256: 'river-second-save-version' },
+      });
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        ...window.externalAPI,
+        open: vi.fn(async () => ({
+          path: page.absPath,
+          name: 'recent-river-file.md',
+          content: 'river first!',
+          mtime: 3,
+          documentVersion: syncedVersion,
+        })),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: true, sharedId: 'shared-1', revision: 1 })),
+        updateContent,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('river first');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('river first');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'river first!',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+
+    await waitFor(() => {
+      expect(updateContent).toHaveBeenCalledWith('shared-1', 'river first!', 1, page.absPath);
+      expect(window.externalAPI!.open).toHaveBeenCalledWith(page.absPath);
+    }, { timeout: 2600 });
+
+    pasteText(renderedInput, '?');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledTimes(2);
+      expect(window.wikiAPI!.save).toHaveBeenNthCalledWith(
+        2,
+        relPath,
+        'river first?',
+        syncedVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
   it('syncs River once when shared files become available', async () => {
     const sync = vi.fn(async () => ({ written: 0, removed: 0, created: 1, errors: [] }));
     const riverChanged = vi.fn();

@@ -1132,6 +1132,14 @@ function getRenderedMarkdownListBodyOffsetInLine(text: string): number | null {
   return listMatch ? listMatch[0].length : null;
 }
 
+function getRenderedMarkdownBlockBodyOffsetInLine(text: string): number | null {
+  const headingMatch = /^(#{1,3})\s+/.exec(text);
+  if (headingMatch) return headingMatch[0].length;
+  const quoteMatch = /^(\s*)>\s?/.exec(text);
+  if (quoteMatch) return quoteMatch[0].length;
+  return getRenderedMarkdownListBodyOffsetInLine(text);
+}
+
 export function getRenderedMarkdownListBodyStartForLine(value: string, lineStart: number): number | null {
   const safeLineStart = Math.max(0, Math.min(value.length, lineStart));
   const lineEndIndex = value.indexOf('\n', safeLineStart);
@@ -1142,6 +1150,18 @@ export function getRenderedMarkdownListBodyStartForLine(value: string, lineStart
 
 function getRenderedMarkdownListBodyStartAtOffset(value: string, offset: number): number | null {
   return getRenderedMarkdownListBodyStartForLine(value, getMarkdownLineBounds(value, offset).lineStart);
+}
+
+export function getRenderedMarkdownBlockBodyStartForLine(value: string, lineStart: number): number | null {
+  const safeLineStart = Math.max(0, Math.min(value.length, lineStart));
+  const lineEndIndex = value.indexOf('\n', safeLineStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const markerLength = getRenderedMarkdownBlockBodyOffsetInLine(value.slice(safeLineStart, lineEnd));
+  return markerLength === null ? null : safeLineStart + markerLength;
+}
+
+function getRenderedMarkdownBlockBodyStartAtOffset(value: string, offset: number): number | null {
+  return getRenderedMarkdownBlockBodyStartForLine(value, getMarkdownLineBounds(value, offset).lineStart);
 }
 
 export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
@@ -1155,6 +1175,17 @@ export function getRenderedMarkdownListBodyStart(value: string, offset: number):
   return isInsideHiddenMarker || isEmptyBodyStart ? bodyStart : null;
 }
 
+export function getRenderedMarkdownBlockBodyStart(value: string, offset: number): number | null {
+  const clampedOffset = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, clampedOffset);
+  const bodyStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
+  if (bodyStart === null) return null;
+  const isEmptyBlockBody = bodyStart === lineEnd;
+  const isInsideHiddenMarker = clampedOffset >= lineStart && clampedOffset < bodyStart;
+  const isEmptyBodyStart = isEmptyBlockBody && clampedOffset === bodyStart;
+  return isInsideHiddenMarker || isEmptyBodyStart ? bodyStart : null;
+}
+
 export function getRenderedMarkdownListBodyClickPosition(
   value: string,
   offset: number,
@@ -1162,6 +1193,15 @@ export function getRenderedMarkdownListBodyClickPosition(
 ): number | null {
   if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return null;
   return getRenderedMarkdownListBodyStart(value, offset);
+}
+
+export function getRenderedMarkdownBlockBodyClickPosition(
+  value: string,
+  offset: number,
+  event: MouseEvent,
+): number | null {
+  if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return null;
+  return getRenderedMarkdownBlockBodyStart(value, offset);
 }
 
 export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
@@ -1179,7 +1219,7 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   }
 
   if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
-  const bodyStart = getRenderedMarkdownListBodyStart(view.state.doc.toString(), selection.from);
+  const bodyStart = getRenderedMarkdownBlockBodyStart(view.state.doc.toString(), selection.from);
   if (bodyStart === null || bodyStart === selection.from) return false;
   view.dispatch({
     changes: { from: bodyStart, insert: input.data },
@@ -1310,8 +1350,16 @@ function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number
 export function getRenderedMarkdownArrowRightEdit(value: string, offset: number): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const { lineEnd } = getMarkdownLineBounds(value, caret);
+  const blockBodyStart = getRenderedMarkdownBlockBodyStart(value, caret);
+  if (blockBodyStart !== null) return { selection: blockBodyStart };
   const listBoundaryEdit = getMarkdownListArrowRightBoundaryEdit(value, caret);
   if (listBoundaryEdit) return listBoundaryEdit;
+  if (caret === lineEnd && lineEnd < value.length) {
+    const nextLineBlockBodyStart = getRenderedMarkdownBlockBodyStartForLine(value, lineEnd + 1);
+    if (nextLineBlockBodyStart !== null && nextLineBlockBodyStart > lineEnd + 1) {
+      return { selection: nextLineBlockBodyStart };
+    }
+  }
   for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
     if (range.kind === 'wiki') continue;
     if (caret < range.contentTo || caret >= range.to) continue;
@@ -1324,6 +1372,10 @@ export function getRenderedMarkdownArrowRightEdit(value: string, offset: number)
 export function getRenderedMarkdownArrowLeftEdit(value: string, offset: number): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const blockBodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, caret);
+  if (blockBodyStart !== null && caret <= blockBodyStart && caret > lineStart) {
+    return { selection: blockBodyStart };
+  }
   for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
     if (range.kind === 'wiki') continue;
     if (caret <= range.from || caret > range.contentFrom) continue;
@@ -1360,7 +1412,7 @@ export function getRenderedMarkdownCommandArrowSelection(
   direction: 'left' | 'right',
 ): number {
   if (direction === 'right') return targetOffset;
-  const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, targetOffset);
+  const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, targetOffset);
   return bodyStart !== null && targetOffset < bodyStart ? bodyStart : targetOffset;
 }
 
@@ -1368,7 +1420,7 @@ export function getRenderedMarkdownVerticalNavigationEdit(
   value: string,
   targetOffset: number,
 ): { selection: number } | null {
-  const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, targetOffset);
+  const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, targetOffset);
   return bodyStart !== null && targetOffset < bodyStart ? { selection: bodyStart } : null;
 }
 
@@ -2845,15 +2897,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                   view.dispatch({ selection: { anchor: imageSelection.from, head: imageSelection.to } });
                   return true;
                 }
-                const listBodyPos = getRenderedMarkdownListBodyClickPosition(
+                const blockBodyPos = getRenderedMarkdownBlockBodyClickPosition(
                   view.state.doc.toString(),
                   pos,
                   event,
                 );
-                if (listBodyPos !== null) {
+                if (blockBodyPos !== null) {
                   event.preventDefault();
                   view.focus();
-                  view.dispatch({ selection: { anchor: listBodyPos, head: listBodyPos } });
+                  view.dispatch({ selection: { anchor: blockBodyPos, head: blockBodyPos } });
                   return true;
                 }
               }
