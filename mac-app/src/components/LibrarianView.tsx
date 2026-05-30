@@ -105,6 +105,7 @@ import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../uti
 import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
+  getRenderedMarkdownBlockBodyStartForLine,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
@@ -1494,22 +1495,38 @@ function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: numbe
   return offset;
 }
 
+function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): number | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  if (caret === lineStart) return lineStart;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const visibleStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
+  if (visibleStart === null || caret !== visibleStart) return null;
+  return value.slice(visibleStart, lineEnd).trim().length > 0 ? lineStart : null;
+}
+
 export function getRenderedMarkdownEnterEdit(
   value: string,
   selectionStart: number,
   selectionEnd: number,
 ): MarkdownTextEdit | null {
   if (selectionStart !== selectionEnd) return null;
-  const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, selectionStart);
+  const lineStartOffset = getRenderedMarkdownLineStartEditOffset(value, selectionStart);
+  const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, lineStartOffset ?? selectionStart);
   const insertionOffset = openingOffset === selectionStart
     ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
     : openingOffset;
-  return getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
-    ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset)
+  const keepCaretOnInsertedBlankLine = lineStartOffset === insertionOffset || openingOffset !== selectionStart;
+  const listEnterEdit = lineStartOffset === insertionOffset
+    ? null
+    : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
+      ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset));
+  return listEnterEdit
     ?? {
       nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
-      selectionStart: insertionOffset + 1,
-      selectionEnd: insertionOffset + 1,
+      selectionStart: keepCaretOnInsertedBlankLine ? insertionOffset : insertionOffset + 1,
+      selectionEnd: keepCaretOnInsertedBlankLine ? insertionOffset : insertionOffset + 1,
     };
 }
 
@@ -3465,6 +3482,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         expectedRevision,
         pending.documentPath,
       );
+      if (sharedResult?.ok && sharedResult.cachePath && sharedResult.cachePath === pending.documentPath) {
+        const refreshed = await window.externalAPI?.open(sharedResult.cachePath);
+        if (activeReadingPathRef.current === pending.documentPath && refreshed?.documentVersion) {
+          lastSavedVersionRef.current = refreshed.documentVersion;
+        }
+      }
       if (sharedResult?.revision !== undefined) {
         setSharedFileStatus((prev) => {
           if (!prev || prev.sharedId !== pending.sharedId) return prev;

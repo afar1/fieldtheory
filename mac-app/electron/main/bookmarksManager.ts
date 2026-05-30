@@ -755,8 +755,9 @@ export class BookmarksManager extends EventEmitter {
     this.watcher.on('error', (err) => log.error('Bookmarks watcher error:', err));
   }
 
-  stopWatcher(): void {
-    this.watcher?.close();
+  async stopWatcher(): Promise<void> {
+    const watcher = this.watcher;
     this.watcher = null;
+    await watcher?.close();
   }
 }

@@ -193,7 +193,7 @@ export class TaggedDocsManager extends EventEmitter {
     this.currentEmail = nextEmail;
 
     if (!this.currentEmail) {
-      this.stopWatcher();
+      void this.stopWatcher();
       this.emit('updated', []);
       return;
     }
@@ -256,12 +256,12 @@ export class TaggedDocsManager extends EventEmitter {
 
   onUserLoggedOut(): void {
     this.currentEmail = null;
-    this.stopWatcher();
+    void this.stopWatcher();
     this.emit('updated', []);
   }
 
-  destroy(): void {
-    this.stopWatcher();
+  async destroy(): Promise<void> {
+    await this.stopWatcher();
     this.worker?.kill();
     this.worker = null;
     this.db?.close();
@@ -547,7 +547,7 @@ export class TaggedDocsManager extends EventEmitter {
   }
 
   private restartWatcher(): void {
-    this.stopWatcher();
+    void this.stopWatcher();
     if (!this.watchEnabled || !this.currentEmail || this.roots.length === 0) return;
 
     this.watcher = chokidar.watch(this.roots, {
@@ -578,9 +578,10 @@ export class TaggedDocsManager extends EventEmitter {
     this.watcher.on('error', (err) => log.error('Tagged docs watcher error:', err));
   }
 
-  private stopWatcher(): void {
-    this.watcher?.close();
+  private async stopWatcher(): Promise<void> {
+    const watcher = this.watcher;
     this.watcher = null;
+    await watcher?.close();
   }
 
   private getRowByUlid(ulid: string): TaggedDocRow | null {
