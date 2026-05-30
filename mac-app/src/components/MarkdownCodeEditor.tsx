@@ -1188,7 +1188,40 @@ export function isRenderedMarkdownSelectionInsideInlineHtmlBlock(
 ): boolean {
   const block = getRenderedMarkdownInlineHtmlBlockRangeAt(value, from, to);
   if (!block) return false;
-  return from > block.from || to < block.to;
+  if (from !== to) return true;
+  return from > block.from && to < block.to;
+}
+
+function getRenderedMarkdownInlineHtmlBoundaryTextEdit(
+  value: string,
+  offset: number,
+  text: string,
+): { from: number; insert: string; selection: number } | null {
+  if (!text) return null;
+  const block = getRenderedMarkdownInlineHtmlBlockRanges(value).find((candidate) => (
+    offset === candidate.from || offset === candidate.to
+  ));
+  if (!block) return null;
+  if (offset === block.from) {
+    const separator = value.slice(Math.max(0, offset - 2), offset) === '\n\n' ? '\n\n' : '\n';
+    return {
+      from: offset,
+      insert: `${text}${separator}`,
+      selection: offset + text.length,
+    };
+  }
+  if (value.slice(offset, offset + 2) === '\n\n') {
+    return {
+      from: offset + 2,
+      insert: text,
+      selection: offset + 2 + text.length,
+    };
+  }
+  return {
+    from: offset,
+    insert: `\n\n${text}`,
+    selection: offset + 2 + text.length,
+  };
 }
 
 function pushRenderedSyntaxReplacement(
@@ -1385,6 +1418,18 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   }
 
   if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
+  const inlineHtmlBoundaryEdit = getRenderedMarkdownInlineHtmlBoundaryTextEdit(
+    view.state.doc.toString(),
+    selection.from,
+    input.data,
+  );
+  if (inlineHtmlBoundaryEdit) {
+    view.dispatch({
+      changes: { from: inlineHtmlBoundaryEdit.from, insert: inlineHtmlBoundaryEdit.insert },
+      selection: { anchor: inlineHtmlBoundaryEdit.selection },
+    });
+    return true;
+  }
   const bodyStart = getRenderedMarkdownBlockBodyStart(view.state.doc.toString(), selection.from);
   if (bodyStart === null || bodyStart === selection.from) return false;
   view.dispatch({
