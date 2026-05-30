@@ -266,6 +266,10 @@ export function shouldUseCompactRightDockToolbar(input: { dockSide: CodexTermina
   return effectiveDockSide === 'right' && input.rightWidth <= MIN_RIGHT_WIDTH + 72;
 }
 
+export function getTerminalTopExtension(input: { panelTop: number; previousTopExtension: number }): number {
+  return Math.max(0, Math.round(input.panelTop + input.previousTopExtension));
+}
+
 function readStoredNumber(key: string, fallback: number): number {
   const value = Number.parseInt(localStorage.getItem(key) ?? '', 10);
   return Number.isFinite(value) ? value : fallback;
@@ -561,20 +565,31 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     }
     const panel = panelRef.current;
     if (!panel) return;
+    let frame: number | null = null;
     const updateTopExtension = () => {
+      frame = null;
       const { top } = panel.getBoundingClientRect();
-      const next = Math.max(0, Math.round(top + topExtensionRef.current));
+      const next = getTerminalTopExtension({ panelTop: top, previousTopExtension: topExtensionRef.current });
+      if (next === topExtensionRef.current) return;
       topExtensionRef.current = next;
       setTopExtension(next);
+      scheduleFitActiveTerminal();
+    };
+    const scheduleTopExtension = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(updateTopExtension);
     };
     updateTopExtension();
-    const frame = window.requestAnimationFrame(updateTopExtension);
-    window.addEventListener('resize', updateTopExtension);
+    scheduleTopExtension();
+    const resizeObserver = new ResizeObserver(scheduleTopExtension);
+    resizeObserver.observe(panel);
+    window.addEventListener('resize', scheduleTopExtension);
     return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener('resize', updateTopExtension);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', scheduleTopExtension);
     };
-  }, [effectiveDockSide, extendToViewportTop, visible]);
+  }, [effectiveDockSide, extendToViewportTop, scheduleFitActiveTerminal, visible]);
 
   useEffect(() => {
     if (!visible || sessions.length !== 0) return;

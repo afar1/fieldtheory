@@ -129,6 +129,7 @@ function emitRenderedMarkdownEditorTiming(stage: string, details: Record<string,
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
   blur: () => void;
+  refreshLayout: () => void;
   getValue: () => string;
   getSelectionRange: () => { start: number; end: number };
   getSelectionSnapshot: () => MarkdownCodeEditorSelectionSnapshot | null;
@@ -3033,6 +3034,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         },
         blur: () => {
           viewRef.current?.contentDOM.blur();
+        },
+        refreshLayout: () => {
+          viewRef.current?.requestMeasure();
         },
         getValue: () => viewRef.current?.state.doc.toString() ?? '',
         getSelectionRange: () => {
