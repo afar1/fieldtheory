@@ -29,6 +29,7 @@ type LocalModelHealth = {
 
 const DEFAULT_MODEL_ID = 'gemma-4-E4B-it-Q4_K_M';
 const FIELD_THEORY_MODEL_DIR = '~/.fieldtheory/models';
+const OLLAMA_GEMMA_COMMAND = 'brew install ollama llama.cpp && ollama pull gemma4:e4b';
 
 function formatBytes(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return 'Unknown';
@@ -62,14 +63,14 @@ export default function LocalModelSettings() {
   const [healthByModel, setHealthByModel] = useState<Record<string, LocalModelHealth>>({});
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [loading, setLoading] = useState(true);
-  const [installing, setInstalling] = useState(false);
+  const [finding, setFinding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState('');
   const [promptSaving, setPromptSaving] = useState(false);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
-  const [copiedCommand, setCopiedCommand] = useState<'download' | 'link' | null>(null);
+  const [copiedCommand, setCopiedCommand] = useState<'ollama' | 'download' | 'link' | null>(null);
 
   const load = useCallback(async () => {
     const api = window.clipboardAPI;
@@ -110,15 +111,10 @@ export default function LocalModelSettings() {
   const ready = health?.status === 'ready';
   const statusTone = ready ? 'success' : health?.status === 'corrupt' ? 'warning' : 'neutral';
   const statusLabel = ready ? 'Ready' : health?.status === 'corrupt' ? 'Invalid file' : 'Missing';
-  const primaryLabel = installing
-    ? 'Working...'
-    : ready
-      ? 'Use local model'
-      : 'Find or download';
   const downloadCommand = getGemmaDownloadCommand(model);
   const linkCommand = getGemmaLinkCommand(model);
 
-  const handleCopyCommand = useCallback(async (kind: 'download' | 'link', command: string) => {
+  const handleCopyCommand = useCallback(async (kind: 'ollama' | 'download' | 'link', command: string) => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(command);
@@ -142,44 +138,41 @@ export default function LocalModelSettings() {
     }
   }, []);
 
-  const handlePrimaryAction = useCallback(async () => {
+  const handleFindGemma = useCallback(async () => {
     const api = window.clipboardAPI;
-    if (!api?.downloadLocalLLM || !api.setLocalLLMSelected) return;
+    if (!api?.getLocalLLMHealth || !api.setLocalLLMSelected) return;
 
     setError(null);
     setMessage(null);
-    setInstalling(!ready);
+    setFinding(true);
 
     try {
+      const nextHealth = await api.getLocalLLMHealth();
+      setHealthByModel(nextHealth);
+      const activeHealth = nextHealth[activeModelId];
+      if (activeHealth?.status !== 'ready') {
+        setError(`Gemma was not found yet. Put ${model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf'} in ${FIELD_THEORY_MODEL_DIR}, or link an existing GGUF file there, then click Find Gemma again.`);
+        return;
+      }
+
       const selected = await api.setLocalLLMSelected(activeModelId);
       if (!selected.success) {
         setError(selected.error ?? 'Could not select local model.');
         return;
       }
 
-      if (ready) {
-        const enabled = await api.setUseLocalLLM?.(true);
-        if (enabled && !enabled.success) {
-          setError(enabled.error ?? 'Could not enable local model.');
-          return;
-        }
-        setMessage('Using the existing local model.');
+      const enabled = await api.setUseLocalLLM?.(true);
+      if (enabled && !enabled.success) {
+        setError(enabled.error ?? 'Could not enable local model.');
         return;
       }
-
-      const result = await api.downloadLocalLLM(activeModelId);
-      if (!result.success) {
-        setError(result.error ?? 'Local model setup failed.');
-        return;
-      }
-      setMessage(result.reusedExisting ? 'Found and linked the existing local model.' : 'Local model installed.');
-      await load();
+      setMessage('Found Gemma and enabled local commands.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Local model setup failed.');
+      setError(err instanceof Error ? err.message : 'Could not check for Gemma.');
     } finally {
-      setInstalling(false);
+      setFinding(false);
     }
-  }, [activeModelId, load, ready]);
+  }, [activeModelId, model?.filename]);
 
   const handleSaveMeetingSummaryPrompt = useCallback(async () => {
     const api = window.clipboardAPI;
@@ -248,7 +241,7 @@ export default function LocalModelSettings() {
       <SettingsSectionHeading
         theme={theme}
         title="Local model"
-        description="Use Gemma for offline portable commands. Field Theory checks known local copies before downloading."
+        description="Use Gemma for offline portable commands. Install the model in Terminal, then let Field Theory find it."
       />
 
       <SettingsCard theme={theme}>
@@ -307,23 +300,23 @@ export default function LocalModelSettings() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0' }}>
           <button
             type="button"
-            onClick={() => void handlePrimaryAction()}
-            disabled={installing}
+            onClick={() => void handleFindGemma()}
+            disabled={finding}
             style={{
               padding: '7px 12px',
               borderRadius: '7px',
               border: `1px solid ${theme.border}`,
-              backgroundColor: installing ? theme.selectedBg : theme.accent,
-              color: installing ? theme.textSecondary : '#fff',
+              backgroundColor: finding ? theme.selectedBg : theme.accent,
+              color: finding ? theme.textSecondary : '#fff',
               fontSize: '12px',
               fontWeight: 600,
-              cursor: installing ? 'default' : 'pointer',
+              cursor: finding ? 'default' : 'pointer',
             }}
           >
-            {primaryLabel}
+            {finding ? 'Finding...' : 'Find Gemma'}
           </button>
           <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-            Existing GGUF files are reused instead of downloaded again.
+            Safe to click anytime. It only checks for Gemma and enables it.
           </span>
         </div>
       </SettingsCard>
@@ -331,20 +324,27 @@ export default function LocalModelSettings() {
       <SettingsCard theme={theme}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            Terminal setup
+            Setup steps
           </div>
           <div style={{ fontSize: '11px', lineHeight: 1.45, color: theme.textSecondary }}>
-            Field Theory checks {getFieldTheoryModelPath(model?.filename)} automatically. Download Gemma 4 there, or replace the placeholder before linking an existing GGUF file to that path.
+            Step 1: install Ollama and pull Gemma 4 in Terminal. Step 2: put the Gemma 4 GGUF at {getFieldTheoryModelPath(model?.filename)}, or link an existing GGUF there. Step 3: click Find Gemma.
           </div>
           <TerminalCommand
-            label="Download Gemma 4"
+            label="1. Install Ollama and Gemma 4"
+            command={OLLAMA_GEMMA_COMMAND}
+            copied={copiedCommand === 'ollama'}
+            onCopy={() => void handleCopyCommand('ollama', OLLAMA_GEMMA_COMMAND)}
+            theme={theme}
+          />
+          <TerminalCommand
+            label="2. Download Gemma 4 GGUF for Field Theory"
             command={downloadCommand}
             copied={copiedCommand === 'download'}
             onCopy={() => void handleCopyCommand('download', downloadCommand)}
             theme={theme}
           />
           <TerminalCommand
-            label="Link existing GGUF"
+            label="Or link an existing GGUF"
             command={linkCommand}
             copied={copiedCommand === 'link'}
             onCopy={() => void handleCopyCommand('link', linkCommand)}
