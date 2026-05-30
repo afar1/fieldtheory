@@ -27,6 +27,8 @@ import {
   RENDERED_MARKDOWN_EDITOR_IMAGE_FRAME_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
+  RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS,
+  RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS,
@@ -68,6 +70,7 @@ import {
   hasMarkdownCodeEditorRangeSelection,
   getRenderedMarkdownImageSelectionFromEventTarget,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownInlineHtmlBlocks,
   getRenderedMarkdownDrawingTitle,
   isRenderedMarkdownDrawingAlt,
   replaceMarkdownImageAltAtSource,
@@ -548,6 +551,50 @@ describe('MarkdownCodeEditor line numbers', () => {
 });
 
 describe('MarkdownCodeEditor rendered presentation', () => {
+  it('finds closed ft-html fenced blocks with stable source ranges', () => {
+    const doc = 'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below';
+    const state = EditorState.create({ doc });
+    const [block] = getRenderedMarkdownInlineHtmlBlocks(state);
+
+    expect(block).toMatchObject({
+      from: doc.indexOf('```ft-html'),
+      to: doc.indexOf('```\n\nProse below') + 3,
+      content: '<section>Widget</section>',
+      fromLine: 3,
+      toLine: 5,
+    });
+  });
+
+  it('renders ft-html fences as sandboxed inline HTML widgets in rendered mode', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension('/tmp/Field Theory/report.md')],
+      }),
+      parent,
+    });
+
+    const block = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}`) as HTMLElement | null;
+    const iframe = block?.querySelector('iframe[data-ft-inline-html-preview="true"]') as HTMLIFrameElement | null;
+    expect(block).toBeTruthy();
+    expect(block?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe(String(doc.indexOf('```ft-html')));
+    expect(block?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe(String(doc.indexOf('```\n\nProse below') + 3));
+    expect(iframe?.getAttribute('sandbox')).toBe('');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<base href="file:///tmp/Field%20Theory/">');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<section>Widget</section>');
+
+    const toggle = block?.querySelector('button') as HTMLButtonElement | null;
+    toggle?.click();
+    expect(block?.classList.contains(RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS)).toBe(true);
+    expect(toggle?.textContent).toBe('Collapse');
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('emits debug-gated timing entries for rendered decoration work', () => {
     const originalLocalStorage = window.localStorage;
     Object.defineProperty(window, 'localStorage', {

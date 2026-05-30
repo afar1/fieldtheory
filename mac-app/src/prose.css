@@ -257,3 +257,68 @@
 .ft-prose p:has(> img:only-child) {
   margin: 1em 0 1.2em;
 }
+
+.ft-inline-html-block {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 1em 0 1.15em;
+  border: 1px solid var(--ft-prose-border, color-mix(in srgb, currentColor 13%, transparent));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ft-prose-bg, transparent);
+}
+
+.ft-inline-html-block__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 6px 4px 9px;
+  border-bottom: 1px solid var(--ft-prose-border, color-mix(in srgb, currentColor 13%, transparent));
+  color: var(--ft-prose-muted, rgba(120, 120, 120, 0.82));
+  background: var(--ft-prose-softer, color-mix(in srgb, currentColor 3%, transparent));
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ft-inline-html-block__toolbar figcaption {
+  margin: 0;
+  font-weight: 620;
+  letter-spacing: 0;
+}
+
+.ft-inline-html-block__toolbar button {
+  min-width: 62px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--ft-prose-border, color-mix(in srgb, currentColor 13%, transparent));
+  border-radius: 5px;
+  color: var(--ft-prose-color, currentColor);
+  background: color-mix(in srgb, var(--ft-prose-bg, transparent) 88%, currentColor 5%);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ft-inline-html-block iframe {
+  display: block;
+  width: 100%;
+  min-height: 260px;
+  height: 320px;
+  border: 0;
+  background: #fff;
+}
+
+.ft-inline-html-block-expanded {
+  width: min(100vw - 48px, 1200px);
+  max-width: min(100vw - 48px, 1200px);
+  margin-left: max(0px, calc((100% - min(100vw - 48px, 1200px)) / 2));
+}
+
+.ft-inline-html-block-expanded iframe {
+  min-height: 520px;
+  height: min(72vh, 820px);
+}
