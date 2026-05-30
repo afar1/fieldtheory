@@ -572,7 +572,7 @@ const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_MAX_LIST_HEIGHT = 378;
 const LAUNCHER_LIST_VERTICAL_PADDING = 12;
 const LAUNCHER_LIST_ITEM_HEIGHT = 30;
-const LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT = 44;
+const LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT = 34;
 const LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS = 5;
 const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
@@ -3265,7 +3265,7 @@ function CommandLauncher() {
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
     const invocationGeneration = launcherGenerationRef.current;
     const closeForInvocation = (closeOptions: Omit<LauncherCloseOptions, 'generation'> = {}) => {
-      prepareLauncherForNextOpen();
+      prepareLauncherForNextOpen({ revealWhenReady: false });
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
     if (item.type === 'source' && item.sourceId) {
