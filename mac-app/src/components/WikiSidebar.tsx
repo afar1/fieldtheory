@@ -1015,6 +1015,32 @@ export function toggleSidebarPinnedItemIds(
   return next;
 }
 
+export function mergeSidebarPinnedItemIds(
+  localPinnedItemIds: ReadonlySet<string>,
+  sharedPinnedItemIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const localNonRiverPins = [...localPinnedItemIds].filter((id) => !isRiverSidebarItemId(id));
+  if (sharedPinnedItemIds.size === 0) {
+    if (localNonRiverPins.length === localPinnedItemIds.size) return localPinnedItemIds;
+    return new Set(localNonRiverPins);
+  }
+  return new Set([...localNonRiverPins, ...sharedPinnedItemIds]);
+}
+
+export function isRiverSidebarItemId(id: string): boolean {
+  const normalized = id.replace(/\\/g, '/');
+  return normalized.includes(`/${RIVER_SHARED_FOLDER_NAME}/`) || normalized.includes(`${RIVER_SHARED_FOLDER_NAME}/`);
+}
+
+export function isSharedRiverSidebarItem(
+  item: Pick<UnifiedItem, 'relPath' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign'> | null | undefined,
+): boolean {
+  if (!item) return false;
+  if (item.sharedOriginalSourcePath || item.sharedAuthorCallsign) return true;
+  const relPath = item.relPath?.replace(/\\/g, '/');
+  return relPath === RIVER_SHARED_FOLDER_NAME || Boolean(relPath?.startsWith(`${RIVER_SHARED_FOLDER_NAME}/`));
+}
+
 export function renamePinnedSidebarIds(pinnedItemIds: Set<string>, event: LibraryRenameEvent): Set<string> {
   let changed = false;
   const next = new Set<string>();
@@ -1542,6 +1568,7 @@ function WikiSidebar({
       return new Set();
     }
   });
+  const [sharedPinnedItemIds, setSharedPinnedItemIds] = useState<Set<string>>(() => new Set());
   const [iconColorIndices, setIconColorIndices] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem(LIBRARY_ICON_COLOR_STORAGE_KEY);
@@ -1690,12 +1717,22 @@ function WikiSidebar({
     if (result) setTaggedDocs(result);
   }, []);
 
+  const loadSharedPins = useCallback(async () => {
+    const result = await window.sharedFilesAPI?.getPinnedItemIds?.();
+    if (result) setSharedPinnedItemIds(new Set(result));
+  }, []);
+
+  const combinedPinnedItemIds = useMemo(() => {
+    return mergeSidebarPinnedItemIds(pinnedItemIds, sharedPinnedItemIds);
+  }, [pinnedItemIds, sharedPinnedItemIds]);
+
   useEffect(() => {
     if (!active) return;
     loadTree('active');
     loadArtifacts();
     loadRecent();
     loadTaggedDocs();
+    loadSharedPins();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => {
       traceLibrarySidebar('sidebar-wiki-changed-received');
       loadTree('wiki:changed');
@@ -1784,8 +1821,10 @@ function WikiSidebar({
     });
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
+    const unsubSharedPins = window.sharedFilesAPI?.onPinsChanged?.(() => loadSharedPins());
     const onLocalRiverChanged = () => {
       loadTree('river:changed-local');
+      loadSharedPins();
     };
     window.addEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
@@ -1794,6 +1833,7 @@ function WikiSidebar({
       loadArtifacts();
       loadRecent();
       loadTaggedDocs();
+      loadSharedPins();
     };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -1811,10 +1851,11 @@ function WikiSidebar({
       unsubRenamedReading?.();
       unsubRecent?.();
       unsubTaggedDocs?.();
+      unsubSharedPins?.();
       window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
     };
-  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, pruneDeletedWikiPage]);
+  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, pruneDeletedWikiPage]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
@@ -2093,13 +2134,13 @@ function WikiSidebar({
     roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
     const visibleRoots = filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
     return orderTopLevelSidebarNodes(
-      applyPinnedSidebarOrder(visibleRoots, sortMode, pinnedItemIds, iconColorIndices, iconColorOrder),
+      applyPinnedSidebarOrder(visibleRoots, sortMode, combinedPinnedItemIds, iconColorIndices, iconColorOrder),
       sortMode,
-      pinnedItemIds,
+      combinedPinnedItemIds,
       iconColorIndices,
       iconColorOrder,
     );
-  }, [artifacts, hiddenDefaultFolders, iconColorIndices, iconColorOrder, libraryRoots, pinnedItemIds, sortMode, taggedDocs]);
+  }, [artifacts, combinedPinnedItemIds, hiddenDefaultFolders, iconColorIndices, iconColorOrder, libraryRoots, sortMode, taggedDocs]);
 
   const sidebarRootsWithTodoOverrides = useMemo(
     () => applyTodoStateOverridesToNodes(sidebarRoots, todoStateOverrides),
@@ -2485,7 +2526,7 @@ function WikiSidebar({
   const contextDirIsRiverShortcut = contextDir?.name === RIVER_SHARED_FOLDER_NAME || contextDir?.label === RIVER_SHARED_FOLDER_NAME;
   const contextPinTargetId = contextDirIsRiverShortcut ? null : contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
   const contextPinLabel = contextPinTargetId
-    ? `${pinnedItemIds.has(contextPinTargetId) ? 'Unpin' : 'Pin'} ${contextDir ? 'folder' : 'doc'}`
+    ? `${combinedPinnedItemIds.has(contextPinTargetId) ? 'Unpin' : 'Pin'} ${contextDir ? 'folder' : 'doc'}`
     : null;
   const rootCreateLocation = getBuiltinCreateLocation('');
   const getExplicitSelectedItems = useCallback((): UnifiedItem[] => {
@@ -2931,8 +2972,40 @@ function WikiSidebar({
     const targetId = contextPinTargetId;
     closeContextMenu();
     if (!targetId) return;
+    const targetFilePath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : null;
+    const targetIsSharedRiverFile = isSharedRiverSidebarItem(contextFile);
+    const nextPinned = !combinedPinnedItemIds.has(targetId);
+    if (targetFilePath && targetIsSharedRiverFile) {
+      const pinRequest = window.sharedFilesAPI?.setPinned?.(targetFilePath, nextPinned);
+      if (!pinRequest) {
+        setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
+        return;
+      }
+      void pinRequest.then((result) => {
+        if (result?.ok) {
+          setPinnedItemIds((prev) => {
+            if (!prev.has(targetId)) return prev;
+            const next = new Set(prev);
+            next.delete(targetId);
+            return next;
+          });
+          setSharedPinnedItemIds((prev) => {
+            const next = new Set(prev);
+            if (nextPinned) next.add(targetId);
+            else next.delete(targetId);
+            return next;
+          });
+          return;
+        }
+        if (result?.reason !== 'not_shared') return;
+        setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
+      }).catch((err) => {
+        console.warn('River pin update failed:', err);
+      });
+      return;
+    }
     setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
-  }, [closeContextMenu, contextPinTargetId]);
+  }, [closeContextMenu, combinedPinnedItemIds, contextFile, contextPinTargetId]);
 
   return (
     <div
@@ -3193,7 +3266,7 @@ function WikiSidebar({
               onRenameRequestConsumed={() => setRenameRequestId(null)}
               onContextMenu={openContextMenu}
               onKeyboardScopeActive={onKeyboardScopeActive}
-              pinnedItemIds={pinnedItemIds}
+              pinnedItemIds={combinedPinnedItemIds}
               pinnedFolderFadeIds={pinnedFolderFadeIds}
               getSidebarIconColor={getSidebarIconColor}
               getSidebarIconColorIndex={getSidebarIconColorIndex}
@@ -3245,7 +3318,7 @@ function WikiSidebar({
           onRenameRequestConsumed={() => setRenameRequestId(null)}
           onContextMenu={openContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
-          pinnedItemIds={pinnedItemIds}
+          pinnedItemIds={combinedPinnedItemIds}
           pinnedFolderFadeIds={pinnedFolderFadeIds}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}

@@ -1549,6 +1549,7 @@ function refreshFieldTheorySyncServices(): void {
     if (!sharedSyncService && authManager) {
       sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
       sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
+      sharedSyncService.on('pinsChanged', broadcastSharedFilePinsChanged);
       sharedSyncService.on('cacheChanged', () => {
         librarianManager?.emit('library:changed');
       });
@@ -1584,7 +1585,20 @@ function scheduleLibrarySyncIfAllowed(): void {
     librarySyncService?.scheduleSync();
   }
   if (canUseSharedFeatures()) {
-    void sharedSyncService?.syncOnce();
+    void syncSharedFilesAndBroadcastChanges();
+  }
+}
+
+async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
+  if (!sharedSyncService) return;
+  try {
+    const result = await sharedSyncService.syncOnce();
+    if (result.written > 0 || result.removed > 0 || result.created > 0) {
+      librarianManager?.emit('library:changed');
+    }
+    broadcastSharedFilePinsChanged();
+  } catch (err) {
+    log.warn('River sync failed:', err);
   }
 }
 
@@ -1592,6 +1606,14 @@ function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedF
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('sharedFiles:presenceChanged', payload);
+    }
+  });
+}
+
+function broadcastSharedFilePinsChanged(): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('sharedFiles:pinsChanged');
     }
   });
 }
@@ -1608,7 +1630,8 @@ async function afterTeamMutation(result: Promise<SharedTeamMutationResult>): Pro
   const resolved = await result;
   if (resolved.ok) {
     broadcastTeamChanged();
-    void sharedSyncService?.syncOnce();
+    refreshFieldTheorySyncServices();
+    void syncSharedFilesAndBroadcastChanges();
   }
   return resolved;
 }
@@ -5038,7 +5061,10 @@ function setupLibrarianIPCHandlers(): void {
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
     const result = await sharedSyncService.syncOnce();
-    if (result.written > 0 || result.removed > 0 || result.created > 0) librarianManager?.emit('library:changed');
+    if (result.written > 0 || result.removed > 0 || result.created > 0) {
+      librarianManager?.emit('library:changed');
+    }
+    broadcastSharedFilePinsChanged();
     return result;
   });
 
@@ -5046,13 +5072,28 @@ function setupLibrarianIPCHandlers(): void {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
-    return sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
+    const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
+    if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+    return result;
   });
 
   ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return [];
     return sharedSyncService.setActivePresence(sharedId);
+  });
+
+  ipcMain.handle('sharedFiles:getPinnedItemIds', async () => {
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseSharedFeatures()) return [];
+    return sharedSyncService.getPinnedSidebarItemIds();
+  });
+
+  ipcMain.handle('sharedFiles:setPinned', async (_event, filePath: string, pinned: boolean) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+    return sharedSyncService.setPinned(filePath, pinned);
   });
 
   // ===========================================================================

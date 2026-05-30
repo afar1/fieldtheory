@@ -34,6 +34,18 @@ function ensureDir(dirPath: string): void {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function isMarkdownFileName(fileName: string): boolean {
+  return /\.(md|markdown)$/i.test(fileName);
+}
+
+function sidebarItemIdForSharedCacheFile(filePath: string): string {
+  const resolvedPath = path.resolve(filePath);
+  const root = libraryDir();
+  if (!isInsidePath(root, resolvedPath)) return `external:${resolvedPath}`;
+  const relPath = path.relative(root, resolvedPath).replace(/\\/g, '/');
+  return `wiki:${relPath.replace(/\.(md|markdown)$/i, '')}`;
+}
+
 function contentForSharedTransport(filePath: string, content: string): string {
   const options = { libraryRoots: [libraryDir()] };
   const localPortable = makeMarkdownImagesPortable(filePath, stripSharedFileFrontmatter(content), options);
@@ -122,6 +134,13 @@ export interface SharedFilePresenceUser {
   userId: string;
   email: string | null;
   initials: string;
+}
+
+export interface SharedFilePinResult {
+  ok: boolean;
+  pinned?: boolean;
+  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  error?: string;
 }
 
 export interface SharedFilesAvailability {
@@ -278,10 +297,23 @@ export class SharedSyncService extends EventEmitter {
           void this.syncFromRemoteChange();
         },
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'team_document_pins',
+          filter: `team_scope_user_id=eq.${teamScopeUserId}`,
+        },
+        () => {
+          this.emit('pinsChanged');
+        },
+      )
       .subscribe((status: string, err?: unknown) => {
         if (err) log.warn('River realtime subscription error:', err);
         if (status === 'SUBSCRIBED') {
           void this.syncFromRemoteChange();
+          this.emit('pinsChanged');
         }
       });
   }
@@ -317,6 +349,7 @@ export class SharedSyncService extends EventEmitter {
       const result = await this.syncOnce();
       if (result.written > 0 || result.removed > 0 || result.created > 0) {
         this.emit('cacheChanged', result);
+        this.emit('pinsChanged');
       }
     } catch (err) {
       log.warn('River realtime sync failed:', err);
@@ -396,6 +429,91 @@ export class SharedSyncService extends EventEmitter {
     };
   }
 
+  async getPinnedSidebarItemIds(): Promise<string[]> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return [];
+    const teamState = await this.getActiveTeamState();
+    if (!teamState?.currentTeamScopeUserId) return [];
+
+    const { data, error } = await supabase
+      .from('team_document_pins')
+      .select('document_id')
+      .eq('team_scope_user_id', teamState.currentTeamScopeUserId);
+
+    if (error) {
+      log.warn('River pinned items lookup failed:', error);
+      return [];
+    }
+
+    const pinnedIds = new Set(
+      ((data ?? []) as Array<{ document_id?: unknown }>)
+        .map((row) => typeof row.document_id === 'string' ? row.document_id : null)
+        .filter((id): id is string => Boolean(id)),
+    );
+    if (pinnedIds.size === 0) return [];
+
+    const sidebarIds: string[] = [];
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return [];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
+        if (parsed?.sharedId && pinnedIds.has(parsed.sharedId)) {
+          sidebarIds.push(sidebarItemIdForSharedCacheFile(filePath));
+        }
+      } catch {
+        // Ignore unreadable cache files while building the shared pin set.
+      }
+    }
+    return sidebarIds;
+  }
+
+  async setPinned(filePath: string, pinned: boolean): Promise<SharedFilePinResult> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { ok: false, reason: 'not_authenticated' };
+    const teamState = await this.getActiveTeamState();
+    if (!teamState?.currentTeamScopeUserId) return { ok: false, reason: 'not_available' };
+    if (!canWriteTeamDocuments(teamState)) return { ok: false, reason: 'read_only' };
+
+    const resolvedPath = path.resolve(filePath);
+    if (!isInsidePath(sharedFilesRoot(), resolvedPath) || !fs.existsSync(resolvedPath)) {
+      return { ok: false, reason: 'not_shared' };
+    }
+
+    let sharedId: string | null = null;
+    try {
+      sharedId = parseSharedFileFrontmatter(fs.readFileSync(resolvedPath, 'utf-8'))?.sharedId ?? null;
+    } catch {
+      return { ok: false, reason: 'not_shared' };
+    }
+    if (!sharedId) return { ok: false, reason: 'not_shared' };
+
+    if (pinned) {
+      const { error } = await supabase
+        .from('team_document_pins')
+        .upsert({
+          team_scope_user_id: teamState.currentTeamScopeUserId,
+          document_id: sharedId,
+          pinned_by: session.user.id,
+        }, { onConflict: 'team_scope_user_id,document_id' });
+      if (error) return { ok: false, reason: 'request_failed', error: error.message };
+    } else {
+      const { error } = await supabase
+        .from('team_document_pins')
+        .delete()
+        .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
+        .eq('document_id', sharedId);
+      if (error) return { ok: false, reason: 'request_failed', error: error.message };
+    }
+
+    this.emit('pinsChanged');
+    return { ok: true, pinned };
+  }
+
   async shareFile(input: SharedFileShareInput): Promise<SharedFileStatus> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
@@ -454,6 +572,9 @@ export class SharedSyncService extends EventEmitter {
 
     const sharedId = this.sharedIdForCacheFile(filePath);
     const originalSourcePath = sharedId ? this.originalSourcePathForCacheFile(filePath) : sourceKeyForFilePath(filePath);
+    const sharedIdsToUnpin = sharedId
+      ? [sharedId]
+      : this.sharedIdsForCacheReference({ originalSourcePath });
     let query = supabase
       .from('team_documents')
       .update({ deleted_at: new Date().toISOString(), updated_by: session.user.id })
@@ -468,6 +589,7 @@ export class SharedSyncService extends EventEmitter {
       log.error('Unshare file failed:', error);
       return false;
     }
+    await this.removePinRowsForSharedIds(sharedIdsToUnpin);
     this.removeCacheFilesForSharedReference({ sharedId, originalSourcePath });
     return true;
   }
@@ -612,6 +734,43 @@ export class SharedSyncService extends EventEmitter {
     }
   }
 
+  private sharedIdsForCacheReference({ originalSourcePath }: { originalSourcePath?: string | null }): string[] {
+    if (!originalSourcePath) return [];
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return [];
+    const sharedIds: string[] = [];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
+        if (parsed?.sharedId && parsed.originalSourcePath === originalSourcePath) {
+          sharedIds.push(parsed.sharedId);
+        }
+      } catch {
+        // Ignore unreadable cache files while finding stale shared pins.
+      }
+    }
+    return sharedIds;
+  }
+
+  private async removePinRowsForSharedIds(sharedIds: string[]): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase || sharedIds.length === 0) return;
+    for (const sharedId of sharedIds) {
+      try {
+        const { error } = await supabase
+          .from('team_document_pins')
+          .delete()
+          .eq('document_id', sharedId);
+        if (error) log.warn('River pin cleanup failed:', error);
+      } catch (err) {
+        log.warn('River pin cleanup failed:', err);
+      }
+    }
+    this.emit('pinsChanged');
+  }
+
   private removeCacheFilesForSharedReference({
     sharedId,
     originalSourcePath,
@@ -623,7 +782,7 @@ export class SharedSyncService extends EventEmitter {
     if (!fs.existsSync(root)) return 0;
     let removed = 0;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
       const filePath = path.join(root, entry.name);
       try {
         const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
@@ -645,7 +804,7 @@ export class SharedSyncService extends EventEmitter {
     const root = sharedFilesRoot();
     if (!fs.existsSync(root)) return null;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
       const filePath = path.join(root, entry.name);
       try {
         if (parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'))?.sharedId === sharedId) {
@@ -703,7 +862,7 @@ export class SharedSyncService extends EventEmitter {
     if (!fs.existsSync(root)) return 0;
     let removed = 0;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
       const filePath = path.join(root, entry.name);
       try {
         const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
