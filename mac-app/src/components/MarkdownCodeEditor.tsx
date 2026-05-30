@@ -2966,6 +2966,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         parent: containerRef.current,
       });
       viewRef.current = view;
+      view.scrollDOM.setAttribute('data-ft-quality-scroll', presentation === 'rendered' ? 'rendered-editor' : 'markdown');
       scrollFpsSamplerRef(view.scrollDOM);
       const handleKeyDownCapture = (event: KeyboardEvent) => {
         handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
@@ -3134,6 +3135,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     return (
       <div
         ref={containerRef}
+        data-ft-quality-editor={presentation === 'rendered' ? 'rendered' : 'markdown'}
         style={{
           width: '100%',
           height: '100%',

@@ -1308,8 +1308,11 @@ interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
   appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  appendScrollDiagnostics: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
   getRenderedEditorDebugLogPath: () => Promise<string>;
+  getScrollDiagnosticsLogPath: () => Promise<string>;
   clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
+  clearScrollDiagnosticsLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 /**
@@ -1523,7 +1526,7 @@ interface CommandsAPI {
   renameCommand: (oldFilePath: string, newName: string) => Promise<string | null>;
 
   // Command launcher (Cmd+Shift+K)
-  invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
+  invokeCommand?: (commandName: string, traceContext?: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>;
   getLauncherFileIcon?: (filePath: string) => Promise<LauncherFileIconResult>;
   searchLauncherFiles?: (query: string) => Promise<LauncherFileSearchResult>;
   openLauncherFile?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -1546,8 +1549,8 @@ interface CommandsAPI {
   launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
-  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void) => () => void;
-  onLauncherFocusInput?: (callback: (payload?: { generation?: number }) => void) => () => void;
+  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string }) => void) => () => void;
+  onLauncherFocusInput?: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;

@@ -48,6 +48,13 @@ type CommandLauncherWindowOptions = {
   getInitialDarkMode?: () => boolean;
 };
 
+type CommandLauncherShowOptions = {
+  anchorBounds?: AnchorBounds | null;
+  launcherSessionId?: string;
+  qualityScenario?: string;
+  suppressBlurHideMs?: number;
+};
+
 type CommandLauncherCloseOptions = {
   skipActivation?: boolean;
   generation?: number;
@@ -93,6 +100,9 @@ export class CommandLauncherWindow {
   private externalInvocationSuppressionTokens = new Set<number>();
   private nextExternalInvocationSuppressionToken = 1;
   private showGeneration = 0;
+  private launcherSessionId: string | null = null;
+  private querySessionId: string | null = null;
+  private qualityScenario: string | null = null;
 
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 520;
@@ -111,6 +121,7 @@ export class CommandLauncherWindow {
   private previewPayload: Record<string, unknown> | null = null;
   private previewAnchorBounds: AnchorBounds | null = null;
   private suppressPreviewBlurUntil = 0;
+  private suppressBlurHideUntil = 0;
 
   constructor(nativeHelper?: NativeHelper, options: CommandLauncherWindowOptions = {}) {
     this.nativeHelper = nativeHelper || null;
@@ -128,6 +139,8 @@ export class CommandLauncherWindow {
         const nextHeight = Math.min(height, this.WINDOW_HEIGHT_RESULTS);
         if (nextHeight !== height) {
           appendCommandLauncherTrace('renderer-resize-clamped', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             requestedHeight: height,
             appliedHeight: nextHeight,
             maxHeight: this.WINDOW_HEIGHT_RESULTS,
@@ -141,6 +154,8 @@ export class CommandLauncherWindow {
         });
       } else {
         appendCommandLauncherTrace('renderer-resize-ignored', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
           requestedHeight: height,
           reason: 'window-missing',
         });
@@ -153,6 +168,8 @@ export class CommandLauncherWindow {
       const closeGeneration = options?.generation;
       if (typeof closeGeneration === 'number' && closeGeneration !== this.showGeneration) {
         appendCommandLauncherTrace('renderer-close-request-ignored-stale', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
           visible: this.isVisible(),
           isShowing: this._isShowing,
           skipActivation,
@@ -162,6 +179,8 @@ export class CommandLauncherWindow {
         return;
       }
       appendCommandLauncherTrace('renderer-close-request', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         visible: this.isVisible(),
         isShowing: this._isShowing,
         skipActivation,
@@ -186,7 +205,21 @@ export class CommandLauncherWindow {
     ipcMain.on('command-launcher:trace', (_event, event: string, details: Record<string, unknown> = {}) => {
       if (!event || typeof event !== 'string') return;
       const safeDetails = details && typeof details === 'object' ? details : { value: details };
-      appendCommandLauncherTrace(`renderer-${event.slice(0, 80)}`, safeDetails);
+      const rendererEvent = event.slice(0, 80);
+      const enrichedDetails: Record<string, unknown> = { ...safeDetails };
+      if (!enrichedDetails.launcherSessionId && this.launcherSessionId) {
+        enrichedDetails.launcherSessionId = this.launcherSessionId;
+      }
+      if (!enrichedDetails.qualityScenario && this.qualityScenario) {
+        enrichedDetails.qualityScenario = this.qualityScenario;
+      }
+      if (rendererEvent === 'first-input' && !enrichedDetails.querySessionId && this.launcherSessionId) {
+        this.querySessionId = `${this.launcherSessionId}:query-${Date.now().toString(36)}`;
+      }
+      if (!enrichedDetails.querySessionId && this.querySessionId) {
+        enrichedDetails.querySessionId = this.querySessionId;
+      }
+      appendCommandLauncherTrace(`renderer-${rendererEvent}`, enrichedDetails);
     });
   }
   
@@ -212,15 +245,23 @@ export class CommandLauncherWindow {
    * Uses fresh frontmost window bounds when possible so the launcher follows
    * same-app window moves across displays.
    */
-  async show(options: { anchorBounds?: AnchorBounds | null } = {}): Promise<void> {
+  async show(options: CommandLauncherShowOptions = {}): Promise<void> {
     // Mark as showing BEFORE any async work to close the race window.
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
     this.showGeneration += 1;
+    this.launcherSessionId = options.launcherSessionId ?? `launcher-${Date.now().toString(36)}-${this.showGeneration}`;
+    this.querySessionId = null;
+    this.qualityScenario = options.qualityScenario ?? null;
+    if (typeof options.suppressBlurHideMs === 'number' && options.suppressBlurHideMs > 0) {
+      this.suppressBlurHideUntil = Math.max(this.suppressBlurHideUntil, Date.now() + options.suppressBlurHideMs);
+    }
     appendCommandLauncherTrace('show-start', {
       hasWindow: Boolean(this.window),
       windowVisible: this.isVisible(),
       generation: this.showGeneration,
+      launcherSessionId: this.launcherSessionId,
+      qualityScenario: this.qualityScenario,
     });
 
     try {
@@ -250,12 +291,16 @@ export class CommandLauncherWindow {
             name: frontmostApp.name,
           };
           appendCommandLauncherTrace('show-frontmost-app', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
           });
         } else {
           appendCommandLauncherTrace('show-frontmost-app-skipped-field-theory', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             previousAppBundleId: this.previousApp?.bundleId ?? null,
@@ -268,16 +313,30 @@ export class CommandLauncherWindow {
       let y: number;
 
       let freshWindowBounds: AnchorBounds | null = null;
-      if (!options.anchorBounds && this.nativeHelper) {
+      if (!options.anchorBounds && this.nativeHelper && !frontmostApp?.windowBounds) {
+        const boundsStartedAt = Date.now();
         try {
           freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds(COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS);
+          appendCommandLauncherTrace('show-frontmost-window-bounds-complete', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
+            elapsedMs: Date.now() - boundsStartedAt,
+            hasWindowBounds: Boolean(freshWindowBounds),
+          });
         } catch (error) {
-          appendCommandLauncherTrace('show-frontmost-window-bounds-error', { error });
+          appendCommandLauncherTrace('show-frontmost-window-bounds-error', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
+            elapsedMs: Date.now() - boundsStartedAt,
+            error,
+          });
         }
       }
 
       const windowBounds = options.anchorBounds ?? freshWindowBounds ?? frontmostApp?.windowBounds ?? null;
       appendCommandLauncherTrace('show-position-source', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         usedWindowBounds: Boolean(windowBounds),
         usedAnchorBounds: Boolean(options.anchorBounds),
         usedFreshWindowBounds: Boolean(!options.anchorBounds && freshWindowBounds),
@@ -305,6 +364,8 @@ export class CommandLauncherWindow {
         height: this.WINDOW_HEIGHT_COLLAPSED,
       });
       appendCommandLauncherTrace('show-set-bounds', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         x,
         y,
         width: this.WINDOW_WIDTH,
@@ -315,21 +376,33 @@ export class CommandLauncherWindow {
       this.window!.webContents.send('command-launcher:reset', {
         isDarkMode: this.getInitialDarkMode(),
         generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
       });
-      appendCommandLauncherTrace('show-sent-reset');
+      appendCommandLauncherTrace('show-sent-reset', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+        generation: this.showGeneration,
+      });
 
       this.window!.show();
       this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
       this.window!.focus();
       this.window!.webContents.send('command-launcher:focus-input', {
         generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
       });
       appendCommandLauncherTrace('show-sent-focus-input', {
         generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
       });
       this._isShowing = false; // Window is now visible, clear the showing flag
 
       appendCommandLauncherTrace('show-complete', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         windowVisible: this.isVisible(),
         previousAppBundleId: this.previousApp?.bundleId ?? null,
       });
@@ -356,6 +429,8 @@ export class CommandLauncherWindow {
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
     if (!isVisible) {
       appendCommandLauncherTrace('hide-noop', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         skipActivation,
         suppressActivationForThisHide,
         externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
@@ -365,6 +440,8 @@ export class CommandLauncherWindow {
     }
 
     appendCommandLauncherTrace('hide', {
+      launcherSessionId: this.launcherSessionId,
+      qualityScenario: this.qualityScenario,
       skipActivation,
       suppressActivationForThisHide,
       externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
@@ -374,7 +451,10 @@ export class CommandLauncherWindow {
     this.hidePreview();
 
     if (shouldSkipActivation || this.fieldTheoryActiveOnShow) {
-      appendCommandLauncherTrace('hide-skip-activation');
+      appendCommandLauncherTrace('hide-skip-activation', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
       return;
     }
 
@@ -382,12 +462,17 @@ export class CommandLauncherWindow {
     // This works even when clipboard history is visible in immersive mode.
     if (this.previousApp?.bundleId) {
       appendCommandLauncherTrace('hide-activate-previous-app', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         bundleId: this.previousApp.bundleId,
       });
       this.activatePreviousApp(this.previousApp.bundleId);
     } else {
       // Fallback to app.hide() if we don't know the previous app
-      appendCommandLauncherTrace('hide-app-hide-fallback');
+      appendCommandLauncherTrace('hide-app-hide-fallback', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
       appendVisibilityTrace('command-launcher.app-hide', {
         reason: 'hide-no-previous-app',
         caller: captureVisibilityCaller(),
@@ -559,6 +644,20 @@ export class CommandLauncherWindow {
         this.window?.focus();
         this.window?.webContents.send('command-launcher:focus-input', {
           generation: this.showGeneration,
+        });
+        return;
+      }
+      if (Date.now() < this.suppressBlurHideUntil) {
+        appendCommandLauncherTrace('window-blur-ignored-suppressed', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
+          suppressBlurHideUntil: this.suppressBlurHideUntil,
+        });
+        this.window?.focus();
+        this.window?.webContents.send('command-launcher:focus-input', {
+          generation: this.showGeneration,
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
         });
         return;
       }
@@ -748,6 +847,11 @@ export class CommandLauncherWindow {
       this.window.destroy();
       this.window = null;
     }
+  }
+
+  async executeJavaScript<T = unknown>(script: string): Promise<T | null> {
+    if (!this.window || this.window.isDestroyed()) return null;
+    return await this.window.webContents.executeJavaScript(script, true) as T;
   }
 
   private recordResizeRequest(requestedHeight: number): void {

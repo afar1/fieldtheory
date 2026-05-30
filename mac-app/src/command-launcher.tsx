@@ -209,6 +209,15 @@ type LauncherMeetingActionResult = {
 type LauncherResetPayload = {
   isDarkMode?: boolean;
   generation?: number;
+  launcherSessionId?: string;
+  qualityScenario?: string;
+};
+
+type LauncherTraceContext = {
+  launcherSessionId?: string;
+  qualityScenario?: string;
+  querySessionId?: string;
+  invocationId?: string;
 };
 
 type LauncherContextState = {
@@ -367,7 +376,7 @@ interface LauncherCommandsAPI {
   getHandoffs: () => Promise<HandoffInfo[]>;
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
-  invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
+  invokeCommand: (name: string, traceContext?: LauncherTraceContext) => Promise<{ success: boolean; error?: string }>;
   getLauncherFileIcon: (filePath: string) => Promise<LauncherFileIconResult>;
   searchLauncherFiles: (query: string) => Promise<LauncherFileSearchResult>;
   openLauncherFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -399,7 +408,7 @@ interface LauncherCommandsAPI {
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
   onLauncherReset: (callback: (payload?: LauncherResetPayload) => void) => () => void;
-  onLauncherFocusInput?: (callback: (payload?: { generation?: number }) => void) => () => void;
+  onLauncherFocusInput?: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void) => () => void;
 }
 
 interface LauncherClipboardAPI {
@@ -470,10 +479,24 @@ const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
 const libraryAPI = window.libraryAPI as unknown as LauncherLibraryAPI | undefined;
 const bookmarksAPI = window.bookmarksAPI as unknown as LauncherBookmarksAPI | undefined;
 const recentAPI = window.recentAPI as unknown as LauncherRecentAPI | undefined;
+const launcherBenchmarkWindow = window as Window & {
+  __fieldTheoryLauncherBenchmarkReady?: boolean;
+};
+
+let activeLauncherTraceContext: LauncherTraceContext = {};
+
+function nextLauncherTraceId(kind: 'query' | 'invocation'): string {
+  const sessionId = activeLauncherTraceContext.launcherSessionId ?? 'launcher-unknown';
+  return `${sessionId}:${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
 
 function traceLauncher(event: string, details: Record<string, unknown> = {}) {
-  if (!shouldTraceLauncherRendererEvent(event, details)) return;
-  commandsAPI.launcherTrace?.(event, details);
+  const traceDetails = {
+    ...activeLauncherTraceContext,
+    ...details,
+  };
+  if (!shouldTraceLauncherRendererEvent(event, traceDetails)) return;
+  commandsAPI.launcherTrace?.(event, traceDetails);
 }
 
 function getLauncherElapsedMs(startedAt: number): number {
@@ -914,6 +937,7 @@ function CommandLauncher() {
   const launcherIconDataFlushFrameRef = useRef<number | null>(null);
   const launcherSearchCacheWarmTimeoutRef = useRef<number | null>(null);
   const launcherSearchCacheWarmIndexRef = useRef(0);
+  const launcherFirstInputAtRef = useRef<number | null>(null);
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
@@ -1025,6 +1049,11 @@ function CommandLauncher() {
   const handleQueryChange = useCallback((nextQuery: string) => {
     if (!launcherFirstInputTracedRef.current) {
       launcherFirstInputTracedRef.current = true;
+      launcherFirstInputAtRef.current = performance.now();
+      activeLauncherTraceContext = {
+        ...activeLauncherTraceContext,
+        querySessionId: nextLauncherTraceId('query'),
+      };
       traceLauncher('first-input', {
         queryLength: nextQuery.length,
         launcherDataLoading,
@@ -1471,7 +1500,11 @@ function CommandLauncher() {
     // Set initial height immediately to prevent layout shift
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
-    void loadLauncherData({ includeBackground: false });
+    launcherBenchmarkWindow.__fieldTheoryLauncherBenchmarkReady = false;
+    void loadLauncherData({ includeBackground: false })
+      .finally(() => {
+        launcherBenchmarkWindow.__fieldTheoryLauncherBenchmarkReady = true;
+      });
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
@@ -1482,12 +1515,17 @@ function CommandLauncher() {
     const handleReset = (payload?: LauncherResetPayload) => {
       const resetStartedAt = performance.now();
       launcherFirstInputTracedRef.current = false;
+      launcherFirstInputAtRef.current = null;
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
       }
       if (typeof payload?.generation === 'number') {
         launcherGenerationRef.current = payload.generation;
       }
+      activeLauncherTraceContext = {
+        launcherSessionId: payload?.launcherSessionId,
+        qualityScenario: payload?.qualityScenario,
+      };
       const earlyTypedQuery = document.hasFocus() && document.activeElement === inputRef.current
         ? inputRef.current?.value ?? ''
         : '';
@@ -1504,7 +1542,14 @@ function CommandLauncher() {
         hadEarlyTypedQuery: Boolean(earlyTypedQuery),
         generation: payload?.generation ?? null,
       });
-      void loadLauncherData({ includeBackground: false });
+      launcherBenchmarkWindow.__fieldTheoryLauncherBenchmarkReady = false;
+      void loadLauncherData({ includeBackground: false })
+        .finally(() => {
+          launcherBenchmarkWindow.__fieldTheoryLauncherBenchmarkReady = true;
+          traceLauncher('launcher-benchmark-ready', {
+            generation: payload?.generation ?? null,
+          });
+        });
       scheduleLauncherBackgroundRefresh();
       void themeAPI.getTheme()
         .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
@@ -2423,11 +2468,39 @@ function CommandLauncher() {
     if (allItems.length === 0 && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
       const waitingForResults = launcherDataLoading && query.trim() !== '';
       const fallback = waitingForResults ? null : localInstructionFallbackForQuery(query, 0, isHelpQuery);
-      applyFilteredResults(fallback ? [fallback] : []);
+      const results = fallback ? [fallback] : [];
+      applyFilteredResults(results);
       selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
       resizeForResults(fallback ? 1 : 0, waitingForResults);
+      if (query.trim()) {
+        const firstInputAt = launcherFirstInputAtRef.current;
+        traceLauncher('filter-results', {
+          queryLength: query.length,
+          namespacePrefix: null,
+          hasDirectoryNamespace: false,
+          hasMoveSource: false,
+          hasAuthorNamespace: false,
+          hasBookmarkNamespace: false,
+          resultCount: results.length,
+          usedLocalInstructionFallback: Boolean(fallback),
+          totalResultCount: 0,
+          allItemCount: 0,
+          commandItemCount: commandItems.length,
+          actionItemCount: actionItems.length,
+          libraryMarkdownItemCount: libraryMarkdownSearchItems.length,
+          artifactItemCount: artifactReadings.length,
+          bookmarkAuthorItemCount: bookmarkAuthorItems.length,
+          bookmarkFacetItemCount: bookmarkFacetItems.length,
+          bookmarkPostItemCount: bookmarkPostItems.length,
+          recentFileItemCount: recentFileItems.length,
+          fileItemCount: fileItems.length,
+          launcherDataLoading,
+          firstInputToResultsMs: firstInputAt === null ? null : getLauncherElapsedMs(firstInputAt),
+          elapsedMs: getLauncherElapsedMs(filterStartedAt),
+        });
+      }
       return;
     }
 
@@ -2628,6 +2701,9 @@ function CommandLauncher() {
       recentFileItemCount: recentFileItems.length,
       fileItemCount: fileItems.length,
       launcherDataLoading,
+      firstInputToResultsMs: launcherFirstInputAtRef.current === null
+        ? null
+        : getLauncherElapsedMs(launcherFirstInputAtRef.current),
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
   }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
@@ -3332,6 +3408,11 @@ function CommandLauncher() {
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
+    const invocationId = nextLauncherTraceId('invocation');
+    activeLauncherTraceContext = {
+      ...activeLauncherTraceContext,
+      invocationId,
+    };
     traceLauncher('invoke-item', {
       item: describeLauncherItem(item),
       fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
@@ -3386,7 +3467,11 @@ function CommandLauncher() {
         commandName: item.name,
         fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
       });
-      const result = await commandsAPI.invokeCommand(item.name).catch((error) => ({
+      const result = await commandsAPI.invokeCommand(item.name, {
+        launcherSessionId: activeLauncherTraceContext.launcherSessionId,
+        querySessionId: activeLauncherTraceContext.querySessionId,
+        invocationId,
+      }).catch((error) => ({
         success: false,
         error: error instanceof Error ? error.message : 'Command paste failed',
       }));

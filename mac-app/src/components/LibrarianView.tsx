@@ -9481,6 +9481,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         <div
           ref={setContentScrollRef}
           data-ft-librarian-content-scroll="true"
+          data-ft-quality-scroll={contentMode === 'markdown' ? undefined : 'rendered'}
           onScroll={(e) => {
             if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
           }}
@@ -9634,6 +9635,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
 	                    dataAttributes={{
+	                      'data-ft-quality-editor': 'markdown',
 	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
 	                      'data-ft-agent-file-path': activeReading.path,
 	                      'data-ft-agent-title': activeReading.title,
@@ -9813,6 +9815,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     documentPath={activeReading.path}
                     dataAttributes={{
                       'data-ft-rendered-editor-input': 'true',
+                      'data-ft-quality-editor': 'rendered',
                       'data-ft-agent-context': 'markdown',
                       'data-ft-agent-file-path': activeReading.path,
                       'data-ft-agent-title': activeReading.title,
