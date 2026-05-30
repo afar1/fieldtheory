@@ -18,7 +18,7 @@ export function resolveUpdaterStatusTransition(
   options: { force?: boolean } = {},
 ): UpdateStatus {
   if (options.force) return next;
-  if (current === 'installing') return next === 'installing' ? next : current;
+  if (current === 'installing') return next === 'installing' || next === 'error' ? next : current;
   if (current === 'ready') return next === 'installing' || next === 'ready' ? next : current;
   return next;
 }
