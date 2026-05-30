@@ -3621,11 +3621,11 @@ export class TranscriberManager extends EventEmitter {
       if (targetBundleId) {
         const safeBundleId = targetBundleId.replace(/"/g, '');
         const activateScript = `tell application id "${safeBundleId}" to activate`;
-        await execFileAsync('osascript', ['-e', activateScript]);
+        await execFileAsync('osascript', ['-e', activateScript], { timeout: 1000 });
         await new Promise((resolve) => setTimeout(resolve, 80));
       }
       // Use AppleScript to send Command+V
-      await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
+      await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down'], { timeout: 2000 });
     } catch (error) {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
       this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
@@ -4516,7 +4516,7 @@ export class TranscriberManager extends EventEmitter {
           return (bundle identifier of frontApp)
         end tell
       `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const { stdout } = await execFileAsync('osascript', ['-e', script], { timeout: 1000 });
       return stdout.trim() || null;
     } catch {
       return null;
@@ -4903,11 +4903,394 @@ export class TranscriberManager extends EventEmitter {
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      if (itemIdx < orderedItems.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
 
     if (clearAfter) {
       this.clearStack();
+    }
+  }
+
+  async runRecordingDeliveryQualityBenchmark(input: {
+    benchmarkId: string;
+    text: string;
+  }): Promise<{
+    success: boolean;
+    pasteMs: number;
+    totalMs: number;
+    textChars: number;
+    error?: string;
+  }> {
+    const traceContext = {
+      benchmark: true,
+      benchmarkId: input.benchmarkId,
+      delivery: 'recording-textedit',
+      qualityScenario: 'synthetic-recording-textedit',
+      source: 'quality-benchmark',
+    };
+    const startedAt = performance.now();
+    const previousStack = [...this.currentStack];
+    const previousDetectedCommands = [...this.detectedCommands];
+    const previousLastTranscription = this.lastTranscription;
+
+    if (this.status !== 'idle') {
+      appendTranscriberTrace('benchmark.error', {
+        ...traceContext,
+        error: `Transcriber status is ${this.status}`,
+      });
+      return {
+        success: false,
+        pasteMs: 0,
+        totalMs: Math.round(performance.now() - startedAt),
+        textChars: input.text.length,
+        error: `Transcriber status is ${this.status}`,
+      };
+    }
+
+    if (!this.clipboardManager) {
+      appendTranscriberTrace('benchmark.error', {
+        ...traceContext,
+        error: 'Clipboard manager unavailable',
+      });
+      return {
+        success: false,
+        pasteMs: 0,
+        totalMs: Math.round(performance.now() - startedAt),
+        textChars: input.text.length,
+        error: 'Clipboard manager unavailable',
+      };
+    }
+
+    try {
+      appendTranscriberTrace('finish.accepted', {
+        ...traceContext,
+        recordingAgeMs: 0,
+        liveChars: input.text.length,
+        queueDepth: 0,
+        helperActive: false,
+      });
+      this.setStatus('transcribing');
+      const prepMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('finish.prep', {
+        ...traceContext,
+        snapshotMs: 0,
+        snapshotStatus: 'benchmark-skipped',
+        stopMs: 0,
+        drainMs: 0,
+        totalMs: prepMs,
+        liveChars: input.text.length,
+        queueDepth: 0,
+        helperActive: false,
+        wavBytes: 0,
+      });
+
+      appendTranscriberTrace('benchmark.delivery-phase', {
+        ...traceContext,
+        phase: 'store-transcript-start',
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      const itemId = await this.clipboardManager.storeText(input.text, 'transcript');
+      if (itemId <= 0) {
+        throw new Error('Could not store benchmark transcript');
+      }
+      appendTranscriberTrace('benchmark.delivery-phase', {
+        ...traceContext,
+        phase: 'store-transcript-done',
+        totalMs: Math.round(performance.now() - startedAt),
+        itemId,
+      });
+      this.currentStack = [itemId];
+      this.detectedCommands = [];
+      this.lastTranscription = input.text;
+
+      const pasteStart = performance.now();
+      appendTranscriberTrace('benchmark.delivery-phase', {
+        ...traceContext,
+        phase: 'paste-stack-start',
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      await this.notifyPasteStarting();
+      await this.pasteStack(false);
+      const pasteMs = Math.round(performance.now() - pasteStart);
+      appendTranscriberTrace('benchmark.delivery-phase', {
+        ...traceContext,
+        phase: 'paste-stack-done',
+        pasteMs,
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      const totalMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('finish.done', {
+        ...traceContext,
+        textSource: 'benchmark',
+        textChars: input.text.length,
+        asrMs: 0,
+        cmdMs: 0,
+        pasteMs,
+        totalMs,
+        tailBytes: 0,
+        commands: [],
+      });
+      this.emit('result', input.text);
+      return {
+        success: true,
+        pasteMs,
+        totalMs,
+        textChars: input.text.length,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recording benchmark failed';
+      appendTranscriberTrace('benchmark.error', {
+        ...traceContext,
+        totalMs: Math.round(performance.now() - startedAt),
+        error,
+      });
+      return {
+        success: false,
+        pasteMs: 0,
+        totalMs: Math.round(performance.now() - startedAt),
+        textChars: input.text.length,
+        error: message,
+      };
+    } finally {
+      this.currentStack = previousStack;
+      this.detectedCommands = previousDetectedCommands;
+      this.lastTranscription = previousLastTranscription;
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+    }
+  }
+
+  async runRecordingAsrQualityBenchmark(input: {
+    benchmarkId: string;
+    wavPath: string;
+  }): Promise<{
+    success: boolean;
+    asrMs: number;
+    totalMs: number;
+    textChars: number;
+    wavBytes: number | null;
+    error?: string;
+  }> {
+    const traceContext = {
+      benchmark: true,
+      benchmarkId: input.benchmarkId,
+      delivery: 'recording-asr-fixture',
+      qualityScenario: 'fixture-audio',
+      source: 'quality-benchmark',
+    };
+    const startedAt = performance.now();
+
+    if (this.status !== 'idle') {
+      const totalMs = Math.round(performance.now() - startedAt);
+      const error = `Transcriber status is ${this.status}`;
+      appendTranscriberTrace('benchmark.asr-error', {
+        ...traceContext,
+        totalMs,
+        error,
+      });
+      return {
+        success: false,
+        asrMs: 0,
+        totalMs,
+        textChars: 0,
+        wavBytes: null,
+        error,
+      };
+    }
+
+    let wavBytes: number | null = null;
+    try {
+      wavBytes = await fs.promises.stat(input.wavPath).then(stat => stat.size).catch(() => null);
+      appendTranscriberTrace('benchmark.asr-start', {
+        ...traceContext,
+        wavBytes,
+      });
+      this.setStatus('transcribing');
+      const asrStart = performance.now();
+      const text = await this.transcribeAudio(input.wavPath);
+      const asrMs = Math.round(performance.now() - asrStart);
+      const totalMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('benchmark.asr-success', {
+        ...traceContext,
+        asrMs,
+        totalMs,
+        textChars: text.length,
+        wavBytes,
+      });
+      return {
+        success: true,
+        asrMs,
+        totalMs,
+        textChars: text.length,
+        wavBytes,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recording ASR benchmark failed';
+      const totalMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('benchmark.asr-error', {
+        ...traceContext,
+        totalMs,
+        wavBytes,
+        error: message,
+      });
+      return {
+        success: false,
+        asrMs: 0,
+        totalMs,
+        textChars: 0,
+        wavBytes,
+        error: message,
+      };
+    } finally {
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+    }
+  }
+
+  async runRecordingAsrDeliveryQualityBenchmark(input: {
+    benchmarkId: string;
+    wavPath: string;
+  }): Promise<{
+    success: boolean;
+    asrMs: number;
+    pasteMs: number;
+    totalMs: number;
+    textChars: number;
+    text: string;
+    wavBytes: number | null;
+    error?: string;
+  }> {
+    const traceContext = {
+      benchmark: true,
+      benchmarkId: input.benchmarkId,
+      delivery: 'recording-asr-textedit',
+      qualityScenario: 'fixture-audio-textedit',
+      source: 'quality-benchmark',
+    };
+    const startedAt = performance.now();
+    const previousStack = [...this.currentStack];
+    const previousDetectedCommands = [...this.detectedCommands];
+    const previousLastTranscription = this.lastTranscription;
+
+    if (this.status !== 'idle') {
+      const totalMs = Math.round(performance.now() - startedAt);
+      const error = `Transcriber status is ${this.status}`;
+      appendTranscriberTrace('benchmark.asr-delivery-error', {
+        ...traceContext,
+        totalMs,
+        error,
+      });
+      return { success: false, asrMs: 0, pasteMs: 0, totalMs, textChars: 0, text: '', wavBytes: null, error };
+    }
+
+    if (!this.clipboardManager) {
+      const totalMs = Math.round(performance.now() - startedAt);
+      const error = 'Clipboard manager unavailable';
+      appendTranscriberTrace('benchmark.asr-delivery-error', {
+        ...traceContext,
+        totalMs,
+        error,
+      });
+      return { success: false, asrMs: 0, pasteMs: 0, totalMs, textChars: 0, text: '', wavBytes: null, error };
+    }
+
+    let wavBytes: number | null = null;
+    let text = '';
+    try {
+      wavBytes = await fs.promises.stat(input.wavPath).then(stat => stat.size).catch(() => null);
+      appendTranscriberTrace('finish.accepted', {
+        ...traceContext,
+        recordingAgeMs: 0,
+        liveChars: 0,
+        queueDepth: 0,
+        helperActive: false,
+        wavBytes,
+      });
+      this.setStatus('transcribing');
+      const asrStart = performance.now();
+      text = await this.transcribeAudio(input.wavPath);
+      const asrMs = Math.round(performance.now() - asrStart);
+      if (!text.trim()) {
+        throw new Error('Recording ASR delivery benchmark produced empty transcript');
+      }
+
+      appendTranscriberTrace('finish.prep', {
+        ...traceContext,
+        snapshotMs: 0,
+        snapshotStatus: 'benchmark-fixture',
+        stopMs: 0,
+        drainMs: 0,
+        totalMs: Math.round(performance.now() - startedAt),
+        asrMs,
+        liveChars: text.length,
+        queueDepth: 0,
+        helperActive: false,
+        wavBytes,
+      });
+
+      const itemId = await this.clipboardManager.storeText(text, 'transcript');
+      if (itemId <= 0) {
+        throw new Error('Could not store benchmark ASR transcript');
+      }
+      this.currentStack = [itemId];
+      this.detectedCommands = [];
+      this.lastTranscription = text;
+
+      const pasteStart = performance.now();
+      await this.notifyPasteStarting();
+      await this.pasteStack(false);
+      const pasteMs = Math.round(performance.now() - pasteStart);
+      const totalMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('finish.done', {
+        ...traceContext,
+        textSource: 'asr-fixture',
+        textChars: text.length,
+        asrMs,
+        cmdMs: 0,
+        pasteMs,
+        totalMs,
+        tailBytes: 0,
+        commands: [],
+        wavBytes,
+      });
+      this.emit('result', text);
+      return {
+        success: true,
+        asrMs,
+        pasteMs,
+        totalMs,
+        textChars: text.length,
+        text,
+        wavBytes,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recording ASR delivery benchmark failed';
+      const totalMs = Math.round(performance.now() - startedAt);
+      appendTranscriberTrace('benchmark.asr-delivery-error', {
+        ...traceContext,
+        totalMs,
+        wavBytes,
+        textChars: text.length,
+        error: message,
+      });
+      return {
+        success: false,
+        asrMs: 0,
+        pasteMs: 0,
+        totalMs,
+        textChars: text.length,
+        text,
+        wavBytes,
+        error: message,
+      };
+    } finally {
+      this.currentStack = previousStack;
+      this.detectedCommands = previousDetectedCommands;
+      this.lastTranscription = previousLastTranscription;
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
     }
   }
 

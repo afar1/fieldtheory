@@ -4,24 +4,69 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  AppState,
   ActivityIndicator,
   Dimensions,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
+  InteractionManager,
+  Linking,
   Modal,
   PanResponder,
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LibraryDocument } from '../types';
+import type { LibraryDocument, LibraryViewState } from '../types';
+import {
+  applyRichBlockFormat,
+  applyRichEditorInputChange,
+  applyRichInlineFormat,
+  applyRichTitleInputChange,
+  applyRichWikiLink,
+  bodySelectionForMarkdownLine,
+  buildLibraryFolderGroups,
+  buildRichContent,
+  buildLibrarySearchRows,
+  fileNameForLibraryTitle,
+  documentDraftFromWikiTarget,
+  findDocumentForWikiDraft,
+  findDocumentByWikiTitle,
+  formatMarkdownListMarker,
+  getBacklinkDocuments,
+  getDisplayTitle,
+  getLibrarySyncStatus,
+  getRecentDocuments,
+  getSwitcherDocuments,
+  nextRecentIds,
+  nextNavigationBackIds,
+  type LibrarySearchRow,
+  type MarkdownInlineSegment,
+  type RichBlockFormat,
+  type RichInlineFormat,
+  type MarkdownReaderBlock,
+  type TextSelection,
+  parseMarkdownReaderBlocks,
+  previewMarkdownReaderContent,
+  reconcileLibraryViewState,
+  resolveNavigationBackTarget,
+  splitRichContent,
+  shouldRetitleMobileFileName,
+  toggleMarkdownTaskAtLine,
+  wikiTargetForDocument,
+  wikiLinksFromContent,
+} from '../services/libraryText';
+import { StorageService } from '../services/storage';
 import { ThemeColors, useIsDark, useThemeColors, useThemeMode } from '../services/theme';
 
 interface LibraryViewProps {
@@ -32,28 +77,25 @@ interface LibraryViewProps {
   callsign?: string | null;
   lastSyncedAt?: number | null;
   isSyncing?: boolean;
+  syncError?: string | null;
   isHydrating?: boolean;
-  onSyncPress?: () => void;
+  onSyncPress?: (flushedDocuments?: LibraryDocument[]) => void | Promise<void>;
+  storageScopeId?: string;
 }
-
-type MarkdownAction =
-  | 'bold'
-  | 'italic'
-  | 'strike'
-  | 'code'
-  | 'quote'
-  | 'link'
-  | 'bullet'
-  | 'number'
-  | 'check'
-  | 'h1'
-  | 'h2'
-  | 'wiki';
 
 type DrawerRow =
   | { type: 'folder'; folder: string; count: number }
   | { type: 'empty'; folder: string }
   | { type: 'file'; doc: LibraryDocument };
+
+type EditorDraftState = {
+  docId: string;
+  content: string;
+  rich: {
+    title: string;
+    body: string;
+  };
+};
 
 const DEFAULT_FOLDER = 'scratchpad';
 const SEEDED_LIBRARY_FOLDERS = [
@@ -63,36 +105,27 @@ const SEEDED_LIBRARY_FOLDERS = [
   'debates',
   'entries',
 ] as const;
+const EDITOR_DRAFT_FLUSH_DELAY_MS = 1_500;
+const READER_PREVIEW_LINE_LIMIT = 120;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DRAWER_WIDTH = Math.min(340, SCREEN_WIDTH * 0.84);
-
-const normalize = (value: string) =>
-  value
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '');
 
 const extractTags = (value: string) => {
   const tags = value.match(/#[\w-]+/g) ?? [];
   return [...new Set(tags.map((tag) => tag.slice(1).toLowerCase()))].slice(0, 8);
 };
 
-const createSlug = (title: string) =>
-  title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-_]/g, '')
-    .replace(/\s+/g, '-') || 'untitled';
-
 const titleFromContent = (content: string, fallback: string) => {
   const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
   return heading || fallback.trim() || 'Untitled';
 };
 
-const fileNameForTitle = (title: string) => `${createSlug(title)}.md`;
+const fileNameForTitle = fileNameForLibraryTitle;
 
 const folderFor = (doc: LibraryDocument) => doc.folderPath?.trim() || DEFAULT_FOLDER;
 const fileNameFor = (doc: LibraryDocument) => doc.fileName?.trim() || fileNameForTitle(doc.title || 'Untitled');
+const fileNameForTitleUpdate = (doc: LibraryDocument, nextTitle: string) =>
+  shouldRetitleMobileFileName(doc, nextTitle) ? fileNameForTitle(nextTitle) : doc.fileName ?? fileNameForTitle(nextTitle);
 
 const compareDocs = (a: LibraryDocument, b: LibraryDocument) => {
   const pinScore = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
@@ -106,7 +139,7 @@ const withContentUpdate = (doc: LibraryDocument, content: string): LibraryDocume
     ...doc,
     content,
     title: nextTitle,
-    fileName: doc.fileName ?? fileNameForTitle(nextTitle),
+    fileName: fileNameForTitleUpdate(doc, nextTitle),
     folderPath: doc.folderPath ?? folderFor(doc),
     tags: extractTags(content),
     updatedAt: Date.now(),
@@ -131,15 +164,6 @@ const applyContentUpdate = (documents: LibraryDocument[], docId: string, content
   };
 };
 
-const getDisplayTitle = (doc: LibraryDocument) => doc.title.trim() || 'Untitled';
-
-const formatSyncTime = (timestamp?: number | null) => {
-  if (!timestamp) return 'not synced yet';
-  const elapsedMs = Date.now() - timestamp;
-  if (elapsedMs < 60_000) return 'just now';
-  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp));
-};
-
 export function LibraryView({
   documents,
   onChange,
@@ -148,15 +172,21 @@ export function LibraryView({
   callsign,
   lastSyncedAt,
   isSyncing,
+  syncError,
   isHydrating,
   onSyncPress,
+  storageScopeId = 'local',
 }: LibraryViewProps) {
   const colors = useThemeColors();
   const isDark = useIsDark();
   const [themeMode, setThemeMode] = useThemeMode();
   const insets = useSafeAreaInsets();
+  const titleInputRef = useRef<TextInput>(null);
   const editorRef = useRef<TextInput>(null);
+  const bodySelectionRef = useRef<TextSelection>({ start: 0, end: 0 });
   const drawerProgress = useRef(new Animated.Value(0)).current;
+  const contentTransition = useRef(new Animated.Value(1)).current;
+  const lastSelectedIdRef = useRef<string | null>(documents[0]?.id ?? null);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDocumentsRef = useRef<LibraryDocument[] | null>(null);
@@ -165,18 +195,41 @@ export function LibraryView({
   const onChangeRef = useRef(onChange);
   const onDocumentChangeRef = useRef(onDocumentChange);
   const onDocumentDeleteRef = useRef(onDocumentDelete);
+  const persistViewStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isViewStateReadyRef = useRef(false);
+  const loadedViewStateRef = useRef<LibraryViewState | null>(null);
+  const readerScrollOffsetsRef = useRef<Record<string, number>>({});
+  const latestViewStateRef = useRef<{ selectedId: string | null; recentIds: string[]; readerScrollOffsets: Record<string, number> }>({
+    selectedId: documents[0]?.id ?? null,
+    recentIds: documents[0]?.id ? [documents[0].id] : [],
+    readerScrollOffsets: {},
+  });
   const [localDocuments, setLocalDocuments] = useState(documents);
   const localDocumentsRef = useRef(documents);
-  const [editorDraft, setEditorDraft] = useState<{ docId: string; content: string } | null>(null);
+  const [editorDraft, setEditorDraft] = useState<EditorDraftState | null>(null);
+  const [draftSaveState, setDraftSaveState] = useState<'idle' | 'pending' | 'saved'>('idle');
   const [selectedId, setSelectedId] = useState<string | null>(documents[0]?.id ?? null);
+  const [recentIds, setRecentIds] = useState<string[]>(documents[0]?.id ? [documents[0].id] : []);
+  const [readerScrollOffsets, setReaderScrollOffsets] = useState<Record<string, number>>({});
+  const [readerBacklinkState, setReaderBacklinkState] = useState<{ docId: string | null; docs: LibraryDocument[] }>({
+    docId: null,
+    docs: [],
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerContentVisible, setDrawerContentVisible] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [headingOpen, setHeadingOpen] = useState(false);
+  const [switcherSearchRows, setSwitcherSearchRows] = useState<LibrarySearchRow[]>([]);
+  const [switcherIndexReady, setSwitcherIndexReady] = useState(false);
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const [linkPickerQuery, setLinkPickerQuery] = useState('');
+  const [linkPickerSearchRows, setLinkPickerSearchRows] = useState<LibrarySearchRow[]>([]);
+  const [linkPickerIndexReady, setLinkPickerIndexReady] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [switcherQuery, setSwitcherQuery] = useState('');
-  const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [editorFocused, setEditorFocused] = useState(false);
+  const [viewMode, setViewMode] = useState<'reader' | 'editor'>('reader');
+  const [navigationBackIds, setNavigationBackIds] = useState<string[]>([]);
+  const [forcedBodySelection, setForcedBodySelection] = useState<TextSelection | null>(null);
   const [folderQuery, setFolderQuery] = useState('');
   const keyboardAppearance = isDark ? 'dark' : 'light';
 
@@ -206,6 +259,9 @@ export function LibraryView({
       }
       if (flushTimerRef.current) {
         clearTimeout(flushTimerRef.current);
+      }
+      if (persistViewStateTimerRef.current) {
+        clearTimeout(persistViewStateTimerRef.current);
       }
       let documentsToFlush = pendingDocumentsRef.current;
       if (pendingDraftRef.current) {
@@ -237,27 +293,148 @@ export function LibraryView({
     return selectedStoredDoc;
   }, [editorDraft, selectedStoredDoc]);
 
+  const richDraft = useMemo(() => {
+    if (!selectedDoc) return null;
+    if (editorDraft?.docId === selectedDoc.id) {
+      return editorDraft.rich;
+    }
+    return splitRichContent(selectedDoc);
+  }, [editorDraft, selectedDoc]);
+
   const sortedDocs = useMemo(() => [...localDocuments].sort(compareDocs), [localDocuments]);
+  const recentDocs = useMemo(
+    () => getRecentDocuments(localDocuments, recentIds, selectedId),
+    [localDocuments, recentIds, selectedId],
+  );
+  const navigationBackTarget = useMemo(
+    () => resolveNavigationBackTarget(localDocuments, navigationBackIds).previousDoc,
+    [localDocuments, navigationBackIds],
+  );
+
+  const flushLibraryViewStateNow = useCallback(() => {
+    if (!isViewStateReadyRef.current) return;
+    if (persistViewStateTimerRef.current) {
+      clearTimeout(persistViewStateTimerRef.current);
+      persistViewStateTimerRef.current = null;
+    }
+    StorageService.saveLibraryViewState({
+      selectedDocumentId: latestViewStateRef.current.selectedId,
+      recentDocumentIds: latestViewStateRef.current.recentIds,
+      readerScrollOffsets: latestViewStateRef.current.readerScrollOffsets,
+      updatedAt: Date.now(),
+    }).catch(console.error);
+  }, []);
+
+  const queueLibraryViewStateSave = useCallback((
+    nextSelectedId: string | null,
+    nextRecentIds: string[],
+    nextReaderScrollOffsets = readerScrollOffsetsRef.current,
+  ) => {
+    latestViewStateRef.current = {
+      selectedId: nextSelectedId,
+      recentIds: nextRecentIds,
+      readerScrollOffsets: nextReaderScrollOffsets,
+    };
+    if (!isViewStateReadyRef.current) return;
+    if (persistViewStateTimerRef.current) {
+      clearTimeout(persistViewStateTimerRef.current);
+    }
+    persistViewStateTimerRef.current = setTimeout(() => {
+      flushLibraryViewStateNow();
+    }, 250);
+  }, [flushLibraryViewStateNow]);
+
+  const rememberRecent = useCallback((docId: string | null) => {
+    if (!docId) return;
+    setRecentIds((ids) => {
+      const nextIds = nextRecentIds(ids, docId);
+      queueLibraryViewStateSave(docId, nextIds);
+      return nextIds;
+    });
+  }, [queueLibraryViewStateSave]);
+
+  useEffect(() => {
+    let cancelled = false;
+    isViewStateReadyRef.current = false;
+    loadedViewStateRef.current = null;
+    if (persistViewStateTimerRef.current) {
+      clearTimeout(persistViewStateTimerRef.current);
+      persistViewStateTimerRef.current = null;
+    }
+
+    StorageService.getLibraryViewState()
+      .then((state) => {
+        if (cancelled) return;
+        loadedViewStateRef.current = state;
+        if (localDocumentsRef.current.length > 0) {
+          const reconciled = reconcileLibraryViewState(localDocumentsRef.current, loadedViewStateRef.current);
+          loadedViewStateRef.current = null;
+          if (reconciled.selectedId) {
+            setSelectedId(reconciled.selectedId);
+          }
+          setRecentIds(reconciled.recentIds);
+          setReaderScrollOffsets(reconciled.readerScrollOffsets);
+          readerScrollOffsetsRef.current = reconciled.readerScrollOffsets;
+          latestViewStateRef.current = reconciled;
+        }
+        isViewStateReadyRef.current = true;
+      })
+      .catch((error) => {
+        console.error(error);
+        isViewStateReadyRef.current = true;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storageScopeId]);
+
+  useEffect(() => {
+    if (!isViewStateReadyRef.current) return;
+    if (loadedViewStateRef.current && sortedDocs.length === 0) return;
+    setRecentIds((ids) => {
+      const reconciled = reconcileLibraryViewState(sortedDocs, loadedViewStateRef.current ?? {
+        selectedDocumentId: selectedId,
+        recentDocumentIds: ids,
+        readerScrollOffsets: readerScrollOffsetsRef.current,
+        updatedAt: Date.now(),
+      });
+      loadedViewStateRef.current = null;
+      if (reconciled.selectedId !== selectedId) {
+        setSelectedId(reconciled.selectedId);
+      }
+      setReaderScrollOffsets(reconciled.readerScrollOffsets);
+      readerScrollOffsetsRef.current = reconciled.readerScrollOffsets;
+      latestViewStateRef.current = reconciled;
+      return reconciled.recentIds;
+    });
+  }, [selectedId, sortedDocs]);
+
+  useEffect(() => {
+    queueLibraryViewStateSave(selectedId, recentIds);
+  }, [queueLibraryViewStateSave, recentIds, selectedId]);
 
   useEffect(() => {
     if (!selectedId && sortedDocs[0]) {
       setSelectedId(sortedDocs[0].id);
+      rememberRecent(sortedDocs[0].id);
     }
-  }, [selectedId, sortedDocs]);
+  }, [rememberRecent, selectedId, sortedDocs]);
+
+  useEffect(() => {
+    if (!selectedId || lastSelectedIdRef.current === selectedId) return;
+    lastSelectedIdRef.current = selectedId;
+    contentTransition.setValue(0);
+    Animated.timing(contentTransition, {
+      toValue: 1,
+      duration: 150,
+      useNativeDriver: true,
+    }).start();
+  }, [contentTransition, selectedId]);
 
   const folders = useMemo(() => {
     if (!drawerContentVisible && !actionsOpen) return [];
-    const groups = new Map<string, LibraryDocument[]>();
-    SEEDED_LIBRARY_FOLDERS.forEach((folder) => groups.set(folder, []));
-    sortedDocs.forEach((doc) => {
-      const folder = folderFor(doc);
-      groups.set(folder, [...(groups.get(folder) ?? []), doc]);
-    });
-    return Array.from(groups.entries()).sort(([a], [b]) => {
-      if (a === DEFAULT_FOLDER) return -1;
-      if (b === DEFAULT_FOLDER) return 1;
-      return a.localeCompare(b);
-    });
+    return buildLibraryFolderGroups(sortedDocs, SEEDED_LIBRARY_FOLDERS, DEFAULT_FOLDER);
   }, [actionsOpen, drawerContentVisible, sortedDocs]);
 
   const drawerRows = useMemo<DrawerRow[]>(() => {
@@ -272,28 +449,88 @@ export function LibraryView({
 
   const switcherDocs = useMemo(() => {
     if (!switcherOpen) return [];
-    const needle = normalize(switcherQuery.trim());
-    if (!needle) return sortedDocs;
-    return sortedDocs.filter((doc) =>
-      normalize(`${getDisplayTitle(doc)}\n${folderFor(doc)}\n${doc.content}`).includes(needle),
-    );
-  }, [sortedDocs, switcherOpen, switcherQuery]);
+    return getSwitcherDocuments({
+      documents: sortedDocs,
+      rows: switcherSearchRows,
+      query: switcherQuery,
+      indexReady: switcherIndexReady,
+    });
+  }, [sortedDocs, switcherIndexReady, switcherOpen, switcherQuery, switcherSearchRows]);
+  const switcherCreateDraft = useMemo(() => {
+    const query = switcherQuery.trim();
+    return query ? documentDraftFromWikiTarget(query, DEFAULT_FOLDER) : null;
+  }, [switcherQuery]);
+  const switcherExistingDraftDoc = useMemo(() => {
+    if (!switcherCreateDraft) return null;
+    return findDocumentForWikiDraft(sortedDocs, switcherCreateDraft);
+  }, [sortedDocs, switcherCreateDraft]);
+  const linkPickerDocuments = useMemo(() => {
+    if (!linkPickerOpen) return [];
+    return sortedDocs.filter((doc) => doc.id !== selectedId);
+  }, [linkPickerOpen, selectedId, sortedDocs]);
+  const linkPickerDocs = useMemo(() => {
+    if (!linkPickerOpen) return [];
+    return getSwitcherDocuments({
+      documents: linkPickerDocuments,
+      rows: linkPickerSearchRows,
+      query: linkPickerQuery,
+      indexReady: linkPickerIndexReady,
+      limit: 12,
+    });
+  }, [linkPickerDocuments, linkPickerIndexReady, linkPickerOpen, linkPickerQuery, linkPickerSearchRows]);
+  const linkPickerCreateDraft = useMemo(() => {
+    const query = linkPickerQuery.trim();
+    return query ? documentDraftFromWikiTarget(query, selectedDoc ? folderFor(selectedDoc) : DEFAULT_FOLDER) : null;
+  }, [linkPickerQuery, selectedDoc]);
+  const linkPickerExistingDraftDoc = useMemo(() => {
+    if (!linkPickerCreateDraft) return null;
+    return findDocumentForWikiDraft(sortedDocs, linkPickerCreateDraft);
+  }, [linkPickerCreateDraft, sortedDocs]);
 
-  const wikiQuery = useMemo(() => {
-    if (!selectedDoc || selection.start !== selection.end) return null;
-    const beforeCursor = selectedDoc.content.slice(0, selection.start);
-    const match = beforeCursor.match(/\[\[([^\]\n]*)$/);
-    return match ? match[1] : null;
-  }, [selectedDoc, selection]);
+  useEffect(() => {
+    if (!switcherOpen) {
+      setSwitcherSearchRows([]);
+      setSwitcherIndexReady(false);
+      return;
+    }
 
-  const wikiMatches = useMemo(() => {
-    if (wikiQuery === null) return [];
-    const needle = normalize(wikiQuery);
-    return sortedDocs
-      .filter((doc) => doc.id !== selectedDoc?.id)
-      .filter((doc) => !needle || normalize(getDisplayTitle(doc)).includes(needle))
-      .slice(0, 6);
-  }, [selectedDoc?.id, sortedDocs, wikiQuery]);
+    let cancelled = false;
+    setSwitcherSearchRows([]);
+    setSwitcherIndexReady(false);
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      setSwitcherSearchRows(buildLibrarySearchRows(sortedDocs));
+      setSwitcherIndexReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel?.();
+    };
+  }, [sortedDocs, switcherOpen]);
+
+  useEffect(() => {
+    if (!linkPickerOpen) {
+      setLinkPickerSearchRows([]);
+      setLinkPickerIndexReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLinkPickerSearchRows([]);
+    setLinkPickerIndexReady(false);
+    const documents = linkPickerDocuments;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      setLinkPickerSearchRows(buildLibrarySearchRows(documents));
+      setLinkPickerIndexReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel?.();
+    };
+  }, [linkPickerDocuments, linkPickerOpen]);
 
   const outline = useMemo(() => {
     if (!actionsOpen || !selectedDoc) return [];
@@ -307,23 +544,78 @@ export function LibraryView({
       .slice(0, 12);
   }, [actionsOpen, selectedDoc]);
 
-  const backlinks = useMemo(() => {
-    if (!actionsOpen || !selectedDoc) return [];
-    const title = getDisplayTitle(selectedDoc);
-    const pattern = `[[${title}]]`;
-    return sortedDocs.filter((doc) => doc.id !== selectedDoc.id && doc.content.includes(pattern)).slice(0, 8);
+  const actionBacklinks = useMemo(() => {
+    if (!actionsOpen) return [];
+    return getBacklinkDocuments(sortedDocs, selectedDoc);
   }, [actionsOpen, selectedDoc, sortedDocs]);
+
+  const readerBacklinks = selectedDoc && readerBacklinkState.docId === selectedDoc.id
+    ? readerBacklinkState.docs
+    : [];
+
+  useEffect(() => {
+    if (viewMode !== 'reader' || !selectedDoc) {
+      setReaderBacklinkState({ docId: null, docs: [] });
+      return;
+    }
+
+    let cancelled = false;
+    const doc = selectedDoc;
+    const docs = sortedDocs;
+    setReaderBacklinkState({ docId: doc.id, docs: [] });
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      setReaderBacklinkState({ docId: doc.id, docs: getBacklinkDocuments(docs, doc) });
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel?.();
+    };
+  }, [selectedDoc, sortedDocs, viewMode]);
 
   const outboundLinks = useMemo(() => {
     if (!actionsOpen || !selectedDoc) return [];
-    const names = new Set((selectedDoc.content.match(/\[\[([^\]]+)\]\]/g) ?? []).map((link) => link.slice(2, -2)));
-    return [...names].slice(0, 12);
+    const links = new Map<string, { target: string; label: string }>();
+    wikiLinksFromContent(selectedDoc.content).forEach((link) => {
+      if (!links.has(link.target)) {
+        links.set(link.target, link);
+      }
+    });
+    return [...links.values()].slice(0, 12);
   }, [actionsOpen, selectedDoc]);
 
   const openDrawer = useCallback(() => {
     Keyboard.dismiss();
+    setFolderQuery('');
     setDrawerContentVisible(false);
     setDrawerOpen(true);
+  }, []);
+
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    setFolderQuery('');
+  }, []);
+
+  const openSwitcher = useCallback(() => {
+    setSwitcherQuery('');
+    setSwitcherOpen(true);
+  }, []);
+
+  const closeSwitcher = useCallback(() => {
+    setSwitcherOpen(false);
+    setSwitcherQuery('');
+  }, []);
+
+  const openLinkPicker = useCallback(() => {
+    setLinkPickerQuery('');
+    setLinkPickerOpen(true);
+  }, []);
+
+  const closeLinkPicker = useCallback(() => {
+    setLinkPickerOpen(false);
+    setLinkPickerQuery('');
+    setTimeout(() => editorRef.current?.focus(), 0);
   }, []);
 
   const edgeSwipeResponder = useMemo(
@@ -423,11 +715,19 @@ export function LibraryView({
       pendingDraftRef.current = null;
     }
     setEditorDraft((draft) => (draft?.docId === docId ? null : draft));
+    setDraftSaveState('idle');
   };
 
-  const flushEditorDraft = () => {
+  const flushEditorDraft = (options: { clearDraft?: boolean } = {}) => {
+    const clearDraft = options.clearDraft ?? true;
     const pendingDraft = pendingDraftRef.current;
-    if (!pendingDraft) return;
+    if (!pendingDraft) {
+      if (clearDraft) {
+        setEditorDraft(null);
+        setDraftSaveState('idle');
+      }
+      return null;
+    }
 
     if (draftFlushTimerRef.current) {
       clearTimeout(draftFlushTimerRef.current);
@@ -436,12 +736,17 @@ export function LibraryView({
     pendingDraftRef.current = null;
 
     const result = applyContentUpdate(localDocumentsRef.current, pendingDraft.docId, pendingDraft.content);
-    setEditorDraft((draft) => (draft?.docId === pendingDraft.docId ? null : draft));
+    if (clearDraft) {
+      setEditorDraft((draft) => (draft?.docId === pendingDraft.docId ? null : draft));
+      setDraftSaveState('idle');
+    } else {
+      setDraftSaveState('saved');
+    }
     if (!result.didPatch) {
       if (!pendingDocumentsRef.current) {
         dirtyDocumentsRef.current = false;
       }
-      return;
+      return null;
     }
 
     localDocumentsRef.current = result.documents;
@@ -451,7 +756,18 @@ export function LibraryView({
     } else {
       flushDocumentsNow(result.documents);
     }
+    return result.documents;
   };
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'inactive' || nextAppState === 'background') {
+        flushEditorDraft({ clearDraft: false });
+        flushLibraryViewStateNow();
+      }
+    });
+    return () => subscription.remove();
+  }, [flushLibraryViewStateNow]);
 
   const persist = (
     next: LibraryDocument[],
@@ -472,7 +788,11 @@ export function LibraryView({
     setSelectedId(nextSelectedId);
   };
 
-  const createDocument = (title = 'Untitled', folderPath = DEFAULT_FOLDER) => {
+  const createDocument = (
+    title = 'Untitled',
+    folderPath = DEFAULT_FOLDER,
+    options: { recordHistory?: boolean; fileName?: string } = {},
+  ) => {
     flushEditorDraft();
     const now = Date.now();
     const cleanTitle = title.trim() || 'Untitled';
@@ -481,7 +801,7 @@ export function LibraryView({
       title: cleanTitle,
       content: `# ${cleanTitle}\n\n`,
       folderPath,
-      fileName: fileNameForTitle(cleanTitle),
+      fileName: options.fileName?.trim() || fileNameForTitle(cleanTitle),
       sourceKind: 'mobile',
       tags: [],
       isPinned: false,
@@ -489,9 +809,33 @@ export function LibraryView({
       updatedAt: now,
     };
     persist([doc, ...localDocumentsRef.current], doc.id, doc);
-    setSwitcherOpen(false);
-    setDrawerOpen(false);
+    if (options.recordHistory) {
+      setNavigationBackIds((ids) => nextNavigationBackIds(ids, selectedId, doc.id));
+    }
+    rememberRecent(doc.id);
+    setViewMode('editor');
+    closeSwitcher();
+    closeDrawer();
     setTimeout(() => editorRef.current?.focus(), 100);
+  };
+
+  const createLinkedDocumentInPlace = (draft: { title: string; folderPath: string; fileName?: string }) => {
+    const now = Date.now();
+    const cleanTitle = draft.title.trim() || 'Untitled';
+    const doc: LibraryDocument = {
+      id: `lib-${now}-${Math.random().toString(36).slice(2, 7)}`,
+      title: cleanTitle,
+      content: `# ${cleanTitle}\n\n`,
+      folderPath: draft.folderPath.trim() || DEFAULT_FOLDER,
+      fileName: draft.fileName?.trim() || fileNameForTitle(cleanTitle),
+      sourceKind: 'mobile',
+      tags: [],
+      isPinned: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    persist([doc, ...localDocumentsRef.current], selectedId, doc);
+    return doc;
   };
 
   const createFolderNote = () => {
@@ -507,11 +851,15 @@ export function LibraryView({
     clearEditorDraft(selectedDoc.id);
     const mergedContent = patch.content ?? baseDoc.content;
     const nextTitle = patch.title ?? titleFromContent(mergedContent, baseDoc.title);
+    const nextFileName = patch.fileName
+      ?? ((patch.content !== undefined || patch.title !== undefined) && shouldRetitleMobileFileName(baseDoc, nextTitle)
+        ? fileNameForTitleUpdate(baseDoc, nextTitle)
+        : baseDoc.fileName ?? fileNameForTitle(nextTitle));
     const updated: LibraryDocument = {
       ...baseDoc,
       ...patch,
       title: nextTitle,
-      fileName: patch.fileName ?? baseDoc.fileName ?? fileNameForTitle(nextTitle),
+      fileName: nextFileName,
       folderPath: patch.folderPath ?? folderFor(baseDoc),
       tags: patch.tags ?? extractTags(mergedContent),
       updatedAt: Date.now(),
@@ -527,16 +875,29 @@ export function LibraryView({
 
   const jumpToLine = (lineNumber: number) => {
     if (!selectedDoc) return;
-    const lines = selectedDoc.content.split('\n');
-    const cursor = lines.slice(0, Math.max(0, lineNumber - 1)).join('\n').length + (lineNumber > 1 ? 1 : 0);
-    setSelection({ start: cursor, end: cursor });
+    const isTitleLine = lineNumber === 1 && /^#\s+/.test(selectedDoc.content.split('\n')[0] ?? '');
+    if (isTitleLine) {
+      setViewMode('editor');
+      setActionsOpen(false);
+      setTimeout(() => titleInputRef.current?.focus(), 0);
+      return;
+    }
+    const selection = bodySelectionForMarkdownLine(selectedDoc.content, lineNumber);
+    bodySelectionRef.current = selection;
+    setForcedBodySelection(selection);
+    setViewMode('editor');
     setActionsOpen(false);
     setTimeout(() => editorRef.current?.focus(), 0);
   };
 
   const openLinkedTitle = (title: string) => {
-    const linkedDoc = sortedDocs.find((doc) => normalize(getDisplayTitle(doc)) === normalize(title));
-    if (linkedDoc) openDoc(linkedDoc);
+    const linkedDoc = findDocumentByWikiTitle(sortedDocs, title);
+    if (linkedDoc) {
+      openDoc(linkedDoc);
+    } else {
+      const draft = documentDraftFromWikiTarget(title, selectedDoc ? folderFor(selectedDoc) : DEFAULT_FOLDER);
+      createDocument(draft.title, draft.folderPath, { recordHistory: true, fileName: draft.fileName });
+    }
     setActionsOpen(false);
   };
 
@@ -557,120 +918,158 @@ export function LibraryView({
     ]);
   };
 
-  const openDoc = useCallback((doc: LibraryDocument) => {
+  const openDoc = useCallback((doc: LibraryDocument, options: { recordHistory?: boolean } = {}) => {
     flushEditorDraft();
+    if (options.recordHistory ?? true) {
+      setNavigationBackIds((ids) => nextNavigationBackIds(ids, selectedId, doc.id));
+    }
     setSelectedId(doc.id);
-    setDrawerOpen(false);
-    setSwitcherOpen(false);
-  }, []);
+    rememberRecent(doc.id);
+    setViewMode('reader');
+    closeDrawer();
+    closeSwitcher();
+  }, [closeDrawer, closeSwitcher, rememberRecent, selectedId]);
 
-  const handleEditorTextChange = (content: string) => {
+  const goBackToPreviousDoc = useCallback(() => {
+    const { previousDoc, remainingIds } = resolveNavigationBackTarget(localDocumentsRef.current, navigationBackIds);
+    if (!previousDoc) {
+      setNavigationBackIds([]);
+      return;
+    }
+    flushEditorDraft();
+    setNavigationBackIds(remainingIds);
+    setSelectedId(previousDoc.id);
+    rememberRecent(previousDoc.id);
+    setViewMode('reader');
+    closeDrawer();
+    closeSwitcher();
+    setActionsOpen(false);
+  }, [closeDrawer, closeSwitcher, navigationBackIds, rememberRecent]);
+
+  const openDocFromActions = useCallback((doc: LibraryDocument) => {
+    openDoc(doc);
+    setActionsOpen(false);
+  }, [openDoc]);
+
+  const handleEditorTextChange = (title: string, body: string) => {
     if (!selectedStoredDoc) return;
     dirtyDocumentsRef.current = true;
-    const draft = { docId: selectedStoredDoc.id, content };
+    const content = buildRichContent(title, body);
+    const draft = { docId: selectedStoredDoc.id, content, rich: { title, body } };
     pendingDraftRef.current = draft;
     setEditorDraft(draft);
+    setDraftSaveState('pending');
     if (draftFlushTimerRef.current) {
       clearTimeout(draftFlushTimerRef.current);
     }
     draftFlushTimerRef.current = setTimeout(() => {
       draftFlushTimerRef.current = null;
-      flushEditorDraft();
-    }, 500);
+      flushEditorDraft({ clearDraft: false });
+    }, EDITOR_DRAFT_FLUSH_DELAY_MS);
   };
 
-  const insertText = (text: string, cursorOffset = text.length) => {
-    if (!selectedDoc) return;
-    const start = Math.min(selection.start, selection.end);
-    const end = Math.max(selection.start, selection.end);
-    const nextContent = `${selectedDoc.content.slice(0, start)}${text}${selectedDoc.content.slice(end)}`;
-    updateDoc({ content: nextContent });
-    const cursor = start + cursorOffset;
-    setSelection({ start: cursor, end: cursor });
+  const handleTitleTextChange = (title: string) => {
+    if (!selectedDoc || !richDraft) return;
+    const result = applyRichTitleInputChange(title, richDraft.body);
+    if (result.bodySelection) {
+      bodySelectionRef.current = result.bodySelection;
+      setForcedBodySelection(result.bodySelection);
+      setTimeout(() => editorRef.current?.focus(), 0);
+    }
+    handleEditorTextChange(result.title, result.body);
+  };
+
+  const handleBodyTextChange = (body: string) => {
+    if (!selectedDoc || !richDraft) return;
+    const result = applyRichEditorInputChange(richDraft.body, body);
+    if (result.selection) {
+      bodySelectionRef.current = result.selection;
+      setForcedBodySelection(result.selection);
+    }
+    handleEditorTextChange(richDraft.title, result.body);
+  };
+
+  const applyEditorInlineFormat = (format: RichInlineFormat) => {
+    if (!selectedDoc || !richDraft) return;
+    const result = applyRichInlineFormat(richDraft.body, bodySelectionRef.current, format);
+    bodySelectionRef.current = result.selection;
+    handleEditorTextChange(richDraft.title, result.body);
+    setForcedBodySelection(result.selection);
     setTimeout(() => editorRef.current?.focus(), 0);
   };
 
-  const wrapSelection = (left: string, right = left, placeholder = '') => {
-    if (!selectedDoc) return;
-    const start = Math.min(selection.start, selection.end);
-    const end = Math.max(selection.start, selection.end);
-    const selected = selectedDoc.content.slice(start, end) || placeholder;
-    insertText(`${left}${selected}${right}`, left.length + selected.length);
+  const insertEditorWikiLink = (target: string, label: string) => {
+    if (!selectedDoc || !richDraft) return;
+    const result = applyRichWikiLink(richDraft.body, bodySelectionRef.current, target, label);
+    bodySelectionRef.current = result.selection;
+    handleEditorTextChange(richDraft.title, result.body);
+    setForcedBodySelection(result.selection);
+    setLinkPickerOpen(false);
+    setLinkPickerQuery('');
+    setTimeout(() => editorRef.current?.focus(), 0);
   };
 
-  const prefixLine = (prefix: string) => {
-    if (!selectedDoc) return;
-    const lineStart = selectedDoc.content.lastIndexOf('\n', Math.max(0, selection.start - 1)) + 1;
-    const nextContent = `${selectedDoc.content.slice(0, lineStart)}${prefix}${selectedDoc.content.slice(lineStart)}`;
-    updateDoc({ content: nextContent });
-    const cursor = selection.start + prefix.length;
-    setSelection({ start: cursor, end: cursor });
-  };
-
-  const applyMarkdownAction = (action: MarkdownAction) => {
-    switch (action) {
-      case 'bold':
-        wrapSelection('**', '**', 'bold');
-        break;
-      case 'italic':
-        wrapSelection('*', '*', 'italic');
-        break;
-      case 'strike':
-        wrapSelection('~~', '~~', 'strike');
-        break;
-      case 'code':
-        wrapSelection('`', '`', 'code');
-        break;
-      case 'quote':
-        prefixLine('> ');
-        break;
-      case 'link':
-        wrapSelection('[', '](url)', 'link');
-        break;
-      case 'bullet':
-        prefixLine('- ');
-        break;
-      case 'number':
-        prefixLine('1. ');
-        break;
-      case 'check':
-        prefixLine('- [ ] ');
-        break;
-      case 'h1':
-        prefixLine('# ');
-        break;
-      case 'h2':
-        prefixLine('## ');
-        break;
-      case 'wiki':
-        insertText('[[', 2);
-        break;
+  const createAndInsertEditorWikiLink = (draft: { title: string; folderPath: string; fileName?: string }) => {
+    const existingDoc = findDocumentForWikiDraft(localDocumentsRef.current, draft);
+    if (existingDoc) {
+      insertEditorWikiLink(wikiTargetForDocument(existingDoc), getDisplayTitle(existingDoc));
+      return;
     }
+    const doc = createLinkedDocumentInPlace(draft);
+    insertEditorWikiLink(wikiTargetForDocument(doc), getDisplayTitle(doc));
   };
 
-  const applyHeading = (level: number | null) => {
+  const applyEditorBlockFormat = (format: RichBlockFormat) => {
+    if (!selectedDoc || !richDraft) return;
+    const result = applyRichBlockFormat(richDraft.body, bodySelectionRef.current, format);
+    bodySelectionRef.current = result.selection;
+    handleEditorTextChange(richDraft.title, result.body);
+    setForcedBodySelection(result.selection);
+    setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
+  const beginEditing = () => {
     if (!selectedDoc) return;
-    const lineStart = selectedDoc.content.lastIndexOf('\n', Math.max(0, selection.start - 1)) + 1;
-    const lineEndRaw = selectedDoc.content.indexOf('\n', selection.start);
-    const lineEnd = lineEndRaw === -1 ? selectedDoc.content.length : lineEndRaw;
-    const line = selectedDoc.content.slice(lineStart, lineEnd).replace(/^#{1,6}\s+/, '');
-    const prefix = level ? `${'#'.repeat(level)} ` : '';
-    const nextContent = `${selectedDoc.content.slice(0, lineStart)}${prefix}${line}${selectedDoc.content.slice(lineEnd)}`;
-    updateDoc({ content: nextContent });
-    const cursor = lineStart + prefix.length + line.length;
-    setSelection({ start: cursor, end: cursor });
-    setHeadingOpen(false);
+    setViewMode('editor');
+    setTimeout(() => editorRef.current?.focus(), 0);
   };
 
-  const insertWikiLink = (doc: LibraryDocument) => {
-    if (!selectedDoc || wikiQuery === null) return;
-    const start = selection.start - wikiQuery.length - 2;
-    const link = `[[${getDisplayTitle(doc)}]]`;
-    const nextContent = `${selectedDoc.content.slice(0, start)}${link}${selectedDoc.content.slice(selection.start)}`;
-    updateDoc({ content: nextContent });
-    const cursor = start + link.length;
-    setSelection({ start: cursor, end: cursor });
+  const focusBodyFromTitle = () => {
+    if (!selectedDoc) return;
+    setTimeout(() => editorRef.current?.focus(), 0);
   };
+
+  const showReader = () => {
+    flushEditorDraft({ clearDraft: false });
+    Keyboard.dismiss();
+    setViewMode('reader');
+  };
+
+  const toggleReaderTask = (lineNumber: number) => {
+    if (!selectedDoc) return;
+    const nextContent = toggleMarkdownTaskAtLine(selectedDoc.content, lineNumber);
+    if (!nextContent || nextContent === selectedDoc.content) return;
+    updateDoc({ content: nextContent });
+  };
+
+  const handleSyncPress = () => {
+    const flushedDocuments = flushEditorDraft({ clearDraft: false });
+    onSyncPress?.(flushedDocuments ?? undefined);
+  };
+
+  const rememberReaderScrollOffset = useCallback((docId: string, offset: number) => {
+    const nextOffset = Math.max(0, Math.round(offset));
+    const previousOffset = readerScrollOffsetsRef.current[docId] ?? 0;
+    if (Math.abs(previousOffset - nextOffset) < 24) return;
+
+    const nextOffsets = {
+      ...readerScrollOffsetsRef.current,
+      [docId]: nextOffset,
+    };
+    readerScrollOffsetsRef.current = nextOffsets;
+    setReaderScrollOffsets(nextOffsets);
+    queueLibraryViewStateSave(selectedId, recentIds, nextOffsets);
+  }, [queueLibraryViewStateSave, recentIds, selectedId]);
 
   const copyContent = async () => {
     if (!selectedDoc) return;
@@ -685,8 +1084,25 @@ export function LibraryView({
     setActionsOpen(false);
   };
 
+  const shareNote = async () => {
+    if (!selectedDoc) return;
+    const title = getDisplayTitle(selectedDoc);
+    await Share.share({
+      title,
+      message: selectedDoc.content,
+    });
+    setActionsOpen(false);
+  };
+
   const createFromSwitcher = () => {
-    createDocument(switcherQuery.trim() || 'Untitled', DEFAULT_FOLDER);
+    const draft = switcherCreateDraft ?? documentDraftFromWikiTarget('Untitled', DEFAULT_FOLDER);
+    const existingDoc = findDocumentForWikiDraft(localDocumentsRef.current, draft);
+    if (existingDoc) {
+      openDoc(existingDoc);
+      setSwitcherQuery('');
+      return;
+    }
+    createDocument(draft.title, draft.folderPath, { fileName: draft.fileName });
     setSwitcherQuery('');
   };
 
@@ -694,6 +1110,9 @@ export function LibraryView({
     <Pressable
       style={[styles.fileRow, item.id === selectedId && { backgroundColor: colors.bgSurface }]}
       onPress={() => openDoc(item)}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${getDisplayTitle(item)}`}
+      accessibilityHint={`${folderFor(item)}/${fileNameFor(item)}`}
     >
       <View style={styles.fileTitleRow}>
         <Feather name={item.isPinned ? 'bookmark' : 'file-text'} size={16} color={item.isPinned ? '#D6B15D' : colors.textSecondary} />
@@ -701,7 +1120,7 @@ export function LibraryView({
           {getDisplayTitle(item)}
         </Text>
       </View>
-      <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>MD</Text>
+      <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>NOTE</Text>
     </Pressable>
   );
 
@@ -725,6 +1144,9 @@ export function LibraryView({
       <Pressable
         style={[styles.fileRow, doc.id === selectedId && { backgroundColor: colors.bgSurface }]}
         onPress={() => openDoc(doc)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${getDisplayTitle(doc)}`}
+        accessibilityHint={`${folderFor(doc)}/${fileNameFor(doc)}`}
       >
         <View style={styles.fileTitleRow}>
           <Feather name={doc.isPinned ? 'bookmark' : 'file-text'} size={16} color={doc.isPinned ? '#D6B15D' : colors.textSecondary} />
@@ -732,7 +1154,7 @@ export function LibraryView({
             {getDisplayTitle(doc)}
           </Text>
         </View>
-        <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>MD</Text>
+        <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>NOTE</Text>
       </Pressable>
     );
   }, [colors, openDoc, selectedId]);
@@ -744,11 +1166,35 @@ export function LibraryView({
   }, []);
 
   const editorEmpty = !selectedDoc;
-  const toolbarButtonProps = {
-    tint: colors.textPrimary,
-    surface: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(17,24,39,0.08)',
-    border: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(17,24,39,0.12)',
-  };
+  const isEditorMode = viewMode === 'editor';
+  const hasLocalDraft = Boolean(selectedDoc && editorDraft?.docId === selectedDoc.id);
+  const unsyncedCount = useMemo(() => {
+    if (!lastSyncedAt) return localDocuments.length;
+    return localDocuments.filter((doc) => doc.updatedAt > lastSyncedAt).length;
+  }, [lastSyncedAt, localDocuments]);
+  const syncStatus = getLibrarySyncStatus({
+    isSyncing,
+    isSignedIn: Boolean(callsign),
+    syncError,
+    hasPendingDraft: hasLocalDraft && draftSaveState === 'pending',
+    hasSavedDraft: hasLocalDraft && draftSaveState === 'saved',
+    unsyncedCount,
+    lastSyncedAt,
+  });
+  const syncStatusIcon = syncStatus.tone === 'syncing'
+    ? 'refresh-cw'
+    : syncStatus.tone === 'saving'
+      ? 'edit-3'
+      : syncStatus.tone === 'error'
+        ? 'alert-circle'
+        : syncStatus.tone === 'synced'
+          ? 'check'
+          : 'check-circle';
+  const syncStatusColor = syncStatus.tone === 'error'
+    ? '#DC2626'
+    : isSyncing
+      ? colors.accent
+      : colors.textSecondary;
   const noteTranslateX = drawerProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, DRAWER_WIDTH],
@@ -761,6 +1207,10 @@ export function LibraryView({
     inputRange: [0, 1],
     outputRange: [0, 0.42],
   });
+  const contentTranslateX = contentTransition.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 0],
+  });
 
   return (
     <KeyboardAvoidingView
@@ -770,10 +1220,10 @@ export function LibraryView({
     >
       <Animated.View {...edgeSwipeResponder.panHandlers} style={[styles.notePane, { transform: [{ translateX: noteTranslateX }] }]}>
         <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 10) }]}>
-          <TouchableOpacity style={styles.topIcon} onPress={openDrawer}>
+          <TouchableOpacity style={styles.topIcon} onPress={openDrawer} accessibilityLabel="Open Library drawer">
             <Feather name="sidebar" size={24} color={colors.textSecondary} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.titleButton} onPress={() => setSwitcherOpen(true)}>
+          <TouchableOpacity style={styles.titleButton} onPress={openSwitcher} accessibilityLabel="Open note switcher">
             <Text style={[styles.topTitle, { color: colors.textPrimary }]} numberOfLines={1}>
               {selectedDoc ? getDisplayTitle(selectedDoc) : 'New tab'}
             </Text>
@@ -783,83 +1233,187 @@ export function LibraryView({
               </Text>
             )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.topIcon} onPress={() => setSwitcherOpen(true)}>
+          <TouchableOpacity style={styles.topIcon} onPress={openSwitcher} accessibilityLabel="Search notes">
             <Feather name="search" size={22} color={colors.textSecondary} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.topIcon} onPress={() => setActionsOpen(true)}>
+          <TouchableOpacity
+            style={styles.topIcon}
+            onPress={isEditorMode ? showReader : beginEditing}
+            disabled={!selectedDoc}
+            accessibilityLabel={isEditorMode ? 'Show reader' : 'Edit note'}
+          >
+            <Feather name={isEditorMode ? 'book-open' : 'edit-3'} size={22} color={selectedDoc ? colors.textSecondary : colors.textTertiary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.topIcon} onPress={() => setActionsOpen(true)} accessibilityLabel="More note actions">
             <Feather name="more-horizontal" size={24} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
-
-        {editorEmpty && isHydrating ? (
-          <View style={styles.emptyState}>
-            <ActivityIndicator size="small" color={colors.accent} />
-            <Text style={[styles.emptyActionText, { color: colors.textSecondary }]}>Loading Library...</Text>
-          </View>
-        ) : editorEmpty ? (
-          <View style={styles.emptyState}>
-            <TouchableOpacity style={[styles.emptyAction, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
-              <Text style={[styles.emptyActionText, { color: colors.accent }]}>Create new note</Text>
+        {selectedDoc && (
+          <View style={styles.statusRow}>
+            <TouchableOpacity
+              style={[styles.statusPill, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}
+              onPress={handleSyncPress}
+              disabled={!onSyncPress || isSyncing}
+              accessibilityRole="button"
+              accessibilityLabel={`${syncStatus.label}. ${syncStatus.detail}`}
+              accessibilityHint="Starts Library sync when available."
+            >
+              <Feather name={syncStatusIcon} size={13} color={syncStatusColor} />
+              <Text style={[styles.statusText, { color: colors.textSecondary }]} numberOfLines={1}>
+                {syncStatus.label}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.emptyAction, { backgroundColor: colors.bgSurface }]} onPress={() => setSwitcherOpen(true)}>
-              <Text style={[styles.emptyActionText, { color: colors.accent }]}>Go to file</Text>
-            </TouchableOpacity>
           </View>
-        ) : (
-          <View style={styles.editorWrap}>
-            {wikiMatches.length > 0 && (
-              <View style={[styles.wikiPopover, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
-                {wikiMatches.map((doc) => (
-                  <TouchableOpacity key={doc.id} style={styles.wikiRow} onPress={() => insertWikiLink(doc)}>
-                    <Text style={[styles.wikiTitle, { color: colors.textPrimary }]} numberOfLines={1}>{getDisplayTitle(doc)}</Text>
-                    <Text style={[styles.wikiPath, { color: colors.textTertiary }]} numberOfLines={1}>{folderFor(doc)}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            <TextInput
-              ref={editorRef}
-              value={selectedDoc.content}
-              onChangeText={handleEditorTextChange}
-              onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
-              onFocus={() => setEditorFocused(true)}
-              onBlur={() => {
-                setEditorFocused(false);
-                flushEditorDraft();
-              }}
-              style={[styles.editor, { color: colors.textPrimary }]}
-              multiline
-              textAlignVertical="top"
-              placeholder="Start writing..."
-              placeholderTextColor={colors.textTertiary}
-              autoCapitalize="sentences"
-              keyboardAppearance={keyboardAppearance}
-            />
+        )}
+        {selectedDoc && navigationBackTarget && !isEditorMode && (
+          <View style={styles.navigationBackRow}>
+            <TouchableOpacity
+              style={[styles.navigationBackPill, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}
+              onPress={goBackToPreviousDoc}
+              accessibilityRole="button"
+              accessibilityLabel={`Back to ${getDisplayTitle(navigationBackTarget)}`}
+            >
+              <Feather name="arrow-left" size={14} color={colors.textSecondary} />
+              <Text style={[styles.navigationBackText, { color: colors.textPrimary }]} numberOfLines={1}>
+                Back to {getDisplayTitle(navigationBackTarget)}
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
 
-        {selectedDoc && editorFocused && (
-          <View style={[styles.markdownToolbar, { bottom: insets.bottom + 4, backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.toolbarContent} keyboardShouldPersistTaps="handled">
-              <ToolbarButton icon="chevron-down" onPress={() => Keyboard.dismiss()} {...toolbarButtonProps} />
-              <ToolbarButton label="[[" onPress={() => applyMarkdownAction('wiki')} {...toolbarButtonProps} />
-              <ToolbarButton icon="hash" onPress={() => setHeadingOpen(true)} {...toolbarButtonProps} />
-              <ToolbarButton label="B" onPress={() => applyMarkdownAction('bold')} {...toolbarButtonProps} />
-              <ToolbarButton label="I" onPress={() => applyMarkdownAction('italic')} {...toolbarButtonProps} />
-              <ToolbarButton label="S" onPress={() => applyMarkdownAction('strike')} {...toolbarButtonProps} />
-              <ToolbarButton icon="code" onPress={() => applyMarkdownAction('code')} {...toolbarButtonProps} />
-              <ToolbarButton icon="link" onPress={() => applyMarkdownAction('link')} {...toolbarButtonProps} />
-              <ToolbarButton icon="list" onPress={() => applyMarkdownAction('bullet')} {...toolbarButtonProps} />
-              <ToolbarButton label="1." onPress={() => applyMarkdownAction('number')} {...toolbarButtonProps} />
-              <ToolbarButton icon="check-square" onPress={() => applyMarkdownAction('check')} {...toolbarButtonProps} />
-              <ToolbarButton icon="chevron-right" onPress={() => applyMarkdownAction('quote')} {...toolbarButtonProps} />
+        <Animated.View style={[styles.contentTransition, { opacity: contentTransition, transform: [{ translateX: contentTranslateX }] }]}>
+          {editorEmpty && isHydrating ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={[styles.emptyActionText, { color: colors.textSecondary }]}>Loading Library...</Text>
+            </View>
+          ) : editorEmpty ? (
+            <View style={styles.emptyState}>
+              <TouchableOpacity style={[styles.emptyAction, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
+                <Text style={[styles.emptyActionText, { color: colors.accent }]}>Create new note</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.emptyAction, { backgroundColor: colors.bgSurface }]} onPress={openSwitcher}>
+                <Text style={[styles.emptyActionText, { color: colors.accent }]}>Go to file</Text>
+              </TouchableOpacity>
+            </View>
+          ) : isEditorMode && richDraft ? (
+            <View style={styles.editorWrap}>
+              <TextInput
+                ref={titleInputRef}
+                value={richDraft.title}
+                onChangeText={handleTitleTextChange}
+                style={[styles.richTitleInput, { color: colors.textPrimary }]}
+                placeholder="Title"
+                placeholderTextColor={colors.textTertiary}
+                autoCapitalize="sentences"
+                autoCorrect
+                spellCheck
+                smartInsertDelete
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={focusBodyFromTitle}
+                keyboardAppearance={keyboardAppearance}
+              />
+              <TextInput
+                ref={editorRef}
+                value={richDraft.body}
+                onChangeText={handleBodyTextChange}
+                onSelectionChange={(event) => {
+                  const nextSelection = event.nativeEvent.selection;
+                  bodySelectionRef.current = nextSelection;
+                  if (
+                    forcedBodySelection
+                    && nextSelection.start === forcedBodySelection.start
+                    && nextSelection.end === forcedBodySelection.end
+                  ) {
+                    setForcedBodySelection(null);
+                  }
+                }}
+                selection={forcedBodySelection ?? undefined}
+                onFocus={() => setEditorFocused(true)}
+                onBlur={() => {
+                  setEditorFocused(false);
+                  flushEditorDraft();
+                }}
+                style={[styles.editor, styles.richBodyInput, { color: colors.textPrimary }]}
+                multiline
+                textAlignVertical="top"
+                placeholder="Start writing"
+                placeholderTextColor={colors.textTertiary}
+                autoCapitalize="sentences"
+                autoCorrect
+                spellCheck
+                smartInsertDelete
+                keyboardAppearance={keyboardAppearance}
+              />
+            </View>
+          ) : selectedDoc ? (
+            <MarkdownReader
+              content={selectedDoc.content}
+              backlinks={readerBacklinks}
+              colors={colors}
+              bottomInset={insets.bottom}
+              onEditLine={jumpToLine}
+              onOpenBacklink={openDoc}
+              onOpenRecent={openDoc}
+              onReaderScrollOffsetChange={(offset) => rememberReaderScrollOffset(selectedDoc.id, offset)}
+              onToggleTask={toggleReaderTask}
+              onWikiLink={openLinkedTitle}
+              readerScrollOffset={readerScrollOffsets[selectedDoc.id] ?? 0}
+              recentDocs={recentDocs}
+            />
+          ) : null}
+        </Animated.View>
+
+        {selectedDoc && isEditorMode && editorFocused && (
+          <View style={[styles.richEditorAccessory, { bottom: insets.bottom + 4, backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
+            <TouchableOpacity style={styles.richAccessoryButton} onPress={() => Keyboard.dismiss()} accessibilityLabel="Dismiss keyboard">
+              <Feather name="chevron-down" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.richAccessoryButton} onPress={showReader} accessibilityLabel="Show reader from editor toolbar">
+              <Feather name="book-open" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.richFormatButtons} keyboardShouldPersistTaps="handled">
+              <TouchableOpacity style={styles.richFormatButton} onPress={openLinkPicker} accessibilityLabel="Insert wiki link">
+                <Feather name="link-2" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorBlockFormat('heading2')} accessibilityLabel="Heading">
+                <Text style={[styles.richFormatText, styles.richHeadingFormatText, { color: colors.textSecondary }]}>H2</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorBlockFormat('bullet')} accessibilityLabel="Bulleted list">
+                <Feather name="list" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorBlockFormat('numbered')} accessibilityLabel="Numbered list">
+                <Text style={[styles.richFormatText, styles.richHeadingFormatText, { color: colors.textSecondary }]}>1.</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorBlockFormat('task')} accessibilityLabel="Task">
+                <Feather name="check-square" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorBlockFormat('quote')} accessibilityLabel="Quote">
+                <Feather name="message-square" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorInlineFormat('strong')} accessibilityLabel="Bold">
+                <Text style={[styles.richFormatText, { color: colors.textSecondary }]}>B</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorInlineFormat('emphasis')} accessibilityLabel="Italic">
+                <Text style={[styles.richFormatText, styles.richFormatItalic, { color: colors.textSecondary }]}>I</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorInlineFormat('code')} accessibilityLabel="Code">
+                <Feather name="code" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.richFormatButton} onPress={() => applyEditorInlineFormat('strike')} accessibilityLabel="Strikethrough">
+                <Text style={[styles.richFormatText, styles.richFormatStrike, { color: colors.textSecondary }]}>S</Text>
+              </TouchableOpacity>
             </ScrollView>
+            <Text style={[styles.richAccessoryText, { color: colors.textTertiary }]} numberOfLines={1}>
+              {syncStatus.label}
+            </Text>
           </View>
         )}
       </Animated.View>
 
       <Animated.View pointerEvents={drawerOpen ? 'auto' : 'none'} style={[styles.drawerScrim, { opacity: scrimOpacity }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => setDrawerOpen(false)} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeDrawer} />
       </Animated.View>
 
       <Animated.View
@@ -879,10 +1433,10 @@ export function LibraryView({
             <View style={styles.drawerHeader}>
               <View>
                 <Text style={[styles.drawerTitle, { color: colors.textPrimary }]}>Library</Text>
-                <Text style={[styles.drawerSubtitle, { color: colors.textSecondary }]}>{localDocuments.length} markdown files</Text>
+                <Text style={[styles.drawerSubtitle, { color: colors.textSecondary }]}>{localDocuments.length} local notes</Text>
               </View>
               <View style={styles.drawerHeaderActions}>
-                <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => setSwitcherOpen(true)}>
+                <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={openSwitcher}>
                   <Feather name="search" size={20} color={colors.textPrimary} />
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
@@ -899,6 +1453,8 @@ export function LibraryView({
                 placeholder="New folder note..."
                 placeholderTextColor={colors.textTertiary}
                 style={[styles.folderInput, { color: colors.textPrimary }]}
+                autoCorrect={false}
+                spellCheck={false}
                 returnKeyType="done"
                 onSubmitEditing={createFolderNote}
                 keyboardAppearance={keyboardAppearance}
@@ -930,14 +1486,14 @@ export function LibraryView({
                 </View>
                 <TouchableOpacity
                   style={[styles.syncButton, { backgroundColor: colors.bgSurface }]}
-                  onPress={onSyncPress}
+                  onPress={handleSyncPress}
                   disabled={!onSyncPress || isSyncing}
                 >
                   <Feather name="refresh-cw" size={17} color={isSyncing ? colors.textTertiary : colors.textSecondary} />
                 </TouchableOpacity>
               </View>
               <Text style={[styles.syncText, { color: colors.textTertiary }]}>
-                {isSyncing ? 'Syncing...' : `Updated ${formatSyncTime(lastSyncedAt)}`}
+                {syncStatus.detail}
               </Text>
               <View style={[styles.themeToggleCompact, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
                 <ThemeButton icon="monitor" active={themeMode === 'system'} colors={colors} onPress={() => setThemeMode('system')} />
@@ -950,9 +1506,9 @@ export function LibraryView({
       </Animated.View>
 
       {switcherOpen && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setSwitcherOpen(false)}>
+        <Modal visible transparent animationType="fade" onRequestClose={closeSwitcher}>
           <View style={[styles.switcherOverlay, { paddingTop: Math.max(insets.top + 50, 70) }]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setSwitcherOpen(false)} />
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeSwitcher} />
             <View style={[styles.switcherPanel, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
               <View style={[styles.switcherInputRow, { backgroundColor: colors.bgSurface }]}>
                 <Feather name="search" size={18} color={colors.textSecondary} />
@@ -963,6 +1519,8 @@ export function LibraryView({
                   placeholderTextColor={colors.textTertiary}
                   style={[styles.switcherInput, { color: colors.textPrimary }]}
                   autoFocus
+                  autoCorrect={false}
+                  spellCheck={false}
                   returnKeyType="done"
                   onSubmitEditing={createFromSwitcher}
                   keyboardAppearance={keyboardAppearance}
@@ -980,9 +1538,20 @@ export function LibraryView({
                 renderItem={renderFile}
                 ListFooterComponent={
                   switcherQuery.trim() ? (
-                    <TouchableOpacity style={styles.createFromQuery} onPress={createFromSwitcher}>
-                      <Feather name="plus" size={18} color={colors.accent} />
-                      <Text style={[styles.createFromQueryText, { color: colors.accent }]}>Create "{switcherQuery.trim()}" in {DEFAULT_FOLDER}</Text>
+                    <TouchableOpacity
+                      style={styles.createFromQuery}
+                      onPress={createFromSwitcher}
+                      accessibilityRole="button"
+                      accessibilityLabel={switcherExistingDraftDoc
+                        ? `Open existing note ${getDisplayTitle(switcherExistingDraftDoc)}`
+                        : `Create note ${switcherCreateDraft?.title ?? switcherQuery.trim()}`}
+                    >
+                      <Feather name={switcherExistingDraftDoc ? 'file-text' : 'plus'} size={18} color={colors.accent} />
+                      <Text style={[styles.createFromQueryText, { color: colors.accent }]}>
+                        {switcherExistingDraftDoc
+                          ? `Open existing "${getDisplayTitle(switcherExistingDraftDoc)}"`
+                          : `Create "${switcherCreateDraft?.title ?? switcherQuery.trim()}" in ${switcherCreateDraft?.folderPath ?? DEFAULT_FOLDER}`}
+                      </Text>
                     </TouchableOpacity>
                   ) : null
                 }
@@ -992,15 +1561,81 @@ export function LibraryView({
         </Modal>
       )}
 
-      {headingOpen && (
-        <Modal visible transparent animationType="slide" onRequestClose={() => setHeadingOpen(false)}>
-          <Pressable style={styles.scrim} onPress={() => setHeadingOpen(false)} />
-          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, backgroundColor: colors.bgElevated }]}>
-            <SheetHandle />
-            <SheetRow iconText="T" label="No heading" onPress={() => applyHeading(null)} />
-            {[1, 2, 3, 4, 5, 6].map((level) => (
-              <SheetRow key={level} iconText={`H${level}`} label={`Heading ${level}`} onPress={() => applyHeading(level)} />
-            ))}
+      {linkPickerOpen && (
+        <Modal visible transparent animationType="fade" onRequestClose={closeLinkPicker}>
+          <View style={[styles.switcherOverlay, { paddingTop: Math.max(insets.top + 50, 70) }]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeLinkPicker} />
+            <View style={[styles.switcherPanel, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
+              <View style={[styles.switcherInputRow, { backgroundColor: colors.bgSurface }]}>
+                <Feather name="link-2" size={18} color={colors.textSecondary} />
+                <TextInput
+                  value={linkPickerQuery}
+                  onChangeText={setLinkPickerQuery}
+                  placeholder="Link to note..."
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.switcherInput, { color: colors.textPrimary }]}
+                  autoFocus
+                  autoCorrect={false}
+                  spellCheck={false}
+                  returnKeyType="done"
+                  onSubmitEditing={() => {
+                    if (!linkPickerCreateDraft) return;
+                    createAndInsertEditorWikiLink(linkPickerCreateDraft);
+                  }}
+                  keyboardAppearance={keyboardAppearance}
+                />
+                {linkPickerQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setLinkPickerQuery('')}>
+                    <Feather name="x-circle" size={20} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <FlatList
+                keyboardShouldPersistTaps="handled"
+                data={linkPickerDocs}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.linkPickerRow}
+                    onPress={() => insertEditorWikiLink(wikiTargetForDocument(item), getDisplayTitle(item))}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Link to ${getDisplayTitle(item)}`}
+                    accessibilityHint={wikiTargetForDocument(item)}
+                  >
+                    <Feather name="file-text" size={16} color={colors.textSecondary} />
+                    <View style={styles.linkPickerTitleColumn}>
+                      <Text style={[styles.linkPickerTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                        {getDisplayTitle(item)}
+                      </Text>
+                      <Text style={[styles.linkPickerPath, { color: colors.textTertiary }]} numberOfLines={1}>
+                        {wikiTargetForDocument(item)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                ListFooterComponent={
+                  linkPickerQuery.trim() && linkPickerCreateDraft ? (
+                    <TouchableOpacity
+                      style={styles.createFromQuery}
+                      onPress={() => {
+                        createAndInsertEditorWikiLink(linkPickerCreateDraft);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={linkPickerExistingDraftDoc
+                        ? `Link existing note ${getDisplayTitle(linkPickerExistingDraftDoc)}`
+                        : `Create and link note ${linkPickerCreateDraft.title}`}
+                    >
+                      <Feather name={linkPickerExistingDraftDoc ? 'link-2' : 'plus'} size={18} color={colors.accent} />
+                      <Text style={[styles.createFromQueryText, { color: colors.accent }]}>
+                        {linkPickerExistingDraftDoc
+                          ? `Link existing "${getDisplayTitle(linkPickerExistingDraftDoc)}"`
+                          : `Create and link "${linkPickerCreateDraft.title}" in ${linkPickerCreateDraft.folderPath}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null
+                }
+              />
+            </View>
           </View>
         </Modal>
       )}
@@ -1020,6 +1655,7 @@ export function LibraryView({
                   setActionsOpen(false);
                 }}
               />
+              <SheetRow feather="share" label="Share note" onPress={shareNote} />
               <SheetRow feather="copy" label="Copy note" onPress={copyContent} />
               <SheetRow feather="file-text" label="Copy as file" onPress={copyFile} />
               <SheetSectionTitle label="Move to folder" />
@@ -1035,16 +1671,18 @@ export function LibraryView({
                 ))
               )}
               <SheetSectionTitle label="Backlinks" />
-              {backlinks.length === 0 ? (
+              {actionBacklinks.length === 0 ? (
                 <SheetRow feather="corner-up-left" label="No backlinks" onPress={() => setActionsOpen(false)} />
               ) : (
-                backlinks.map((doc) => <SheetRow key={doc.id} feather="corner-up-left" label={getDisplayTitle(doc)} onPress={() => openDoc(doc)} />)
+                actionBacklinks.map((doc) => <SheetRow key={doc.id} feather="corner-up-left" label={getDisplayTitle(doc)} onPress={() => openDocFromActions(doc)} />)
               )}
               <SheetSectionTitle label="Outgoing links" />
               {outboundLinks.length === 0 ? (
                 <SheetRow feather="corner-up-right" label="No outgoing links" onPress={() => setActionsOpen(false)} />
               ) : (
-                outboundLinks.map((title) => <SheetRow key={title} feather="corner-up-right" label={title} onPress={() => openLinkedTitle(title)} />)
+                outboundLinks.map((link) => (
+                  <SheetRow key={link.target} feather="corner-up-right" label={link.label} onPress={() => openLinkedTitle(link.target)} />
+                ))
               )}
               <SheetRow feather="trash-2" label="Delete" destructive onPress={deleteSelected} />
             </ScrollView>
@@ -1055,31 +1693,370 @@ export function LibraryView({
   );
 }
 
-function ToolbarButton({
-  icon,
-  label,
-  disabled,
-  tint,
-  surface,
-  border,
-  onPress,
+function MarkdownReader({
+  content,
+  backlinks,
+  colors,
+  bottomInset,
+  onEditLine,
+  onOpenBacklink,
+  onOpenRecent,
+  onReaderScrollOffsetChange,
+  onToggleTask,
+  onWikiLink,
+  readerScrollOffset,
+  recentDocs,
 }: {
-  icon?: keyof typeof Feather.glyphMap;
-  label?: string;
-  disabled?: boolean;
-  tint: string;
-  surface: string;
-  border: string;
-  onPress: () => void;
+  content: string;
+  backlinks: LibraryDocument[];
+  colors: ThemeColors;
+  bottomInset: number;
+  onEditLine: (lineNumber: number) => void;
+  onOpenBacklink: (doc: LibraryDocument) => void;
+  onOpenRecent: (doc: LibraryDocument) => void;
+  onReaderScrollOffsetChange: (offset: number) => void;
+  onToggleTask: (lineNumber: number) => void;
+  onWikiLink: (title: string) => void;
+  readerScrollOffset: number;
+  recentDocs: LibraryDocument[];
 }) {
+  const listRef = useRef<FlatList<MarkdownReaderBlock>>(null);
+  const buildPreviewBlocks = useCallback((value: string) => {
+    const previewContent = previewMarkdownReaderContent(value, READER_PREVIEW_LINE_LIMIT);
+    return {
+      blocks: parseMarkdownReaderBlocks(previewContent),
+      isPreview: previewContent !== value,
+    };
+  }, []);
+  const [blockState, setBlockState] = useState(() => buildPreviewBlocks(content));
+  const blocks = blockState.blocks;
+  const isPreview = blockState.isPreview;
+  const readerLinePressHandler = (block: Exclude<MarkdownReaderBlock, { type: 'blank' }>) =>
+    () => onEditLine(block.lineNumber);
+  const readerLineLongPressHandler = (block: MarkdownReaderBlock) => () => onEditLine(block.lineNumber);
+  const rememberScrollOffset = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onReaderScrollOffsetChange(event.nativeEvent.contentOffset.y);
+  };
+
+  useEffect(() => {
+    const preview = buildPreviewBlocks(content);
+    setBlockState(preview);
+    if (!preview.isPreview) return;
+
+    let cancelled = false;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      setBlockState({
+        blocks: parseMarkdownReaderBlocks(content),
+        isPreview: false,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel?.();
+    };
+  }, [buildPreviewBlocks, content]);
+
+  useEffect(() => {
+    if (readerScrollOffset <= 0) return;
+    if (isPreview) return;
+    const frame = requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: readerScrollOffset, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [content, isPreview, readerScrollOffset]);
+
+  const renderInline = (segments: MarkdownInlineSegment[], keyPrefix: string, baseStyle: object) => {
+    return segments.map((segment, index) => {
+      if (segment.type === 'text') {
+        return <Text key={`${keyPrefix}-${index}`}>{segment.text}</Text>;
+      }
+      if (segment.type === 'wiki') {
+        return (
+          <Text
+            key={`${keyPrefix}-${index}`}
+            style={[baseStyle, { color: colors.accent, fontWeight: '700' }]}
+            onPress={(event) => {
+              event.stopPropagation();
+              onWikiLink(segment.target);
+            }}
+          >
+            {segment.text}
+          </Text>
+        );
+      }
+      if (segment.type === 'url') {
+        return (
+          <Text
+            key={`${keyPrefix}-${index}`}
+            style={[baseStyle, { color: colors.accent, textDecorationLine: 'underline' }]}
+            onPress={(event) => {
+              event.stopPropagation();
+              Linking.openURL(segment.url).catch(console.error);
+            }}
+          >
+            {segment.text}
+          </Text>
+        );
+      }
+
+      const inlineStyle =
+        segment.type === 'strong'
+          ? styles.readerStrong
+          : segment.type === 'emphasis'
+            ? styles.readerEmphasis
+            : segment.type === 'strike'
+              ? styles.readerStrike
+              : styles.readerCode;
+      return (
+        <Text key={`${keyPrefix}-${index}`} style={inlineStyle}>
+          {segment.text}
+        </Text>
+      );
+    });
+  };
+
+  const renderLine = ({ item: block, index }: { item: MarkdownReaderBlock; index: number }) => {
+    if (block.type === 'blank') {
+      return <View style={styles.readerBlankLine} />;
+    }
+
+    if (block.type === 'rule') {
+      return <View style={[styles.readerRule, { backgroundColor: colors.border }]} />;
+    }
+
+    if (block.type === 'image') {
+      return (
+        <Pressable
+          style={[styles.readerImageFrame, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}
+          onPress={readerLinePressHandler(block)}
+          onLongPress={readerLineLongPressHandler(block)}
+          accessibilityRole="imagebutton"
+          accessibilityLabel={block.alt || 'Markdown image'}
+        >
+          <Image
+            source={{ uri: block.url }}
+            style={styles.readerImage}
+            resizeMode="cover"
+            accessibilityIgnoresInvertColors
+          />
+          {block.alt ? (
+            <Text style={[styles.readerImageCaption, { color: colors.textTertiary }]} numberOfLines={2}>
+              {block.alt}
+            </Text>
+          ) : null}
+        </Pressable>
+      );
+    }
+
+    if (block.type === 'table') {
+      return (
+        <Pressable
+          style={[styles.readerTableFrame, { borderColor: colors.border }]}
+          onPress={readerLinePressHandler(block)}
+          onLongPress={readerLineLongPressHandler(block)}
+          accessibilityRole="button"
+          accessibilityLabel="Edit markdown table"
+        >
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View>
+              <View style={[styles.readerTableRow, { backgroundColor: colors.bgSurface }]}>
+                {block.headerSegments.map((segments, cellIndex) => (
+                  <Text
+                    key={`header-${cellIndex}`}
+                    style={[styles.readerTableHeaderCell, { color: colors.textPrimary, borderColor: colors.border }]}
+                    numberOfLines={2}
+                  >
+                    {renderInline(segments, `table-header-${index}-${cellIndex}`, styles.readerTableHeaderCell)}
+                  </Text>
+                ))}
+              </View>
+              {block.rows.map((row, rowIndex) => (
+                <View key={`row-${rowIndex}`} style={styles.readerTableRow}>
+                  {block.headers.map((_header, cellIndex) => (
+                    <Text
+                      key={`cell-${rowIndex}-${cellIndex}`}
+                      style={[styles.readerTableCell, { color: colors.textSecondary, borderColor: colors.border }]}
+                      numberOfLines={3}
+                    >
+                      {renderInline(block.rowSegments[rowIndex]?.[cellIndex] ?? [], `table-cell-${index}-${rowIndex}-${cellIndex}`, styles.readerTableCell)}
+                    </Text>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </Pressable>
+      );
+    }
+
+    if (block.type === 'heading') {
+      const headingStyle = [
+        styles.readerHeading,
+        block.level === 1 && styles.readerHeading1,
+        block.level === 2 && styles.readerHeading2,
+        block.level === 3 && styles.readerHeading3,
+        block.level === 4 && styles.readerHeading4,
+        block.level >= 5 && styles.readerHeading5,
+        { color: colors.textPrimary },
+      ];
+      return (
+        <Text
+          style={headingStyle}
+          onPress={readerLinePressHandler(block)}
+          onLongPress={readerLineLongPressHandler(block)}
+        >
+          {renderInline(block.segments, `heading-${index}`, headingStyle)}
+        </Text>
+      );
+    }
+
+    if (block.type === 'codeBlock') {
+      return (
+        <Pressable
+          style={[styles.readerCodeBlock, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}
+          onPress={readerLinePressHandler(block)}
+          onLongPress={readerLineLongPressHandler(block)}
+        >
+          {block.language && (
+            <Text style={[styles.readerCodeLanguage, { color: colors.textTertiary }]}>{block.language}</Text>
+          )}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <Text style={[styles.readerCodeBlockText, { color: colors.textPrimary }]}>
+              {block.text || ' '}
+            </Text>
+          </ScrollView>
+        </Pressable>
+      );
+    }
+
+    if (block.type === 'list') {
+      const listIndent = Math.min(block.indent * 9, 54);
+      const isTask = /^- \[[ xX]\]$/.test(block.marker);
+      if (isTask) {
+        const isChecked = /\[[xX]\]/.test(block.marker);
+        return (
+          <View style={[styles.readerTaskRow, { marginLeft: listIndent }]}>
+            <TouchableOpacity
+              style={styles.readerTaskCheckbox}
+              onPress={() => onToggleTask(block.lineNumber)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: isChecked }}
+              accessibilityLabel={isChecked ? 'Mark task incomplete' : 'Mark task complete'}
+            >
+              <Feather name={isChecked ? 'check-square' : 'square'} size={21} color={isChecked ? colors.accent : colors.textTertiary} />
+            </TouchableOpacity>
+            <Text
+              style={[styles.readerParagraph, styles.readerTaskText, { color: isChecked ? colors.textSecondary : colors.textPrimary }]}
+              onPress={readerLinePressHandler(block)}
+              onLongPress={readerLineLongPressHandler(block)}
+            >
+              {renderInline(block.segments, `task-${index}`, styles.readerParagraph)}
+            </Text>
+          </View>
+        );
+      }
+
+      return (
+        <Text
+          style={[styles.readerParagraph, styles.readerListItem, { color: colors.textPrimary, marginLeft: listIndent }]}
+          onPress={readerLinePressHandler(block)}
+          onLongPress={readerLineLongPressHandler(block)}
+        >
+          <Text style={{ color: colors.textTertiary }}>{formatMarkdownListMarker(block.marker)} </Text>
+          {renderInline(block.segments, `list-${index}`, styles.readerParagraph)}
+        </Text>
+      );
+    }
+
+    if (block.type === 'quote') {
+      return (
+        <View style={[styles.readerQuote, { borderLeftColor: colors.accent }]}>
+          <Text
+            style={[styles.readerParagraph, { color: colors.textSecondary }]}
+            onPress={readerLinePressHandler(block)}
+            onLongPress={readerLineLongPressHandler(block)}
+          >
+            {renderInline(block.segments, `quote-${index}`, styles.readerParagraph)}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <Text
+        style={[styles.readerParagraph, { color: colors.textPrimary }]}
+        onPress={readerLinePressHandler(block)}
+        onLongPress={readerLineLongPressHandler(block)}
+      >
+        {renderInline(block.segments, `p-${index}`, styles.readerParagraph)}
+      </Text>
+    );
+  };
+
+  const renderFooter = () => (
+    isPreview ? null : <>
+      {backlinks.length > 0 && (
+        <View style={[styles.readerBacklinks, { borderTopColor: colors.border }]}>
+          <Text style={[styles.readerBacklinksLabel, { color: colors.textTertiary }]}>Linked from</Text>
+          {backlinks.map((doc) => (
+            <TouchableOpacity
+              key={doc.id}
+              style={styles.readerBacklinkRow}
+              onPress={() => onOpenBacklink(doc)}
+              accessibilityRole="button"
+              accessibilityLabel={`Open backlink from ${getDisplayTitle(doc)}`}
+            >
+              <Feather name="corner-up-left" size={15} color={colors.textSecondary} />
+              <Text style={[styles.readerBacklinkTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                {getDisplayTitle(doc)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      {recentDocs.length > 0 && (
+        <View style={[styles.readerRiver, { borderTopColor: colors.border }]}>
+          <Text style={[styles.readerBacklinksLabel, { color: colors.textTertiary }]}>Recent</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.readerRiverContent}>
+            {recentDocs.map((doc) => (
+              <TouchableOpacity
+                key={doc.id}
+                style={[styles.readerRiverPill, { borderColor: colors.border, backgroundColor: colors.bgSurface }]}
+                onPress={() => onOpenRecent(doc)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open recent note ${getDisplayTitle(doc)}`}
+              >
+                <Text style={[styles.readerRiverTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                  {getDisplayTitle(doc)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+    </>
+  );
+
   return (
-    <TouchableOpacity
-      style={[styles.toolbarButton, { backgroundColor: surface, borderColor: border }, disabled && styles.toolbarButtonDisabled]}
-      onPress={onPress}
-      disabled={disabled}
-    >
-      {icon ? <Feather name={icon} size={21} color={disabled ? '#535963' : tint} /> : <Text style={[styles.toolbarLabel, { color: tint }, disabled && styles.toolbarLabelDisabled]}>{label}</Text>}
-    </TouchableOpacity>
+    <FlatList
+      ref={listRef}
+      style={styles.readerScroll}
+      contentContainerStyle={[styles.readerContent, { paddingBottom: bottomInset + 96 }]}
+      data={blocks}
+      keyExtractor={(item) => item.key}
+      renderItem={renderLine}
+      ListFooterComponent={renderFooter}
+      onMomentumScrollEnd={rememberScrollOffset}
+      onScrollEndDrag={rememberScrollOffset}
+      keyboardShouldPersistTaps="handled"
+      initialNumToRender={28}
+      maxToRenderPerBatch={16}
+      updateCellsBatchingPeriod={32}
+      windowSize={9}
+      removeClippedSubviews={Platform.OS !== 'ios'}
+    />
   );
 }
 
@@ -1143,17 +2120,67 @@ const styles = StyleSheet.create({
   titleButton: { flex: 1, alignItems: 'center' },
   topTitle: { fontSize: 16, fontWeight: '700', letterSpacing: 0 },
   topSubtitle: { fontSize: 11, marginTop: 2, letterSpacing: 0 },
+  statusRow: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
+  statusPill: { minHeight: 26, maxWidth: '72%', borderRadius: 999, borderWidth: 1, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusText: { flexShrink: 1, fontSize: 12, fontWeight: '700', letterSpacing: 0 },
+  navigationBackRow: { alignItems: 'center', paddingBottom: 2 },
+  navigationBackPill: { maxWidth: '76%', minHeight: 30, borderRadius: 15, borderWidth: 1, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  navigationBackText: { flexShrink: 1, fontSize: 13, fontWeight: '700', letterSpacing: 0 },
+  contentTransition: { flex: 1 },
   editorWrap: { flex: 1, paddingHorizontal: 22 },
   editor: { flex: 1, fontSize: 18, lineHeight: 30, paddingTop: 34, paddingBottom: 120, letterSpacing: 0 },
+  richTitleInput: { fontSize: 34, lineHeight: 42, fontWeight: '800', letterSpacing: 0, paddingTop: 28, paddingBottom: 8 },
+  richBodyInput: { paddingTop: 8 },
+  richEditorAccessory: { position: 'absolute', left: 0, right: 0, minHeight: 48, borderTopWidth: 1, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  richAccessoryButton: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  richFormatButtons: { alignItems: 'center', gap: 4 },
+  richFormatButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
+  richFormatText: { fontSize: 16, fontWeight: '800', letterSpacing: 0 },
+  richHeadingFormatText: { fontSize: 12 },
+  richFormatItalic: { fontStyle: 'italic' },
+  richFormatStrike: { textDecorationLine: 'line-through' },
+  richAccessoryText: { width: 96, fontSize: 13, fontWeight: '600', letterSpacing: 0, textAlign: 'right' },
+  readerScroll: { flex: 1 },
+  readerContent: { paddingHorizontal: 24, paddingTop: 28 },
+  readerBlankLine: { height: 12 },
+  readerRule: { height: StyleSheet.hairlineWidth, marginVertical: 18 },
+  readerImageFrame: { borderWidth: 1, borderRadius: 8, marginVertical: 12, overflow: 'hidden' },
+  readerImage: { width: '100%', height: 190 },
+  readerImageCaption: { fontSize: 12, fontWeight: '600', letterSpacing: 0, paddingHorizontal: 12, paddingVertical: 8 },
+  readerTableFrame: { borderWidth: 1, borderRadius: 8, marginVertical: 12, overflow: 'hidden' },
+  readerTableRow: { flexDirection: 'row' },
+  readerTableHeaderCell: { width: 150, minHeight: 42, borderRightWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 9, fontSize: 13, lineHeight: 18, fontWeight: '800', letterSpacing: 0 },
+  readerTableCell: { width: 150, minHeight: 42, borderRightWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 9, fontSize: 13, lineHeight: 18, letterSpacing: 0 },
+  readerHeading: { letterSpacing: 0, marginTop: 18, marginBottom: 8 },
+  readerHeading1: { fontSize: 30, lineHeight: 38, fontWeight: '800' },
+  readerHeading2: { fontSize: 24, lineHeight: 32, fontWeight: '800' },
+  readerHeading3: { fontSize: 20, lineHeight: 28, fontWeight: '700' },
+  readerHeading4: { fontSize: 18, lineHeight: 26, fontWeight: '700' },
+  readerHeading5: { fontSize: 16, lineHeight: 24, fontWeight: '700' },
+  readerParagraph: { fontSize: 18, lineHeight: 30, letterSpacing: 0, marginBottom: 8 },
+  readerStrong: { fontWeight: '800' },
+  readerEmphasis: { fontStyle: 'italic' },
+  readerStrike: { textDecorationLine: 'line-through' },
+  readerCode: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 16 },
+  readerCodeBlock: { borderWidth: 1, borderRadius: 8, padding: 12, marginVertical: 10 },
+  readerCodeLanguage: { fontSize: 11, fontWeight: '800', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 },
+  readerCodeBlockText: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 14, lineHeight: 21, letterSpacing: 0 },
+  readerListItem: { paddingLeft: 4 },
+  readerTaskRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 8 },
+  readerTaskCheckbox: { width: 30, minHeight: 30, alignItems: 'center', justifyContent: 'center' },
+  readerTaskText: { flex: 1, marginBottom: 0 },
+  readerQuote: { borderLeftWidth: 3, paddingLeft: 14, marginVertical: 8 },
+  readerBacklinks: { marginTop: 28, paddingTop: 16, borderTopWidth: 1 },
+  readerBacklinksLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 },
+  readerBacklinkRow: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  readerBacklinkTitle: { flex: 1, fontSize: 16, fontWeight: '700', letterSpacing: 0 },
+  readerRiver: { marginTop: 28, paddingTop: 16, borderTopWidth: 1 },
+  readerRiverContent: { gap: 8, paddingRight: 24 },
+  readerRiverPill: { maxWidth: 180, minHeight: 38, borderWidth: 1, borderRadius: 19, paddingHorizontal: 14, justifyContent: 'center' },
+  readerRiverTitle: { fontSize: 14, fontWeight: '700', letterSpacing: 0 },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingBottom: 120 },
   emptyAction: { minWidth: 220, borderRadius: 28, paddingVertical: 16, paddingHorizontal: 24, alignItems: 'center' },
   emptyActionText: { fontSize: 17, fontWeight: '600', letterSpacing: 0 },
-  markdownToolbar: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1, borderBottomWidth: 1, paddingVertical: 6 },
-  toolbarContent: { gap: 8, paddingHorizontal: 12, alignItems: 'center' },
-  toolbarButton: { width: 42, height: 38, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  toolbarButtonDisabled: { opacity: 0.45 },
-  toolbarLabel: { fontSize: 20, fontWeight: '800', letterSpacing: 0 },
-  toolbarLabelDisabled: { color: '#535963' },
   scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
   drawerScrim: { ...StyleSheet.absoluteFillObject, zIndex: 3, backgroundColor: '#000' },
   drawer: { position: 'absolute', top: 0, bottom: 0, left: 0, zIndex: 4, paddingHorizontal: 16 },
@@ -1185,12 +2212,12 @@ const styles = StyleSheet.create({
   switcherPanel: { maxHeight: '70%', borderRadius: 24, borderWidth: 1, padding: 10 },
   switcherInputRow: { height: 52, borderRadius: 18, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   switcherInput: { flex: 1, fontSize: 17, letterSpacing: 0 },
+  linkPickerRow: { minHeight: 54, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  linkPickerTitleColumn: { flex: 1 },
+  linkPickerTitle: { fontSize: 16, fontWeight: '700', letterSpacing: 0 },
+  linkPickerPath: { fontSize: 12, marginTop: 2, letterSpacing: 0 },
   createFromQuery: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 14 },
   createFromQueryText: { flex: 1, fontSize: 15, fontWeight: '600', letterSpacing: 0 },
-  wikiPopover: { position: 'absolute', left: 14, right: 14, top: 74, zIndex: 2, borderWidth: 1, borderRadius: 18, paddingVertical: 8 },
-  wikiRow: { paddingHorizontal: 14, paddingVertical: 10 },
-  wikiTitle: { fontSize: 16, fontWeight: '600', letterSpacing: 0 },
-  wikiPath: { fontSize: 12, marginTop: 2, letterSpacing: 0 },
   sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 12, paddingHorizontal: 18 },
   sheetScroll: { maxHeight: 560 },
   sheetHandle: { alignSelf: 'center', width: 70, height: 5, borderRadius: 999, backgroundColor: '#737373', marginBottom: 14 },

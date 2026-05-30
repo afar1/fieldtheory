@@ -1,6 +1,14 @@
 import { supabase } from './supabase';
 import { StorageService } from './storage';
 import { getSession } from './auth';
+import { sha256Hex } from './libraryHash';
+import {
+  filterLibraryDocumentsDeletedRemotely,
+  mergeLibraryDocumentsByIdentity,
+  normalizeLibrarySourcePath,
+  parseLibrarySourcePath,
+  sourcePathForLibraryDocument as sourcePathForLibraryDocumentFromSync,
+} from './librarySync';
 import {
   LibraryDocument,
   Observation,
@@ -115,28 +123,10 @@ const toLocalTranscript = (row: TranscriptRow): TranscriptEntry => ({
   stackSegments: row.metadata?.stackSegments,
 });
 
-const parseSourcePath = (sourcePath: string | null, title: string) => {
-  const fallbackFileName = `${(title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`;
-  if (!sourcePath) {
-    return { folderPath: 'scratchpad', fileName: fallbackFileName };
-  }
-
-  const parts = sourcePath.split('/').filter(Boolean);
-  const fileName = parts.pop() || fallbackFileName;
-  return {
-    folderPath: parts.join('/') || 'scratchpad',
-    fileName,
-  };
-};
-
-export const sourcePathForLibraryDocument = (doc: LibraryDocument) => {
-  const folderPath = doc.folderPath?.trim() || 'scratchpad';
-  const fileName = doc.fileName?.trim() || `${(doc.title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`;
-  return `${folderPath}/${fileName}`;
-};
+export const sourcePathForLibraryDocument = sourcePathForLibraryDocumentFromSync;
 
 const toLocalLibraryDocument = (row: LibraryDocumentRow): LibraryDocument => {
-  const pathParts = parseSourcePath(row.source_path, row.title);
+  const pathParts = parseLibrarySourcePath(row.source_path, row.title);
   return {
     id: row.client_id,
     title: row.title,
@@ -282,17 +272,19 @@ const syncLibraryTombstonesUpForUser = async (userId: string) => {
 
 const syncLibraryUpForUser = async (userId: string) => {
   const libraryDocuments = await StorageService.getLibraryDocuments();
-  await upsertRows('library_documents', libraryDocuments.map((doc) => ({
+  const rows = await Promise.all(libraryDocuments.map(async (doc) => ({
     user_id: userId,
     title: doc.title,
     content: doc.content,
     tags: doc.tags ?? [],
     source_path: sourcePathForLibraryDocument(doc),
     source_kind: doc.sourceKind ?? 'mobile',
+    content_hash: await sha256Hex(doc.content),
     client_id: doc.id,
     client_created_at_ms: doc.createdAt,
     deleted_at: null,
   })));
+  await upsertRows('library_documents', rows);
 };
 
 const syncLibraryDownOnly = async () => {
@@ -307,16 +299,18 @@ const syncLibraryDownOnly = async () => {
   const remoteRows = (data ?? []) as LibraryDocumentRow[];
   const activeRows = remoteRows.filter((row) => !row.deleted_at);
   const deletedRows = remoteRows.filter((row) => row.deleted_at);
-  let mergedLibraryDocuments = mergeByLastWriteWins(localLibraryDocuments, activeRows.map(toLocalLibraryDocument));
+  let mergedLibraryDocuments = mergeLibraryDocumentsByIdentity(localLibraryDocuments, activeRows.map(toLocalLibraryDocument));
 
-  for (const row of deletedRows) {
-    const deletedAt = row.deleted_at ? new Date(row.deleted_at).getTime() : 0;
-    if (!Number.isFinite(deletedAt)) continue;
-    mergedLibraryDocuments = mergedLibraryDocuments.filter((doc) => {
-      if (doc.id !== row.client_id) return true;
-      return (doc.updatedAt ?? doc.createdAt) > deletedAt;
-    });
-  }
+  mergedLibraryDocuments = filterLibraryDocumentsDeletedRemotely(
+    mergedLibraryDocuments,
+    deletedRows
+      .map((row) => ({
+        id: row.client_id,
+        sourcePath: normalizeLibrarySourcePath(row.source_path, row.title),
+        deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : 0,
+      }))
+      .filter((row) => Number.isFinite(row.deletedAt)),
+  );
 
   await StorageService.saveLibraryDocuments(mergedLibraryDocuments);
   return mergedLibraryDocuments;

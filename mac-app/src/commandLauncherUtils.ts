@@ -394,6 +394,8 @@ export function shouldTraceLauncherRendererEvent(
   details: Record<string, unknown> = {},
 ): boolean {
   if (event !== 'filter-results') return true;
+  const launcherSessionId = details.launcherSessionId;
+  if (typeof launcherSessionId === 'string' && launcherSessionId.startsWith('benchmark-')) return true;
   const queryLength = details.queryLength;
   if (typeof queryLength === 'number' && queryLength > 0 && queryLength <= 2) return true;
   const elapsedMs = details.elapsedMs;

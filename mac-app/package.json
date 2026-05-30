@@ -40,7 +40,9 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "quality:baseline": "node scripts/quality-baseline.mjs",
+    "quality:baseline:checks": "node scripts/quality-baseline.mjs --run-checks"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

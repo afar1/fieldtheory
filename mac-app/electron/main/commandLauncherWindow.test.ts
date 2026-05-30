@@ -58,6 +58,12 @@ vi.mock('./logger', () => ({
   }),
 }));
 
+const mockAppendCommandLauncherTrace = vi.hoisted(() => vi.fn());
+
+vi.mock('./commandLauncherTrace', () => ({
+  appendCommandLauncherTrace: mockAppendCommandLauncherTrace,
+}));
+
 const mockExecFile = vi.hoisted(() => vi.fn((_cmd: string, _args: string[], cb: Function) => cb(null, '', '')));
 
 vi.mock('child_process', () => ({
@@ -71,6 +77,8 @@ import { BrowserWindow } from 'electron';
 type CommandLauncherResetPayload = {
   isDarkMode: boolean;
   generation: number;
+  launcherSessionId: string;
+  qualityScenario: string | null;
 };
 
 function getLastResetPayload(): CommandLauncherResetPayload {
@@ -111,12 +119,35 @@ describe('CommandLauncherWindow.show()', () => {
     });
   });
 
-  it('prefers fresh frontmost window bounds over cached bounds', async () => {
+  it('prefers cached frontmost window bounds on the open hot path', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({
         bundleId: 'com.apple.Safari',
         name: 'Safari',
         windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+      })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 1400, y: 120, width: 1100, height: 900 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
+      y: Math.round(100 + (800 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_COLLAPSED_HEIGHT,
+    });
+  });
+
+  it('uses fresh frontmost window bounds when cached bounds are unavailable', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: null,
       })),
       getFrontmostWindowBounds: vi.fn(() => ({ x: 1400, y: 120, width: 1100, height: 900 })),
     };
@@ -134,36 +165,13 @@ describe('CommandLauncherWindow.show()', () => {
     });
   });
 
-  it('falls back to cached frontmost window bounds when fresh bounds are unavailable', async () => {
-    const nativeHelper = {
-      getFrontmostApp: vi.fn(() => ({
-        bundleId: 'com.apple.Safari',
-        name: 'Safari',
-        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
-      })),
-      getFrontmostWindowBounds: vi.fn(() => null),
-    };
-    const launcher = new CommandLauncherWindow(nativeHelper as any);
-    (launcher as any).window = mockWindow;
-
-    await launcher.show();
-
-    expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
-    expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
-      y: Math.round(100 + (800 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
-      width: LAUNCHER_WIDTH,
-      height: LAUNCHER_COLLAPSED_HEIGHT,
-    });
-  });
-
-  it('keeps fresh bounds lookup inside the open latency budget', async () => {
+  it('keeps missing-cache fresh bounds lookup inside the open latency budget', async () => {
     vi.useFakeTimers();
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({
         bundleId: 'com.apple.Safari',
         name: 'Safari',
-        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+        windowBounds: null,
       })),
       getFrontmostWindowBounds: vi.fn((timeoutMs: number) => new Promise(resolve => {
         setTimeout(() => resolve(null), timeoutMs);
@@ -196,13 +204,48 @@ describe('CommandLauncherWindow.show()', () => {
 
     await launcher.show();
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: false, generation: 1 });
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', {
+      isDarkMode: false,
+      generation: 1,
+      launcherSessionId: expect.any(String),
+      qualityScenario: null,
+    });
     expect(mockWindow.webContents.send.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.show.mock.invocationCallOrder[0]);
     expect(mockWindow.show.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.focus.mock.invocationCallOrder[0]);
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:focus-input', { generation: 1 });
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:focus-input', {
+      generation: 1,
+      launcherSessionId: expect.any(String),
+      qualityScenario: null,
+    });
     const focusInputCallIndex = mockWindow.webContents.send.mock.calls.findIndex(([channel]) => channel === 'command-launcher:focus-input');
     expect(focusInputCallIndex).toBeGreaterThan(-1);
     expect(mockWindow.focus.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.webContents.send.mock.invocationCallOrder[focusInputCallIndex]);
+  });
+
+  it('adds active session ids to renderer trace events', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
+      getFrontmostWindowBounds: vi.fn(),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({ launcherSessionId: 'launcher-test-session' });
+    mockAppendCommandLauncherTrace.mockClear();
+
+    mockIpcMainHandlers.get('command-launcher:trace')?.({}, 'first-input', { queryLength: 4 });
+    mockIpcMainHandlers.get('command-launcher:trace')?.({}, 'filter-results', { resultCount: 2 });
+
+    expect(mockAppendCommandLauncherTrace).toHaveBeenCalledWith('renderer-first-input', {
+      launcherSessionId: 'launcher-test-session',
+      queryLength: 4,
+      querySessionId: expect.stringMatching(/^launcher-test-session:query-/),
+    });
+    expect(mockAppendCommandLauncherTrace).toHaveBeenCalledWith('renderer-filter-results', {
+      launcherSessionId: 'launcher-test-session',
+      querySessionId: expect.stringMatching(/^launcher-test-session:query-/),
+      resultCount: 2,
+    });
   });
 
   it('does not replace an external previous app with Field Theory', async () => {
@@ -312,7 +355,12 @@ describe('CommandLauncherWindow.preload()', () => {
 
     await launcher.show();
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: true, generation: 1 });
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', {
+      isDarkMode: true,
+      generation: 1,
+      launcherSessionId: expect.any(String),
+      qualityScenario: null,
+    });
   });
 
   it('uses a transparent launcher background so rounded corners stay clean', () => {
