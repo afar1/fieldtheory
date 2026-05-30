@@ -883,6 +883,27 @@ export function filterLauncherNamespaceItems<T extends LauncherSearchableItem & 
   return filtered.slice().sort(compareLauncherItemsByRecency);
 }
 
+export function shouldShowLauncherItemInTypedSearch(item: { type: string }): boolean {
+  return item.type !== 'recent-file';
+}
+
+export function isLauncherRiverItem(item: { source?: string; sourceLabel?: string }): boolean {
+  return item.source === 'shared' || item.sourceLabel === 'River (shared)';
+}
+
+export function getLauncherDefaultPanelItems<T>(input: {
+  expanded: boolean;
+  isRootIdle: boolean;
+  source: 'recents' | 'clipboard';
+  recentItems: T[];
+  clipboardItems: T[];
+  maxItems?: number;
+}): T[] {
+  if (!input.expanded || !input.isRootIdle) return [];
+  const maxItems = input.maxItems ?? 5;
+  return (input.source === 'clipboard' ? input.clipboardItems : input.recentItems).slice(0, maxItems);
+}
+
 function joinLauncherPath(parent: string, child: string): string {
   const cleanParent = parent.replace(/\/+$/, '');
   const cleanChild = child.replace(/^\/+/, '');

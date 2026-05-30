@@ -226,17 +226,33 @@ export class SharedSyncService extends EventEmitter {
       this.emit('presenceChanged', { sharedId, users });
     };
 
-    channel.on('presence', { event: 'sync' }, emitPresence);
-    channel.subscribe(async (status: string) => {
-      if (status !== 'SUBSCRIBED') return;
-      await channel.track({
-        userId: session.user.id,
-        email: session.user.email ?? null,
-        initials: authorInitialsFromSession(session),
-        openedAt: Date.now(),
+    try {
+      channel.on('presence', { event: 'sync' }, emitPresence);
+      channel.subscribe((status: string, err?: unknown) => {
+        if (err) log.warn('River presence subscription error:', err);
+        if (status !== 'SUBSCRIBED') return;
+        void channel.track({
+          userId: session.user.id,
+          email: session.user.email ?? null,
+          initials: authorInitialsFromSession(session),
+          openedAt: Date.now(),
+        }).then(() => {
+          emitPresence();
+        }).catch((trackError: unknown) => {
+          log.warn('River presence track failed:', trackError);
+        });
       });
-      emitPresence();
-    });
+    } catch (err) {
+      log.warn('River presence subscription failed:', err);
+      this.presenceChannel = null;
+      this.activePresenceSharedId = null;
+      try {
+        await supabase.removeChannel(channel);
+      } catch {
+        // Presence setup failed; teardown is best-effort.
+      }
+      return [];
+    }
 
     return [];
   }

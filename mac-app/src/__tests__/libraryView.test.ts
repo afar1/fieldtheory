@@ -1398,8 +1398,8 @@ describe('rendered markdown edit helpers', () => {
 
     expect(getRenderedMarkdownEnterEdit('**Done**', 2, 2)).toEqual({
       nextValue: '\n**Done**',
-      selectionStart: 1,
-      selectionEnd: 1,
+      selectionStart: 0,
+      selectionEnd: 0,
     });
 
     expect(getRenderedMarkdownEnterEdit('[[Target Page|Alias]]', 19, 19)).toEqual({
@@ -1414,6 +1414,26 @@ describe('rendered markdown edit helpers', () => {
       nextValue: 'Use \n* literally',
       selectionStart: 5,
       selectionEnd: 5,
+    });
+  });
+
+  it('inserts rendered Enter before hidden block markdown at the visible line start', () => {
+    expect(getRenderedMarkdownEnterEdit('# Resolved', 2, 2)).toEqual({
+      nextValue: '\n# Resolved',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('> Resolved', 2, 2)).toEqual({
+      nextValue: '\n> Resolved',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('Resolved', 0, 0)).toEqual({
+      nextValue: '\nResolved',
+      selectionStart: 0,
+      selectionEnd: 0,
     });
   });
 

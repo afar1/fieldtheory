@@ -1181,6 +1181,8 @@ let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
 let appQuitConfirmedWithLocalWork = false;
 let appQuitConfirmationOpen = false;
+let appQuitWatcherCleanupComplete = false;
+let appQuitWatcherCleanupInFlight: Promise<void> | null = null;
 let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
@@ -1204,6 +1206,27 @@ function ensureBookmarksWatcher(): void {
     });
   });
   bookmarksWatcherStarted = true;
+}
+
+function cleanupFileWatchersBeforeQuit(): Promise<void> {
+  if (appQuitWatcherCleanupComplete) return Promise.resolve();
+  if (appQuitWatcherCleanupInFlight) return appQuitWatcherCleanupInFlight;
+
+  appQuitWatcherCleanupInFlight = (async () => {
+    await Promise.allSettled([
+      librarianManager?.destroy(),
+      taggedDocsManager?.destroy(),
+      bookmarksManager?.stopWatcher(),
+    ]);
+    librarianManager = null;
+    taggedDocsManager = null;
+    bookmarksWatcherStarted = false;
+    appQuitWatcherCleanupComplete = true;
+  })().finally(() => {
+    appQuitWatcherCleanupInFlight = null;
+  });
+
+  return appQuitWatcherCleanupInFlight;
 }
 
 async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
@@ -7186,12 +7209,6 @@ function setupClipboardIPCHandlers(): void {
     // Unregister Squares window management hotkeys.
     squaresManager?.unregisterHotkeys();
 
-    // Clean up LibrarianManager (stop file watchers, close database)
-    librarianManager?.destroy();
-
-    // Clean up TaggedDocsManager (stop file watcher, close database)
-    taggedDocsManager?.destroy();
-
     // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
 
@@ -13004,6 +13021,18 @@ if (!gotTheLock) {
     }
 
     log.info('App quitting, cleaning up...');
+
+    if (!appQuitWatcherCleanupComplete) {
+      event.preventDefault();
+      void cleanupFileWatchersBeforeQuit().then(() => {
+        app.quit();
+      }).catch((error) => {
+        log.warn('File watcher cleanup before quit failed: %s', error instanceof Error ? error.message : String(error));
+        appQuitWatcherCleanupComplete = true;
+        app.quit();
+      });
+      return;
+    }
 
     if (feedbackManager) {
       feedbackManager.destroy();
