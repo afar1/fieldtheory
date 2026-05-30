@@ -3944,16 +3944,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useLayoutEffect(() => {
+    let frame: number | null = null;
+    let settleTimer: number | null = null;
+    const refreshEditorLayout = () => {
+      markdownCodeEditorRef.current?.refreshLayout();
+      renderedMarkdownEditorRef.current?.refreshLayout();
+      updateMarkdownEditorFades(markdownCodeEditorRef.current);
+      updateRenderedDocumentTopFade(contentScrollRef.current);
+    };
     const updateResponsivePanelSize = () => {
       const containerRect = containerRef.current?.getBoundingClientRect();
       if (!containerRect) return;
+      const width = Math.round(containerRect.width);
+      const height = Math.round(containerRect.height);
       setResponsivePanelSize((previous) => {
-        if (previous.width === containerRect.width && previous.height === containerRect.height) return previous;
-        return { width: containerRect.width, height: containerRect.height };
+        if (previous.width === width && previous.height === height) return previous;
+        return { width, height };
       });
     };
     const updateCenter = () => {
+      frame = null;
       updateResponsivePanelSize();
+      refreshEditorLayout();
       if (!active || !focusChromeActive) {
         onFocusChromeContentCenterChange?.(null);
         return;
@@ -3972,22 +3984,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         terminalVisible: effectiveCodexTerminalVisible,
       }));
     };
+    const scheduleUpdateCenter = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(updateCenter);
+    };
+    const scheduleSettledUpdate = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        scheduleUpdateCenter();
+      }, 80);
+    };
+    const scheduleResizeUpdate = () => {
+      scheduleUpdateCenter();
+      scheduleSettledUpdate();
+    };
 
     updateCenter();
-    const frame = window.requestAnimationFrame(updateCenter);
-    const resizeObserver = new ResizeObserver(updateCenter);
+    scheduleUpdateCenter();
+    const resizeObserver = new ResizeObserver(scheduleResizeUpdate);
     if (containerRef.current) resizeObserver.observe(containerRef.current);
     if (readerPaneRef.current) resizeObserver.observe(readerPaneRef.current);
     for (const element of readerPaneRef.current?.querySelectorAll<HTMLElement>('[data-ft-codex-terminal-panel="true"]') ?? []) {
       resizeObserver.observe(element);
     }
-    window.addEventListener('resize', updateCenter);
+    window.addEventListener('resize', scheduleResizeUpdate);
     return () => {
-      window.cancelAnimationFrame(frame);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
       resizeObserver.disconnect();
-      window.removeEventListener('resize', updateCenter);
+      window.removeEventListener('resize', scheduleResizeUpdate);
     };
-  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
