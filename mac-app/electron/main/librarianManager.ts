@@ -803,6 +803,8 @@ def main():
             except:
                 seq = 0
         seq += 1
+        while (jobs_dir / f"job_{seq}.json").exists():
+            seq += 1
         seq_file.write_text(str(seq))
 
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -1109,6 +1111,18 @@ def find_pending_job():
     return None
 
 
+def abandon_pending_job(job_file, job, reason):
+    try:
+        next_job = dict(job) if isinstance(job, dict) else {}
+        next_job["status"] = "abandoned"
+        next_job["abandoned_reason"] = reason
+        from datetime import datetime
+        next_job["abandoned_at"] = datetime.now().isoformat()
+        job_file.write_text(json.dumps(next_job, indent=2) + "\\n")
+    except:
+        pass
+
+
 def get_rule_file_path(job):
     rule_file = job.get("rule_file") if isinstance(job, dict) else None
     if isinstance(rule_file, str) and rule_file.strip():
@@ -1235,13 +1249,18 @@ def main():
     pending_job = find_pending_job()
     if pending_job:
         job_file, job = pending_job
-        SENTINEL_FILE.write_text(json.dumps({
-            "job_file": str(job_file),
-            "output": job.get("output", ""),
-            "created_at": datetime.now().isoformat()
-        }, indent=2))
-        sync_stop_hook(should_stop_on_pending(cfg))
-        return
+        if should_stop_on_pending(cfg):
+            SENTINEL_FILE.write_text(json.dumps({
+                "job_file": str(job_file),
+                "output": job.get("output", ""),
+                "created_at": datetime.now().isoformat()
+            }, indent=2))
+            sync_stop_hook(True)
+            return
+
+        abandon_pending_job(job_file, job, "codex_non_blocking_superseded")
+        SENTINEL_FILE.unlink(missing_ok=True)
+        sync_stop_hook(False)
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -1279,6 +1298,8 @@ def main():
             except:
                 seq = 0
         seq += 1
+        while (jobs_dir / f"job_{seq}.json").exists():
+            seq += 1
         seq_file.write_text(str(seq))
 
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -7265,14 +7286,10 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   /**
    * Stop all watchers.
    */
-  destroy(): void {
-    for (const [, watcher] of this.watchers) {
-      watcher.close();
-    }
+  async destroy(): Promise<void> {
+    await Promise.allSettled(Array.from(this.watchers.values(), (watcher) => watcher.close()));
     this.watchers.clear();
-    for (const [, watcher] of this.libraryRootWatchers) {
-      watcher.close();
-    }
+    await Promise.allSettled(Array.from(this.libraryRootWatchers.values(), (watcher) => watcher.close()));
     this.libraryRootWatchers.clear();
     this.clearPendingRenameTimers();
   }
