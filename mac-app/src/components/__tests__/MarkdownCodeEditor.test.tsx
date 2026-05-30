@@ -71,6 +71,8 @@ import {
   getRenderedMarkdownImageSelectionFromEventTarget,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownInlineHtmlBlocks,
+  getRenderedMarkdownInlineHtmlSelectionFromEventTarget,
+  isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   getRenderedMarkdownDrawingTitle,
   isRenderedMarkdownDrawingAlt,
   replaceMarkdownImageAltAtSource,
@@ -590,6 +592,31 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     toggle?.click();
     expect(block?.classList.contains(RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS)).toBe(true);
     expect(toggle?.textContent).toBe('Collapse');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('treats rendered ft-html widgets as atomic editor selections', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension('/tmp/Field Theory/report.md')],
+      }),
+      parent,
+    });
+
+    const block = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}`) as HTMLElement | null;
+    const selection = getRenderedMarkdownInlineHtmlSelectionFromEventTarget(block?.querySelector('iframe') ?? null);
+    expect(selection).toEqual({
+      from: doc.indexOf('```ft-html'),
+      to: doc.indexOf('```\n\nProse below') + 3,
+    });
+    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from + 12, selection!.from + 12)).toBe(true);
+    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from, selection!.to)).toBe(false);
 
     view.destroy();
     parent.remove();

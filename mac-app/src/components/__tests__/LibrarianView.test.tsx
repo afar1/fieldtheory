@@ -8,6 +8,7 @@ import LibrarianView, {
   getLocalFileUrl,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
+  getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
   shouldAnimateResponsiveSidebar,
 } from '../LibrarianView';
@@ -47,6 +48,37 @@ describe('LibrarianView render', () => {
     `root:${testLibraryRootPath}`,
     `${testLibraryRootPath}::scratchpad`,
   ]);
+
+  it('deletes rendered ft-html blocks as whole containers', () => {
+    const value = 'Before\n\n```ft-html\n<section>Widget</section>\n```\n\nAfter';
+    const blockStart = value.indexOf('```ft-html');
+    const blockEnd = value.indexOf('```\n\nAfter') + 3;
+
+    const selectedEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event: new KeyboardEvent('keydown', { key: 'Backspace' }),
+      value,
+      selectionStart: blockStart + 12,
+      selectionEnd: blockStart + 20,
+    });
+    expect(selectedEdit).toMatchObject({
+      nextValue: 'Before\n\nAfter',
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+
+    const adjacentEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event: new KeyboardEvent('keydown', { key: 'Delete' }),
+      value,
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+    expect(adjacentEdit).toMatchObject({
+      nextValue: 'Before\n\nAfter',
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+    expect(blockEnd).toBeGreaterThan(blockStart);
+  });
 
   function mockStoredWikiSelection(relPath: string, options: { expandScratchpad?: boolean } = {}): void {
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => {

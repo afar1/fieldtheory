@@ -107,6 +107,8 @@ import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
+  getRenderedMarkdownInlineHtmlBlockRanges,
+  isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
@@ -1580,6 +1582,49 @@ type RenderedMarkdownImageDeleteRange = {
   deletedMarkdownImages: string[];
 };
 
+type RenderedMarkdownAtomicDeleteRange = {
+  start: number;
+  end: number;
+};
+
+function expandRenderedMarkdownBlockDeleteRange(value: string, start: number, end: number): RenderedMarkdownAtomicDeleteRange {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', end);
+  const lineEnd = lineEndIndex >= 0 ? lineEndIndex : value.length;
+  const before = value.slice(lineStart, start);
+  const after = value.slice(end, lineEnd);
+  if (before.trim() !== '' || after.trim() !== '') return { start, end };
+  if (lineEndIndex >= 0) {
+    const afterLineBreak = lineEnd + 1;
+    return { start: lineStart, end: value[afterLineBreak] === '\n' ? afterLineBreak + 1 : afterLineBreak };
+  }
+  if (lineStart > 0) return { start: lineStart - 1, end: lineEnd };
+  return { start: lineStart, end: lineEnd };
+}
+
+function getRenderedMarkdownInlineHtmlDeleteRange(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: 'Backspace' | 'Delete',
+): RenderedMarkdownAtomicDeleteRange | null {
+  const blocks = getRenderedMarkdownInlineHtmlBlockRanges(value);
+  if (selectionStart !== selectionEnd) {
+    const touched = blocks.filter((block) => selectionStart < block.to && selectionEnd > block.from);
+    if (!touched.length) return null;
+    const start = Math.min(selectionStart, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).start));
+    const end = Math.max(selectionEnd, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).end));
+    return { start, end };
+  }
+
+  const block = blocks.find((candidate) => (
+    key === 'Backspace'
+      ? candidate.from < selectionStart && selectionStart <= candidate.to
+      : candidate.from <= selectionStart && selectionStart < candidate.to
+  ));
+  return block ? expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to) : null;
+}
+
 function getAdjacentRenderedMarkdownImageDeleteRange(
   value: string,
   offset: number,
@@ -1638,6 +1683,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const selectionStart = Math.max(0, Math.min(input.selectionStart, input.value.length));
   const selectionEnd = Math.max(selectionStart, Math.min(input.selectionEnd, input.value.length));
+  const inlineHtmlRange = getRenderedMarkdownInlineHtmlDeleteRange(input.value, selectionStart, selectionEnd, key);
+  if (inlineHtmlRange) {
+    return {
+      nextValue: `${input.value.slice(0, inlineHtmlRange.start)}${input.value.slice(inlineHtmlRange.end)}`,
+      selectionStart: inlineHtmlRange.start,
+      selectionEnd: inlineHtmlRange.start,
+    };
+  }
+
   if (selectionStart !== selectionEnd) {
     const imageRange = getSelectedRenderedMarkdownImageDeleteRange(input.value, selectionStart, selectionEnd);
     if (imageRange) {
@@ -5747,6 +5801,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
 
     const value = editor.getValue();
+    if (
+      isRenderedMarkdownSelectionInsideInlineHtmlBlock(value, selection.start, selection.end)
+      && event.key !== 'Backspace'
+      && event.key !== 'Delete'
+      && event.key !== 'Escape'
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
     if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const indentEdit = getMarkdownListIndentEdit(value, selection.start, selection.end, event.shiftKey ? 'out' : 'in');
       if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
