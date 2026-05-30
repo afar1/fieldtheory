@@ -73,10 +73,10 @@ describe('LocalModelSettings', () => {
     delete (window as any).clipboardAPI;
   });
 
-  it('offers to use an already-present local model instead of downloading it', async () => {
+  it('finds an already-present local model instead of downloading it', async () => {
     render(<LocalModelSettings />);
 
-    const button = await screen.findByRole('button', { name: 'Use local model' });
+    const button = await screen.findByRole('button', { name: 'Find Gemma' });
     expect(screen.getByText('Ready')).toBeTruthy();
     expect(screen.getByText(/Atomic Chat/)).toBeTruthy();
 
@@ -88,37 +88,38 @@ describe('LocalModelSettings', () => {
     expect(setLocalLLMSelected).toHaveBeenCalledWith(modelId);
     expect(setUseLocalLLM).toHaveBeenCalledWith(true);
     expect(downloadLocalLLM).not.toHaveBeenCalled();
-    expect(await screen.findByText('Using the existing local model.')).toBeTruthy();
+    expect(await screen.findByText('Found Gemma and enabled local commands.')).toBeTruthy();
   });
 
-  it('runs the install path when the model is missing', async () => {
+  it('does not download when Gemma is missing', async () => {
     (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
 
     render(<LocalModelSettings />);
 
-    const button = await screen.findByRole('button', { name: 'Find or download' });
+    const button = await screen.findByRole('button', { name: 'Find Gemma' });
     await act(async () => {
       button.click();
       await Promise.resolve();
     });
 
     await waitFor(() => {
-      expect(downloadLocalLLM).toHaveBeenCalledWith(modelId);
+      expect(screen.getByText(/Gemma was not found yet/i)).toBeTruthy();
     });
-    expect(await screen.findByText('Found and linked the existing local model.')).toBeTruthy();
+    expect(downloadLocalLLM).not.toHaveBeenCalled();
   });
 
-  it('shows copyable Gemma 4 terminal commands that Field Theory can use', async () => {
+  it('shows copyable Ollama and Gemma 4 terminal steps that Field Theory can use', async () => {
     (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
 
     render(<LocalModelSettings />);
 
-    expect(await screen.findByText('Terminal setup')).toBeTruthy();
-    expect(screen.getByText(/Field Theory checks ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf automatically/i)).toBeTruthy();
+    expect(await screen.findByText('Setup steps')).toBeTruthy();
+    expect(screen.getByText(/Step 1: install Ollama and pull Gemma 4 in Terminal/i)).toBeTruthy();
+    expect(screen.getByText(/brew install ollama llama\.cpp && ollama pull gemma4:e4b/i)).toBeTruthy();
+    expect(screen.getByText(/Step 2: put the Gemma 4 GGUF at ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
     expect(screen.getByText(/curl -L --fail --continue-at - -o ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
-    expect(screen.getByText(/replace the placeholder before linking an existing GGUF file/i)).toBeTruthy();
     expect(screen.getByText(/test -f "<paste-your-existing-gguf-path-here>" && ln -sf "<paste-your-existing-gguf-path-here>" ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(3);
   });
 
   it('saves a customized meeting notes prompt', async () => {
