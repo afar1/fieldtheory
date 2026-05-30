@@ -50,6 +50,7 @@ export default function MarkdownPreviewCard({ title, filePath, content, isDark =
       </header>
       <FieldTheoryProse
         color={colors.text}
+        documentPath={filePath}
         fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
         fontSize="13px"
         h1Size="18px"
