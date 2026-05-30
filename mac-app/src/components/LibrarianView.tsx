@@ -767,11 +767,13 @@ const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
 export const LIBRARIAN_TODO_MARKER_STORAGE_KEY = 'librarian-todo-marker';
 export const LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY = 'librarian-maxwell-items';
+export const LIBRARIAN_HTML_LAYOUT_STORAGE_KEY = 'librarian-html-layout-by-path';
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
 
 export type LibrarianUnorderedListMarker = 'dash' | 'carrot';
 export type LibrarianTodoMarker = 'circle' | 'square';
+export type LibrarianHtmlLayout = 'contained' | 'full';
 export type LibrarianMaxwellItem = {
   id: string;
   type: 'wiki' | 'artifact' | 'external';
@@ -847,6 +849,35 @@ export function persistLibrarianMaxwellItems(
   items: LibrarianMaxwellItem[],
 ): void {
   storage.setItem(LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY, JSON.stringify(items));
+}
+
+export function isLibrarianHtmlLayout(value: unknown): value is LibrarianHtmlLayout {
+  return value === 'contained' || value === 'full';
+}
+
+export function restoreLibrarianHtmlLayoutByPath(
+  storage: Pick<Storage, 'getItem'>,
+): Record<string, LibrarianHtmlLayout> {
+  try {
+    const raw = storage.getItem(LIBRARIAN_HTML_LAYOUT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, LibrarianHtmlLayout] => (
+        typeof entry[0] === 'string' && isLibrarianHtmlLayout(entry[1])
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function persistLibrarianHtmlLayoutByPath(
+  storage: Pick<Storage, 'setItem'>,
+  layouts: Record<string, LibrarianHtmlLayout>,
+): void {
+  storage.setItem(LIBRARIAN_HTML_LAYOUT_STORAGE_KEY, JSON.stringify(layouts));
 }
 
 export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): MaxwellToolbarRunMode {
@@ -2756,6 +2787,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [maxwellItems, setMaxwellItems] = useState<LibrarianMaxwellItem[]>(() => (
     restoreLibrarianMaxwellItems(localStorage)
   ));
+  const [htmlLayoutByPath, setHtmlLayoutByPath] = useState<Record<string, LibrarianHtmlLayout>>(() => (
+    restoreLibrarianHtmlLayoutByPath(localStorage)
+  ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
   const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
     restoreRenderedTextCursorStyle(localStorage)
@@ -3759,6 +3793,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [maxwellItems]);
 
   useEffect(() => {
+    persistLibrarianHtmlLayoutByPath(localStorage, htmlLayoutByPath);
+  }, [htmlLayoutByPath]);
+
+  useEffect(() => {
     const syncTextCursorBlink = () => setBlinkTextCursor(restoreTextCursorBlink(localStorage));
     window.addEventListener('storage', syncTextCursorBlink);
     window.addEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, syncTextCursorBlink);
@@ -4138,6 +4176,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
   const activeIsHtmlDocument = activeDocumentKind === 'html';
   const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
+  const activeHtmlLayout: LibrarianHtmlLayout = activeIsHtmlDocument && activeReadingPath
+    ? htmlLayoutByPath[activeReadingPath] ?? 'full'
+    : 'contained';
+  const activeHtmlUsesFullCanvas = activeIsHtmlDocument && contentMode !== 'markdown' && activeHtmlLayout === 'full';
   const sidebarHidden = isFullScreen;
   const latestRenderedContent = latestRenderedContentRef.current;
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
@@ -7475,6 +7517,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite]);
 
+  const toggleActiveHtmlLayout = useCallback(() => {
+    if (!activeIsHtmlDocument || !activeReadingPath) return;
+    setHtmlLayoutByPath((current) => ({
+      ...current,
+      [activeReadingPath]: (current[activeReadingPath] ?? 'full') === 'full' ? 'contained' : 'full',
+    }));
+  }, [activeIsHtmlDocument, activeReadingPath]);
+
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
     await navigator.clipboard.writeText(shareStatus.url);
@@ -9321,6 +9371,51 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   typedownEnabled={activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED}
                 />
               )}
+              {focusToolbarControlsVisible && activeIsHtmlDocument && (
+                <button
+                  type="button"
+                  onClick={toggleActiveHtmlLayout}
+                  title={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
+                  aria-label={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
+                  aria-pressed={activeHtmlLayout === 'full'}
+                  style={{
+                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    boxSizing: 'border-box',
+                    padding: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: activeHtmlLayout === 'full' ? theme.text : theme.textSecondary,
+                    backgroundColor: activeHtmlLayout === 'full'
+                      ? (theme.isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                      : 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    // @ts-ignore - toolbar buttons should receive clicks.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  onMouseEnter={(event) => {
+                    event.currentTarget.style.backgroundColor = theme.hoverBg;
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = activeHtmlLayout === 'full'
+                      ? (theme.isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                      : 'transparent';
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="2.5" y="3" width="11" height="10" rx="1.25" stroke="currentColor" strokeWidth="1.35" />
+                    {activeHtmlLayout === 'full' ? (
+                      <path d="M5 6h6M5 8h6M5 10h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    ) : (
+                      <path d="M6 6h4M6 8h4M6 10h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    )}
+                  </svg>
+                </button>
+              )}
               {focusToolbarControlsVisible && (
                 <button
                   type="button"
@@ -9390,8 +9485,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
           }}
           style={{
-            flex: '0 1 auto',
-            width: `min(100%, calc(${documentMaxWidth} + 64px))`,
+            flex: activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
+            width: activeHtmlUsesFullCanvas ? '100%' : `min(100%, calc(${documentMaxWidth} + 64px))`,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: `${contentTopPadding}px 32px 0 32px`,
@@ -9404,12 +9499,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {activeReading ? (
           <div
             style={{
-              maxWidth: documentMaxWidth,
+              maxWidth: activeHtmlUsesFullCanvas ? 'none' : documentMaxWidth,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
-              flex: contentMode === 'markdown' ? '1 1 auto' : '0 1 auto',
-              height: contentMode === 'markdown' ? '100%' : 'auto',
+              flex: contentMode === 'markdown' || activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
+              height: contentMode === 'markdown' || activeHtmlUsesFullCanvas ? '100%' : 'auto',
               minHeight: 0,
               overflow: contentMode === 'markdown' ? 'hidden' : 'visible',
               position: 'relative',
@@ -9608,6 +9703,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               data-ft-rendered-editor-debug={renderedEditorDebugEnabled ? 'true' : 'false'}
               data-ft-rendered-editor-mode={contentMode}
               data-ft-rendered-editor-path={activeReading?.path ?? undefined}
+              data-ft-html-layout={activeIsHtmlDocument ? activeHtmlLayout : undefined}
               spellCheck
               tabIndex={activeReading ? 0 : undefined}
               onMouseDown={(event) => {
@@ -9646,19 +9742,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 userSelect: 'text',
                 cursor: activeReading && activeIsMarkdownDocument ? 'text' : 'default',
                 caretColor: theme.accent,
+                flex: activeHtmlUsesFullCanvas ? '1 1 auto' : undefined,
+                minHeight: activeHtmlUsesFullCanvas ? 0 : undefined,
+                display: activeHtmlUsesFullCanvas ? 'flex' : undefined,
+                flexDirection: activeHtmlUsesFullCanvas ? 'column' : undefined,
               }}
             >
               {activeIsHtmlDocument && activeReadingPath ? (
                 <iframe
                   title={activeReading.title}
                   data-ft-html-preview="true"
+                  data-ft-html-layout={activeHtmlLayout}
                   srcDoc={getHtmlPreviewSrcDoc(activeReadingContent ?? activeReading.content, activeReadingPath)}
                   sandbox=""
                   style={{
                     display: 'block',
                     width: '100%',
                     minHeight: '520px',
-                    height: 'min(72vh, 820px)',
+                    height: activeHtmlUsesFullCanvas ? '100%' : '72vh',
+                    maxHeight: activeHtmlUsesFullCanvas ? undefined : '820px',
+                    flex: activeHtmlUsesFullCanvas ? '1 1 auto' : undefined,
                     border: `1px solid ${theme.border}`,
                     borderRadius: '6px',
                     backgroundColor: '#fff',
