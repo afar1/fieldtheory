@@ -13,6 +13,7 @@ import {
   shouldSendBackendResize,
   shouldFocusTerminalForRequest,
   shouldUseCompactRightDockToolbar,
+  getTerminalTopExtension,
   terminalAppearanceOptions,
   terminalContrastRatio,
   terminalTheme,
@@ -240,6 +241,16 @@ describe('estimateCodexTerminalSize', () => {
       cols: 93,
       rows: 18,
     });
+  });
+});
+
+describe('getTerminalTopExtension', () => {
+  it('extends the right dock to the viewport top from its current panel top', () => {
+    expect(getTerminalTopExtension({ panelTop: 52.4, previousTopExtension: 0 })).toBe(52);
+  });
+
+  it('does not accumulate drift after the panel has already been pulled upward', () => {
+    expect(getTerminalTopExtension({ panelTop: 0.2, previousTopExtension: 52 })).toBe(52);
   });
 });
 
