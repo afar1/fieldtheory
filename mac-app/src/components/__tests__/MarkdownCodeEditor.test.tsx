@@ -592,6 +592,9 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     toggle?.click();
     expect(block?.classList.contains(RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS)).toBe(true);
     expect(toggle?.textContent).toBe('Collapse');
+    toggle?.click();
+    expect(block?.classList.contains(RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS)).toBe(false);
+    expect(toggle?.textContent).toBe('Expand');
 
     view.destroy();
     parent.remove();
@@ -616,7 +619,50 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       to: doc.indexOf('```\n\nProse below') + 3,
     });
     expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from + 12, selection!.from + 12)).toBe(true);
-    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from, selection!.to)).toBe(false);
+    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from, selection!.to)).toBe(true);
+    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.from, selection!.from)).toBe(false);
+    expect(isRenderedMarkdownSelectionInsideInlineHtmlBlock(doc, selection!.to, selection!.to)).toBe(false);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('allows typing immediately before and after rendered ft-html widgets, but not into the widget', () => {
+    const doc = 'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below';
+    const blockFrom = doc.indexOf('```ft-html');
+    const blockTo = doc.indexOf('```\n\nProse below') + 3;
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension('/tmp/Field Theory/report.md')],
+      }),
+      parent,
+    });
+
+    view.dispatch({ selection: EditorSelection.cursor(blockFrom) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: 'before ',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toContain('Prose above\n\nbefore \n\n```ft-html');
+
+    const nextBlockFrom = view.state.doc.toString().indexOf('```ft-html');
+    const nextBlockTo = view.state.doc.toString().indexOf('```\n\nProse below') + 3;
+    view.dispatch({ selection: EditorSelection.range(nextBlockFrom, nextBlockTo) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: 'x',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toContain('before \n\n```ft-html\n<section>Widget</section>');
+
+    view.dispatch({ selection: EditorSelection.cursor(nextBlockTo) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: 'after ',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toContain('```\n\nafter Prose below');
 
     view.destroy();
     parent.remove();
