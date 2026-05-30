@@ -12744,7 +12744,7 @@ if (!gotTheLock) {
 
     ipcMain.handle('updater:downloadUpdate', () => {
       if (!isAutoUpdaterEnabled) return;
-      getAutoUpdater().downloadUpdate();
+      return getAutoUpdater().downloadUpdate().catch((err) => reportAutoUpdaterError('Update download failed', err));
     });
 
     ipcMain.handle('updater:installUpdate', () => {
@@ -12756,7 +12756,13 @@ if (!gotTheLock) {
         }
       });
       setTimeout(() => {
-        getAutoUpdater().quitAndInstall();
+        try {
+          appQuitConfirmedWithLocalWork = true;
+          getAutoUpdater().quitAndInstall(false, true);
+        } catch (err) {
+          appQuitConfirmedWithLocalWork = false;
+          reportAutoUpdaterError('Update install failed', err);
+        }
       }, 250);
     });
 

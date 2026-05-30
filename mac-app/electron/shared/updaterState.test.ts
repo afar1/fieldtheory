@@ -16,9 +16,10 @@ describe('updater state transitions', () => {
     expect(resolveUpdaterStatusTransition('ready', 'installing')).toBe('installing');
   });
 
-  it('keeps installing sticky until explicitly forced', () => {
+  it('keeps installing sticky until explicitly forced or failed', () => {
     expect(resolveUpdaterStatusTransition('installing', 'ready')).toBe('installing');
     expect(resolveUpdaterStatusTransition('installing', 'idle')).toBe('installing');
+    expect(resolveUpdaterStatusTransition('installing', 'error')).toBe('error');
     expect(resolveUpdaterStatusTransition('installing', 'idle', { force: true })).toBe('idle');
   });
 
