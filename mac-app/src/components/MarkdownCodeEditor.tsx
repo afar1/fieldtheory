@@ -181,6 +181,11 @@ export interface MarkdownCodeEditorImagePreview {
   sourceTo: number | null;
 }
 
+export interface MarkdownCodeEditorSourceRange {
+  from: number;
+  to: number;
+}
+
 export function isRenderedMarkdownDrawingAlt(alt: string): boolean {
   return alt === 'Drawing' || alt.startsWith(DRAWING_ALT_PREFIX);
 }
@@ -823,6 +828,16 @@ export function getRenderedMarkdownImageSelectionFromEventTarget(target: EventTa
   return { from: sourceFrom, to: sourceTo };
 }
 
+export function getRenderedMarkdownInlineHtmlSelectionFromEventTarget(target: EventTarget | null): MarkdownCodeEditorSourceRange | null {
+  if (!(target instanceof Element)) return null;
+  const block = target.closest(`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}`);
+  if (!(block instanceof HTMLElement)) return null;
+  const sourceFrom = parseNullableMarkdownSourceOffset(block.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
+  const sourceTo = parseNullableMarkdownSourceOffset(block.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
+  if (sourceFrom === null || sourceTo === null || sourceTo <= sourceFrom) return null;
+  return { from: sourceFrom, to: sourceTo };
+}
+
 function commitRenderedMarkdownDrawingCaption(view: EditorView, target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   const captionText = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`);
@@ -1085,7 +1100,7 @@ const renderedMarkdownDocumentPathFacet = Facet.define<string | null, string | n
 });
 type RenderedMarkdownEditorRange = { from: number; to: number };
 type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
-type RenderedMarkdownInlineHtmlBlock = {
+export type RenderedMarkdownInlineHtmlBlock = {
   from: number;
   to: number;
   content: string;
@@ -1100,7 +1115,7 @@ function rangesIntersect(
   return first.from < second.to && second.from < first.to;
 }
 
-export function getRenderedMarkdownInlineHtmlBlocks(state: EditorState): RenderedMarkdownInlineHtmlBlock[] {
+export function getRenderedMarkdownInlineHtmlBlockRanges(value: string): RenderedMarkdownInlineHtmlBlock[] {
   const blocks: RenderedMarkdownInlineHtmlBlock[] = [];
   let active: {
     fence: string;
@@ -1109,35 +1124,71 @@ export function getRenderedMarkdownInlineHtmlBlocks(state: EditorState): Rendere
     fromLine: number;
   } | null = null;
 
-  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-    const line = state.doc.line(lineNumber);
+  const lines = value.split('\n');
+  let offset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const text = lines[index];
+    const lineNumber = index + 1;
+    const lineFrom = offset;
+    const lineTo = offset + text.length;
     if (!active) {
-      const startMatch = /^(`{3,}|~{3,})\s*ft-html\s*$/.exec(line.text);
+      const startMatch = /^(`{3,}|~{3,})\s*ft-html\s*$/.exec(text);
       if (startMatch) {
         active = {
           fence: startMatch[1],
-          from: line.from,
-          contentFrom: line.to + 1,
+          from: lineFrom,
+          contentFrom: lineTo + 1,
           fromLine: lineNumber,
         };
       }
+      offset = lineTo + 1;
       continue;
     }
 
-    const closeMatch = new RegExp(`^${active.fence[0]}{${active.fence.length},}\\s*$`).exec(line.text);
-    if (!closeMatch) continue;
-    const contentTo = Math.max(active.contentFrom, line.from - 1);
+    const closeMatch = new RegExp(`^${active.fence[0]}{${active.fence.length},}\\s*$`).exec(text);
+    if (!closeMatch) {
+      offset = lineTo + 1;
+      continue;
+    }
+    const contentTo = Math.max(active.contentFrom, lineFrom - 1);
     blocks.push({
       from: active.from,
-      to: line.to,
-      content: state.doc.sliceString(active.contentFrom, contentTo),
+      to: lineTo,
+      content: value.slice(active.contentFrom, contentTo),
       fromLine: active.fromLine,
       toLine: lineNumber,
     });
     active = null;
+    offset = lineTo + 1;
   }
 
   return blocks;
+}
+
+export function getRenderedMarkdownInlineHtmlBlocks(state: EditorState): RenderedMarkdownInlineHtmlBlock[] {
+  return getRenderedMarkdownInlineHtmlBlockRanges(state.doc.toString());
+}
+
+export function getRenderedMarkdownInlineHtmlBlockRangeAt(
+  value: string,
+  from: number,
+  to = from,
+): MarkdownCodeEditorSourceRange | null {
+  const selectionStart = Math.max(0, Math.min(from, value.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(to, value.length));
+  return getRenderedMarkdownInlineHtmlBlockRanges(value).find((block) => (
+    selectionStart < block.to && selectionEnd > block.from
+  )) ?? null;
+}
+
+export function isRenderedMarkdownSelectionInsideInlineHtmlBlock(
+  value: string,
+  from: number,
+  to = from,
+): boolean {
+  const block = getRenderedMarkdownInlineHtmlBlockRangeAt(value, from, to);
+  if (!block) return false;
+  return from > block.from || to < block.to;
 }
 
 function pushRenderedSyntaxReplacement(
@@ -1318,6 +1369,9 @@ export function getRenderedMarkdownBlockBodyClickPosition(
 
 export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
   const selection = view.state.selection.main;
+  if (isRenderedMarkdownSelectionInsideInlineHtmlBlock(view.state.doc.toString(), selection.from, selection.to)) {
+    return true;
+  }
   if (!selection.empty) return false;
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
@@ -3086,6 +3140,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                   event.preventDefault();
                   view.focus();
                   view.dispatch({ selection: { anchor: imageSelection.from, head: imageSelection.to } });
+                  return true;
+                }
+                const inlineHtmlSelection = getRenderedMarkdownInlineHtmlSelectionFromEventTarget(event.target);
+                if (inlineHtmlSelection !== null) {
+                  event.preventDefault();
+                  view.focus();
+                  view.dispatch({ selection: { anchor: inlineHtmlSelection.from, head: inlineHtmlSelection.to } });
                   return true;
                 }
                 const blockBodyPos = getRenderedMarkdownBlockBodyClickPosition(
