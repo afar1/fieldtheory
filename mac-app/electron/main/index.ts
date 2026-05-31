@@ -93,6 +93,7 @@ import {
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import type { QuotaManager } from './quotaManager';
+import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
 import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
@@ -9214,94 +9215,9 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  // =========================================================================
-  // Quota IPC Handlers - Local usage tracking
-  // QuotaManager handles session checking internally via setSessionChecker().
-  // =========================================================================
-
-  ipcMain.handle('quota:getQuotas', async () => {
-    if (!quotaManager) {
-      return null;
-    }
-    return quotaManager.getQuotas();
-  });
-
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => {
-    if (!quotaManager) {
-      return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
-    }
-    // Map old feature names to new database column names.
-    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'portable_commands'> = {
-      priorityMic: 'priority_mic_seconds',
-      autoStack: 'auto_stack_sessions',
-      textImprove: 'text_improve_words',
-      portableCommands: 'portable_commands',
-    };
-    const dbFeature = featureMap[feature];
-    return quotaManager.getFeatureStatus(dbFeature);
-  });
-
-  ipcMain.handle('quota:getFormattedUsage', async () => {
-    if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', portableCommands: 'Unlimited' };
-    }
-    return {
-      priorityMic: quotaManager.formatPriorityMicUsage(),
-      autoStack: quotaManager.formatAutoStackUsage(),
-      textImprove: quotaManager.formatTextImproveUsage(),
-      portableCommands: quotaManager.formatPortableCommandsUsage(),
-    };
-  });
-
-  ipcMain.handle('quota:getResetDate', async () => {
-    // Quotas now reset on calendar month boundary (1st of each month).
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  });
-
-  ipcMain.handle('quota:getDaysUntilReset', async () => {
-    if (!quotaManager) {
-      return 0;
-    }
-    return quotaManager.getDaysUntilReset();
-  });
-
-  ipcMain.handle('quota:getLimits', async () => {
-    if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, portableCommands: Infinity };
-    }
-    const raw = quotaManager.getLimits();
-    // Transform keys from snake_case to camelCase and convert seconds to minutes.
-    return {
-      priorityMicMinutes: raw.priority_mic_seconds === Infinity ? Infinity : Math.floor(raw.priority_mic_seconds / 60),
-      autoStackSessions: raw.auto_stack_sessions,
-      textImprovementWords: raw.text_improve_words,
-      portableCommands: raw.portable_commands,
-    };
-  });
-
-  ipcMain.handle('quota:refreshTier', async () => {
-    // Sync usage and tier from server. Tier is included in get-usage response.
-    if (!quotaManager) {
-      return { tier: 'free', error: 'Not initialized' };
-    }
-
-    try {
-      await quotaManager.syncFromServer();
-      const tier = quotaManager.getCachedTier();
-
-      // Broadcast tier change to all windows.
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('tier:changed', tier);
-        }
-      });
-
-      return { tier, error: null };
-    } catch (err) {
-      log.error('Error refreshing tier:', err);
-      return { tier: quotaManager.getCachedTier(), error: String(err) };
-    }
+  registerQuotaIpc({
+    getQuotaManager: () => quotaManager,
+    logError: (message, error) => log.error(message, error),
   });
 
   // =========================================================================
