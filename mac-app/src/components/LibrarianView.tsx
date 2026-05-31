@@ -3059,6 +3059,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
   const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
   const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
+  const userResizingPanel = isResizing || codexTerminalResizing;
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
@@ -3069,7 +3070,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     sidebarForcedVisible: sidebarForcedVisibleForEmptySelection,
     terminalVisible: codexTerminalVisible,
     terminalDockSide: codexTerminalDockSide,
-    userResizing: isResizing || codexTerminalResizing,
+    userResizing: userResizingPanel,
     autoCollapseSidebarSuppressed: suppressAutoCollapseSidebar,
     previous: responsivePanelStateRef.current,
   });
@@ -3082,7 +3083,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
   const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
     responsivePanelState,
-    userResizing: isResizing || codexTerminalResizing,
+    userResizing: userResizingPanel,
   });
   useEffect(() => {
     if (sidebarToggleRequestKey > 0 && effectiveSidebarCollapsed && !isFullScreen) {
@@ -4063,6 +4064,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
       const width = Math.round(containerRect.width);
       const height = Math.round(containerRect.height);
+      const containerSizeChanged = responsivePanelSize.width !== width || responsivePanelSize.height !== height;
+      if (containerSizeChanged && sidebarHoverExpanded) {
+        setSidebarHoverExpanded(false);
+      }
       setResponsivePanelSize((previous) => {
         if (previous.width === width && previous.height === height) return previous;
         return { width, height };
@@ -4121,7 +4126,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       resizeObserver.disconnect();
       window.removeEventListener('resize', scheduleResizeUpdate);
     };
-  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, responsivePanelSize.height, responsivePanelSize.width, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -8615,7 +8620,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   };
 
   const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !activeReading && !isFullScreen);
-  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisible;
+  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !userResizingPanel && !isFullScreen && !sidebarForcedVisible;
   const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!sidebarTemporarilyExpanded) return;
