@@ -51,7 +51,7 @@ Capability classes:
 | `claudeAPI` | advanced/dev surface | process-execution | Claude integration handlers | Local agent/tooling integration. Should remain outside basic setup docs. |
 | `cursorAPI` | advanced/dev surface | process-execution, os-integration | Cursor integration handlers | Local editor/agent integration. Should remain outside basic setup docs. |
 | `codexReadPermissionAPI` | advanced/dev surface | local-read, local-write | Codex permission handlers | Controls read permission state for Codex-related workflows. |
-| `shellAPI` | public app surface with checks | os-integration | `shell:*` handlers | `shell:openExternal` only permits `http:` and `https:` URLs. Other shell methods should remain explicit about what they open or reveal. |
+| `shellAPI` | public app surface with checks | os-integration | `shellIpc.ts`, `shell:*` handlers | `shell:openExternal` permits `http:`, `https:`, `mailto:`, and `x-apple.systempreferences:` URLs. Other shell methods should remain explicit about what they open or reveal. |
 | `diagnosticsAPI` | dev-internal surface | local-read, local-write | diagnostics handlers | Reads diagnostics and writes rendered-editor debug logs. Good for contributors, but privacy-sensitive if copied into issues. |
 | `audioAPI` | public app surface | os-integration, local-read, local-write | audio manager channels | Audio device state and priority device behavior. |
 | `gazeAPI` | experimental surface | os-integration, local-read, local-write | gaze handlers and gaze overlay preload files | Gaze windows and overlays are present but should be described as experimental until there is a public readiness note. |
@@ -123,4 +123,4 @@ The smallest useful next code step is to create feature-owned IPC registration m
 - `registerUpdaterIpc`
 - `registerShellIpc`
 
-Each move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.
+The first module, `registerShellIpc`, now lives in `mac-app/electron/main/shellIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.

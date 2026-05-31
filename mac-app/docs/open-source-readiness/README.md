@@ -17,6 +17,7 @@ The immediate purpose is to make the app legible before making Tier 1 public dec
 - [Asset provenance inventory](./asset-provenance-inventory.md): bundled media/icon/reference voice assets that need source and redistribution confirmation.
 - [Tier 1 audit](./tier-1-audit.md): what the first public-readiness pass completed and which public-release gates still require explicit decisions.
 - [Tier 2 audit](./tier-2-audit.md): what the architecture and boundary pass completed and which code boundaries still need cleanup.
+- [Tier 2 progress](./tier-2-progress.md): current plain-English checklist for the active Tier 2 code slice.
 
 ## Current public-readiness position
 

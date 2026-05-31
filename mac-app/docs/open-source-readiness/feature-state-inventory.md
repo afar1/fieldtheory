@@ -34,7 +34,7 @@ The most important rule is simple: do not call something broken just because it 
 | Tagged docs | Public local default | `taggedDocsAPI`, `tagged.db` | Local tagging/indexing surface. |
 | Onboarding | Public local default | `onboardingAPI`, `onboardingWindow.ts`, preferences | First-run permission and setup flow. |
 | Global hotkeys | Public local default with permissions | `hotkeyAPI`, clipboard preferences | Document as macOS integration that may require accessibility permissions depending on behavior. |
-| Shell open/reveal behavior | Public local default with checks | `shellAPI`, `shell:openExternal` | `openExternal` is scheme-limited to `http:` and `https:`. Other shell actions should stay explicit. |
+| Shell open/reveal behavior | Public local default with checks | `shellAPI`, `shellIpc.ts`, `shell:openExternal` | `openExternal` is scheme-limited to `http:`, `https:`, `mailto:`, and `x-apple.systempreferences:`. Other shell actions should stay explicit. |
 | Auth | Account-backed public | `authAPI`, `authManager`, `supabase-session.json` | Public setup can run without login, but account-backed features need Supabase config and an account. |
 | Account status | Account-backed public | `accountAPI`, `account:*` handlers | Safer account metadata surface than full session access. |
 | Quotas and usage limits | Account-backed public | `quotaAPI`, `quota:*` handlers | Account-backed feature limits. Explain that local dev may not exercise these without Supabase. |

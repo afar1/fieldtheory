@@ -13,10 +13,11 @@ Tier 2 is the architecture and boundary pass. Its job is to make the current Mac
 - Documented disabled mobile transcript sync and shared clipboard behavior as intentionally inert, not broken setup.
 - Documented the experimental updater and packaging paths as maintainer-only.
 - Added dependency license summary automation during the public-readiness pass with `npm run license:summary`.
+- Extracted the shell IPC handler family into `mac-app/electron/main/shellIpc.ts` with focused coverage for all three public `shell:*` channels.
 
 ## Code observations
 
-`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a public-release blocker, but it is the main contributor comprehension problem. A new contributor has to scan one very large integration file to find auth, River, commands, clipboard settings, shell behavior, updater behavior, and agent surfaces.
+`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a public-release blocker, but it is the main contributor comprehension problem. The shell handler family has moved out, but a new contributor still has to scan one very large integration file to find auth, River, commands, clipboard settings, updater behavior, and agent surfaces.
 
 `mac-app/electron/preload.ts` is the real public capability surface. It is large, but it is also useful because it gives one place to see what the renderer can request. The new IPC map should be treated as a bridge between current code and a future generated contract.
 
@@ -35,9 +36,8 @@ Do these as narrow behavior-preserving PRs:
 3. Add or keep focused tests around the moved handler group.
 4. Update `ipc-capability-map.md` in the same PR.
 
-Start with the lowest-risk owner modules:
+Continue with the remaining low-risk owner modules:
 
-- `registerShellIpc`, because the surface is small and has clear URL-scheme behavior.
 - `registerAccountIpc`, because it is small and distinct from full auth/session handling.
 - `registerFieldTheorySyncIpc`, because it already has a policy module and tests.
 - `registerUpdaterIpc`, because contributor-versus-maintainer docs already separate it from local development.
@@ -53,7 +53,7 @@ Then move the higher-complexity owners:
 
 ## Remaining Tier 2 gaps
 
-- Main-process IPC registration is still physically concentrated in `main/index.ts`.
+- Most main-process IPC registration is still physically concentrated in `main/index.ts`.
 - Feature state is documented but not centralized in code.
 - Auth/session access is documented but not narrowed.
 - Contributor-safe development data paths are documented as a need, but no first-class path override was added.
@@ -65,6 +65,7 @@ Then move the higher-complexity owners:
 - Checked `mac-app/electron/preload.ts` for current `contextBridge.exposeInMainWorld` globals.
 - Checked preload comments for disabled mobile transcript sync, shared clipboard stubs, and experimental Tasks tab behavior.
 - Checked `mac-app/electron/main/index.ts` for auth, River/shared files, team, metrics, commands, account, sync, updater, shell, agent, and clipboard handler families.
+- Checked `mac-app/electron/main/shellIpc.ts` and `mac-app/electron/main/shellIpc.test.ts` for the extracted shell handler family.
 - Checked `mac-app/electron/main/releaseSyncPolicy.ts` for internal sync gate names.
 - Checked `mac-app/electron/main/preferences.ts` for Tasks tab preference state.
 
