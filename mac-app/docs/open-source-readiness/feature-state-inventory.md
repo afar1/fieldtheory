@@ -36,12 +36,12 @@ The most important rule is simple: do not call something broken just because it 
 | Global hotkeys | Public local default with permissions | `hotkeyAPI`, clipboard preferences | Document as macOS integration that may require accessibility permissions depending on behavior. |
 | Shell open/reveal behavior | Public local default with checks | `shellAPI`, `shellIpc.ts`, `shell:openExternal` | `openExternal` is scheme-limited to `http:`, `https:`, `mailto:`, and `x-apple.systempreferences:`. Other shell actions should stay explicit. |
 | Auth | Account-backed public | `authAPI`, `authManager`, `supabase-session.json` | Public setup can run without login, but account-backed features need Supabase config and an account. |
-| Account status | Account-backed public | `accountAPI`, `account:*` handlers | Safer account metadata surface than full session access. |
+| Account status | Account-backed public | `accountAPI`, `accountIpc.ts`, `account:*` handlers | Safer account metadata surface than full session access. |
 | Quotas and usage limits | Account-backed public | `quotaAPI`, `quota:*` handlers | Account-backed feature limits. Explain that local dev may not exercise these without Supabase. |
 | Metrics sync | Account-backed public with privacy note | `metricsAPI`, `user-metrics.json`, `metrics:*` handlers | Local metrics exist; sync/fetch are cloud-backed. Privacy docs must state this clearly. |
 | Feedback and social feedback | Account-backed public | `socialAPI`, Supabase feedback behavior | Cloud-backed. Keep privacy language explicit. |
 | River shared documents | Account-backed public | `sharedFilesAPI`, `teamAPI`, `sharedSyncService.ts`, `sharedTeamService.ts` | Current public collaboration feature. Do not conflate with full private Library sync. |
-| Full Library sync | Internal-gated | `fieldTheorySyncAPI`, `releaseSyncPolicy.ts`, `preferences.ts` | Code exists but should not be promised as default public behavior. Gate names include `FIELD_THEORY_INTERNAL_SYNC_ENABLED` and `FIELD_THEORY_INTERNAL_SYNC`. |
+| Full Library sync | Internal-gated | `fieldTheorySyncAPI`, `fieldTheorySyncIpc.ts`, `releaseSyncPolicy.ts`, `preferences.ts` | Code exists but should not be promised as default public behavior. Gate names include `FIELD_THEORY_INTERNAL_SYNC_ENABLED` and `FIELD_THEORY_INTERNAL_SYNC`. |
 | Command/mobile sync | Internal-gated | command sync handlers, `releaseSyncPolicy.ts` | Treat as internal until public policy and docs exist. |
 | Tasks tab and todos | Experimental/internal | `todoAPI`, `preferences.ts`, preload comments | The Tasks tab is hidden by default and marked experimental. Do not present as stable public setup. |
 | Mobile transcript sync into clipboard history | Disabled/stubbed | `clipboardAPI` sync methods in `preload.ts` | Preload methods intentionally return inert values. `clipboard:getSyncSession` remains in old type definitions but no active handler was found in `main/index.ts`. |
@@ -57,7 +57,7 @@ The most important rule is simple: do not call something broken just because it 
 | Scenario and auth simulator | Dev-only | `scenarioAPI`, `authAPI.simulateState`, `authAPI.resetSimulator` | Useful for testing and demos. Do not describe as user-facing product behavior. |
 | Diagnostics and debug logs | Dev-only with privacy caution | `diagnosticsAPI` | Good contributor support surface. Warn contributors not to paste logs containing local paths or document contents into public issues. |
 | Production updater | Maintainer-only in packaged builds | `updaterAPI`, `buildChannel.ts`, `electron-updater` setup | Local development does not require updater behavior. |
-| Experimental updater | Maintainer-only | `buildChannel.ts`, `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`, `electron-builder.experimental.json` | Requires GitHub auth or private token for `afar1/oscar` release assets. Do not include in contributor setup. |
+| Experimental updater | Maintainer-only | `buildChannel.ts`, `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`, `electron-builder.experimental.json` | Requires maintainer GitHub auth or a private update token. Do not include in contributor setup. |
 | Packaging, signing, notarization | Maintainer-only | `mac-app/package.json`, `mac-app/scripts`, Electron Builder configs | Public contributors can build/test locally without signing or release credentials. |
 | Stripe upgrade links | Account-backed public config | `stripeConfig` in `preload.ts` | Live links are public configuration. License/open-source docs should decide whether they stay in public builds. |
 

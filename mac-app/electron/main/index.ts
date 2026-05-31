@@ -94,6 +94,7 @@ import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import type { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
+import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
@@ -104,6 +105,7 @@ import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
+import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
 import {
@@ -1381,9 +1383,10 @@ async function runRecordingAsrQualityBenchmark(benchmarkId: string): Promise<voi
 
 function getRecordingAsrBenchmarkFixturePath(): string {
   const configuredFixturePath = process.env.FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO?.trim();
-  return configuredFixturePath
-    ? path.resolve(configuredFixturePath)
-    : path.join(__dirname, '../../resources/chatterbox/reference-voice.wav');
+  if (!configuredFixturePath) {
+    throw new Error('Set FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO to a local WAV fixture before running the recording ASR benchmark');
+  }
+  return path.resolve(configuredFixturePath);
 }
 
 async function prepareRecordingAsrBenchmarkAudio(benchmarkId: string): Promise<{ audioPath: string; cleanup: () => void }> {
@@ -2168,7 +2171,6 @@ function resolveClipboardFullScreenHotkeyPreference(prefs: {
 
 function getLocalEnvPaths(): string[] {
   return [
-    '/Users/afar/dev/fieldtheory/.env.local',
     path.join(__dirname, '../../../.env.local'),
     path.join(__dirname, '../../.env.local'),
     path.join(process.cwd(), '.env.local'),
@@ -2305,7 +2307,7 @@ function formatAutoUpdaterErrorMessage(err: unknown): string {
     fieldTheoryBuildChannel === 'experimental'
     && /(401|403|404|not found|forbidden|unauthorized)/i.test(message)
   ) {
-    return 'Experimental updates need GitHub auth for afar1/oscar. Run gh auth login or set FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN, then restart Field Theory Experimental.';
+    return 'Experimental updates need maintainer GitHub access. Sign in with the GitHub CLI or set the maintainer-only experimental update token, then restart Field Theory Experimental.';
   }
   return message;
 }
@@ -11066,27 +11068,18 @@ function setupClipboardIPCHandlers(): void {
     return await feedbackManager.isCurrentUserAdmin();
   });
 
-  ipcMain.handle('account:getStatus', async () => {
-    return accountStatusManager?.getStatus() ?? { state: 'checking', capabilityMode: 'writable' };
+  registerAccountIpc({
+    getAccountStatusManager: () => accountStatusManager,
   });
 
-  ipcMain.handle('account:checkNow', async () => {
-    if (!accountStatusManager) {
-      return { state: 'checking', capabilityMode: 'writable' };
-    }
-    return accountStatusManager.checkNow();
-  });
-
-  ipcMain.handle('fieldTheorySync:getStatus', async () => {
-    return getFieldTheorySyncStatus();
-  });
-
-  ipcMain.handle('fieldTheorySync:setLocalEnabled', async (_event, enabled: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled === true });
-      refreshFieldTheorySyncServices();
-    }
-    return getFieldTheorySyncStatus();
+  registerFieldTheorySyncIpc({
+    getStatus: getFieldTheorySyncStatus,
+    setLocalEnabled: async (enabled: boolean) => {
+      if (preferencesManager) {
+        await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled });
+        refreshFieldTheorySyncServices();
+      }
+    },
   });
 }
 

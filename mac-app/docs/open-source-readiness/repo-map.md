@@ -36,7 +36,7 @@ This map is written for open-source readiness. It names the areas a contributor 
 - `mac-app/README.md`: too thin and partly stale for public contributors. It tells users to copy `.env.example`, but no `mac-app/.env.example` exists in the current tree.
 - `mac-app/PRIVACY_POLICY.md`: stale for current Mac behavior. It says Supabase is for iOS sync only, but current Mac code also uses Supabase for auth, metrics, quota/account checks, feedback, public sharing, River, and optional sync. It also says API keys are stored in Keychain, while Supabase session persistence is file-backed in `supabase-session.json`.
 - `mac-app/docs/ARCHITECTURE.md`: useful historical context, but stale around shared clipboard, mobile sync, social sync, and the current River/shared sync shape.
-- `mac-app/docs/RELEASE_WORKFLOW.md`: stale for open source. It describes private source and separate public release publishing.
+- `mac-app/docs/RELEASE_WORKFLOW.md`: maintainer packaging notes. It should stay separate from contributor setup because packaging uses signing, notarization, updater feeds, and release credentials.
 - `mac-app/docs/RELEASE_CHECKLIST.md`: version-specific and stale relative to the current package version.
 - `mac-app/CHANGELOG.md`: stops before the current app version.
 

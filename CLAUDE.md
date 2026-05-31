@@ -181,11 +181,11 @@ See `PRODUCT_OVERVIEW.md` for detailed iOS architecture.
 
 ## Releases
 
-**IMPORTANT**: The mac-app auto-updater checks `afar1/field-releases` (not `afar1/oscar`).
+**IMPORTANT**: The mac-app production auto-updater checks the production release feed, not the experimental source/release feed.
 
 When releasing:
 1. Build and package: `npm run package`
-2. Notarize: use credentials from `/Users/afar/dev/fieldtheory/.env.local`
+2. Notarize: use maintainer-controlled Apple credentials stored outside the repository
 3. Staple: `xcrun stapler staple <dmg>`
 4. Upload to **field-releases**: `gh release create vX.X.X --repo afar1/field-releases ...`
 5. Rename files to use periods not spaces: `Field.Theory-X.X.X-arm64.dmg`

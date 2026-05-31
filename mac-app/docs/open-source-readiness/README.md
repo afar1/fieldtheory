@@ -15,15 +15,17 @@ The immediate purpose is to make the app legible before making Tier 1 public dec
 - [IPC capability map](./ipc-capability-map.md): every renderer global exposed by preload, grouped by capability class and contributor risk.
 - [Feature state inventory](./feature-state-inventory.md): which surfaces are public local, account-backed, internal-gated, disabled, experimental, maintainer-only, or dev-only.
 - [Asset provenance inventory](./asset-provenance-inventory.md): bundled media/icon/reference voice assets that need source and redistribution confirmation.
+- [Secret and private reference audit](./secret-private-reference-audit.md): current tracked-file findings and required history-aware audit before publication.
+- [Dependency and asset follow-up](./dependency-asset-followup.md): remaining provenance, notice, model, and audit follow-up that does not depend on choosing a license.
 - [Tier 1 audit](./tier-1-audit.md): what the first public-readiness pass completed and which public-release gates still require explicit decisions.
 - [Tier 2 audit](./tier-2-audit.md): what the architecture and boundary pass completed and which code boundaries still need cleanup.
-- [Tier 2 progress](./tier-2-progress.md): current plain-English checklist for the active Tier 2 code slice.
+- [Open source readiness progress](./open-source-readiness-progress.md): current plain-English checklist for the active non-license readiness work.
 
 ## Current public-readiness position
 
 Field Theory Mac is local-first, but not local-only. The core Library, editor, clipboard history, command launcher, transcription, bookmarks, and many settings operate on local files and local app data. Login unlocks account-backed features such as feedback, account status, quota or usage checks, public sharing, River shared documents, and any internally enabled sync features.
 
-The main public documentation problem is not that the app lacks code. It is that the public story is stale or contradictory. The root README and LICENSE currently describe the project as proprietary, while `mac-app/PRIVACY_POLICY.md` already uses open-source language. `mac-app/README.md` points at a missing `.env.example`. Release docs still describe a private source repository and separate public release repository. Those documents should be replaced or rewritten from this foundation before the repo is presented publicly.
+The main remaining public documentation problem is not that the app lacks code. It is that the final license story is still deferred. The root README and Mac docs now describe the repository as an open-source candidate, but the root `LICENSE` remains proprietary until a human license decision is made. Maintainer packaging docs are separate from contributor setup because releases still depend on signing, notarization, updater feeds, and private maintainer credentials.
 
 ## Success criteria for this pass
 

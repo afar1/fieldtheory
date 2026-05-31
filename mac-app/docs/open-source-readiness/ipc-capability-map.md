@@ -37,11 +37,11 @@ Capability classes:
 | `sharedFilesAPI` | account-backed public surface | local-read, local-write, cloud | `sharedFiles:*` handlers, `sharedSyncService.ts` | River shared markdown documents. Remote data lives in Supabase and local cache lives under `River (shared)`. |
 | `teamAPI` | account-backed public surface | cloud | `team:*` handlers, `sharedTeamService.ts` | Team membership, contacts, invites, and shared document state. Requires auth. |
 | `authAPI` | account-backed public surface | auth-session, cloud, dev-internal | `auth:*` handlers, `authManager` | `auth:getSession` returns the current Supabase session to the renderer. Simulator/debug methods are development-oriented and should not be presented as product setup. |
-| `accountAPI` | account-backed public surface | local-read, cloud | `account:*` handlers | Account status and manual refresh. Safer public account metadata path than full session access. |
+| `accountAPI` | account-backed public surface | local-read, cloud | `accountIpc.ts`, `account:*` handlers | Account status and manual refresh. Safer public account metadata path than full session access. |
 | `quotaAPI` | account-backed public surface | local-read, cloud | `quota:*` handlers | Usage/quota checks for gated features. |
 | `metricsAPI` | account-backed public surface | local-read, local-write, cloud | `metrics:*` handlers | Reads local usage metrics and can sync or fetch Supabase-backed metrics. |
 | `socialAPI` | account-backed public surface | cloud | social/feedback handlers | Feedback and social feedback behavior. Requires accurate public privacy language. |
-| `fieldTheorySyncAPI` | internal-gated surface | local-read, local-write, cloud | `fieldTheorySync:*`, `releaseSyncPolicy.ts` | Full Library sync is controlled by local preference and internal environment gating. Do not document it as a default contributor feature. |
+| `fieldTheorySyncAPI` | internal-gated surface | local-read, local-write, cloud | `fieldTheorySyncIpc.ts`, `releaseSyncPolicy.ts` | Full Library sync is controlled by local preference and internal environment gating. Do not document it as a default contributor feature. |
 | `todoAPI` | internal or experimental surface | cloud, dev-internal | `todo:*` handlers | Tied to auth and internal/task surfaces. The visible Tasks tab is marked experimental in preload and preferences. |
 | `commandsAPI` | public app surface with extra care | local-read, local-write, os-integration, process-execution, cloud | `commands:*` handlers and command launcher services | Lists and runs local commands, opens Field Theory markdown targets, inserts markdown, shares/unshares commands, and can mutate active documents through guarded flows. |
 | `agentKickoffAPI` | experimental/dev surface | process-execution | `agent:*` handlers | Starts or cancels local agent kickoff flows. Useful for power users, but should be documented as advanced/local process behavior. |
@@ -59,7 +59,7 @@ Capability classes:
 | `transcribeAPI` | public app surface | os-integration, process-execution, local-read, local-write | transcription handlers | Microphone, local transcription engines, setup checks, and model installation paths. |
 | `permissionsAPI` | public app surface | os-integration | permission handlers | Accessibility, microphone, and screen recording permission state/events. |
 | `onboardingAPI` | public app surface | local-read, local-write, os-integration | onboarding handlers/windows | First-run setup and permission flows. |
-| `updaterAPI` | maintainer/release surface in packaged builds | updater-release, os-integration | `updater:*`, `buildChannel.ts` | Contributor dev does not require this. Experimental updater needs GitHub auth or `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN` for private release assets. |
+| `updaterAPI` | maintainer/release surface in packaged builds | updater-release, os-integration | `updater:*`, `buildChannel.ts` | Contributor dev does not require this. Experimental updater needs maintainer GitHub auth or `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`. |
 | `taggedDocsAPI` | public app surface | local-read, local-write | tagged docs database/index handlers | Local tagging and scan progress. |
 | `squaresAPI` | experimental surface | local-read, local-write | Squares handlers | Present in preload; should be marked experimental until product state is clearer. |
 | `hotMicAPI` | advanced/experimental surface | os-integration, process-execution | `hotmic:*` handlers | Continuous voice input for Codex terminals. Treat as advanced local automation. |
@@ -123,4 +123,4 @@ The smallest useful next code step is to create feature-owned IPC registration m
 - `registerUpdaterIpc`
 - `registerShellIpc`
 
-The first module, `registerShellIpc`, now lives in `mac-app/electron/main/shellIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.
+The first extracted modules are `registerShellIpc` in `mac-app/electron/main/shellIpc.ts`, `registerAccountIpc` in `mac-app/electron/main/accountIpc.ts`, and `registerFieldTheorySyncIpc` in `mac-app/electron/main/fieldTheorySyncIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.
