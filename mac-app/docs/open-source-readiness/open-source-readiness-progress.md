@@ -24,10 +24,11 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] Add a current tracked-file secret/private-reference audit note.
 - [ ] Run a history-aware secret audit with a dedicated scanner before publication.
 - [x] Add dependency and asset follow-up note for remaining unknowns.
+- [x] Replace third-party notices draft with a current notice/provenance index.
 - [ ] Resolve dependency and asset provenance follow-up for remaining unknowns.
 - [x] Rewrite Mac release workflow docs so they no longer describe a private-source/public-release split.
 - [x] Remove obviously private Cursor operational command docs for unrelated deploy/droplet/env/release workflows.
-- [ ] Finish a broader pass over remaining Cursor, Claude, and iOS docs for private paths or maintainer-only assumptions.
+- [x] Finish a broader pass over remaining Cursor, Claude, and iOS docs for private paths or maintainer-only assumptions.
 - [ ] Review Supabase policy/account-backed wording as far as repo code allows without changing production infrastructure.
 
 **Tier 2 architecture and boundary work**

@@ -36,7 +36,7 @@ This does NOT go through App Store or TestFlight.
 │  1. Open Terminal                                        │
 │  2. Navigate to project:                                │
 │                                                         │
-│     cd /Users/afar/dev/littleai/ios                     │
+│     cd ios                                               │
 │                                                         │
 │  3. Open workspace (NOT .xcodeproj):                   │
 │                                                         │
@@ -446,7 +446,7 @@ This does NOT go through App Store or TestFlight.
 
 ```bash
 # Open project
-cd /Users/afar/dev/littleai/ios
+cd ios
 open littleai.xcworkspace
 
 # Clean CocoaPods (if needed)
