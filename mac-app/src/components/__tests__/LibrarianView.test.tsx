@@ -152,7 +152,7 @@ describe('LibrarianView render', () => {
   it.each([
     {
       name: 'keeps wide layouts unchanged',
-      containerWidth: 1400,
+      containerWidth: 1200,
       expected: {
         autoCollapseSidebar: false,
         autoDockTerminalBottom: false,
@@ -162,7 +162,7 @@ describe('LibrarianView render', () => {
     },
     {
       name: 'auto-collapses the sidebar before shrinking the editor',
-      containerWidth: 1200,
+      containerWidth: 1160,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: false,
@@ -172,7 +172,7 @@ describe('LibrarianView render', () => {
     },
     {
       name: 'auto-docks the terminal bottom before shrinking the editor',
-      containerWidth: 1120,
+      containerWidth: 990,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: true,
@@ -194,7 +194,7 @@ describe('LibrarianView render', () => {
 
   it('keeps responsive panel state stable near restore thresholds', () => {
     const previous = getResponsivePanelState({
-      containerWidth: 1200,
+      containerWidth: 1160,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
@@ -204,7 +204,7 @@ describe('LibrarianView render', () => {
     });
 
     expect(getResponsivePanelState({
-      containerWidth: 1340,
+      containerWidth: 1210,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
@@ -242,9 +242,27 @@ describe('LibrarianView render', () => {
     })).toEqual(previous);
   });
 
-  it('bottom-docks the terminal when an explicitly opened sidebar consumes the side-by-side editor budget', () => {
+  it('keeps the terminal on the right when an explicitly opened sidebar still leaves enough editor room', () => {
     expect(getResponsivePanelState({
       containerWidth: 1200,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      autoCollapseSidebarSuppressed: true,
+    })).toMatchObject({
+      autoCollapseSidebar: false,
+      autoDockTerminalBottom: false,
+      autoHideTerminal: false,
+      reason: 'wide',
+    });
+  });
+
+  it('bottom-docks the terminal when an explicitly opened sidebar consumes the side-by-side editor budget', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 1160,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
