@@ -1,89 +1,63 @@
 # Field Theory Release Workflow
 
-## Overview
+This document describes maintainer packaging. It is not required for normal local development.
 
-Field Theory releases are published to a **separate public repository** (`afar1/field-releases`) to keep the source code private while allowing public distribution via GitHub Releases.
-Experimental releases are published as prereleases on the private source repository (`afar1/oscar`) from its `experimental` branch.
+Public contributors should use the development path in `mac-app/README.md` and `mac-app/CONTRIBUTING.md`. Packaging, signing, notarization, GitHub release publishing, and updater feeds require maintainer-controlled credentials and release repositories.
 
-## Repository Setup
+## Local development versus release packaging
 
-- **Source code**: `afar1/oscar` (private)
-- **Production releases**: `afar1/field-releases` (public) — only contains release assets, no source code
-- **Experimental releases**: `afar1/oscar` (private) — prerelease assets targeted at the `experimental` branch
+Use these commands for normal development:
 
-## Configuration
-
-### `package.json` (build.publish section)
-```json
-"publish": {
-  "provider": "github",
-  "owner": "afar1",
-  "repo": "field-releases"
-}
+```bash
+npm run dev
+npm run build
+npm test
 ```
 
-### `electron/main/index.ts` (autoUpdater feed URL)
-```typescript
-autoUpdater.setFeedURL(autoUpdaterFeedOptionsForBuildChannel(fieldTheoryBuildChannel, token));
+Use release packaging only when preparing a signed maintainer build:
+
+```bash
+npm run package
+npm run package:experimental
 ```
 
-## Publishing a New Release
+The package commands run release-channel guards, package-safety checks, native/helper builds, Whisper builds, Electron/Vite builds, Electron Builder, and signing/notarization hooks. They are intentionally stricter than contributor development.
 
-1. **Bump version** in `mac-app/package.json`
-2. **Export GitHub token** with `Contents: Read and write` permission for `field-releases`:
-   ```bash
-   export GH_TOKEN=ghp_your_token_here
-   ```
-3. **Build and publish**:
-   ```bash
-   cd mac-app
-   npm run package -- --publish always
-   ```
+## Release channels
 
-This uploads:
-- `Field.Theory-x.x.x-arm64-mac.zip`
-- `Field.Theory-x.x.x-arm64.dmg`
-- `latest-mac.yml` (used by auto-updater to detect new versions)
+Production builds use the production build channel and the production updater feed configured in `mac-app/package.json`.
 
-## Testing Auto-Updates
+Experimental builds use the experimental build channel and `mac-app/electron-builder.experimental.json`. Experimental updater access may require maintainer GitHub authentication or `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`. That token is maintainer-only and must not be committed or documented as contributor setup.
 
-1. Build an older version locally (without publishing):
-   ```bash
-   # Set version to e.g., 0.1.14-test in package.json
-   npm run package
-   # Install the DMG from mac-app/release/
-   ```
+The release-channel behavior is implemented in:
 
-2. Publish a newer version to `field-releases`, or publish an experimental prerelease to `oscar` from the `experimental` branch
+- `mac-app/electron/main/buildChannel.ts`
+- `mac-app/scripts/check-release-channel.mjs`
+- `mac-app/scripts/check-package-safety.mjs`
+- `mac-app/electron-builder.experimental.json`
 
-3. Run the installed app from terminal to see updater logs:
-   ```bash
-   /Applications/Field\ Theory.app/Contents/MacOS/Field\ Theory
-   ```
+## Publishing a maintainer release
 
-4. Look for `[Updater]` logs confirming update detection
+1. Confirm the intended release channel and version.
+2. Run the public safety checks.
+3. Build/package from `mac-app`.
+4. Publish the generated `.dmg`, `.zip`, and updater metadata to the appropriate maintainer release feed.
+5. Verify updater behavior from an installed packaged build.
 
-## GitHub Token Permissions
-
-For fine-grained tokens on `field-releases`:
-- **Contents**: Read and write (required for creating releases and uploading assets)
-
-For classic tokens:
-- `repo` scope (full control of private repositories)
+Exact credential locations and maintainer release tokens are intentionally not stored in this repository.
 
 ## Troubleshooting
 
-### "No published versions on GitHub"
-The `field-releases` repo has no releases yet. Publish one first.
+### Packaging fails on a feature branch
 
-### "403 Forbidden - Resource not accessible by personal access token"
-Your `GH_TOKEN` doesn't have write access to `field-releases`. Update token permissions.
+The release-channel guard may intentionally block packaging from the wrong branch. This is a release safety check, not a contributor setup failure.
 
-### Auto-updater not checking
-- Only runs in packaged builds with an enabled updater feed (not when `ELECTRON_START_URL` is set)
-- Experimental builds need `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN` or local GitHub CLI auth at runtime so they can read private `afar1/oscar` release assets
-- Checks on startup (5s delay) and every 30 minutes
-- Use "Check for Updates…" in tray menu for manual check
+### Auto-updater does not check in development
 
+The updater is for packaged builds. It is not expected to run from normal Vite/Electron development sessions.
+
+### Experimental updater cannot read releases
+
+Experimental builds may require maintainer GitHub authentication. Do not use broad classic personal access tokens for normal development. Prefer maintainer-scoped, least-privilege credentials outside the repository.
 
 

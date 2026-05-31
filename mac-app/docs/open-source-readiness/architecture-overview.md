@@ -133,7 +133,7 @@ Some surfaces exist in code but should not be presented as default public featur
 - Command mobile sync and todo setup are also tied to the internal sync gate.
 - Shared clipboard is hard-disabled in the current public-facing preload shape.
 - Mobile transcript sync returns inert values in preload.
-- Experimental updates require private maintainer access to `afar1/oscar` assets through `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN` or GitHub auth.
+- Experimental updates require maintainer GitHub access through `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN` or GitHub auth.
 - Gaze, local model, transcription engine, and agent surfaces may need separate feature-readiness notes before inviting broad contribution.
 
 ## Release and packaging shape

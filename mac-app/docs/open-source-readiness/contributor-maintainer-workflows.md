@@ -77,9 +77,9 @@ None of those should be required for normal local development.
 
 Current code configures production publishing to GitHub `afar1/field-releases`.
 
-Experimental release configuration points at private `afar1/oscar` infrastructure. That makes sense for maintainers, but it must be marked private/internal in public docs.
+Experimental release configuration points at maintainer-only updater infrastructure. That makes sense for maintainers, but it must be marked private/internal in public docs.
 
-The existing release docs still describe the source as private and releases as a separate public repository to hide source code. That should be rewritten before open source.
+The current release workflow docs have been rewritten as maintainer packaging docs. Keep that boundary intact: release feeds can be visible infrastructure, but credentials and release publication are not contributor setup.
 
 ## Asset and dependency notices
 

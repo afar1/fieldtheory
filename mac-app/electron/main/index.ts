@@ -93,7 +93,9 @@ import {
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import type { QuotaManager } from './quotaManager';
+import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
+import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
@@ -104,6 +106,7 @@ import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
+import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
 import {
@@ -176,7 +179,8 @@ import {
   type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
-import { MetricsManager, UserMetrics } from './metricsManager';
+import { MetricsManager } from './metricsManager';
+import { registerMetricsIpc } from './metricsIpc';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
@@ -185,6 +189,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -1380,9 +1385,10 @@ async function runRecordingAsrQualityBenchmark(benchmarkId: string): Promise<voi
 
 function getRecordingAsrBenchmarkFixturePath(): string {
   const configuredFixturePath = process.env.FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO?.trim();
-  return configuredFixturePath
-    ? path.resolve(configuredFixturePath)
-    : path.join(__dirname, '../../resources/chatterbox/reference-voice.wav');
+  if (!configuredFixturePath) {
+    throw new Error('Set FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO to a local WAV fixture before running the recording ASR benchmark');
+  }
+  return path.resolve(configuredFixturePath);
 }
 
 async function prepareRecordingAsrBenchmarkAudio(benchmarkId: string): Promise<{ audioPath: string; cleanup: () => void }> {
@@ -2167,7 +2173,6 @@ function resolveClipboardFullScreenHotkeyPreference(prefs: {
 
 function getLocalEnvPaths(): string[] {
   return [
-    '/Users/afar/dev/fieldtheory/.env.local',
     path.join(__dirname, '../../../.env.local'),
     path.join(__dirname, '../../.env.local'),
     path.join(process.cwd(), '.env.local'),
@@ -2304,7 +2309,7 @@ function formatAutoUpdaterErrorMessage(err: unknown): string {
     fieldTheoryBuildChannel === 'experimental'
     && /(401|403|404|not found|forbidden|unauthorized)/i.test(message)
   ) {
-    return 'Experimental updates need GitHub auth for afar1/oscar. Run gh auth login or set FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN, then restart Field Theory Experimental.';
+    return 'Experimental updates need maintainer GitHub access. Sign in with the GitHub CLI or set the maintainer-only experimental update token, then restart Field Theory Experimental.';
   }
   return message;
 }
@@ -6790,73 +6795,8 @@ function setupLibrarianIPCHandlers(): void {
     return result;
   });
 
-  // ===========================================================================
-  // Metrics IPC handlers - User-visible usage stats
-  // "The metrics you see are the metrics we see."
-  // ===========================================================================
-
-  // Get current metrics for display in Settings
-  ipcMain.handle('metrics:getMetrics', (): UserMetrics => {
-    return metricsManager?.getMetrics() ?? {
-      transcriptions: 0,
-      words_transcribed: 0,
-      words_improved: 0,
-      priority_mic_minutes: 0,
-      verbal_commands: 0,
-      command_launcher_uses: 0,
-      clipboard_items: 0,
-      pastes_used: 0,
-      stacks_created: 0,
-      autostacks_created: 0,
-      stacks_pasted: 0,
-      items_added_to_context: 0,
-      sketches_created: 0,
-      screenshots_taken: 0,
-      librarian_artifacts_created: 0,
-      librarian_artifacts_shared: 0,
-      commands_executed: 0,
-      commands_contributed: 0,
-      feedback_given: 0,
-    };
-  });
-
-  // Get metrics with sync status
-  ipcMain.handle('metrics:getMetricsWithStatus', (): { metrics: UserMetrics; lastSyncedAt: string | null; pendingSync: boolean } => {
-    return metricsManager?.getMetricsWithStatus() ?? {
-      metrics: {
-        transcriptions: 0,
-        words_transcribed: 0,
-        words_improved: 0,
-        priority_mic_minutes: 0,
-        verbal_commands: 0,
-        command_launcher_uses: 0,
-        clipboard_items: 0,
-        pastes_used: 0,
-        stacks_created: 0,
-        autostacks_created: 0,
-        stacks_pasted: 0,
-        items_added_to_context: 0,
-        sketches_created: 0,
-        screenshots_taken: 0,
-        librarian_artifacts_created: 0,
-        librarian_artifacts_shared: 0,
-        commands_executed: 0,
-        commands_contributed: 0,
-        feedback_given: 0,
-      },
-      lastSyncedAt: null,
-      pendingSync: false,
-    };
-  });
-
-  // Force sync to Supabase
-  ipcMain.handle('metrics:syncToSupabase', async (): Promise<boolean> => {
-    return metricsManager?.syncToSupabase() ?? false;
-  });
-
-  // Fetch from Supabase (merge with local)
-  ipcMain.handle('metrics:fetchFromSupabase', async (): Promise<boolean> => {
-    return metricsManager?.fetchFromSupabase() ?? false;
+  registerMetricsIpc({
+    getMetricsManager: () => metricsManager,
   });
 }
 
@@ -8691,34 +8631,7 @@ function setupClipboardIPCHandlers(): void {
     return authManager?.isSuperAdmin() ?? false;
   });
 
-  // Open external URL in default browser (for Stripe checkout, etc).
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
-    if (!allowed.test(url)) {
-      log.warn('shell:openExternal blocked non-http URL: %s', url);
-      return;
-    }
-    await shell.openExternal(url);
-  });
-
-  // Reveal file in Finder (macOS).
-  ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
-    try {
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
-        await shell.openPath(fullPath);
-        return;
-      }
-    } catch {
-      // Fall through to the existing reveal behavior.
-    }
-    shell.showItemInFolder(fullPath);
-  });
-
-  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
-  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    win?.setRepresentedFilename(fullPath || '');
-  });
+  registerShellIpc();
 
   ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
     return launchAgentImproveInTerminal(request);
@@ -9302,94 +9215,9 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  // =========================================================================
-  // Quota IPC Handlers - Local usage tracking
-  // QuotaManager handles session checking internally via setSessionChecker().
-  // =========================================================================
-
-  ipcMain.handle('quota:getQuotas', async () => {
-    if (!quotaManager) {
-      return null;
-    }
-    return quotaManager.getQuotas();
-  });
-
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => {
-    if (!quotaManager) {
-      return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
-    }
-    // Map old feature names to new database column names.
-    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'portable_commands'> = {
-      priorityMic: 'priority_mic_seconds',
-      autoStack: 'auto_stack_sessions',
-      textImprove: 'text_improve_words',
-      portableCommands: 'portable_commands',
-    };
-    const dbFeature = featureMap[feature];
-    return quotaManager.getFeatureStatus(dbFeature);
-  });
-
-  ipcMain.handle('quota:getFormattedUsage', async () => {
-    if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', portableCommands: 'Unlimited' };
-    }
-    return {
-      priorityMic: quotaManager.formatPriorityMicUsage(),
-      autoStack: quotaManager.formatAutoStackUsage(),
-      textImprove: quotaManager.formatTextImproveUsage(),
-      portableCommands: quotaManager.formatPortableCommandsUsage(),
-    };
-  });
-
-  ipcMain.handle('quota:getResetDate', async () => {
-    // Quotas now reset on calendar month boundary (1st of each month).
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  });
-
-  ipcMain.handle('quota:getDaysUntilReset', async () => {
-    if (!quotaManager) {
-      return 0;
-    }
-    return quotaManager.getDaysUntilReset();
-  });
-
-  ipcMain.handle('quota:getLimits', async () => {
-    if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, portableCommands: Infinity };
-    }
-    const raw = quotaManager.getLimits();
-    // Transform keys from snake_case to camelCase and convert seconds to minutes.
-    return {
-      priorityMicMinutes: raw.priority_mic_seconds === Infinity ? Infinity : Math.floor(raw.priority_mic_seconds / 60),
-      autoStackSessions: raw.auto_stack_sessions,
-      textImprovementWords: raw.text_improve_words,
-      portableCommands: raw.portable_commands,
-    };
-  });
-
-  ipcMain.handle('quota:refreshTier', async () => {
-    // Sync usage and tier from server. Tier is included in get-usage response.
-    if (!quotaManager) {
-      return { tier: 'free', error: 'Not initialized' };
-    }
-
-    try {
-      await quotaManager.syncFromServer();
-      const tier = quotaManager.getCachedTier();
-
-      // Broadcast tier change to all windows.
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('tier:changed', tier);
-        }
-      });
-
-      return { tier, error: null };
-    } catch (err) {
-      log.error('Error refreshing tier:', err);
-      return { tier: quotaManager.getCachedTier(), error: String(err) };
-    }
+  registerQuotaIpc({
+    getQuotaManager: () => quotaManager,
+    logError: (message, error) => log.error(message, error),
   });
 
   // =========================================================================
@@ -11092,27 +10920,18 @@ function setupClipboardIPCHandlers(): void {
     return await feedbackManager.isCurrentUserAdmin();
   });
 
-  ipcMain.handle('account:getStatus', async () => {
-    return accountStatusManager?.getStatus() ?? { state: 'checking', capabilityMode: 'writable' };
+  registerAccountIpc({
+    getAccountStatusManager: () => accountStatusManager,
   });
 
-  ipcMain.handle('account:checkNow', async () => {
-    if (!accountStatusManager) {
-      return { state: 'checking', capabilityMode: 'writable' };
-    }
-    return accountStatusManager.checkNow();
-  });
-
-  ipcMain.handle('fieldTheorySync:getStatus', async () => {
-    return getFieldTheorySyncStatus();
-  });
-
-  ipcMain.handle('fieldTheorySync:setLocalEnabled', async (_event, enabled: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled === true });
-      refreshFieldTheorySyncServices();
-    }
-    return getFieldTheorySyncStatus();
+  registerFieldTheorySyncIpc({
+    getStatus: getFieldTheorySyncStatus,
+    setLocalEnabled: async (enabled: boolean) => {
+      if (preferencesManager) {
+        await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled });
+        refreshFieldTheorySyncServices();
+      }
+    },
   });
 }
 

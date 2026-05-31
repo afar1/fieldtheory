@@ -34,10 +34,9 @@ Unused legacy tray icons, unused onboarding images, unused or unknown sound file
 
 `npm run license:summary` now generates a lockfile-derived dependency license summary for repeatable notice review.
 
-The current summary reports 1204 lockfile package entries and two entries with missing license metadata:
+The current summary reports 1204 package entries and zero missing-license entries after documented overrides.
 
-- `agentmail@0.4.9` in runtime dependencies;
-- `spawn-command@0.0.2` in dev dependencies.
+The package lock omitted license fields for `agentmail@0.4.9` and `spawn-command@0.0.2`. Both versions publish MIT metadata on npm, and `mac-app/scripts/generate-license-summary.mjs` records explicit override sources.
 
 ### Production dependency audit cleaned
 
