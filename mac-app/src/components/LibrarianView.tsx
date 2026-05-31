@@ -633,6 +633,7 @@ export function getFocusChromeContentCenterX(input: {
 }
 
 const RESPONSIVE_PANEL_MIN_EDITOR_WIDTH = 560;
+const RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH = 784;
 const RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH = 360;
 const RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT = 220;
 const RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL = 360;
@@ -667,7 +668,7 @@ export function getResponsivePanelState(input: {
 
   const sidebarThreshold = input.sidebarWidth
     + RESPONSIVE_PANEL_SIDEBAR_GAP
-    + RESPONSIVE_PANEL_MIN_EDITOR_WIDTH
+    + RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH
     + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
   const sidebarRestoreThreshold = sidebarThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
   const autoCollapseSidebar = !input.sidebarCollapsed
@@ -676,7 +677,7 @@ export function getResponsivePanelState(input: {
       || (input.previous?.autoCollapseSidebar === true && input.containerWidth < sidebarRestoreThreshold));
   const effectiveSidebarCollapsed = input.sidebarCollapsed || autoCollapseSidebar;
   const readerWidth = input.containerWidth - (effectiveSidebarCollapsed ? 0 : input.sidebarWidth + RESPONSIVE_PANEL_SIDEBAR_GAP);
-  const rightDockThreshold = RESPONSIVE_PANEL_MIN_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const rightDockThreshold = RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
   const rightDockRestoreThreshold = rightDockThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
   const canUseBottomDock = input.containerHeight >= (
     RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL + RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT

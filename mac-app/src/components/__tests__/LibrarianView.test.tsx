@@ -152,7 +152,7 @@ describe('LibrarianView render', () => {
   it.each([
     {
       name: 'keeps wide layouts unchanged',
-      containerWidth: 1200,
+      containerWidth: 1400,
       expected: {
         autoCollapseSidebar: false,
         autoDockTerminalBottom: false,
@@ -161,8 +161,8 @@ describe('LibrarianView render', () => {
       },
     },
     {
-      name: 'auto-collapses the sidebar before reshaping the terminal',
-      containerWidth: 1040,
+      name: 'auto-collapses the sidebar before shrinking the editor',
+      containerWidth: 1200,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: false,
@@ -171,8 +171,8 @@ describe('LibrarianView render', () => {
       },
     },
     {
-      name: 'auto-docks the terminal bottom after the sidebar is collapsed',
-      containerWidth: 880,
+      name: 'auto-docks the terminal bottom before shrinking the editor',
+      containerWidth: 1120,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: true,
@@ -194,7 +194,7 @@ describe('LibrarianView render', () => {
 
   it('keeps responsive panel state stable near restore thresholds', () => {
     const previous = getResponsivePanelState({
-      containerWidth: 1040,
+      containerWidth: 1200,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
@@ -204,7 +204,7 @@ describe('LibrarianView render', () => {
     });
 
     expect(getResponsivePanelState({
-      containerWidth: 1120,
+      containerWidth: 1340,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
