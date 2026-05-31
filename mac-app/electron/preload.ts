@@ -235,8 +235,11 @@ const DiagnosticsIPCChannels = {
   GET_DIAGNOSTICS: 'diagnostics:get',
   GET_DIAGNOSTICS_MARKDOWN: 'diagnostics:getMarkdown',
   APPEND_RENDERED_EDITOR_DEBUG: 'diagnostics:appendRenderedEditorDebug',
+  APPEND_SCROLL_DIAGNOSTICS: 'diagnostics:appendScrollDiagnostics',
   GET_RENDERED_EDITOR_DEBUG_LOG_PATH: 'diagnostics:getRenderedEditorDebugLogPath',
+  GET_SCROLL_DIAGNOSTICS_LOG_PATH: 'diagnostics:getScrollDiagnosticsLogPath',
   CLEAR_RENDERED_EDITOR_DEBUG_LOG: 'diagnostics:clearRenderedEditorDebugLog',
+  CLEAR_SCROLL_DIAGNOSTICS_LOG: 'diagnostics:clearScrollDiagnosticsLog',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -991,8 +994,11 @@ export interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
   appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  appendScrollDiagnostics: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
   getRenderedEditorDebugLogPath: () => Promise<string>;
+  getScrollDiagnosticsLogPath: () => Promise<string>;
   clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
+  clearScrollDiagnosticsLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 const audioAPI: AudioAPI = {
@@ -2972,11 +2978,20 @@ const diagnosticsAPI: DiagnosticsAPI = {
   appendRenderedEditorDebug: async (entry: unknown): Promise<{ ok: boolean; path: string; error?: string }> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.APPEND_RENDERED_EDITOR_DEBUG, entry);
   },
+  appendScrollDiagnostics: async (entry: unknown): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.APPEND_SCROLL_DIAGNOSTICS, entry);
+  },
   getRenderedEditorDebugLogPath: async (): Promise<string> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_RENDERED_EDITOR_DEBUG_LOG_PATH);
   },
+  getScrollDiagnosticsLogPath: async (): Promise<string> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_SCROLL_DIAGNOSTICS_LOG_PATH);
+  },
   clearRenderedEditorDebugLog: async (): Promise<{ ok: boolean; path: string; error?: string }> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.CLEAR_RENDERED_EDITOR_DEBUG_LOG);
+  },
+  clearScrollDiagnosticsLog: async (): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.CLEAR_SCROLL_DIAGNOSTICS_LOG);
   },
 };
 
@@ -3394,8 +3409,8 @@ const commandsAPI = {
   // ==========================================================================
 
   // Invoke a command by name (paste file or reference to target app).
-  invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('commands:invoke', commandName);
+  invokeCommand: async (commandName: string, traceContext?: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:invoke', commandName, traceContext);
   },
 
   getLauncherFileIcon: async (filePath: string): Promise<LauncherFileIconResult> => {
@@ -3501,16 +3516,16 @@ const commandsAPI = {
   },
 
   // Listen for reset events (when launcher is shown).
-  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean; generation?: number }) => callback(payload);
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => callback(payload);
     ipcRenderer.on('command-launcher:reset', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:reset', handler);
     };
   },
 
-  onLauncherFocusInput: (callback: (payload?: { generation?: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload?: { generation?: number }) => callback(payload);
+  onLauncherFocusInput: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => callback(payload);
     ipcRenderer.on('command-launcher:focus-input', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:focus-input', handler);

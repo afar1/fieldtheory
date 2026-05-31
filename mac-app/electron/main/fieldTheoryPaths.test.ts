@@ -13,6 +13,7 @@ import {
   sharedFilesCacheDir,
   sharedFilesRootDir,
 } from './fieldTheoryPaths';
+import { createFieldTheoryTestEnv } from './testSupport/fieldTheoryTestEnv';
 
 describe('Field Theory path contract', () => {
   const homeDir = '/Users/tester';
@@ -125,5 +126,26 @@ describe('Field Theory path contract', () => {
 
     expect(legacyLibraryDir(options)).toBe('/tmp/custom-data/md');
     expect(libraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
+  });
+
+  it('provides an isolated test fixture for local Field Theory data paths', () => {
+    const fixture = createFieldTheoryTestEnv();
+
+    try {
+      const options = { homeDir: fixture.homeDir, env: fixture.env };
+
+      expect(bookmarkDataDir(options)).toBe(fixture.bookmarkDataDir);
+      expect(libraryDir(options)).toBe(fixture.libraryDir);
+      expect(commandsDir(options)).toBe(fixture.commandsDir);
+      expect(sharedFilesRootDir(options)).toBe(fixture.sharedFilesRootDir);
+      expect(sharedFilesCacheDir(options)).toBe(fixture.sharedFilesCacheDir);
+      expect(ideasDir(options)).toBe(fixture.ideasDir);
+
+      fixture.assertInsideTestRoot(libraryDir(options));
+      fixture.assertInsideTestRoot(commandsDir(options));
+      expect(() => fixture.assertNoRealFieldTheoryPath(path.join(os.homedir(), '.fieldtheory', 'library'))).toThrow(/real Field Theory data path/);
+    } finally {
+      fixture.cleanup();
+    }
   });
 });

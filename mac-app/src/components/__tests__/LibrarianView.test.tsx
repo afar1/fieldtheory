@@ -11,6 +11,7 @@ import LibrarianView, {
   restoreLibrarianHtmlLayoutByPath,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
+  getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
   shouldAnimateResponsiveSidebar,
 } from '../LibrarianView';
@@ -50,6 +51,37 @@ describe('LibrarianView render', () => {
     `root:${testLibraryRootPath}`,
     `${testLibraryRootPath}::scratchpad`,
   ]);
+
+  it('deletes rendered ft-html blocks as whole containers', () => {
+    const value = 'Before\n\n```ft-html\n<section>Widget</section>\n```\n\nAfter';
+    const blockStart = value.indexOf('```ft-html');
+    const blockEnd = value.indexOf('```\n\nAfter') + 3;
+
+    const selectedEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event: new KeyboardEvent('keydown', { key: 'Backspace' }),
+      value,
+      selectionStart: blockStart + 12,
+      selectionEnd: blockStart + 20,
+    });
+    expect(selectedEdit).toMatchObject({
+      nextValue: 'Before\n\nAfter',
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+
+    const adjacentEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event: new KeyboardEvent('keydown', { key: 'Delete' }),
+      value,
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+    expect(adjacentEdit).toMatchObject({
+      nextValue: 'Before\n\nAfter',
+      selectionStart: blockStart,
+      selectionEnd: blockStart,
+    });
+    expect(blockEnd).toBeGreaterThan(blockStart);
+  });
 
   function mockStoredWikiSelection(relPath: string, options: { expandScratchpad?: boolean } = {}): void {
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
@@ -129,8 +161,8 @@ describe('LibrarianView render', () => {
       },
     },
     {
-      name: 'auto-collapses the sidebar before reshaping the terminal',
-      containerWidth: 1040,
+      name: 'auto-collapses the sidebar before shrinking the editor',
+      containerWidth: 1160,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: false,
@@ -139,8 +171,8 @@ describe('LibrarianView render', () => {
       },
     },
     {
-      name: 'auto-docks the terminal bottom after the sidebar is collapsed',
-      containerWidth: 880,
+      name: 'auto-docks the terminal bottom before shrinking the editor',
+      containerWidth: 990,
       expected: {
         autoCollapseSidebar: true,
         autoDockTerminalBottom: true,
@@ -162,7 +194,7 @@ describe('LibrarianView render', () => {
 
   it('keeps responsive panel state stable near restore thresholds', () => {
     const previous = getResponsivePanelState({
-      containerWidth: 1040,
+      containerWidth: 1160,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
@@ -172,7 +204,7 @@ describe('LibrarianView render', () => {
     });
 
     expect(getResponsivePanelState({
-      containerWidth: 1120,
+      containerWidth: 1210,
       containerHeight: 800,
       sidebarWidth: 180,
       sidebarCollapsed: false,
@@ -208,6 +240,42 @@ describe('LibrarianView render', () => {
       userResizing: true,
       previous,
     })).toEqual(previous);
+  });
+
+  it('keeps the terminal on the right when an explicitly opened sidebar still leaves enough editor room', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 1200,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      autoCollapseSidebarSuppressed: true,
+    })).toMatchObject({
+      autoCollapseSidebar: false,
+      autoDockTerminalBottom: false,
+      autoHideTerminal: false,
+      reason: 'wide',
+    });
+  });
+
+  it('bottom-docks the terminal when an explicitly opened sidebar consumes the side-by-side editor budget', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 1160,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      autoCollapseSidebarSuppressed: true,
+    })).toMatchObject({
+      autoCollapseSidebar: true,
+      autoDockTerminalBottom: true,
+      autoHideTerminal: false,
+      reason: 'terminal-bottom',
+    });
   });
 
   it('animates sidebar auto-collapse unless the terminal also rearranges', () => {
@@ -3821,5 +3889,58 @@ describe('LibrarianView render', () => {
 
     fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
+  });
+
+  it('hides a popped-out collapsed sidebar while the sidebar resize handle is dragging', async () => {
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+    }]);
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+      content: '# Example\n',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'example' },
+    }));
+
+    const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
+    });
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
+    ) as HTMLElement | null;
+    const getResizeHandle = () => root.querySelector(
+      '[data-fieldtheory-sidebar-resize-handle="true"]'
+    ) as HTMLElement | null;
+
+    fireEvent.click(await screen.findByText('example.md'));
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReading).toHaveBeenCalledWith('/tmp/library/example.md');
+    });
+
+    fireEvent.click(getHoverStrip()!);
+    expect(getSidebarPane()?.style.width).not.toBe('0px');
+
+    fireEvent.mouseDown(getResizeHandle()!);
+    expect(getSidebarPane()?.style.width).toBe('0px');
+    expect(getHoverStrip()).toBeTruthy();
+
+    fireEvent.mouseUp(document);
   });
 });

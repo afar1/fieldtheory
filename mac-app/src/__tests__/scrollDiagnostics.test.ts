@@ -13,6 +13,7 @@ import {
   pushLongTask,
   recordInteractionFrame,
   recordScrollFrame,
+  recordSyntheticScrollDiagnosticSamples,
   resetScrollDiagnosticsForTest,
   setScrollDiagnosticsEnabled,
   subscribeScrollDiagnostics,
@@ -273,5 +274,24 @@ describe('scrollDiagnostics', () => {
     expect(report.longTaskCount).toBe(1);
     expect(report.longTaskTotalMs).toBe(62);
     expect(report.longestLongTaskMs).toBe(62);
+  });
+
+  it('records a complete synthetic immersive surface sample set when enabled', () => {
+    recordSyntheticScrollDiagnosticSamples();
+    expect(getScrollDiagnosticsSnapshot().scrollByLastSource).toEqual({});
+
+    setScrollDiagnosticsEnabled(true);
+    recordSyntheticScrollDiagnosticSamples('synthetic-test');
+
+    const snapshot = getScrollDiagnosticsSnapshot();
+    expect(Object.keys(snapshot.scrollByLastSource).sort()).toEqual(['markdown', 'rendered']);
+    expect(Object.keys(snapshot.interactionByLastSource).sort()).toEqual([
+      'launcher-input',
+      'markdown-editor-input',
+      'rendered-editor-input',
+    ]);
+    expect(snapshot.scrollByLastSource.rendered?.qualityScenario).toBe('synthetic-test');
+    expect(snapshot.interactionByLastSource['rendered-editor-input']?.qualityScenario).toBe('synthetic-test');
+    expect(getScrollDiagnosticsValidationReport().pass).toBe(true);
   });
 });

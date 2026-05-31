@@ -1,7 +1,8 @@
-import { forwardRef, type CSSProperties, type MouseEventHandler, type ClipboardEventHandler } from 'react';
+import { Children, forwardRef, isValidElement, type CSSProperties, type MouseEventHandler, type ClipboardEventHandler, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import InlineHtmlBlock from './InlineHtmlBlock';
 import '../prose.css';
 
 type FieldTheoryProseSize = 'reader' | 'compact' | 'preview';
@@ -21,6 +22,7 @@ export interface FieldTheoryProseProps {
   linkColor?: string;
   mutedColor?: string;
   paragraphSpacing?: CSSProperties['marginBottom'];
+  documentPath?: string | null;
   onClick?: MouseEventHandler<HTMLDivElement>;
   onCopy?: ClipboardEventHandler<HTMLDivElement>;
   onMouseDown?: MouseEventHandler<HTMLDivElement>;
@@ -86,10 +88,34 @@ function fieldTheoryUrlTransform(url: string, key: string): string {
   return defaultUrlTransform(url);
 }
 
+function getTextContent(children: ReactNode): string {
+  return Children.toArray(children).map((child) => {
+    if (typeof child === 'string' || typeof child === 'number') return String(child);
+    return '';
+  }).join('');
+}
+
+function createFieldTheoryProseComponents(components: Components | undefined, documentPath: string | null | undefined): Components {
+  return {
+    pre: ({ children, ...props }) => {
+      const child = Children.toArray(children)[0];
+      if (isValidElement<{ className?: string; children?: ReactNode }>(child)) {
+        const isInlineHtmlBlock = /(?:^|\s)language-ft-html(?:\s|$)/.test(child.props.className ?? '');
+        if (isInlineHtmlBlock) {
+          return <InlineHtmlBlock html={getTextContent(child.props.children)} documentPath={documentPath} />;
+        }
+      }
+      return <pre {...props}>{children}</pre>;
+    },
+    ...components,
+  };
+}
+
 const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(function FieldTheoryProse({
   children,
   className,
   components,
+  documentPath,
   onClick,
   onCopy,
   onMouseDown,
@@ -100,6 +126,7 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
 }, ref) {
   const remarkPlugins = remarkLineBreaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
   const baseClassName = `ft-prose ft-prose-${size}${surface ? ` ft-prose-${surface}` : ''}`;
+  const fieldTheoryComponents = createFieldTheoryProseComponents(components, documentPath);
 
   return (
     <div
@@ -112,7 +139,7 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
     >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        components={components}
+        components={fieldTheoryComponents}
         urlTransform={fieldTheoryUrlTransform}
       >
         {children}

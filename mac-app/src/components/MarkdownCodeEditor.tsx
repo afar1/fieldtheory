@@ -56,6 +56,7 @@ import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
+import { getHtmlPreviewSrcDoc } from '../utils/htmlPreview';
 import { DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY, DEFAULT_RENDERED_TEXT_CURSOR_STYLE, type RenderedTextCursorStyle } from '../utils/editorShortcuts';
 import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEditor';
 
@@ -88,6 +89,8 @@ export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS = 'cm-rendered-mark
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS = 'cm-rendered-markdown-code-block-end';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS = 'cm-rendered-markdown-code-fence';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-markdown-code-fence-marker';
+export const RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS = 'cm-rendered-markdown-inline-html';
+export const RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS = 'cm-rendered-markdown-inline-html-expanded';
 export const RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS = 'cm-rendered-markdown-list-line';
 export const RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS = 'cm-rendered-markdown-list-marker';
 export const RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS = 'cm-rendered-markdown-list-body';
@@ -176,6 +179,11 @@ export interface MarkdownCodeEditorImagePreview {
   alt: string;
   sourceFrom: number | null;
   sourceTo: number | null;
+}
+
+export interface MarkdownCodeEditorSourceRange {
+  from: number;
+  to: number;
 }
 
 export function isRenderedMarkdownDrawingAlt(alt: string): boolean {
@@ -820,6 +828,16 @@ export function getRenderedMarkdownImageSelectionFromEventTarget(target: EventTa
   return { from: sourceFrom, to: sourceTo };
 }
 
+export function getRenderedMarkdownInlineHtmlSelectionFromEventTarget(target: EventTarget | null): MarkdownCodeEditorSourceRange | null {
+  if (!(target instanceof Element)) return null;
+  const block = target.closest(`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}`);
+  if (!(block instanceof HTMLElement)) return null;
+  const sourceFrom = parseNullableMarkdownSourceOffset(block.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
+  const sourceTo = parseNullableMarkdownSourceOffset(block.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
+  if (sourceFrom === null || sourceTo === null || sourceTo <= sourceFrom) return null;
+  return { from: sourceFrom, to: sourceTo };
+}
+
 function commitRenderedMarkdownDrawingCaption(view: EditorView, target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   const captionText = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`);
@@ -960,6 +978,68 @@ class RenderedMarkdownImageWidget extends WidgetType {
   }
 }
 
+class RenderedMarkdownInlineHtmlWidget extends WidgetType {
+  constructor(
+    private readonly html: string,
+    private readonly documentPath: string | null | undefined,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+  ) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownInlineHtmlWidget): boolean {
+    return other.html === this.html
+      && other.documentPath === this.documentPath
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return !['click', 'mousedown'].includes(event.type);
+  }
+
+  toDOM(): HTMLElement {
+    const block = document.createElement('figure');
+    block.className = RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS;
+    block.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
+    block.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
+    block.setAttribute('data-ft-inline-html-block', 'true');
+
+    const toolbar = document.createElement('div');
+    toolbar.className = `${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}__toolbar`;
+    const caption = document.createElement('figcaption');
+    caption.textContent = 'HTML';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.textContent = 'Expand';
+    toggle.setAttribute('aria-label', 'Expand HTML block');
+    toggle.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    toggle.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const expanded = block.classList.toggle(RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS);
+      toggle.textContent = expanded ? 'Collapse' : 'Expand';
+      toggle.setAttribute('aria-label', expanded ? 'Collapse HTML block' : 'Expand HTML block');
+    });
+    toolbar.appendChild(caption);
+    toolbar.appendChild(toggle);
+
+    const frame = document.createElement('iframe');
+    frame.title = 'Inline HTML block';
+    frame.srcdoc = getHtmlPreviewSrcDoc(this.html, this.documentPath || '/');
+    frame.setAttribute('sandbox', '');
+    frame.setAttribute('data-ft-inline-html-preview', 'true');
+
+    block.appendChild(toolbar);
+    block.appendChild(frame);
+    return block;
+  }
+}
+
 class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
   constructor(
     private readonly checked: boolean,
@@ -1020,12 +1100,128 @@ const renderedMarkdownDocumentPathFacet = Facet.define<string | null, string | n
 });
 type RenderedMarkdownEditorRange = { from: number; to: number };
 type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
+export type RenderedMarkdownInlineHtmlBlock = {
+  from: number;
+  to: number;
+  content: string;
+  fromLine: number;
+  toLine: number;
+};
 
 function rangesIntersect(
   first: { from: number; to: number },
   second: { from: number; to: number },
 ): boolean {
   return first.from < second.to && second.from < first.to;
+}
+
+export function getRenderedMarkdownInlineHtmlBlockRanges(value: string): RenderedMarkdownInlineHtmlBlock[] {
+  const blocks: RenderedMarkdownInlineHtmlBlock[] = [];
+  let active: {
+    fence: string;
+    from: number;
+    contentFrom: number;
+    fromLine: number;
+  } | null = null;
+
+  const lines = value.split('\n');
+  let offset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const text = lines[index];
+    const lineNumber = index + 1;
+    const lineFrom = offset;
+    const lineTo = offset + text.length;
+    if (!active) {
+      const startMatch = /^(`{3,}|~{3,})\s*ft-html\s*$/.exec(text);
+      if (startMatch) {
+        active = {
+          fence: startMatch[1],
+          from: lineFrom,
+          contentFrom: lineTo + 1,
+          fromLine: lineNumber,
+        };
+      }
+      offset = lineTo + 1;
+      continue;
+    }
+
+    const closeMatch = new RegExp(`^${active.fence[0]}{${active.fence.length},}\\s*$`).exec(text);
+    if (!closeMatch) {
+      offset = lineTo + 1;
+      continue;
+    }
+    const contentTo = Math.max(active.contentFrom, lineFrom - 1);
+    blocks.push({
+      from: active.from,
+      to: lineTo,
+      content: value.slice(active.contentFrom, contentTo),
+      fromLine: active.fromLine,
+      toLine: lineNumber,
+    });
+    active = null;
+    offset = lineTo + 1;
+  }
+
+  return blocks;
+}
+
+export function getRenderedMarkdownInlineHtmlBlocks(state: EditorState): RenderedMarkdownInlineHtmlBlock[] {
+  return getRenderedMarkdownInlineHtmlBlockRanges(state.doc.toString());
+}
+
+export function getRenderedMarkdownInlineHtmlBlockRangeAt(
+  value: string,
+  from: number,
+  to = from,
+): MarkdownCodeEditorSourceRange | null {
+  const selectionStart = Math.max(0, Math.min(from, value.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(to, value.length));
+  return getRenderedMarkdownInlineHtmlBlockRanges(value).find((block) => (
+    selectionStart < block.to && selectionEnd > block.from
+  )) ?? null;
+}
+
+export function isRenderedMarkdownSelectionInsideInlineHtmlBlock(
+  value: string,
+  from: number,
+  to = from,
+): boolean {
+  const block = getRenderedMarkdownInlineHtmlBlockRangeAt(value, from, to);
+  if (!block) return false;
+  if (from !== to) return true;
+  return from > block.from && to < block.to;
+}
+
+function getRenderedMarkdownInlineHtmlBoundaryTextEdit(
+  value: string,
+  offset: number,
+  text: string,
+): { from: number; insert: string; selection: number } | null {
+  if (!text) return null;
+  const block = getRenderedMarkdownInlineHtmlBlockRanges(value).find((candidate) => (
+    offset === candidate.from || offset === candidate.to
+  ));
+  if (!block) return null;
+  if (offset === block.from) {
+    const separator = value.slice(Math.max(0, offset - 2), offset) === '\n\n' ? '\n\n' : '\n';
+    return {
+      from: offset,
+      insert: `${text}${separator}`,
+      selection: offset + text.length,
+    };
+  }
+  if (value.slice(offset, offset + 2) === '\n\n') {
+    return {
+      from: offset + 2,
+      insert: text,
+      selection: offset + 2 + text.length,
+    };
+  }
+  return {
+    from: offset,
+    insert: `\n\n${text}`,
+    selection: offset + 2 + text.length,
+  };
 }
 
 function pushRenderedSyntaxReplacement(
@@ -1206,6 +1402,9 @@ export function getRenderedMarkdownBlockBodyClickPosition(
 
 export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
   const selection = view.state.selection.main;
+  if (isRenderedMarkdownSelectionInsideInlineHtmlBlock(view.state.doc.toString(), selection.from, selection.to)) {
+    return true;
+  }
   if (!selection.empty) return false;
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
@@ -1219,6 +1418,18 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   }
 
   if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
+  const inlineHtmlBoundaryEdit = getRenderedMarkdownInlineHtmlBoundaryTextEdit(
+    view.state.doc.toString(),
+    selection.from,
+    input.data,
+  );
+  if (inlineHtmlBoundaryEdit) {
+    view.dispatch({
+      changes: { from: inlineHtmlBoundaryEdit.from, insert: inlineHtmlBoundaryEdit.insert },
+      selection: { anchor: inlineHtmlBoundaryEdit.selection },
+    });
+    return true;
+  }
   const bodyStart = getRenderedMarkdownBlockBodyStart(view.state.doc.toString(), selection.from);
   if (bodyStart === null || bodyStart === selection.from) return false;
   view.dispatch({
@@ -1926,10 +2137,31 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
 ): DecorationSet {
   const decorations: RenderedMarkdownDecoration[] = [];
   const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, ranges);
+  const inlineHtmlBlocks = getRenderedMarkdownInlineHtmlBlocks(state);
+  const visibleInlineHtmlBlocks = inlineHtmlBlocks.filter((block) => (
+    ranges.some((range) => rangesIntersect(block, range))
+  ));
+
+  for (const block of visibleInlineHtmlBlocks) {
+    const startLine = state.doc.line(block.fromLine);
+    decorations.push(
+      Decoration.replace({
+        widget: new RenderedMarkdownInlineHtmlWidget(block.content, documentPath, block.from, block.to),
+      }).range(startLine.from, startLine.to),
+    );
+    for (let lineNumber = block.fromLine + 1; lineNumber <= block.toLine; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS }).range(line.from));
+      pushRenderedSyntaxReplacement(decorations, line.from, line.to);
+    }
+  }
 
   for (const range of lineRanges) {
     let codeFenceMarker = getRenderedMarkdownCodeFenceMarkerBeforeLine(state, range.fromLine);
     for (let lineNumber = range.fromLine; lineNumber <= range.toLine; lineNumber += 1) {
+      if (visibleInlineHtmlBlocks.some((block) => lineNumber >= block.fromLine && lineNumber <= block.toLine)) {
+        continue;
+      }
       codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker, documentPath);
     }
   }
@@ -2698,6 +2930,64 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}:focus`]: {
             backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.055)',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}`]: {
+            display: 'block',
+            boxSizing: 'border-box',
+            width: '100%',
+            maxWidth: '100%',
+            margin: `calc(${paragraphSpacing ?? '0.78em'} * 0.75) 0`,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            overflow: 'hidden',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.78)',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}__toolbar`]: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            minHeight: '30px',
+            padding: '4px 6px 4px 9px',
+            borderBottom: `1px solid ${theme.border}`,
+            color: mutedColor ?? theme.textSecondary,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.03)',
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            fontSize: '12px',
+            lineHeight: '1',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}__toolbar figcaption`]: {
+            margin: '0',
+            fontWeight: 620,
+            letterSpacing: '0',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS}__toolbar button`]: {
+            minWidth: '62px',
+            height: '22px',
+            padding: '0 8px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '5px',
+            color,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.035)',
+            font: 'inherit',
+            cursor: 'pointer',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS} iframe`]: {
+            display: 'block',
+            width: '100%',
+            minHeight: '260px',
+            height: '320px',
+            border: '0',
+            backgroundColor: '#fff',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS}`]: {
+            width: 'min(100vw - 48px, 1200px)',
+            maxWidth: 'min(100vw - 48px, 1200px)',
+            marginLeft: 'max(0px, calc((100% - min(100vw - 48px, 1200px)) / 2))',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS} iframe`]: {
+            minHeight: '520px',
+            height: 'min(72vh, 820px)',
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
             ...getRenderedMarkdownTaskMarkerLayoutStyle(),
             verticalAlign: '-0.14em',
@@ -2897,6 +3187,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                   view.dispatch({ selection: { anchor: imageSelection.from, head: imageSelection.to } });
                   return true;
                 }
+                const inlineHtmlSelection = getRenderedMarkdownInlineHtmlSelectionFromEventTarget(event.target);
+                if (inlineHtmlSelection !== null) {
+                  event.preventDefault();
+                  view.focus();
+                  view.dispatch({ selection: { anchor: inlineHtmlSelection.from, head: inlineHtmlSelection.to } });
+                  return true;
+                }
                 const blockBodyPos = getRenderedMarkdownBlockBodyClickPosition(
                   view.state.doc.toString(),
                   pos,
@@ -2966,6 +3263,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         parent: containerRef.current,
       });
       viewRef.current = view;
+      view.scrollDOM.setAttribute('data-ft-quality-scroll', presentation === 'rendered' ? 'rendered-editor' : 'markdown');
       scrollFpsSamplerRef(view.scrollDOM);
       const handleKeyDownCapture = (event: KeyboardEvent) => {
         handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
@@ -3134,6 +3432,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     return (
       <div
         ref={containerRef}
+        data-ft-quality-editor={presentation === 'rendered' ? 'rendered' : 'markdown'}
         style={{
           width: '100%',
           height: '100%',

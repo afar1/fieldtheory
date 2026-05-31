@@ -93,17 +93,21 @@ import {
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import type { QuotaManager } from './quotaManager';
+import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
+import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
-import { MeetingManager, type MeetingFileContext, type MeetingSession } from './meetingManager';
+import { MeetingManager, type MeetingSession } from './meetingManager';
+import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
+import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
 import {
@@ -130,6 +134,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
 import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, resolveCommandLauncherInvocationTarget } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
+import { appendTranscriberTrace } from './transcriberTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
 import { inferLibrarianSetupComplete } from './librarianSetupState';
@@ -175,7 +180,8 @@ import {
   type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
-import { MetricsManager, UserMetrics } from './metricsManager';
+import { MetricsManager } from './metricsManager';
+import { registerMetricsIpc } from './metricsIpc';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
@@ -184,6 +190,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -201,6 +208,7 @@ import {
 
 const log = createLogger('Main');
 const renderedEditorDebugLogPath = path.join(process.cwd(), '.logs', 'rendered-editor-debug.jsonl');
+const scrollDiagnosticsLogPath = path.join(process.cwd(), '.logs', 'scroll-diagnostics.jsonl');
 const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
 const STARTUP_PROFILE_ENABLED = ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_STARTUP_PROFILE ?? '').toLowerCase());
 const STARTUP_LAUNCHED_AT_MS = Number.parseFloat(process.env.FIELD_THEORY_STARTUP_LAUNCHED_AT_MS ?? '');
@@ -251,36 +259,52 @@ function markStartupSurfaceShown(window: BrowserWindow | null, stage: string): v
   window.once('show', markShown);
 }
 
-function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+function writeJsonlDiagnosticLog(filePath: string, entry: unknown): { ok: boolean; path: string; error?: string } {
   try {
-    fs.mkdirSync(path.dirname(renderedEditorDebugLogPath), { recursive: true });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.appendFileSync(
-      renderedEditorDebugLogPath,
+      filePath,
       `${JSON.stringify({ receivedAt: Date.now(), entry })}\n`,
       'utf-8',
     );
-    return { ok: true, path: renderedEditorDebugLogPath };
+    return { ok: true, path: filePath };
   } catch (error) {
     return {
       ok: false,
-      path: renderedEditorDebugLogPath,
+      path: filePath,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
-function clearRenderedEditorDebugLog(): { ok: boolean; path: string; error?: string } {
+function clearJsonlDiagnosticLog(filePath: string): { ok: boolean; path: string; error?: string } {
   try {
-    fs.mkdirSync(path.dirname(renderedEditorDebugLogPath), { recursive: true });
-    fs.writeFileSync(renderedEditorDebugLogPath, '', 'utf-8');
-    return { ok: true, path: renderedEditorDebugLogPath };
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '', 'utf-8');
+    return { ok: true, path: filePath };
   } catch (error) {
     return {
       ok: false,
-      path: renderedEditorDebugLogPath,
+      path: filePath,
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+  return writeJsonlDiagnosticLog(renderedEditorDebugLogPath, entry);
+}
+
+function clearRenderedEditorDebugLog(): { ok: boolean; path: string; error?: string } {
+  return clearJsonlDiagnosticLog(renderedEditorDebugLogPath);
+}
+
+function writeScrollDiagnosticsLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+  return writeJsonlDiagnosticLog(scrollDiagnosticsLogPath, entry);
+}
+
+function clearScrollDiagnosticsLog(): { ok: boolean; path: string; error?: string } {
+  return clearJsonlDiagnosticLog(scrollDiagnosticsLogPath);
 }
 
 function traceLibraryRename(stage: string, payload: Record<string, unknown>): void {
@@ -382,6 +406,1156 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
   });
 }
 
+function createLauncherSessionId(): string {
+  return `launcher-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function elapsedMsSince(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+}
+
+const QUALITY_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-benchmark=';
+const QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-external-benchmark=';
+const QUALITY_BROWSER_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-browser-benchmark=';
+const QUALITY_COMMAND_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-command-benchmark=';
+const QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-launcher-benchmark=';
+const QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-launcher-normal-focus-benchmark=';
+const QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-immersive-benchmark=';
+const QUALITY_RECORDING_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-benchmark=';
+const QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-asr-benchmark=';
+const QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-asr-delivery-benchmark=';
+const QUALITY_BENCHMARK_SWITCH = 'field-theory-run-quality-benchmark';
+const QUALITY_EXTERNAL_BENCHMARK_SWITCH = 'field-theory-run-quality-external-benchmark';
+const QUALITY_BROWSER_BENCHMARK_SWITCH = 'field-theory-run-quality-browser-benchmark';
+const QUALITY_COMMAND_BENCHMARK_SWITCH = 'field-theory-run-quality-command-benchmark';
+const QUALITY_LAUNCHER_BENCHMARK_SWITCH = 'field-theory-run-quality-launcher-benchmark';
+const QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH = 'field-theory-run-quality-launcher-normal-focus-benchmark';
+const QUALITY_IMMERSIVE_BENCHMARK_SWITCH = 'field-theory-run-quality-immersive-benchmark';
+const QUALITY_RECORDING_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-benchmark';
+const QUALITY_RECORDING_ASR_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-asr-benchmark';
+const QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-asr-delivery-benchmark';
+
+function qualityBenchmarkIdFromArgv(argv: string[]): string | null {
+  const arg = argv.find(item => (
+    item.startsWith(QUALITY_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX)
+  ));
+  let prefix = QUALITY_BENCHMARK_ARG_PREFIX;
+  if (arg?.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_BROWSER_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_COMMAND_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_BENCHMARK_ARG_PREFIX;
+  }
+  const id = arg?.slice(prefix.length).trim();
+  return id || null;
+}
+
+function shouldRunExternalQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunBrowserQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunCommandQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunLauncherQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunLauncherNormalQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunImmersiveQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingAsrQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingAsrDeliveryQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX));
+}
+
+function qualityBenchmarkIdFromCommandLine(): string | null {
+  return app.commandLine.getSwitchValue(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_RECORDING_ASR_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_RECORDING_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_IMMERSIVE_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_LAUNCHER_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_COMMAND_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_BROWSER_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_EXTERNAL_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_BENCHMARK_SWITCH)
+    || qualityBenchmarkIdFromArgv(process.argv)
+    || null;
+}
+
+function qualityBenchmarkModeFromCommandLine(): 'controlled' | 'external' | 'browser' | 'command' | 'launcher' | 'launcher-normal' | 'immersive' | 'recording' | 'recording-asr' | 'recording-asr-delivery' {
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH) || shouldRunRecordingAsrDeliveryQualityBenchmark(process.argv)) return 'recording-asr-delivery';
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_ASR_BENCHMARK_SWITCH) || shouldRunRecordingAsrQualityBenchmark(process.argv)) return 'recording-asr';
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_BENCHMARK_SWITCH) || shouldRunRecordingQualityBenchmark(process.argv)) return 'recording';
+  if (app.commandLine.hasSwitch(QUALITY_IMMERSIVE_BENCHMARK_SWITCH) || shouldRunImmersiveQualityBenchmark(process.argv)) return 'immersive';
+  if (app.commandLine.hasSwitch(QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH) || shouldRunLauncherNormalQualityBenchmark(process.argv)) return 'launcher-normal';
+  if (app.commandLine.hasSwitch(QUALITY_LAUNCHER_BENCHMARK_SWITCH) || shouldRunLauncherQualityBenchmark(process.argv)) return 'launcher';
+  if (app.commandLine.hasSwitch(QUALITY_COMMAND_BENCHMARK_SWITCH) || shouldRunCommandQualityBenchmark(process.argv)) return 'command';
+  if (app.commandLine.hasSwitch(QUALITY_BROWSER_BENCHMARK_SWITCH) || shouldRunBrowserQualityBenchmark(process.argv)) return 'browser';
+  if (app.commandLine.hasSwitch(QUALITY_EXTERNAL_BENCHMARK_SWITCH) || shouldRunExternalQualityBenchmark(process.argv)) return 'external';
+  return 'controlled';
+}
+
+type QualityBenchmarkDeliveryResult = {
+  success: boolean;
+  elapsedMs: number;
+  deliveredLength: number;
+  error?: string;
+};
+
+async function waitForLauncherBenchmarkReady(
+  launcherWindow: CommandLauncherWindow,
+  traceContext: Record<string, unknown>,
+  eventName = 'launcher-interaction-benchmark-ready',
+): Promise<boolean> {
+  const startedAt = process.hrtime.bigint();
+  const inspectReadiness = `
+(() => {
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  return {
+    hasInput: Boolean(input),
+    ready: Boolean(window.__fieldTheoryLauncherBenchmarkReady),
+    documentReadyState: document.readyState,
+  };
+})()
+`;
+
+  let lastState: unknown = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    lastState = await launcherWindow.executeJavaScript<unknown>(inspectReadiness);
+    if (
+      typeof lastState === 'object'
+      && lastState !== null
+      && (lastState as { hasInput?: unknown }).hasInput === true
+      && (lastState as { ready?: unknown }).ready === true
+    ) {
+      appendCommandLauncherTrace(eventName, {
+        ...traceContext,
+        elapsedMs: elapsedMsSince(startedAt),
+        attempt,
+      });
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  appendCommandLauncherTrace(`${eventName}-timeout`, {
+    ...traceContext,
+    elapsedMs: elapsedMsSince(startedAt),
+    lastState,
+  });
+  return false;
+}
+
+async function runControlledBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+  let targetWindow: BrowserWindow | null = null;
+
+  try {
+    targetWindow = new BrowserWindow({
+      width: 320,
+      height: 120,
+      show: false,
+      skipTaskbar: true,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    await targetWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<textarea id="target" autofocus></textarea>')}`);
+    await targetWindow.webContents.executeJavaScript('document.getElementById("target").focus();', true);
+    clipboard.writeText(text);
+    targetWindow.webContents.paste();
+
+    let delivered = '';
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      delivered = await targetWindow.webContents.executeJavaScript('document.getElementById("target").value;', true);
+      if (delivered === text) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    return {
+      success: delivered === text,
+      elapsedMs,
+      deliveredLength: delivered.length,
+      error: delivered === text ? undefined : 'Controlled target did not receive expected text',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Controlled delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      const windowToDestroy = targetWindow;
+      setTimeout(() => {
+        if (!windowToDestroy.isDestroyed()) {
+          windowToDestroy.destroy();
+        }
+      }, 100);
+    }
+    appendCommandLauncherTrace('invoke-command-controlled-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function runExternalTextEditBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+
+  try {
+    clipboard.writeText(text);
+    const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  tell application "TextEdit"
+    activate
+    make new document with properties {text:""}
+  end tell
+  delay 0.5
+  tell application "System Events"
+    tell process "TextEdit"
+      set frontmost to true
+      keystroke "v" using command down
+    end tell
+  end tell
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText is expectedText or deliveredText is (expectedText & linefeed) then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    set deliveredText to text of front document
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+    const result = await execFileAsync('osascript', ['-e', script, text], { timeout: 5000 });
+    const delivered = result.stdout.replace(/\r?\n$/, '');
+    const normalizedDelivered = delivered === `${text}\n` ? text : delivered;
+    return {
+      success: normalizedDelivered === text,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: delivered.length,
+      error: normalizedDelivered === text ? undefined : 'TextEdit did not receive expected text',
+    };
+  } catch (error) {
+    try {
+      await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+    } catch {}
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'External delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    appendCommandLauncherTrace('invoke-command-external-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function runExternalSafariTextareaBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+  const pageHtml = [
+    '<!doctype html>',
+    '<meta charset="utf-8">',
+    '<title>Field Theory Quality Benchmark</title>',
+    '<textarea id="target" autofocus style="width:90vw;height:70vh;font:16px -apple-system;"></textarea>',
+    '<script>requestAnimationFrame(() => document.getElementById("target").focus());</script>',
+  ].join('');
+  const targetUrl = `data:text/html;charset=utf-8,${encodeURIComponent(pageHtml)}`;
+
+  try {
+    clipboard.writeText(text);
+    const setupStartedAt = process.hrtime.bigint();
+    const setupScript = `
+on run argv
+  set targetUrl to item 1 of argv
+  tell application "Safari"
+    activate
+    make new document with properties {URL:targetUrl}
+  end tell
+  delay 0.7
+  tell application "System Events"
+    tell process "Safari"
+      set frontmost to true
+    end tell
+  end tell
+end run`;
+    await execFileAsync('osascript', ['-e', setupScript, targetUrl], { timeout: 5000 });
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: 'open-safari-textarea',
+      elapsedMs: elapsedMsSince(setupStartedAt),
+    });
+
+    const deliveryStartedAt = process.hrtime.bigint();
+    const deliveryScript = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  tell application "System Events"
+    tell process "Safari"
+      set frontmost to true
+      keystroke "v" using command down
+    end tell
+  end tell
+  delay 0.1
+  repeat 40 times
+    tell application "System Events"
+      tell process "Safari"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.02
+        keystroke "c" using command down
+      end tell
+    end tell
+    delay 0.05
+    try
+      set deliveredText to the clipboard as text
+    on error
+      set deliveredText to ""
+    end try
+    if deliveredText is expectedText then exit repeat
+  end repeat
+  tell application "Safari"
+    try
+      close front window
+    end try
+  end tell
+  return deliveredText
+end run`;
+    const result = await execFileAsync('osascript', ['-e', deliveryScript, text], { timeout: 7000 });
+    const delivered = result.stdout.replace(/\r?\n$/, '');
+    return {
+      success: delivered === text,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: delivered.length,
+      error: delivered === text ? undefined : 'Safari textarea did not receive expected text',
+    };
+  } catch (error) {
+    try {
+      await execFileAsync('osascript', ['-e', 'tell application "Safari" to try\nclose front window\nend try'], { timeout: 1000 });
+    } catch {}
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Safari textarea delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    appendCommandLauncherTrace('invoke-command-browser-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function openTextEditBenchmarkDocument(): Promise<void> {
+  const script = `
+tell application "TextEdit"
+  activate
+  make new document with properties {text:""}
+end tell
+tell application "System Events"
+  repeat 40 times
+    if exists process "TextEdit" then
+      tell process "TextEdit"
+        set frontmost to true
+        if exists window 1 then exit repeat
+      end tell
+    end if
+    delay 0.05
+  end repeat
+end tell
+tell application "TextEdit"
+  activate
+end tell
+delay 0.1`;
+  await execFileAsync('osascript', ['-e', script], { timeout: 3000 });
+}
+
+async function activateTargetAppWithSystemEvents(targetApp: { bundleId: string; name: string }): Promise<void> {
+  const activateScript = `
+on run argv
+  set targetBundleId to item 1 of argv
+  set targetName to item 2 of argv
+  tell application id targetBundleId
+    activate
+  end tell
+  tell application "System Events"
+    if exists process targetName then
+      tell process targetName
+        set frontmost to true
+      end tell
+    end if
+  end tell
+end run`;
+  await execFileAsync('osascript', ['-e', activateScript, targetApp.bundleId, targetApp.name], { timeout: 3000 });
+}
+
+async function readAndCloseTextEditBenchmarkDocument(expectedText: string): Promise<{
+  success: boolean;
+  deliveredLength: number;
+  error?: string;
+}> {
+  const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText is expectedText or deliveredText is (expectedText & linefeed) then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+  const result = await execFileAsync('osascript', ['-e', script, expectedText], { timeout: 5000 });
+  const delivered = result.stdout.replace(/\r?\n$/, '');
+  const normalizedDelivered = delivered === `${expectedText}\n` ? expectedText : delivered;
+  return {
+    success: normalizedDelivered === expectedText,
+    deliveredLength: delivered.length,
+    error: normalizedDelivered === expectedText ? undefined : 'TextEdit did not receive expected command text',
+  };
+}
+
+async function readAndCloseTextEditCommandBenchmarkDocument(expectedText: string): Promise<{
+  success: boolean;
+  deliveredLength: number;
+  error?: string;
+}> {
+  const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText contains expectedText then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+  const result = await execFileAsync('osascript', ['-e', script, expectedText], { timeout: 5000 });
+  const delivered = result.stdout.replace(/\r?\n$/, '');
+  return {
+    success: delivered.includes(expectedText),
+    deliveredLength: delivered.length,
+    error: delivered.includes(expectedText) ? undefined : 'TextEdit document did not contain expected command text',
+  };
+}
+
+async function runCommandTextEditBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const benchmarkStartedAt = process.hrtime.bigint();
+  let deliveryStartedAt = benchmarkStartedAt;
+  const commandName = 'quality-benchmark-command';
+  const commandPath = path.join(os.tmpdir(), `field-theory-quality-command-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
+  const targetApp = { bundleId: 'com.apple.TextEdit', name: 'TextEdit' };
+  let documentNeedsCleanup = false;
+
+  try {
+    fs.writeFileSync(commandPath, text, 'utf8');
+    const openDocumentStartedAt = process.hrtime.bigint();
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: 'open-textedit-document',
+      elapsedMs: elapsedMsSince(openDocumentStartedAt),
+    });
+
+    const pasteMode = resolveCommandFilePasteMode({ isTerminal: false, isIDE: false });
+    const commandText = formatCommandFilePasteText({
+      kind: 'command',
+      name: commandName,
+      filePath: commandPath,
+      mode: pasteMode,
+      markdownContent: text,
+    });
+    deliveryStartedAt = process.hrtime.bigint();
+
+    const pasteResult = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: boolean; error?: string }> => {
+      const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+      let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
+      try {
+        const clipboardStartedAt = process.hrtime.bigint();
+        clipboard.writeText(commandText);
+        clipboardManager?.syncClipboardHash();
+        launcherClipboardPayload = captureCommandClipboardPayload();
+        appendCommandLauncherTrace('invoke-command-clipboard-written', {
+          ...traceContext,
+          commandName,
+          format: 'text',
+          contentMode: pasteMode,
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          textReferenceTarget: false,
+          markdownContentTarget: true,
+          ...commandPayloadTrace(commandText),
+          textLength: commandText.length,
+          clipboard: readCommandPasteClipboardTrace(),
+        });
+        appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+          ...traceContext,
+          phase: 'clipboard-write',
+          elapsedMs: elapsedMsSince(clipboardStartedAt),
+        });
+
+        let pasted = false;
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal: false, isIDE: false });
+        const pasteStartedAt = process.hrtime.bigint();
+        if (pasteDelivery === 'native-helper') {
+          pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', traceContext);
+        } else {
+          appendCommandLauncherTrace('invoke-command-native-type-skipped', {
+            ...traceContext,
+            commandName,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+            delivery: pasteDelivery,
+          });
+        }
+        if (!pasted) {
+          appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+            ...traceContext,
+            commandName,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+          });
+        }
+        if (!pasted) {
+          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+            clipboardTrace: readCommandPasteClipboardTrace,
+            requireFocusedTextInput: true,
+            traceDetails: traceContext,
+          });
+        }
+        appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+          ...traceContext,
+          phase: pasted ? 'paste-delivery' : 'paste-delivery-failed',
+          strategy: pasteDelivery,
+          elapsedMs: elapsedMsSince(pasteStartedAt),
+        });
+        return pasted
+          ? { success: true }
+          : { success: false, error: 'Could not paste command text into TextEdit' };
+      } finally {
+        scheduleCommandClipboardRestore({
+          commandName,
+          commandPath,
+          restoreGeneration: clipboardRestore.generation,
+          restoreSnapshot: clipboardRestore.snapshot,
+          launcherClipboardPayload,
+        });
+      }
+    });
+
+    if (!pasteResult.success) {
+      return {
+        success: false,
+        elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+        deliveredLength: 0,
+        error: pasteResult.error,
+      };
+    }
+
+    const verifyStartedAt = process.hrtime.bigint();
+    const delivered = await readAndCloseTextEditCommandBenchmarkDocument(commandText);
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: delivered.success ? 'verify-textedit-delivery' : 'verify-textedit-delivery-failed',
+      elapsedMs: elapsedMsSince(verifyStartedAt),
+      deliveredLength: delivered.deliveredLength,
+    });
+    documentNeedsCleanup = false;
+    return {
+      success: delivered.success,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: delivered.deliveredLength,
+      error: delivered.error,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Command delivery benchmark failed',
+    };
+  } finally {
+    try {
+      fs.rmSync(commandPath, { force: true });
+    } catch {}
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runLauncherInteractionQualityBenchmark(
+  benchmarkId: string,
+  options: { focusProtection?: boolean } = {},
+): Promise<void> {
+  if (!commandLauncherWindow) {
+    appendCommandLauncherTrace('launcher-interaction-benchmark-error', {
+      benchmark: true,
+      benchmarkId,
+      error: 'Command launcher window unavailable',
+    });
+    return;
+  }
+
+  const launcherSessionId = `benchmark-${benchmarkId}`;
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId,
+    delivery: options.focusProtection === false ? 'launcher-interaction-normal' : 'launcher-interaction-focus-protected',
+    qualityScenario: options.focusProtection === false ? 'synthetic-launcher-normal-focus' : 'synthetic-launcher-focus-protected',
+  };
+  const query = 'quality benchmark';
+
+  appendCommandLauncherTrace('launcher-interaction-benchmark-start', traceContext);
+  const preloadReady = await waitForLauncherBenchmarkReady(
+    commandLauncherWindow,
+    traceContext,
+    'launcher-interaction-benchmark-preload-ready',
+  );
+  if (!preloadReady) return;
+  appendCommandLauncherTrace('hotkey-trigger', {
+    ...traceContext,
+    source: 'quality-benchmark',
+  });
+  await commandLauncherWindow.show({
+    launcherSessionId,
+    qualityScenario: String(traceContext.qualityScenario),
+    ...(options.focusProtection === false ? {} : { suppressBlurHideMs: 2500 }),
+  });
+  const ready = await waitForLauncherBenchmarkReady(commandLauncherWindow, traceContext);
+  if (!ready) return;
+  const setBenchmarkQuery = `
+(() => {
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  if (!input) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, ${JSON.stringify(query)});
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(query)} }));
+  return true;
+})()
+`;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const didSetQuery = await commandLauncherWindow.executeJavaScript<boolean>(setBenchmarkQuery);
+    if (didSetQuery) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await commandLauncherWindow.executeJavaScript<boolean>(setBenchmarkQuery);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  commandLauncherWindow.hide(true);
+  appendCommandLauncherTrace('launcher-interaction-benchmark-success', traceContext);
+}
+
+async function runImmersiveSurfaceQualityBenchmark(benchmarkId: string): Promise<void> {
+  const qualityScenario = 'renderer-driven-immersive-surface';
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId: `benchmark-${benchmarkId}`,
+    delivery: 'immersive-surface',
+    qualityScenario,
+  };
+  const startedAt = process.hrtime.bigint();
+  appendCommandLauncherTrace('immersive-surface-benchmark-start', traceContext);
+  try {
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+    }
+    const libraryBounds = restoreClipboardHistoryBounds('library');
+    clipboardHistoryWindow.showLibrary(libraryBounds, true, true);
+    const immersiveRelPath = process.env.FIELD_THEORY_QUALITY_IMMERSIVE_WIKI_REL_PATH?.trim();
+    if (immersiveRelPath) {
+      clipboardHistoryWindow.openScratchpad({ relPath: immersiveRelPath });
+    }
+    await new Promise(resolve => setTimeout(resolve, 600));
+    if (immersiveRelPath) {
+      clipboardHistoryWindow.openScratchpad({ relPath: immersiveRelPath });
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    const targetWindow = clipboardHistoryWindow.getWindow?.();
+    if (!targetWindow || targetWindow.isDestroyed()) {
+      throw new Error('Clipboard history BrowserWindow unavailable');
+    }
+    const librarySurfaceReady = await targetWindow.webContents.executeJavaScript(`
+new Promise((resolve) => {
+  const selectors = [
+    '[data-ft-rendered-editor-root="true"]',
+    '[data-ft-quality-editor="markdown"]',
+    '[data-ft-librarian-content-scroll="true"]',
+  ];
+  const hasSurface = () => selectors.some((selector) => document.querySelector(selector));
+  if (hasSurface()) {
+    resolve(true);
+    return;
+  }
+  const observer = new MutationObserver(() => {
+    if (!hasSurface()) return;
+    observer.disconnect();
+    window.clearTimeout(timeout);
+    resolve(true);
+  });
+  const timeout = window.setTimeout(() => {
+    observer.disconnect();
+    resolve(false);
+  }, 3500);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})
+`, true);
+    appendCommandLauncherTrace('immersive-surface-library-ready', {
+      ...traceContext,
+      librarySurfaceReady,
+    });
+    const result = await targetWindow.webContents.executeJavaScript(`
+(() => {
+  const api = window.ftDebugScroll;
+  if (!api?.recordRendererJourneyQualitySamples) {
+    return { ok: false, error: 'ftDebugScroll renderer journey helper unavailable' };
+  }
+  return Promise.resolve(api.recordRendererJourneyQualitySamples(${JSON.stringify(qualityScenario)}, ${JSON.stringify(benchmarkId)}))
+    .then((result) => {
+      const evidence = result?.evidence ?? {};
+      const journeyOk = Boolean(
+        evidence.librarySurfaceReady
+          && evidence.renderedScroll?.targetFound
+          && evidence.markdownScroll?.targetFound
+          && evidence.renderedInput?.targetFound
+          && evidence.markdownInput?.targetFound
+      );
+      return { ...result, ok: journeyOk, journeyOk };
+    });
+})()
+`, true);
+    const launcherWindow = commandLauncherWindow;
+    if (!launcherWindow) {
+      throw new Error('Command launcher window unavailable for immersive journey');
+    }
+    const launcherReady = await waitForLauncherBenchmarkReady(
+      launcherWindow,
+      traceContext,
+      'immersive-surface-launcher-preload-ready',
+    );
+    if (launcherReady) {
+      appendCommandLauncherTrace('hotkey-trigger', {
+        ...traceContext,
+        source: 'quality-benchmark',
+      });
+      await launcherWindow.show({
+        launcherSessionId: String(traceContext.launcherSessionId),
+        qualityScenario,
+        suppressBlurHideMs: 2500,
+      });
+      const ready = await waitForLauncherBenchmarkReady(launcherWindow, traceContext);
+      if (ready) {
+        const query = 'quality journey';
+        await launcherWindow.executeJavaScript<boolean>(`
+(() => {
+  const api = window.ftDebugScroll;
+  api?.enable?.();
+  api?.setQualityContext?.({
+    qualityScenario: ${JSON.stringify(qualityScenario)},
+    benchmarkId: ${JSON.stringify(benchmarkId)},
+    sampleOrigin: 'programmatic-dom-event',
+    journeyStep: 'launcher-type',
+  });
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  if (!input) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, ${JSON.stringify(query)});
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(query)} }));
+  window.setTimeout(() => api?.clearQualityContext?.(), 400);
+  return true;
+})()
+`);
+        await new Promise(resolve => setTimeout(resolve, 450));
+        launcherWindow.hide(true);
+      }
+    }
+    appendCommandLauncherTrace('immersive-surface-benchmark-success', {
+      ...traceContext,
+      elapsedMs: elapsedMsSince(startedAt),
+      result,
+    });
+  } catch (error) {
+    appendCommandLauncherTrace('immersive-surface-benchmark-error', {
+      ...traceContext,
+      elapsedMs: elapsedMsSince(startedAt),
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function runRecordingDeliveryQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-textedit',
+    qualityScenario: 'synthetic-recording-textedit',
+    source: 'quality-benchmark',
+  };
+  const text = `Field Theory recording benchmark ${benchmarkId}`;
+  let documentNeedsCleanup = false;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    appendTranscriberTrace('benchmark.start', traceContext);
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    await activateTargetAppWithSystemEvents({ bundleId: 'com.apple.TextEdit', name: 'TextEdit' });
+    const result = await transcriberManager.runRecordingDeliveryQualityBenchmark({
+      benchmarkId,
+      text,
+    });
+    const delivered = await readAndCloseTextEditCommandBenchmarkDocument(text);
+    documentNeedsCleanup = false;
+    if (result.success && delivered.success) {
+      appendTranscriberTrace('benchmark.delivery-success', {
+        ...traceContext,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        deliveredLength: delivered.deliveredLength,
+      });
+    } else {
+      appendTranscriberTrace('benchmark.delivery-error', {
+        ...traceContext,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        deliveredLength: delivered.deliveredLength,
+        error: result.error ?? delivered.error ?? 'Recording benchmark delivery failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.error', {
+      ...traceContext,
+      error,
+    });
+  } finally {
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runRecordingAsrQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-asr-fixture',
+    qualityScenario: 'fixture-audio',
+    source: 'quality-benchmark',
+  };
+  let audioCleanup: (() => void) | null = null;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.asr-error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    const preparedAudio = await prepareRecordingAsrBenchmarkAudio(benchmarkId);
+    audioCleanup = preparedAudio.cleanup;
+    const result = await transcriberManager.runRecordingAsrQualityBenchmark({
+      benchmarkId,
+      wavPath: preparedAudio.audioPath,
+    });
+    if (!result.success) {
+      appendTranscriberTrace('benchmark.asr-error', {
+        ...traceContext,
+        totalMs: result.totalMs,
+        wavBytes: result.wavBytes,
+        error: result.error ?? 'Recording ASR benchmark failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.asr-error', {
+      ...traceContext,
+      error: error instanceof Error ? error.message : 'Recording ASR benchmark failed',
+    });
+  } finally {
+    audioCleanup?.();
+  }
+}
+
+function getRecordingAsrBenchmarkFixturePath(): string {
+  const configuredFixturePath = process.env.FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO?.trim();
+  if (!configuredFixturePath) {
+    throw new Error('Set FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO to a local WAV fixture before running the recording ASR benchmark');
+  }
+  return path.resolve(configuredFixturePath);
+}
+
+async function prepareRecordingAsrBenchmarkAudio(benchmarkId: string): Promise<{ audioPath: string; cleanup: () => void }> {
+  const fixturePath = getRecordingAsrBenchmarkFixturePath();
+  const tempAudioPath = path.join(os.tmpdir(), `field-theory-recording-asr-${benchmarkId}.wav`);
+  try {
+    await execFileAsync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', fixturePath, '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le', tempAudioPath], { timeout: 10000 });
+  } catch {
+    await execFileAsync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@24000', fixturePath, tempAudioPath], { timeout: 10000 });
+  }
+  return {
+    audioPath: tempAudioPath,
+    cleanup: () => fs.rm(tempAudioPath, { force: true }, () => {}),
+  };
+}
+
+async function runRecordingAsrDeliveryQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-asr-textedit',
+    qualityScenario: 'fixture-audio-textedit',
+    source: 'quality-benchmark',
+  };
+  let audioCleanup: (() => void) | null = null;
+  let documentNeedsCleanup = false;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.asr-delivery-error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    const preparedAudio = await prepareRecordingAsrBenchmarkAudio(benchmarkId);
+    audioCleanup = preparedAudio.cleanup;
+    appendTranscriberTrace('benchmark.asr-delivery-start', traceContext);
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    const result = await transcriberManager.runRecordingAsrDeliveryQualityBenchmark({
+      benchmarkId,
+      wavPath: preparedAudio.audioPath,
+    });
+    const delivered = result.text
+      ? await readAndCloseTextEditCommandBenchmarkDocument(result.text)
+      : { success: false, deliveredLength: 0, error: 'No ASR transcript to verify' };
+    documentNeedsCleanup = false;
+    if (result.success && delivered.success) {
+      appendTranscriberTrace('benchmark.asr-delivery-success', {
+        ...traceContext,
+        asrMs: result.asrMs,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        textChars: result.textChars,
+        deliveredLength: delivered.deliveredLength,
+        wavBytes: result.wavBytes,
+      });
+    } else {
+      appendTranscriberTrace('benchmark.asr-delivery-error', {
+        ...traceContext,
+        asrMs: result.asrMs,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        textChars: result.textChars,
+        deliveredLength: delivered.deliveredLength,
+        wavBytes: result.wavBytes,
+        error: result.error ?? delivered.error ?? 'Recording ASR delivery benchmark failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.asr-delivery-error', {
+      ...traceContext,
+      error: error instanceof Error ? error.message : 'Recording ASR delivery benchmark failed',
+    });
+  } finally {
+    audioCleanup?.();
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runCommandLauncherQualityBenchmark(benchmarkId: string, mode: 'controlled' | 'external' | 'browser' | 'command' = 'controlled'): Promise<void> {
+  const startedAt = process.hrtime.bigint();
+  const launcherSessionId = `benchmark-${benchmarkId}`;
+  const querySessionId = `${launcherSessionId}:query`;
+  const invocationId = `${launcherSessionId}:invocation`;
+  const deliveryMode = mode === 'command'
+    ? 'command-textedit'
+    : mode === 'external'
+      ? 'controlled-textedit'
+      : mode === 'browser'
+        ? 'controlled-safari-textarea'
+        : 'controlled-electron-textarea';
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId,
+    querySessionId,
+    invocationId,
+    delivery: deliveryMode,
+    qualityScenario: mode === 'command'
+      ? 'synthetic-command-textedit'
+      : mode === 'external'
+        ? 'synthetic-external-textedit'
+        : mode === 'browser'
+          ? 'synthetic-browser-safari-textarea'
+          : 'synthetic-electron-textarea',
+  };
+  const benchmarkText = `field-theory-quality-benchmark:${benchmarkId}`;
+
+  appendCommandLauncherTrace('quality-benchmark-start', traceContext);
+  appendCommandLauncherTrace('renderer-invoke-item', {
+    ...traceContext,
+    item: {
+      id: 'quality-benchmark-command',
+      type: 'command',
+      displayName: 'Quality benchmark command',
+    },
+    fieldTheoryActive: false,
+    hasFieldTheoryTarget: false,
+  });
+  appendCommandLauncherTrace('invoke-command-start', {
+    ...traceContext,
+    commandName: 'quality-benchmark',
+    commandPath: null,
+    invocationTarget: mode === 'command'
+      ? 'benchmark-command-textedit-target'
+      : mode === 'external' ? 'benchmark-textedit-target' : mode === 'browser' ? 'benchmark-safari-textarea-target' : 'benchmark-controlled-target',
+  });
+  const delivery = mode === 'command'
+    ? await runCommandTextEditBenchmarkDelivery(traceContext, benchmarkText)
+    : mode === 'external'
+      ? await runExternalTextEditBenchmarkDelivery(traceContext, benchmarkText)
+      : mode === 'browser'
+        ? await runExternalSafariTextareaBenchmarkDelivery(traceContext, benchmarkText)
+        : await runControlledBenchmarkDelivery(traceContext, benchmarkText);
+  appendCommandLauncherTrace(delivery.success
+    ? 'invoke-command-benchmark-delivery-success'
+    : 'invoke-command-benchmark-delivery-error', {
+    ...traceContext,
+    mutatedUserState: false,
+    deliveredLength: delivery.deliveredLength,
+    expectedLength: benchmarkText.length,
+    deliveryElapsedMs: delivery.elapsedMs,
+    error: delivery.error ?? null,
+  });
+  appendCommandLauncherTrace('invoke-command-success', {
+    ...traceContext,
+    deliveryVerified: delivery.success,
+    commandName: 'quality-benchmark',
+    commandPath: null,
+    targetBundleId: null,
+    targetName: mode === 'external' || mode === 'command' ? 'TextEdit' : mode === 'browser' ? 'Safari' : null,
+    contentMode: mode === 'command'
+      ? 'benchmark-command-textedit-target'
+      : mode === 'external' ? 'benchmark-textedit-target' : mode === 'browser' ? 'benchmark-safari-textarea-target' : 'benchmark-controlled-target',
+    fallbackRan: false,
+    elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+  });
+}
+
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
   targetApp: { bundleId: string; name: string } | null,
@@ -389,9 +1563,11 @@ async function activateAndPaste(
     beforePaste?: () => void | Promise<void>;
     clipboardTrace?: () => Record<string, unknown>;
     requireFocusedTextInput?: boolean;
+    traceDetails?: Record<string, unknown>;
   } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('activate-and-paste-start', {
+    ...options.traceDetails,
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
   });
@@ -403,10 +1579,10 @@ async function activateAndPaste(
       appendCommandLauncherTrace('activate-and-paste-invalid-bundle', { bundleId });
       return false;
     }
-    const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
-    await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    await activateTargetAppWithSystemEvents(targetApp);
     const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-after-activate', {
+      ...options.traceDetails,
       targetBundleId: bundleId,
       frontmostBundleId: afterActivate?.bundleId ?? null,
       frontmostName: afterActivate?.name ?? null,
@@ -441,6 +1617,7 @@ async function activateAndPaste(
     }
     const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
+      ...options.traceDetails,
       targetBundleId: bundleId,
       frontmostBundleId: beforeKeystroke?.bundleId ?? null,
       frontmostName: beforeKeystroke?.name ?? null,
@@ -453,6 +1630,7 @@ async function activateAndPaste(
   }
   const afterKeystroke = nativeHelper?.getFrontmostApp() ?? null;
   appendCommandLauncherTrace('activate-and-paste-success', {
+    ...options.traceDetails,
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
     frontmostBundleId: afterKeystroke?.bundleId ?? null,
@@ -621,8 +1799,7 @@ async function activateCommandLauncherTargetApp(
     return false;
   }
   try {
-    const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
-    await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    await activateTargetAppWithSystemEvents(targetApp);
     const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace(`${tracePrefix}-after-activate`, {
       targetBundleId: bundleId,
@@ -643,9 +1820,10 @@ async function activateCommandLauncherTargetApp(
 
 function activateAndPasteFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
-  options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean } = {},
+  options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean; traceDetails?: Record<string, unknown> } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    ...options.traceDetails,
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     strategy: 'applescript',
     targetBundleId: targetApp.bundleId,
@@ -655,6 +1833,7 @@ function activateAndPasteFromCommandLauncher(
     beforePaste: () => commandLauncherWindow?.hide(true),
     clipboardTrace: options.clipboardTrace,
     requireFocusedTextInput: options.requireFocusedTextInput,
+    traceDetails: options.traceDetails,
   });
 }
 
@@ -662,9 +1841,12 @@ async function typeTextFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
   text: string,
   tracePrefix: 'invoke-command' | 'invoke-handoff',
+  traceDetails: Record<string, unknown> = {},
 ): Promise<boolean> {
+  const phaseStartedAt = process.hrtime.bigint();
   if (!nativeHelper) {
     appendCommandLauncherTrace(`${tracePrefix}-native-type-unavailable`, {
+      ...traceDetails,
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
@@ -676,22 +1858,31 @@ async function typeTextFromCommandLauncher(
   // Keep the launcher visible until the external app is actually frontmost.
   // Otherwise hiding it can expose the Field Theory library while macOS is
   // still completing the app switch.
+  const activateStartedAt = process.hrtime.bigint();
   const activated = await activateCommandLauncherTargetApp(targetApp, `${tracePrefix}-native-type`);
+  const activateMs = elapsedMsSince(activateStartedAt);
   if (!activated) {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: 'activate-failed',
+      activateMs,
+      totalMs: elapsedMsSince(phaseStartedAt),
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+    });
     return false;
   }
   appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.before-hide`, targetApp, {
     targetFrontmost: true,
   });
+  const hideStartedAt = process.hrtime.bigint();
   commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
+  const hideMs = elapsedMsSince(hideStartedAt);
   appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.after-hide-before-native-helper`, targetApp);
-  const focusedTextInput = await checkCommandLauncherFocusedTextInput(`${tracePrefix}-native-type-focused-text-input`, targetApp);
-  if (!focusedTextInput) {
-    return false;
-  }
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    ...traceDetails,
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     strategy: 'native-helper',
     tracePrefix,
@@ -700,6 +1891,7 @@ async function typeTextFromCommandLauncher(
   });
   const frontmostBeforeType = nativeHelper.getFrontmostApp();
   appendCommandLauncherTrace(`${tracePrefix}-native-type-start`, {
+    ...traceDetails,
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
@@ -710,9 +1902,12 @@ async function typeTextFromCommandLauncher(
   });
 
   try {
+    const nativeStartedAt = process.hrtime.bigint();
     const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+    const nativeMs = elapsedMsSince(nativeStartedAt);
     const frontmost = nativeHelper.getFrontmostApp();
     appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
+      ...traceDetails,
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
@@ -727,10 +1922,32 @@ async function typeTextFromCommandLauncher(
       frontmostName: frontmost?.name ?? null,
       clipboard: readCommandPasteClipboardTrace(),
     });
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: result.success ? 'native-helper-success' : 'native-helper-failed',
+      activateMs,
+      hideMs,
+      nativeMs,
+      focusedTextInput: result.focusedTextInput ?? null,
+      totalMs: elapsedMsSince(phaseStartedAt),
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+    });
     return result.success && result.focusedTextInput !== false;
   } catch (error) {
     appendCommandLauncherTrace(`${tracePrefix}-native-type-error`, {
+      ...traceDetails,
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: 'native-helper-error',
+      activateMs,
+      hideMs,
+      totalMs: elapsedMsSince(phaseStartedAt),
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
       error,
@@ -957,7 +2174,6 @@ function resolveClipboardFullScreenHotkeyPreference(prefs: {
 
 function getLocalEnvPaths(): string[] {
   return [
-    '/Users/afar/dev/fieldtheory/.env.local',
     path.join(__dirname, '../../../.env.local'),
     path.join(__dirname, '../../.env.local'),
     path.join(process.cwd(), '.env.local'),
@@ -1094,7 +2310,7 @@ function formatAutoUpdaterErrorMessage(err: unknown): string {
     fieldTheoryBuildChannel === 'experimental'
     && /(401|403|404|not found|forbidden|unauthorized)/i.test(message)
   ) {
-    return 'Experimental updates need GitHub auth for afar1/oscar. Run gh auth login or set FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN, then restart Field Theory Experimental.';
+    return 'Experimental updates need maintainer GitHub access. Sign in with the GitHub CLI or set the maintainer-only experimental update token, then restart Field Theory Experimental.';
   }
   return message;
 }
@@ -2952,12 +4168,14 @@ function registerHotkeysAfterOnboarding(): void {
     tracePath: getCommandLauncherTracePath(),
   });
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
+      const launcherSessionId = createLauncherSessionId();
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
       const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
       const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
       const fieldTheoryFocused = clipboardHistoryWindow?.getWindow()?.isFocused() ?? false;
 
       appendCommandLauncherTrace('hotkey-trigger', {
+        launcherSessionId,
         hotkey: commandLauncherHotkey,
         launcherVisible,
         launcherShowingOrVisible,
@@ -2967,13 +4185,13 @@ function registerHotkeysAfterOnboarding(): void {
 
       try {
         if (launcherVisible) {
-          appendCommandLauncherTrace('hotkey-hide-request');
+          appendCommandLauncherTrace('hotkey-hide-request', { launcherSessionId });
           commandLauncherWindow?.hide();
           return;
         }
 
         if (!commandLauncherWindow) {
-          appendCommandLauncherTrace('hotkey-show-missing-window');
+          appendCommandLauncherTrace('hotkey-show-missing-window', { launcherSessionId });
           return;
         }
 
@@ -2981,7 +4199,7 @@ function registerHotkeysAfterOnboarding(): void {
         // z-order conflicts. Keep it in place when Field Theory is the active
         // writing surface so launcher selection can navigate inside the app.
         if (immersiveMode && !fieldTheoryFocused) {
-          appendCommandLauncherTrace('hotkey-hide-immersive-window');
+          appendCommandLauncherTrace('hotkey-hide-immersive-window', { launcherSessionId });
           clipboardHistoryWindow?.hide();
         }
 
@@ -2993,17 +4211,19 @@ function registerHotkeysAfterOnboarding(): void {
           && (clipboardHistoryWindow?.temporarilyDisableAppWindowFocus('command-launcher-show') ?? false);
 
         appendCommandLauncherTrace('hotkey-show-request', {
+          launcherSessionId,
           anchor: anchorBounds ? 'field-theory-window' : 'frontmost-window',
           appWindowFocusSuppressed,
         });
-        await commandLauncherWindow.show({ anchorBounds });
+        await commandLauncherWindow.show({ anchorBounds, launcherSessionId });
         appendCommandLauncherTrace('hotkey-show-complete', {
+          launcherSessionId,
           launcherVisible: commandLauncherWindow.isVisible(),
           launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
         });
         metricsManager?.recordCommandLauncherUse();
       } catch (error) {
-        appendCommandLauncherTrace('hotkey-show-error', { error });
+        appendCommandLauncherTrace('hotkey-show-error', { launcherSessionId, error });
         log.error('Command launcher hotkey failed:', error);
       }
   });
@@ -5576,73 +6796,8 @@ function setupLibrarianIPCHandlers(): void {
     return result;
   });
 
-  // ===========================================================================
-  // Metrics IPC handlers - User-visible usage stats
-  // "The metrics you see are the metrics we see."
-  // ===========================================================================
-
-  // Get current metrics for display in Settings
-  ipcMain.handle('metrics:getMetrics', (): UserMetrics => {
-    return metricsManager?.getMetrics() ?? {
-      transcriptions: 0,
-      words_transcribed: 0,
-      words_improved: 0,
-      priority_mic_minutes: 0,
-      verbal_commands: 0,
-      command_launcher_uses: 0,
-      clipboard_items: 0,
-      pastes_used: 0,
-      stacks_created: 0,
-      autostacks_created: 0,
-      stacks_pasted: 0,
-      items_added_to_context: 0,
-      sketches_created: 0,
-      screenshots_taken: 0,
-      librarian_artifacts_created: 0,
-      librarian_artifacts_shared: 0,
-      commands_executed: 0,
-      commands_contributed: 0,
-      feedback_given: 0,
-    };
-  });
-
-  // Get metrics with sync status
-  ipcMain.handle('metrics:getMetricsWithStatus', (): { metrics: UserMetrics; lastSyncedAt: string | null; pendingSync: boolean } => {
-    return metricsManager?.getMetricsWithStatus() ?? {
-      metrics: {
-        transcriptions: 0,
-        words_transcribed: 0,
-        words_improved: 0,
-        priority_mic_minutes: 0,
-        verbal_commands: 0,
-        command_launcher_uses: 0,
-        clipboard_items: 0,
-        pastes_used: 0,
-        stacks_created: 0,
-        autostacks_created: 0,
-        stacks_pasted: 0,
-        items_added_to_context: 0,
-        sketches_created: 0,
-        screenshots_taken: 0,
-        librarian_artifacts_created: 0,
-        librarian_artifacts_shared: 0,
-        commands_executed: 0,
-        commands_contributed: 0,
-        feedback_given: 0,
-      },
-      lastSyncedAt: null,
-      pendingSync: false,
-    };
-  });
-
-  // Force sync to Supabase
-  ipcMain.handle('metrics:syncToSupabase', async (): Promise<boolean> => {
-    return metricsManager?.syncToSupabase() ?? false;
-  });
-
-  // Fetch from Supabase (merge with local)
-  ipcMain.handle('metrics:fetchFromSupabase', async (): Promise<boolean> => {
-    return metricsManager?.fetchFromSupabase() ?? false;
+  registerMetricsIpc({
+    getMetricsManager: () => metricsManager,
   });
 }
 
@@ -7477,34 +8632,7 @@ function setupClipboardIPCHandlers(): void {
     return authManager?.isSuperAdmin() ?? false;
   });
 
-  // Open external URL in default browser (for Stripe checkout, etc).
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
-    if (!allowed.test(url)) {
-      log.warn('shell:openExternal blocked non-http URL: %s', url);
-      return;
-    }
-    await shell.openExternal(url);
-  });
-
-  // Reveal file in Finder (macOS).
-  ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
-    try {
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
-        await shell.openPath(fullPath);
-        return;
-      }
-    } catch {
-      // Fall through to the existing reveal behavior.
-    }
-    shell.showItemInFolder(fullPath);
-  });
-
-  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
-  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    win?.setRepresentedFilename(fullPath || '');
-  });
+  registerShellIpc();
 
   ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
     return launchAgentImproveInTerminal(request);
@@ -8088,94 +9216,9 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  // =========================================================================
-  // Quota IPC Handlers - Local usage tracking
-  // QuotaManager handles session checking internally via setSessionChecker().
-  // =========================================================================
-
-  ipcMain.handle('quota:getQuotas', async () => {
-    if (!quotaManager) {
-      return null;
-    }
-    return quotaManager.getQuotas();
-  });
-
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => {
-    if (!quotaManager) {
-      return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
-    }
-    // Map old feature names to new database column names.
-    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'portable_commands'> = {
-      priorityMic: 'priority_mic_seconds',
-      autoStack: 'auto_stack_sessions',
-      textImprove: 'text_improve_words',
-      portableCommands: 'portable_commands',
-    };
-    const dbFeature = featureMap[feature];
-    return quotaManager.getFeatureStatus(dbFeature);
-  });
-
-  ipcMain.handle('quota:getFormattedUsage', async () => {
-    if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', portableCommands: 'Unlimited' };
-    }
-    return {
-      priorityMic: quotaManager.formatPriorityMicUsage(),
-      autoStack: quotaManager.formatAutoStackUsage(),
-      textImprove: quotaManager.formatTextImproveUsage(),
-      portableCommands: quotaManager.formatPortableCommandsUsage(),
-    };
-  });
-
-  ipcMain.handle('quota:getResetDate', async () => {
-    // Quotas now reset on calendar month boundary (1st of each month).
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  });
-
-  ipcMain.handle('quota:getDaysUntilReset', async () => {
-    if (!quotaManager) {
-      return 0;
-    }
-    return quotaManager.getDaysUntilReset();
-  });
-
-  ipcMain.handle('quota:getLimits', async () => {
-    if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, portableCommands: Infinity };
-    }
-    const raw = quotaManager.getLimits();
-    // Transform keys from snake_case to camelCase and convert seconds to minutes.
-    return {
-      priorityMicMinutes: raw.priority_mic_seconds === Infinity ? Infinity : Math.floor(raw.priority_mic_seconds / 60),
-      autoStackSessions: raw.auto_stack_sessions,
-      textImprovementWords: raw.text_improve_words,
-      portableCommands: raw.portable_commands,
-    };
-  });
-
-  ipcMain.handle('quota:refreshTier', async () => {
-    // Sync usage and tier from server. Tier is included in get-usage response.
-    if (!quotaManager) {
-      return { tier: 'free', error: 'Not initialized' };
-    }
-
-    try {
-      await quotaManager.syncFromServer();
-      const tier = quotaManager.getCachedTier();
-
-      // Broadcast tier change to all windows.
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('tier:changed', tier);
-        }
-      });
-
-      return { tier, error: null };
-    } catch (err) {
-      log.error('Error refreshing tier:', err);
-      return { tier: quotaManager.getCachedTier(), error: String(err) };
-    }
+  registerQuotaIpc({
+    getQuotaManager: () => quotaManager,
+    logError: (message, error) => log.error(message, error),
   });
 
   // =========================================================================
@@ -8201,9 +9244,17 @@ function setupClipboardIPCHandlers(): void {
     return writeRenderedEditorDebugLog(entry);
   });
 
+  ipcMain.handle('diagnostics:appendScrollDiagnostics', (_event, entry: unknown) => {
+    return writeScrollDiagnosticsLog(entry);
+  });
+
   ipcMain.handle('diagnostics:getRenderedEditorDebugLogPath', () => renderedEditorDebugLogPath);
 
   ipcMain.handle('diagnostics:clearRenderedEditorDebugLog', () => clearRenderedEditorDebugLog());
+
+  ipcMain.handle('diagnostics:getScrollDiagnosticsLogPath', () => scrollDiagnosticsLogPath);
+
+  ipcMain.handle('diagnostics:clearScrollDiagnosticsLog', () => clearScrollDiagnosticsLog());
 
   // =========================================================================
   // Commands IPC Handlers - Portable commands management
@@ -9469,10 +10520,11 @@ function setupClipboardIPCHandlers(): void {
 
   // Handle direct command invocation from command launcher (Cmd+Shift+K).
   // Gets the command, determines if target is terminal, and pastes appropriately.
-  ipcMain.handle('commands:invoke', async (_event, commandName: string) => {
+  ipcMain.handle('commands:invoke', async (_event, commandName: string, traceContext?: Record<string, unknown>) => {
     if (!commandsManager) {
       return { success: false, error: 'Not initialized' };
     }
+    const invocationTrace = traceContext && typeof traceContext === 'object' ? traceContext : {};
 
     const command = commandsManager.getCommand(commandName);
     if (!command) {
@@ -9484,6 +10536,7 @@ function setupClipboardIPCHandlers(): void {
       const targetApp = getCommandLauncherTargetApp();
       const invocationTarget = getCommandLauncherInvocationTarget(targetApp);
       appendCommandLauncherTrace('invoke-command-start', {
+        ...invocationTrace,
         commandName,
         commandPath: command.filePath,
         targetBundleId: targetApp?.bundleId ?? null,
@@ -9502,6 +10555,7 @@ function setupClipboardIPCHandlers(): void {
         if (writeTextIntoFocusedCodexTerminal(commandText)) {
           commandLauncherWindow?.hide(true);
           appendCommandLauncherTrace('invoke-command-integrated-terminal-success', {
+            ...invocationTrace,
             commandName,
             commandPath: command.filePath,
             sessionId: focusedCodexTerminalLauncherSessionId,
@@ -9510,6 +10564,7 @@ function setupClipboardIPCHandlers(): void {
           return { success: true };
         }
         appendCommandLauncherTrace('invoke-command-integrated-terminal-failed', {
+          ...invocationTrace,
           commandName,
           commandPath: command.filePath,
         });
@@ -9525,6 +10580,7 @@ function setupClipboardIPCHandlers(): void {
         if (insertTextIntoActiveFieldTheoryMarkdown(commandText)) {
           commandLauncherWindow?.hide(true);
           appendCommandLauncherTrace('invoke-command-field-theory-markdown-success', {
+            ...invocationTrace,
             commandName,
             commandPath: command.filePath,
             textLength: commandText.length,
@@ -9532,12 +10588,14 @@ function setupClipboardIPCHandlers(): void {
           return { success: true };
         }
         appendCommandLauncherTrace('invoke-command-field-theory-markdown-failed', {
+          ...invocationTrace,
           commandName,
           commandPath: command.filePath,
         });
       }
       if (invocationTarget.kind !== 'external-app' || !targetApp) {
         appendCommandLauncherTrace('invoke-command-no-target', {
+          ...invocationTrace,
           commandName,
           commandPath: command.filePath,
         });
@@ -9568,6 +10626,7 @@ function setupClipboardIPCHandlers(): void {
           clipboardManager?.syncClipboardHash();
           launcherClipboardPayload = captureCommandClipboardPayload();
           appendCommandLauncherTrace('invoke-command-clipboard-written', {
+            ...invocationTrace,
             commandName,
             format: 'text',
             contentMode: pasteMode,
@@ -9583,9 +10642,10 @@ function setupClipboardIPCHandlers(): void {
           let pasted = false;
           const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
           if (pasteDelivery === 'native-helper') {
-            pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command');
+            pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', invocationTrace);
           } else {
             appendCommandLauncherTrace('invoke-command-native-type-skipped', {
+              ...invocationTrace,
               commandName,
               targetBundleId: targetApp.bundleId,
               targetName: targetApp.name,
@@ -9596,6 +10656,7 @@ function setupClipboardIPCHandlers(): void {
           if (!pasted) {
             fallbackRan = true;
             appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+              ...invocationTrace,
               commandName,
               targetBundleId: targetApp.bundleId,
               targetName: targetApp.name,
@@ -9606,6 +10667,7 @@ function setupClipboardIPCHandlers(): void {
             pasted = await activateAndPasteFromCommandLauncher(targetApp, {
               clipboardTrace: readCommandPasteClipboardTrace,
               requireFocusedTextInput: true,
+              traceDetails: invocationTrace,
             });
           }
           if (!pasted) {
@@ -9625,6 +10687,7 @@ function setupClipboardIPCHandlers(): void {
       });
       if (invocationFailure) return invocationFailure;
       appendCommandLauncherTrace('invoke-command-success', {
+        ...invocationTrace,
         commandName,
         commandPath: command.filePath,
         targetBundleId: targetApp.bundleId,
@@ -9640,7 +10703,7 @@ function setupClipboardIPCHandlers(): void {
       return { success: true };
     } catch (error) {
       log.error('Error invoking command:', error);
-      appendCommandLauncherTrace('invoke-command-error', { commandName, commandPath: command.filePath, error });
+      appendCommandLauncherTrace('invoke-command-error', { ...invocationTrace, commandName, commandPath: command.filePath, error });
       cursorStatusManager?.showNoTargetError('Portable command paste failed');
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
@@ -9858,72 +10921,26 @@ function setupClipboardIPCHandlers(): void {
     return await feedbackManager.isCurrentUserAdmin();
   });
 
-  ipcMain.handle('account:getStatus', async () => {
-    return accountStatusManager?.getStatus() ?? { state: 'checking', capabilityMode: 'writable' };
+  registerAccountIpc({
+    getAccountStatusManager: () => accountStatusManager,
   });
 
-  ipcMain.handle('account:checkNow', async () => {
-    if (!accountStatusManager) {
-      return { state: 'checking', capabilityMode: 'writable' };
-    }
-    return accountStatusManager.checkNow();
-  });
-
-  ipcMain.handle('fieldTheorySync:getStatus', async () => {
-    return getFieldTheorySyncStatus();
-  });
-
-  ipcMain.handle('fieldTheorySync:setLocalEnabled', async (_event, enabled: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled === true });
-      refreshFieldTheorySyncServices();
-    }
-    return getFieldTheorySyncStatus();
+  registerFieldTheorySyncIpc({
+    getStatus: getFieldTheorySyncStatus,
+    setLocalEnabled: async (enabled: boolean) => {
+      if (preferencesManager) {
+        await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled });
+        refreshFieldTheorySyncServices();
+      }
+    },
   });
 }
 
 function setupMeetingsIPCHandlers(): void {
-  const runMeetingAction = async (action: () => Promise<unknown>): Promise<unknown> => {
-    try {
-      return await action();
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Meeting action failed',
-      };
-    }
-  };
-
-  ipcMain.handle('meetings:create', async (_event, rawTitle?: unknown) => runMeetingAction(async () => {
-    const title = typeof rawTitle === 'string' ? rawTitle : undefined;
-    return getMeetingManager().createMeetingNote(title);
-  }));
-
-  ipcMain.handle('meetings:startHere', async () => runMeetingAction(async () => {
-    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
-    return getMeetingManager().startHere(context);
-  }));
-
-  ipcMain.handle('meetings:stop', async () => runMeetingAction(async () => {
-    return getMeetingManager().stopActiveMeeting();
-  }));
-
-  ipcMain.handle('meetings:cancel', async () => runMeetingAction(async () => {
-    return getMeetingManager().cancelActiveMeeting();
-  }));
-
-  ipcMain.handle('meetings:getActive', () => {
-    try {
-      return getMeetingManager().getActiveSession();
-    } catch {
-      return null;
-    }
+  registerMeetingsIpc({
+    getMeetingManager,
+    getActiveFileContext: () => activeLibraryFileContext ? { ...activeLibraryFileContext } : null,
   });
-
-  ipcMain.handle('meetings:summarizeCurrent', async () => runMeetingAction(async () => {
-    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
-    return getMeetingManager().summarizeCurrentMeeting(context);
-  }));
 }
 
 
@@ -11064,7 +12081,9 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize Hot Mic manager for continuous voice input.
   if (nativeHelper && preferencesManager) {
     const soundMgr = transcriberManager.getSoundManager();
-    hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
+    hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr, {
+      startHttpServer: !qualityBenchmarkIdFromCommandLine(),
+    });
     hotMicManager.setFieldTheoryMarkdownInsertionTarget({
       isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
       insertText: insertTextIntoFocusedFieldTheoryMarkdown,
@@ -11349,6 +12368,27 @@ async function initTranscriberSystem(): Promise<void> {
   });
   commandLauncherWindow.preload();
   startupMark('command-launcher-preload-called');
+  const startupQualityBenchmarkId = qualityBenchmarkIdFromCommandLine();
+  if (startupQualityBenchmarkId) {
+    const startupQualityBenchmarkMode = qualityBenchmarkModeFromCommandLine();
+    setTimeout(() => {
+      const benchmark = startupQualityBenchmarkMode === 'launcher'
+        ? runLauncherInteractionQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'launcher-normal'
+        ? runLauncherInteractionQualityBenchmark(startupQualityBenchmarkId, { focusProtection: false })
+        : startupQualityBenchmarkMode === 'immersive'
+        ? runImmersiveSurfaceQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording-asr-delivery'
+        ? runRecordingAsrDeliveryQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording-asr'
+        ? runRecordingAsrQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording'
+        ? runRecordingDeliveryQualityBenchmark(startupQualityBenchmarkId)
+        : runCommandLauncherQualityBenchmark(startupQualityBenchmarkId, startupQualityBenchmarkMode);
+      void benchmark
+        .finally(() => setTimeout(() => app.exit(0), 50));
+    }, 250);
+  }
 
   // Skip auto-paste only when draw canvas is actively visible
   transcriberManager.setSketchModeChecker(() => {
@@ -11747,8 +12787,10 @@ async function initClipboardCallbacks(): Promise<void> {
   });
 }
 
-// Prevent multiple instances of the app.
-const gotTheLock = app.requestSingleInstanceLock();
+// Prevent multiple instances of the app. Dev quality probes can opt into an
+// isolated parallel instance so instrumentation does not disturb the real app.
+const allowParallelDevInstance = !app.isPackaged && ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_ALLOW_PARALLEL_INSTANCE ?? '').toLowerCase());
+const gotTheLock = allowParallelDevInstance || app.requestSingleInstanceLock();
 
 // Register fieldtheory:// URL protocol for deep linking.
 // Development and experimental builds only register when explicitly opted in.
@@ -11868,6 +12910,31 @@ if (!gotTheLock) {
   });
 
   app.on('second-instance', (_event, argv) => {
+    const benchmarkId = qualityBenchmarkIdFromArgv(argv);
+    if (benchmarkId) {
+      if (shouldRunLauncherQualityBenchmark(argv)) {
+        void runLauncherInteractionQualityBenchmark(benchmarkId);
+      } else if (shouldRunLauncherNormalQualityBenchmark(argv)) {
+        void runLauncherInteractionQualityBenchmark(benchmarkId, { focusProtection: false });
+      } else if (shouldRunImmersiveQualityBenchmark(argv)) {
+        void runImmersiveSurfaceQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingAsrDeliveryQualityBenchmark(argv)) {
+        void runRecordingAsrDeliveryQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingAsrQualityBenchmark(argv)) {
+        void runRecordingAsrQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingQualityBenchmark(argv)) {
+        void runRecordingDeliveryQualityBenchmark(benchmarkId);
+      } else {
+        void runCommandLauncherQualityBenchmark(
+          benchmarkId,
+          shouldRunCommandQualityBenchmark(argv)
+            ? 'command'
+            : shouldRunBrowserQualityBenchmark(argv) ? 'browser' : shouldRunExternalQualityBenchmark(argv) ? 'external' : 'controlled',
+        );
+      }
+      return;
+    }
+
     // Handle URL from second instance (Windows/Linux)
     const url = argv.find(arg => arg.startsWith('fieldtheory://'));
     if (url) {

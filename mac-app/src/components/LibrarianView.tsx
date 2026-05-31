@@ -102,10 +102,13 @@ import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils
 import { getMarkdownDrawCommandEdit, insertMarkdownBlockAt } from '../utils/markdownSlashCommands';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
+import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
 import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
+  getRenderedMarkdownInlineHtmlBlockRanges,
+  isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
@@ -213,9 +216,7 @@ export function getLibraryDocumentDefaultContentMode(kind: LibraryDocumentViewKi
 }
 
 export function getLocalFileUrl(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/');
-  const prefixed = normalized.startsWith('/') ? normalized : `/${normalized}`;
-  return `file://${prefixed.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
+  return buildLocalFileUrl(filePath);
 }
 
 function getEditActorDisplay(actor: MarkdownEditActor | undefined): string | null {
@@ -241,20 +242,8 @@ export function getReadingUpdatedTitle(reading: Pick<Reading, 'mtime' | 'sharedA
   return callsign ? `${updated} by ${callsign}` : updated;
 }
 
-function escapeHtmlAttribute(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-}
-
 export function getHtmlPreviewSrcDoc(html: string, filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/');
-  const directoryPath = normalized.includes('/')
-    ? normalized.slice(0, normalized.lastIndexOf('/') + 1)
-    : '/';
-  const baseTag = `<base href="${escapeHtmlAttribute(getLocalFileUrl(directoryPath))}">`;
-  if (/<head(\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseTag}`);
-  }
-  return `${baseTag}${html}`;
+  return buildHtmlPreviewSrcDoc(html, filePath);
 }
 
 function libraryRenameTraceEnabled(): boolean {
@@ -644,6 +633,7 @@ export function getFocusChromeContentCenterX(input: {
 }
 
 const RESPONSIVE_PANEL_MIN_EDITOR_WIDTH = 560;
+const RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH = 640;
 const RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH = 360;
 const RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT = 220;
 const RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL = 360;
@@ -666,6 +656,7 @@ export function getResponsivePanelState(input: {
   terminalVisible: boolean;
   terminalDockSide: CodexTerminalDockSide;
   userResizing?: boolean;
+  autoCollapseSidebarSuppressed?: boolean;
   previous?: ResponsivePanelState;
 }): ResponsivePanelState {
   if (input.userResizing && input.previous) {
@@ -678,16 +669,17 @@ export function getResponsivePanelState(input: {
 
   const sidebarThreshold = input.sidebarWidth
     + RESPONSIVE_PANEL_SIDEBAR_GAP
-    + RESPONSIVE_PANEL_MIN_EDITOR_WIDTH
+    + RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH
     + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
   const sidebarRestoreThreshold = sidebarThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
   const autoCollapseSidebar = !input.sidebarCollapsed
     && !input.sidebarForcedVisible
     && (input.containerWidth < sidebarThreshold
       || (input.previous?.autoCollapseSidebar === true && input.containerWidth < sidebarRestoreThreshold));
-  const effectiveSidebarCollapsed = input.sidebarCollapsed || autoCollapseSidebar;
+  const effectiveSidebarCollapsed = input.sidebarCollapsed
+    || (autoCollapseSidebar && !input.autoCollapseSidebarSuppressed);
   const readerWidth = input.containerWidth - (effectiveSidebarCollapsed ? 0 : input.sidebarWidth + RESPONSIVE_PANEL_SIDEBAR_GAP);
-  const rightDockThreshold = RESPONSIVE_PANEL_MIN_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const rightDockThreshold = RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
   const rightDockRestoreThreshold = rightDockThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
   const canUseBottomDock = input.containerHeight >= (
     RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL + RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT
@@ -1624,6 +1616,49 @@ type RenderedMarkdownImageDeleteRange = {
   deletedMarkdownImages: string[];
 };
 
+type RenderedMarkdownAtomicDeleteRange = {
+  start: number;
+  end: number;
+};
+
+function expandRenderedMarkdownBlockDeleteRange(value: string, start: number, end: number): RenderedMarkdownAtomicDeleteRange {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', end);
+  const lineEnd = lineEndIndex >= 0 ? lineEndIndex : value.length;
+  const before = value.slice(lineStart, start);
+  const after = value.slice(end, lineEnd);
+  if (before.trim() !== '' || after.trim() !== '') return { start, end };
+  if (lineEndIndex >= 0) {
+    const afterLineBreak = lineEnd + 1;
+    return { start: lineStart, end: value[afterLineBreak] === '\n' ? afterLineBreak + 1 : afterLineBreak };
+  }
+  if (lineStart > 0) return { start: lineStart - 1, end: lineEnd };
+  return { start: lineStart, end: lineEnd };
+}
+
+function getRenderedMarkdownInlineHtmlDeleteRange(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: 'Backspace' | 'Delete',
+): RenderedMarkdownAtomicDeleteRange | null {
+  const blocks = getRenderedMarkdownInlineHtmlBlockRanges(value);
+  if (selectionStart !== selectionEnd) {
+    const touched = blocks.filter((block) => selectionStart < block.to && selectionEnd > block.from);
+    if (!touched.length) return null;
+    const start = Math.min(selectionStart, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).start));
+    const end = Math.max(selectionEnd, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).end));
+    return { start, end };
+  }
+
+  const block = blocks.find((candidate) => (
+    key === 'Backspace'
+      ? candidate.from < selectionStart && selectionStart <= candidate.to
+      : candidate.from <= selectionStart && selectionStart < candidate.to
+  ));
+  return block ? expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to) : null;
+}
+
 function getAdjacentRenderedMarkdownImageDeleteRange(
   value: string,
   offset: number,
@@ -1682,6 +1717,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const selectionStart = Math.max(0, Math.min(input.selectionStart, input.value.length));
   const selectionEnd = Math.max(selectionStart, Math.min(input.selectionEnd, input.value.length));
+  const inlineHtmlRange = getRenderedMarkdownInlineHtmlDeleteRange(input.value, selectionStart, selectionEnd, key);
+  if (inlineHtmlRange) {
+    return {
+      nextValue: `${input.value.slice(0, inlineHtmlRange.start)}${input.value.slice(inlineHtmlRange.end)}`,
+      selectionStart: inlineHtmlRange.start,
+      selectionEnd: inlineHtmlRange.start,
+    };
+  }
+
   if (selectionStart !== selectionEnd) {
     const imageRange = getSelectedRenderedMarkdownImageDeleteRange(input.value, selectionStart, selectionEnd);
     if (imageRange) {
@@ -3015,6 +3059,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
   const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
   const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
+  const userResizingPanel = isResizing || codexTerminalResizing;
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
@@ -3025,7 +3070,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     sidebarForcedVisible: sidebarForcedVisibleForEmptySelection,
     terminalVisible: codexTerminalVisible,
     terminalDockSide: codexTerminalDockSide,
-    userResizing: isResizing || codexTerminalResizing,
+    userResizing: userResizingPanel,
+    autoCollapseSidebarSuppressed: suppressAutoCollapseSidebar,
     previous: responsivePanelStateRef.current,
   });
   responsivePanelStateRef.current = responsivePanelState;
@@ -3037,7 +3083,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
   const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
     responsivePanelState,
-    userResizing: isResizing || codexTerminalResizing,
+    userResizing: userResizingPanel,
   });
   useEffect(() => {
     if (sidebarToggleRequestKey > 0 && effectiveSidebarCollapsed && !isFullScreen) {
@@ -4018,6 +4064,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
       const width = Math.round(containerRect.width);
       const height = Math.round(containerRect.height);
+      const containerSizeChanged = responsivePanelSize.width !== width || responsivePanelSize.height !== height;
+      if (containerSizeChanged && sidebarHoverExpanded) {
+        setSidebarHoverExpanded(false);
+      }
       setResponsivePanelSize((previous) => {
         if (previous.width === width && previous.height === height) return previous;
         return { width, height };
@@ -4076,7 +4126,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       resizeObserver.disconnect();
       window.removeEventListener('resize', scheduleResizeUpdate);
     };
-  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, responsivePanelSize.height, responsivePanelSize.width, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -5802,6 +5852,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
 
     const value = editor.getValue();
+    if (
+      isRenderedMarkdownSelectionInsideInlineHtmlBlock(value, selection.start, selection.end)
+      && event.key !== 'Backspace'
+      && event.key !== 'Delete'
+      && event.key !== 'Escape'
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
     if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const indentEdit = getMarkdownListIndentEdit(value, selection.start, selection.end, event.shiftKey ? 'out' : 'in');
       if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
@@ -8559,7 +8620,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   };
 
   const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !activeReading && !isFullScreen);
-  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisible;
+  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !userResizingPanel && !isFullScreen && !sidebarForcedVisible;
   const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!sidebarTemporarilyExpanded) return;
@@ -9481,6 +9542,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         <div
           ref={setContentScrollRef}
           data-ft-librarian-content-scroll="true"
+          data-ft-quality-scroll={contentMode === 'markdown' ? undefined : 'rendered'}
           onScroll={(e) => {
             if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
           }}
@@ -9634,6 +9696,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
 	                    dataAttributes={{
+	                      'data-ft-quality-editor': 'markdown',
 	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
 	                      'data-ft-agent-file-path': activeReading.path,
 	                      'data-ft-agent-title': activeReading.title,
@@ -9813,6 +9876,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     documentPath={activeReading.path}
                     dataAttributes={{
                       'data-ft-rendered-editor-input': 'true',
+                      'data-ft-quality-editor': 'rendered',
                       'data-ft-agent-context': 'markdown',
                       'data-ft-agent-file-path': activeReading.path,
                       'data-ft-agent-title': activeReading.title,

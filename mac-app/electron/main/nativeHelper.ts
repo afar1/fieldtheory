@@ -88,7 +88,7 @@ export class NativeHelper extends EventEmitter {
         return;
       }
 
-      await this.waitForReady();
+      await this.waitForReady({ readyDelayMs: 0, settledDelayMs: 0 });
 
       const timeout = setTimeout(() => {
         cleanup();
@@ -226,10 +226,14 @@ export class NativeHelper extends EventEmitter {
   /**
    * Wait for the helper to be ready (has sent initial message).
    */
-  private async waitForReady(): Promise<void> {
+  private async waitForReady(options: { readyDelayMs?: number; settledDelayMs?: number } = {}): Promise<void> {
+    const readyDelayMs = options.readyDelayMs ?? 50;
+    const settledDelayMs = options.settledDelayMs ?? 100;
     if (this.isReady) {
       // Even if ready, give a small delay to ensure stdin loop is fully initialized
-      await new Promise(resolve => setTimeout(resolve, 50));
+      if (readyDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, readyDelayMs));
+      }
       return;
     }
     
@@ -245,7 +249,9 @@ export class NativeHelper extends EventEmitter {
       log.error('Helper did not become ready within timeout');
     } else {
       // Give Swift a moment to fully initialize its stdin reading loop after first message
-      await new Promise(resolve => setTimeout(resolve, 100));
+      if (settledDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, settledDelayMs));
+      }
     }
   }
 
