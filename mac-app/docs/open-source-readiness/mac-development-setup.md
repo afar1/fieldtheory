@@ -62,9 +62,13 @@ The release-channel guards intentionally fail unless run from the correct releas
 
 ## Environment variables
 
-The current README references `.env.example`, but the file does not exist yet. A public-ready repo should add one with non-secret placeholders and comments.
+`mac-app/.env.example` exists and contains non-secret placeholders for optional account-backed development. Copy it only when you need environment-backed features:
 
-Expected public guidance:
+```bash
+cp .env.example .env.local
+```
+
+Public guidance:
 
 - Core local functionality should work without login.
 - Supabase URL and publishable key are public client configuration, not private secrets. Access control must come from auth, database policy, and server-side checks.
@@ -106,8 +110,6 @@ Model binaries are not tracked in the repository. Public docs should distinguish
 
 ## Known setup gaps before public release
 
-- Add `mac-app/.env.example`.
-- Rewrite `mac-app/README.md` from the current code path.
 - Decide whether public contributors should use real Supabase development infrastructure, local Supabase, or local-only mode by default.
 - Add a first-class contributor-safe dev profile that redirects both Electron `userData` and Field Theory home paths.
-- Publish a third-party notices or dependency license document.
+- Finalize third-party notices after the license and asset terms are chosen.

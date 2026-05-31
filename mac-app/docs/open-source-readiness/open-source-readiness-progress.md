@@ -8,7 +8,7 @@ This page tracks the active push to finish Field Theory Mac open-source readines
 
 **Current status**
 
-The active worktree is `/Users/afar/dev/fieldtheory-mac-open-source-readiness` on `codex/mac-open-source-readiness`. The root checkout `/Users/afar/dev/fieldtheory` is the local staging bench on `experimental`. The root still has preexisting `md` submodule dirt that this work should not touch.
+The root checkout `/Users/afar/dev/fieldtheory` is the local staging bench on `experimental`. The current shipped review branch is `codex/mac-oss-root-stabilization`, opened as PR 317 against `experimental`. The root still has preexisting `md` submodule dirt that this work should not touch.
 
 The non-license readiness pass is complete as far as this worktree can take it without human publication decisions or external secret-scanner tooling. Public docs now describe the current Mac app from code inspection. The shell, account, Field Theory sync, metrics, and quota IPC families have focused modules and tests. Remaining publication decisions are documented instead of guessed.
 
@@ -57,6 +57,12 @@ The non-license readiness pass is complete as far as this worktree can take it w
 
 **Verification log**
 
+- [x] `npm run typecheck` passed on the current Mac app.
+- [x] `npm test` passed on the current Mac app: 151 test files, 2364 tests passed, 1 skipped.
+- [x] `npm run build` passed on the current Mac app.
+- [x] `npm run guard:release-channel:experimental`, `npm run guard:tracked-sources`, `npm run guard:package-safety:experimental`, and `npm run guard:electron-dist-requires` passed on `experimental`.
+- [x] `FIELD_THEORY_RELEASE_BRANCH_OVERRIDE=true npm run guard:release-channel`, `npm run guard:tracked-sources`, `npm run guard:package-safety`, and `npm run guard:electron-dist-requires` passed for a local production-package guard smoke on `experimental`.
+- [x] `npm run test:library-text` passed at the repository root: 57 tests.
 - [x] `npm test -- shellIpc.test.ts` passed with 8 tests.
 - [x] `npm test -- accountIpc.test.ts shellIpc.test.ts` passed with 12 tests.
 - [x] `npm test -- fieldTheorySyncIpc.test.ts accountIpc.test.ts shellIpc.test.ts` passed with 16 tests.
