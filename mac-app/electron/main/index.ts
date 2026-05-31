@@ -101,7 +101,8 @@ import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } fro
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
-import { MeetingManager, type MeetingFileContext, type MeetingSession } from './meetingManager';
+import { MeetingManager, type MeetingSession } from './meetingManager';
+import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
@@ -10936,47 +10937,10 @@ function setupClipboardIPCHandlers(): void {
 }
 
 function setupMeetingsIPCHandlers(): void {
-  const runMeetingAction = async (action: () => Promise<unknown>): Promise<unknown> => {
-    try {
-      return await action();
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Meeting action failed',
-      };
-    }
-  };
-
-  ipcMain.handle('meetings:create', async (_event, rawTitle?: unknown) => runMeetingAction(async () => {
-    const title = typeof rawTitle === 'string' ? rawTitle : undefined;
-    return getMeetingManager().createMeetingNote(title);
-  }));
-
-  ipcMain.handle('meetings:startHere', async () => runMeetingAction(async () => {
-    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
-    return getMeetingManager().startHere(context);
-  }));
-
-  ipcMain.handle('meetings:stop', async () => runMeetingAction(async () => {
-    return getMeetingManager().stopActiveMeeting();
-  }));
-
-  ipcMain.handle('meetings:cancel', async () => runMeetingAction(async () => {
-    return getMeetingManager().cancelActiveMeeting();
-  }));
-
-  ipcMain.handle('meetings:getActive', () => {
-    try {
-      return getMeetingManager().getActiveSession();
-    } catch {
-      return null;
-    }
+  registerMeetingsIpc({
+    getMeetingManager,
+    getActiveFileContext: () => activeLibraryFileContext ? { ...activeLibraryFileContext } : null,
   });
-
-  ipcMain.handle('meetings:summarizeCurrent', async () => runMeetingAction(async () => {
-    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
-    return getMeetingManager().summarizeCurrentMeeting(context);
-  }));
 }
 
 
