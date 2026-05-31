@@ -4,7 +4,7 @@ This map is written for open-source readiness. It names the areas a contributor 
 
 ## Repository root
 
-- `README.md`: currently stale for an open-source launch. It still describes the project as closed or proprietary.
+- `README.md`: refreshed during the open-source readiness pass. It describes the repository as an open-source candidate, points to the current readiness docs, and keeps the deferred license decision explicit.
 - `LICENSE`: currently proprietary. A public release needs an explicit license decision before this file can become public-facing truth.
 - `arch.md`: useful context, but this pass still treats code as the source of truth.
 - `mac-app/`: the active Electron/Vite/React Mac application.
@@ -33,8 +33,9 @@ This map is written for open-source readiness. It names the areas a contributor 
 
 ## Current documentation status
 
-- `mac-app/README.md`: too thin and partly stale for public contributors. It tells users to copy `.env.example`, but no `mac-app/.env.example` exists in the current tree.
-- `mac-app/PRIVACY_POLICY.md`: stale for current Mac behavior. It says Supabase is for iOS sync only, but current Mac code also uses Supabase for auth, metrics, quota/account checks, feedback, public sharing, River, and optional sync. It also says API keys are stored in Keychain, while Supabase session persistence is file-backed in `supabase-session.json`.
+- `mac-app/README.md`: refreshed during the readiness pass. It now gives a contributor setup path, local data cautions, account-backed feature notes, and maintainer-only packaging separation.
+- `mac-app/.env.example`: present and intentionally non-secret. It documents optional Supabase/account-backed configuration without release credentials.
+- `mac-app/PRIVACY_POLICY.md`: rewritten as a current Mac privacy draft. It documents local data, file-backed Supabase sessions, clipboard history, account-backed features, River, internal sync gates, metrics, account deletion scope, and privileged Electron capabilities.
 - `mac-app/docs/ARCHITECTURE.md`: useful historical context, but stale around shared clipboard, mobile sync, social sync, and the current River/shared sync shape.
 - `mac-app/docs/RELEASE_WORKFLOW.md`: maintainer packaging notes. It should stay separate from contributor setup because packaging uses signing, notarization, updater feeds, and release credentials.
 - `mac-app/docs/RELEASE_CHECKLIST.md`: version-specific and stale relative to the current package version.

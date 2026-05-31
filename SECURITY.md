@@ -66,7 +66,7 @@ Before public release:
 - run a history-aware secret scan;
 - audit Supabase policies and Edge Functions relevant to public clients;
 - verify account deletion wording against actual local and remote behavior;
-- triage production dependency vulnerabilities;
+- keep production/runtime dependency audit clean and separately track dev/build toolchain advisories that require breaking Electron, Vite, or packaging upgrades;
 - document third-party notices and asset provenance;
 - review IPC paths that return auth/session material to the renderer;
 - verify updater/release credentials are maintainer-only and not required for local development.

@@ -6,7 +6,7 @@ This audit records current working-tree and git-history findings for open-source
 
 ## Current working-tree results
 
-A tracked-file grep pass did not find obvious live plaintext secrets. The hits were mostly environment variable names, placeholders, code that reads secrets from environment variables, and maintainer-only release references.
+A tracked-file grep pass did not find obvious live plaintext secrets. The current hits are expected environment variable names, placeholders, code that reads secrets from environment variables, Supabase Edge Functions, and maintainer-only release references.
 
 No `gitleaks`, `trufflehog`, or `detect-secrets` binary was available in the current shell, so this pass cannot prove repository history is clean.
 
@@ -17,6 +17,7 @@ A git-history grep pass was run for credential-shaped strings, secret environmen
 Findings:
 
 - No tracked `.env`, `.env.local`, `.pem`, `.p8`, `.p12`, or `.mobileprovision` file additions were found by the targeted history command.
+- History contains the now-removed `mac-app/resources/chatterbox/reference-voice.wav` and `.m4a` files in older commits. Those files are not present in the current tree and should not be reintroduced without source, consent, attribution, license, and redistribution notes.
 - History contains expected hits for environment variable names such as `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GH_TOKEN`, `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`, and `APPLE_APP_SPECIFIC_PASSWORD`.
 - The current tree uses those names in server-side environment reads, package/release docs, tests, and open-source readiness audit notes. The pass did not intentionally print or preserve secret values in this document.
 - History contains the removed maintainer-local env path in older Electron main code and docs. The current working tree no longer uses that path as a runtime fallback.
@@ -66,11 +67,13 @@ If any real credentials appear in history, rotate them before publication. Do no
 Representative commands used during this pass:
 
 ```bash
-git grep -n -I -E '(OPENAI_API_KEY|ANTHROPIC_API_KEY|GH_TOKEN|FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN|APPLE_APP_SPECIFIC_PASSWORD)' -- .
-git grep -n -I -E '(private source|afar1/oscar|field-releases|/Users/afar|/Users/benjmarston|~/.ssh|hatchery|routines)' -- .
+git grep -I -l -E 'sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----|SUPABASE_SERVICE_ROLE|FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN|APPLE_ID_PASSWORD|CSC_LINK|CSC_KEY_PASSWORD|GH_TOKEN|GITHUB_TOKEN|SENTRY_AUTH_TOKEN|NPM_TOKEN|PRIVATE_KEY' -- ':!mac-app/package-lock.json' ':!package-lock.json'
+git log --all --oneline -- 'mac-app/.env' '.env' '.env.local' 'mac-app/.env.local' 'mac-app/resources/chatterbox/reference-voice.wav' 'mac-app/resources/chatterbox/reference-voice.m4a'
 command -v gitleaks || true
 command -v trufflehog || true
 command -v detect-secrets || true
+git grep -n -I -E '(OPENAI_API_KEY|ANTHROPIC_API_KEY|GH_TOKEN|FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN|APPLE_APP_SPECIFIC_PASSWORD)' -- .
+git grep -n -I -E '(private source|afar1/oscar|field-releases|/Users/afar|/Users/benjmarston|~/.ssh|hatchery|routines)' -- .
 git log --all --format='%h %ad %s' --date=short -S'GH_TOKEN' -S'FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN' -S'APPLE_APP_SPECIFIC_PASSWORD' -- .
 git log --all --format='%h %ad %s' --date=short -G'(ghp_|github_pat_|sk-[A-Za-z0-9_-]{20,}|BEGIN .*PRIVATE KEY|/Users/afar/dev/fieldtheory/.env.local)' -- .
 git log --all --format='%h %ad %s' --date=short --name-only -- .env .env.local '*.pem' '*.p8' '*.p12' '*.mobileprovision'

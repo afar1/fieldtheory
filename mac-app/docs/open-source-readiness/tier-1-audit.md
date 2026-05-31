@@ -70,7 +70,7 @@ The notice file and asset inventory are drafts. They still need source/provenanc
 - native/transcription artifacts;
 - model downloads and model terms.
 
-The dependency license summary also needs follow-up for `agentmail` and `spawn-command`, because their lockfile entries do not include license metadata.
+The dependency license summary now resolves the missing lockfile license metadata for `agentmail` and `spawn-command` through documented overrides. Future dependency changes should rerun `npm run license:summary` and review any new missing metadata before publication.
 
 ### Dev/build toolchain audit
 
@@ -102,32 +102,33 @@ The privacy draft does not claim local data is deleted on account deletion. The 
 Commands run in `mac-app`:
 
 ```bash
+npm run typecheck
+npm test
 npm audit --omit=dev --audit-level=high
 npm run build
 npm run guard:package-safety
 npm run guard:package-safety:experimental
+npm run guard:electron-dist-requires
 npm run license:summary
-npm test
+```
+
+Command run at the repository root:
+
+```bash
+npm run test:library-text
 ```
 
 Results:
 
+- Mac typecheck passed;
+- full Mac Vitest run passed: 151 test files, 2364 tests passed, 1 skipped;
 - production audit passed with zero vulnerabilities;
 - app build passed;
-- package safety guards passed for production and experimental configs.
-- dependency license summary command passed and identified two missing-license lockfile entries.
-- full Vitest run did not pass, but most Mac app tests ran successfully: 139 test files passed, 2274 tests passed, and 1 test was skipped.
+- package safety guards passed for production and experimental configs;
+- Electron dist require check passed;
+- dependency license summary command passed and reports 1204 package entries with zero missing-license entries after documented overrides;
+- root Library text/hash/sync tests passed: 57 tests.
 
 Known verification limitation:
 
-`npm run typecheck` still fails because the root TypeScript config reaches sibling mobile/service files that are missing React Native/Supabase dependencies in this worktree. The Electron TypeScript build path did pass as part of `npm run build`.
-
-`npm test` still fails on the same root Expo tsconfig issue for mobile/service test files:
-
-- `src/__tests__/mobileCommands.test.ts`
-- `src/__tests__/mobileLibraryState.test.ts`
-- `src/__tests__/mobileStorage.test.ts`
-- `src/__tests__/mobileTranscriptCapture.test.ts`
-- `src/__tests__/syncUtils.test.ts`
-
-It also had one Mac test timeout in `src/components/__tests__/LibrarianView.test.tsx`: `uses x and j to build a multi-selection before archiving selected files`.
+`npm run guard:release-channel` intentionally fails from `experimental` unless `FIELD_THEORY_RELEASE_BRANCH_OVERRIDE=true` is set, because production packaging is guarded for `main`. Experimental release-channel, package-safety, and electron-dist checks passed on `experimental`.
