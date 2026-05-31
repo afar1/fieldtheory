@@ -3890,4 +3890,57 @@ describe('LibrarianView render', () => {
     fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
   });
+
+  it('hides a popped-out collapsed sidebar while the sidebar resize handle is dragging', async () => {
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+    }]);
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+      content: '# Example\n',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'example' },
+    }));
+
+    const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
+    });
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
+    ) as HTMLElement | null;
+    const getResizeHandle = () => root.querySelector(
+      '[data-fieldtheory-sidebar-resize-handle="true"]'
+    ) as HTMLElement | null;
+
+    fireEvent.click(await screen.findByText('example.md'));
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReading).toHaveBeenCalledWith('/tmp/library/example.md');
+    });
+
+    fireEvent.click(getHoverStrip()!);
+    expect(getSidebarPane()?.style.width).not.toBe('0px');
+
+    fireEvent.mouseDown(getResizeHandle()!);
+    expect(getSidebarPane()?.style.width).toBe('0px');
+    expect(getHoverStrip()).toBeTruthy();
+
+    fireEvent.mouseUp(document);
+  });
 });
