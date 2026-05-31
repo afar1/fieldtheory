@@ -106,6 +106,7 @@ const TOP_FADE_OPACITIES = [1, 0.85, 0.65, 0.45, 0.25, 0.1];
 
 const TAB_INACTIVE = '#9CA3AF';
 const TAB_ACTIVE = '#007AFF';
+const LIBRARY_PAGE_INDEX = 0;
 const ITEMS_PAGE_INDEX = 1;
 
 // Linear color interpolation between two #rrggbb hex strings.
@@ -246,7 +247,7 @@ function AppContent() {
     activateSession,
   } = useScopedAppData();
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
-  const [pageIndex, setPageIndex] = useState(ITEMS_PAGE_INDEX);
+  const [pageIndex, setPageIndex] = useState(LIBRARY_PAGE_INDEX);
   
   // Transcript history state
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
@@ -255,6 +256,11 @@ function AppContent() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const librarySaveQueueRef = useRef(Promise.resolve());
+  const latestQueuedLibraryDocumentsRef = useRef<LibraryDocument[] | null>(null);
+  const librarySaveDrainActiveRef = useRef(false);
+  const waitForLibrarySaveQueue = useCallback(async () => {
+    await librarySaveQueueRef.current.catch(console.error);
+  }, []);
   
   // Selection mode state for multi-select stacking and deleting
   const [selectionMode, setSelectionMode] = useState(false);
@@ -297,6 +303,7 @@ function AppContent() {
     isSyncingData,
     isSeeding,
     isLibrarySyncing,
+    librarySyncError,
     handleLibrarySyncQuiet,
     handleSyncNow,
     handleSeedNow,
@@ -309,6 +316,7 @@ function AppContent() {
     setSyncedAt,
     setLibrarySyncedAt,
     setSyncNotice,
+    beforeLibrarySync: waitForLibrarySaveQueue,
   });
   
   // Track last processed transcription to prevent loops/duplicate processing
@@ -761,9 +769,22 @@ function AppContent() {
   }, []);
 
   const queueLibraryDocumentsSave = useCallback((documents: LibraryDocument[]) => {
+    latestQueuedLibraryDocumentsRef.current = documents;
+    if (librarySaveDrainActiveRef.current) return;
+
+    librarySaveDrainActiveRef.current = true;
     librarySaveQueueRef.current = librarySaveQueueRef.current
       .catch(() => undefined)
-      .then(() => StorageService.saveLibraryDocuments(documents));
+      .then(async () => {
+        while (latestQueuedLibraryDocumentsRef.current) {
+          const nextDocuments = latestQueuedLibraryDocumentsRef.current;
+          latestQueuedLibraryDocumentsRef.current = null;
+          await StorageService.saveLibraryDocuments(nextDocuments);
+        }
+      })
+      .finally(() => {
+        librarySaveDrainActiveRef.current = false;
+      });
     librarySaveQueueRef.current.catch(console.error);
   }, []);
 
@@ -806,6 +827,13 @@ function AppContent() {
       return next;
     });
   }, [queueLibraryDocumentsSave]);
+
+  const handleLibrarySyncPress = useCallback(async (flushedDocuments?: LibraryDocument[]) => {
+    if (flushedDocuments) {
+      queueLibraryDocumentsSave(flushedDocuments);
+    }
+    await handleLibrarySyncQuiet();
+  }, [handleLibrarySyncQuiet, queueLibraryDocumentsSave]);
 
   const handleCopyTranscript = useCallback(async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
@@ -1196,6 +1224,7 @@ function AppContent() {
   const navigateToPage = (idx: number) => {
     setPageIndex(idx);
   };
+  const hideBottomBar = pageIndex === LIBRARY_PAGE_INDEX || (!createMode.isCreating && !selectionMode && keyboardHeight > 0);
 
   // Items page search row — rendered as the FlatList header so it scrolls
   // with the list (not sticky) and only takes up the height it needs.
@@ -1301,7 +1330,7 @@ function AppContent() {
       <PagerView
         ref={pagerRef}
         style={styles.pager}
-        initialPage={ITEMS_PAGE_INDEX}
+        initialPage={LIBRARY_PAGE_INDEX}
         scrollEnabled={true}
         overdrag={false}
         overScrollMode="never"
@@ -1323,8 +1352,10 @@ function AppContent() {
               callsign={callsign}
               lastSyncedAt={librarySyncedAt}
               isSyncing={isLibrarySyncing}
+              syncError={librarySyncError}
               isHydrating={!isLibraryHydrated}
-              onSyncPress={handleLibrarySyncQuiet}
+              onSyncPress={handleLibrarySyncPress}
+              storageScopeId={session?.user.id ?? 'local'}
             />
           ) : null}
         </View>
@@ -1570,10 +1601,9 @@ function AppContent() {
         </PagerView>
 
       {/* BOTTOM BAR - Changes based on mode (create > selection > normal).
-          Hidden entirely when the keyboard is up in plain typing (e.g. search)
-          so the user sees only their content + keyboard. Create/selection modes
-          still render their own action bars because those bars ARE the actions. */}
-      {!createMode.isCreating && !selectionMode && keyboardHeight > 0 ? null : (
+          Hidden on Library so reading and writing get the full screen. Also
+          hidden when the keyboard is up in plain typing (e.g. search). */}
+      {hideBottomBar ? null : (
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={createMode.isCreating && Platform.OS === 'ios' ? 36 : 0} // 36px offset for iOS suggestion bar when creating

@@ -173,7 +173,7 @@ Run:                   Command + R
 
 ```bash
 # Open Xcode workspace
-cd /Users/afar/dev/littleai/ios
+cd ios
 open littleai.xcworkspace
 
 # Install CocoaPods (if needed)

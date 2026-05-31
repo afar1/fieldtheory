@@ -82,10 +82,6 @@
         "to": "sounds"
       },
       {
-        "from": "resources/chatterbox",
-        "to": "chatterbox"
-      },
-      {
         "from": "scripts/gemma-generate.mjs",
         "to": "scripts/gemma-generate.mjs"
       },

@@ -762,6 +762,11 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     term.loadAddon(fit);
     term.loadAddon(webLinks);
     term.open(element);
+    try {
+      fit.fit();
+    } catch {
+      // The terminal can briefly mount before layout has a measurable size.
+    }
     terminalHandlesRef.current.set(sessionId, {
       term,
       fit,
@@ -806,6 +811,9 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           replayedData = appendTerminalEchoTail(replayedData, unreplayedPending);
         }
         suppressBackendResizeUntilRef.current.set(sessionId, Date.now() + INITIAL_REPLAY_RESIZE_SUPPRESSION_MS);
+        window.setTimeout(() => {
+          if (sessionId === activeSessionId) scheduleFitActiveTerminal();
+        }, INITIAL_REPLAY_RESIZE_SUPPRESSION_MS + 20);
       } else {
         if (pending?.length) {
           for (const chunk of pending) {
@@ -832,7 +840,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     term.onData((data) => {
       void window.codexTerminalAPI?.input(sessionId, data);
     });
-  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, theme.isDark]);
+  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, scheduleFitActiveTerminal, theme.isDark]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);

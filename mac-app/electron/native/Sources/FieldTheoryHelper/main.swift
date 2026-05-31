@@ -2374,6 +2374,16 @@ final class MessageHandler {
             )
             return
         }
+        guard focusedTextInput else {
+            sendTypeResult(
+                success: false,
+                error: "No focused text input in target app: \(bundleId)",
+                targetFrontmost: targetFrontmost,
+                focusedTextInput: false,
+                pasteboardWritten: pasteboardWritten
+            )
+            return
+        }
 
         // Simulate Cmd+V (paste) directly to the target process.
         let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)

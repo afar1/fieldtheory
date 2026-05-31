@@ -17,6 +17,14 @@ export interface ScrollFrameRecord {
   longestFrameMs: number;
   durationMs: number;
   timestamp: number;
+  qualityScenario?: string;
+  benchmarkId?: string;
+  sampleOrigin?: string;
+  journeyStep?: string;
+  targetFound?: boolean;
+  scrollBefore?: number;
+  scrollAfter?: number;
+  scrollDelta?: number;
 }
 
 export interface InteractionFrameRecord {
@@ -26,13 +34,28 @@ export interface InteractionFrameRecord {
   durationMs: number;
   frameCount: number;
   timestamp: number;
+  qualityScenario?: string;
+  benchmarkId?: string;
+  sampleOrigin?: string;
+  journeyStep?: string;
+  targetFound?: boolean;
+  inputBeforeLength?: number;
+  inputAfterLength?: number;
+  inputDelta?: number;
 }
 
 export interface ScrollDiagnosticsSnapshot {
   enabled: boolean;
   scrollByLastSource: Record<string, ScrollFrameRecord>;
   interactionByLastSource: Record<string, InteractionFrameRecord>;
-  longTasks: { duration: number; startTime: number }[];
+  longTasks: Array<{
+    duration: number;
+    startTime: number;
+    qualityScenario?: string;
+    benchmarkId?: string;
+    sampleOrigin?: string;
+    journeyStep?: string;
+  }>;
 }
 
 export interface ScrollDiagnosticsBudgetViolation {
@@ -92,6 +115,15 @@ let state: ScrollDiagnosticsSnapshot = {
 type EnabledChangeListener = (enabled: boolean) => void;
 const enabledChangeListeners = new Set<EnabledChangeListener>();
 
+export interface ScrollDiagnosticsQualityContext {
+  qualityScenario?: string;
+  benchmarkId?: string;
+  sampleOrigin?: string;
+  journeyStep?: string;
+}
+
+let qualityContext: ScrollDiagnosticsQualityContext = {};
+
 function emit() {
   for (const listener of listeners) {
     try {
@@ -137,7 +169,7 @@ export function onScrollDiagnosticsEnabledChange(
  * wired up in the bootstrap module.
  */
 export function pushLongTask(entry: { duration: number; startTime: number }): void {
-  const merged = [...state.longTasks, entry].slice(-LONG_TASK_HISTORY);
+  const merged = [...state.longTasks, { ...qualityContext, ...entry }].slice(-LONG_TASK_HISTORY);
   state = { ...state, longTasks: merged };
   emit();
 }
@@ -154,7 +186,7 @@ export function subscribeScrollDiagnostics(
 
 export function recordScrollFrame(record: Omit<ScrollFrameRecord, 'timestamp'>): void {
   if (!state.enabled) return;
-  const next: ScrollFrameRecord = { ...record, timestamp: performance.now() };
+  const next: ScrollFrameRecord = { ...qualityContext, ...record, timestamp: performance.now() };
   state = {
     ...state,
     scrollByLastSource: { ...state.scrollByLastSource, [record.source]: next },
@@ -164,12 +196,52 @@ export function recordScrollFrame(record: Omit<ScrollFrameRecord, 'timestamp'>):
 
 export function recordInteractionFrame(record: Omit<InteractionFrameRecord, 'timestamp'>): void {
   if (!state.enabled) return;
-  const next: InteractionFrameRecord = { ...record, timestamp: performance.now() };
+  const next: InteractionFrameRecord = { ...qualityContext, ...record, timestamp: performance.now() };
   state = {
     ...state,
     interactionByLastSource: { ...state.interactionByLastSource, [record.source]: next },
   };
   emit();
+}
+
+export function setScrollDiagnosticsQualityContext(context: ScrollDiagnosticsQualityContext): void {
+  qualityContext = { ...context };
+}
+
+export function clearScrollDiagnosticsQualityContext(): void {
+  qualityContext = {};
+}
+
+export function recordSyntheticScrollDiagnosticSamples(
+  qualityScenario = 'synthetic-immersive-surface',
+  benchmarkId?: string,
+): void {
+  if (!state.enabled) return;
+  const samples = [
+    { source: 'markdown', fps: 120, longestFrameMs: 8, durationMs: 220 },
+    { source: 'rendered', fps: 120, longestFrameMs: 8, durationMs: 220 },
+  ];
+  for (const sample of samples) {
+    recordScrollFrame({
+      ...sample,
+      qualityScenario,
+      benchmarkId,
+      sampleOrigin: 'synthetic-record',
+    });
+  }
+  const interactionSamples = [
+    { source: 'launcher-input', fps: 120, longestFrameMs: 8, durationMs: 180, frameCount: 22 },
+    { source: 'markdown-editor-input', fps: 120, longestFrameMs: 8, durationMs: 180, frameCount: 22 },
+    { source: 'rendered-editor-input', fps: 120, longestFrameMs: 8, durationMs: 180, frameCount: 22 },
+  ];
+  for (const sample of interactionSamples) {
+    recordInteractionFrame({
+      ...sample,
+      qualityScenario,
+      benchmarkId,
+      sampleOrigin: 'synthetic-record',
+    });
+  }
 }
 
 export function getScrollDiagnosticsFpsLevel(fps: number): 'muted' | 'ok' | 'warning' | 'bad' {
@@ -281,6 +353,7 @@ export function resetScrollDiagnosticsForTest(): void {
     interactionByLastSource: {},
     longTasks: [],
   };
+  qualityContext = {};
   listeners.clear();
   enabledChangeListeners.clear();
 }

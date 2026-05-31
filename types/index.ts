@@ -50,6 +50,13 @@ export interface LibraryTombstone {
   deletedAt: number;
 }
 
+export interface LibraryViewState {
+  selectedDocumentId?: string | null;
+  recentDocumentIds?: string[];
+  readerScrollOffsets?: Record<string, number>;
+  updatedAt: number;
+}
+
 export type SyncTombstoneCollection = 'todos' | 'observations' | 'transcripts';
 
 export interface SyncTombstone {

@@ -467,6 +467,7 @@ export class HotMicManager extends EventEmitter {
     nativeHelper: NativeHelper,
     preferences: PreferencesManager,
     soundManager: SoundManager,
+    options: { startHttpServer?: boolean } = {},
   ) {
     super();
     this.nativeHelper = nativeHelper;
@@ -475,7 +476,9 @@ export class HotMicManager extends EventEmitter {
     this.muted = this.preferences.getPreference('hotMicMuted') ?? false;
     this.modelManager = new ModelManager();
     this.modelManager.setSelectedModel('small');
-    this.startServer();
+    if (options.startHttpServer !== false) {
+      this.startServer();
+    }
   }
 
   /**

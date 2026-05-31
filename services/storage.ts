@@ -7,6 +7,7 @@ import {
   TranscriptSegment,
   LibraryDocument,
   LibraryTombstone,
+  LibraryViewState,
   SyncTombstone,
 } from '../types';
 
@@ -48,6 +49,22 @@ const normalizeLibraryTombstone = (raw: LibraryTombstone): LibraryTombstone => (
   deletedAt: raw.deletedAt ?? raw.createdAt,
 });
 
+const normalizeLibraryViewState = (raw: Partial<LibraryViewState> | null | undefined): LibraryViewState => ({
+  selectedDocumentId: typeof raw?.selectedDocumentId === 'string' ? raw.selectedDocumentId : null,
+  recentDocumentIds: Array.isArray(raw?.recentDocumentIds)
+    ? raw.recentDocumentIds.filter((id): id is string => typeof id === 'string')
+    : [],
+  readerScrollOffsets: raw?.readerScrollOffsets && typeof raw.readerScrollOffsets === 'object'
+    ? Object.fromEntries(
+      Object.entries(raw.readerScrollOffsets)
+        .filter((entry): entry is [string, number] =>
+          typeof entry[0] === 'string' && typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0,
+        ),
+    )
+    : {},
+  updatedAt: typeof raw?.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+});
+
 const normalizeSyncTombstone = (raw: SyncTombstone): SyncTombstone => ({
   ...raw,
   deletedAt: raw.deletedAt ?? Date.now(),
@@ -60,6 +77,7 @@ const SETTINGS_KEY = '@littleai/settings';
 const TRANSCRIPTS_KEY = '@littleai/transcripts';
 const LIBRARY_DOCUMENTS_KEY = '@littleai/library-documents';
 const LIBRARY_TOMBSTONES_KEY = '@littleai/library-tombstones';
+const LIBRARY_VIEW_STATE_KEY = '@littleai/library-view-state';
 const SYNC_TOMBSTONES_KEY = '@littleai/sync-tombstones';
 const LOCAL_SCOPE_ID = 'local';
 const SCOPED_DATA_KEYS = [
@@ -69,6 +87,7 @@ const SCOPED_DATA_KEYS = [
   TRANSCRIPTS_KEY,
   LIBRARY_DOCUMENTS_KEY,
   LIBRARY_TOMBSTONES_KEY,
+  LIBRARY_VIEW_STATE_KEY,
   SYNC_TOMBSTONES_KEY,
 ];
 
@@ -264,6 +283,31 @@ export class StorageService {
       await AsyncStorage.setItem(StorageService.scopedKey(LIBRARY_DOCUMENTS_KEY), JSON.stringify(documents));
     } catch (error) {
       console.error('Failed to save library documents:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load lightweight Library UI continuity state.
+   */
+  static async getLibraryViewState(): Promise<LibraryViewState | null> {
+    try {
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(LIBRARY_VIEW_STATE_KEY));
+      return data ? normalizeLibraryViewState(JSON.parse(data)) : null;
+    } catch (error) {
+      console.error('Failed to load library view state:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Save lightweight Library UI continuity state.
+   */
+  static async saveLibraryViewState(state: LibraryViewState): Promise<void> {
+    try {
+      await AsyncStorage.setItem(StorageService.scopedKey(LIBRARY_VIEW_STATE_KEY), JSON.stringify(normalizeLibraryViewState(state)));
+    } catch (error) {
+      console.error('Failed to save library view state:', error);
       throw error;
     }
   }
