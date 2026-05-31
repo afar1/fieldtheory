@@ -242,6 +242,24 @@ describe('LibrarianView render', () => {
     })).toEqual(previous);
   });
 
+  it('bottom-docks the terminal when an explicitly opened sidebar consumes the side-by-side editor budget', () => {
+    expect(getResponsivePanelState({
+      containerWidth: 1200,
+      containerHeight: 800,
+      sidebarWidth: 180,
+      sidebarCollapsed: false,
+      sidebarForcedVisible: false,
+      terminalVisible: true,
+      terminalDockSide: 'right',
+      autoCollapseSidebarSuppressed: true,
+    })).toMatchObject({
+      autoCollapseSidebar: true,
+      autoDockTerminalBottom: true,
+      autoHideTerminal: false,
+      reason: 'terminal-bottom',
+    });
+  });
+
   it('animates sidebar auto-collapse unless the terminal also rearranges', () => {
     expect(shouldAnimateResponsiveSidebar({
       responsivePanelState: {

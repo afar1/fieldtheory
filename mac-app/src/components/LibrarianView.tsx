@@ -656,6 +656,7 @@ export function getResponsivePanelState(input: {
   terminalVisible: boolean;
   terminalDockSide: CodexTerminalDockSide;
   userResizing?: boolean;
+  autoCollapseSidebarSuppressed?: boolean;
   previous?: ResponsivePanelState;
 }): ResponsivePanelState {
   if (input.userResizing && input.previous) {
@@ -675,7 +676,8 @@ export function getResponsivePanelState(input: {
     && !input.sidebarForcedVisible
     && (input.containerWidth < sidebarThreshold
       || (input.previous?.autoCollapseSidebar === true && input.containerWidth < sidebarRestoreThreshold));
-  const effectiveSidebarCollapsed = input.sidebarCollapsed || autoCollapseSidebar;
+  const effectiveSidebarCollapsed = input.sidebarCollapsed
+    || (autoCollapseSidebar && !input.autoCollapseSidebarSuppressed);
   const readerWidth = input.containerWidth - (effectiveSidebarCollapsed ? 0 : input.sidebarWidth + RESPONSIVE_PANEL_SIDEBAR_GAP);
   const rightDockThreshold = RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
   const rightDockRestoreThreshold = rightDockThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
@@ -3068,6 +3070,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     terminalVisible: codexTerminalVisible,
     terminalDockSide: codexTerminalDockSide,
     userResizing: isResizing || codexTerminalResizing,
+    autoCollapseSidebarSuppressed: suppressAutoCollapseSidebar,
     previous: responsivePanelStateRef.current,
   });
   responsivePanelStateRef.current = responsivePanelState;
