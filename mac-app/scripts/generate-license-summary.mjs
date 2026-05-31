@@ -8,6 +8,17 @@ const lockPath = path.resolve(process.cwd(), 'package-lock.json');
 const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
 const packages = lock.packages ?? {};
 
+const licenseOverrides = new Map([
+  ['agentmail@0.4.9', {
+    license: 'MIT',
+    source: 'npm view agentmail@0.4.9 license',
+  }],
+  ['spawn-command@0.0.2', {
+    license: 'MIT',
+    source: 'npm view spawn-command@0.0.2 license',
+  }],
+]);
+
 function packageNameFromPath(packagePath) {
   const parts = packagePath.split('/');
   const nodeModulesIndex = parts.lastIndexOf('node_modules');
@@ -26,10 +37,12 @@ for (const [packagePath, meta] of Object.entries(packages)) {
   if (!packagePath.startsWith('node_modules/')) continue;
   const name = packageNameFromPath(packagePath);
   if (!name) continue;
+  const override = licenseOverrides.get(`${name}@${meta.version ?? ''}`);
   rows.push({
     name,
     version: meta.version ?? '',
-    license: meta.license ?? 'MISSING',
+    license: meta.license ?? override?.license ?? 'MISSING',
+    licenseSource: meta.license ? 'package-lock.json' : override?.source ?? 'missing',
     dev: meta.dev === true,
     optional: meta.optional === true,
   });
@@ -60,13 +73,26 @@ console.log('');
 console.log('## Missing License Metadata');
 console.log('');
 if (missing.length === 0) {
-  console.log('No package-lock entries are missing license metadata.');
+  console.log('No package entries are missing license metadata after documented overrides.');
 } else {
   console.log('| Package | Version | Scope |');
   console.log('| --- | --- | --- |');
   for (const row of missing) {
     const scope = row.dev ? 'dev' : row.optional ? 'optional' : 'runtime';
     console.log(`| ${row.name} | ${row.version} | ${scope} |`);
+  }
+}
+console.log('');
+console.log('## Manual License Overrides');
+console.log('');
+const overrideRows = rows.filter((row) => row.licenseSource !== 'package-lock.json' && row.licenseSource !== 'missing');
+if (overrideRows.length === 0) {
+  console.log('No manual license overrides were applied.');
+} else {
+  console.log('| Package | Version | License | Source |');
+  console.log('| --- | --- | --- | --- |');
+  for (const row of overrideRows) {
+    console.log(`| ${row.name} | ${row.version} | ${row.license.replaceAll('|', '\\|')} | ${row.licenseSource.replaceAll('|', '\\|')} |`);
   }
 }
 console.log('');

@@ -17,9 +17,14 @@ Current summary:
 
 - total lockfile package entries: 1204;
 - runtime/dev/optional scope is reported per package;
-- missing lockfile license metadata remains for `agentmail@0.4.9` and `spawn-command@0.0.2`.
+- no package entries are missing license metadata after documented overrides.
 
-Before publication, manually confirm those two package licenses or replace/remove the packages.
+Documented overrides:
+
+- `agentmail@0.4.9`: npm metadata reports MIT. Confirmed with `npm view agentmail@0.4.9 license`.
+- `spawn-command@0.0.2`: npm metadata reports MIT. Confirmed with `npm view spawn-command@0.0.2 license`.
+
+The package lock omits license fields for those two entries, so `mac-app/scripts/generate-license-summary.mjs` records explicit overrides instead of leaving the report ambiguous.
 
 ## WebRTC VAD
 
