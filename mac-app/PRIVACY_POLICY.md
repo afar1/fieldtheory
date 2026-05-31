@@ -1,138 +1,133 @@
-# Field Theory Privacy Policy
+# Field Theory Privacy Policy Draft
 
-**Last Updated:** January 19, 2026
+Last updated: May 31, 2026
 
-Field Theory is a privacy-first voice transcription and clipboard management application. This policy explains how your data is handled.
+This is a current Mac-app privacy draft written from code inspection. It should be reviewed before publication, especially after the license, account model, Supabase deployment model, and release model are final.
 
----
+## Short Version
 
-## Our Core Principle
+Field Theory Mac is local-first, not local-only.
 
-**Your data stays on your device by default.** We built Field Theory to be useful without requiring cloud accounts, internet connectivity, or data collection.
+Core local workflows can run without login. Account-backed features can use Supabase for auth, account state, quota or usage checks, metrics, feedback, public sharing, River shared documents, team presence, and internally gated sync features.
 
----
+## Local User Content
 
-## Data That Never Leaves Your Device
+User-authored Field Theory content generally lives under `~/.fieldtheory`, including:
 
-The following data is stored locally and processed entirely on your device:
+- `~/.fieldtheory/library`
+- `~/.fieldtheory/library/Commands`
+- `~/.fieldtheory/ideas`
+- `~/.fieldtheory/bookmarks`
+- `~/.fieldtheory/library/River (shared)`
+- `~/.fieldtheory/library/Conflicts`
 
-| Data Type | Storage | Purpose |
-|-----------|---------|---------|
-| Voice recordings | Processed in memory, not saved | Transcription via local Whisper AI model |
-| Clipboard history | Local SQLite database | Quick access to recent copies |
-| Screenshots (Continuous Context) | Local SQLite database | Context capture for AI features |
-| Transcriptions | Local SQLite database | Your transcribed text |
-| Preferences | Local JSON file | App settings |
+The app can create, read, edit, rename, move, delete, index, and search markdown and related Library files through the Electron main process.
 
-**We do not have access to this data. It never leaves your Mac.**
+## Local App Data
 
----
+Electron app-managed data lives under Electron `app.getPath("userData")`. Per-account state can live under `users/{userId}`.
 
-## Optional Cloud Features
+Examples include:
 
-### iOS Sync (Optional)
+- `supabase-session.json`
+- `preferences.json`
+- `clipboard.db`
+- `user-metrics.json`
+- Librarian settings and index files
+- command settings
+- tagged documents database
+- generated figures
 
-If you choose to create an account and enable sync on iOS:
+Supabase sessions are persisted as local files, not in macOS Keychain. Field Theory also writes a CLI-facing account mirror at `~/.fieldtheory/session.json` with user metadata and expiry; that mirror should not contain Supabase access or refresh tokens.
 
-- Transcriptions, tasks, and observations sync via Supabase (our backend provider)
-- Data is encrypted in transit (TLS) and at rest
-- You can delete your account and all synced data at any time
-- Sync is **off by default** and requires explicit opt-in
+## Clipboard, Screenshots, and Transcription
 
-### Engineer Feature (Optional)
+Clipboard history is stored locally in SQLite. Field Theory must not sync clipboard history.
 
-If you use the "Engineer" feature to refine prompts:
+Clipboard and capture features are still sensitive because the app can read clipboard history, write clipboard contents, capture screenshots, save pasted images or sketches, and automate paste into other apps when the user enables the relevant macOS permissions.
 
-- The text you select is sent to Anthropic's Claude API
-- This requires you to provide your own Anthropic API key
-- Anthropic's privacy policy applies to data sent to their service
-- This feature is **opt-in** and only activates when you explicitly invoke it
+Voice and transcription behavior depends on the selected local engine and setup. Public docs should not claim that every transcription path is cloud-free unless the exact engine path has been verified.
 
----
+## Supabase and Account-Backed Features
 
-## Usage Metrics (Visible to You)
+Current Mac code can use Supabase for:
 
-If you have an account, we collect feature usage counts to understand which features provide value. **The metrics you can see in Settings are the only metrics we collect.** Nothing is hidden.
+- authentication and profiles;
+- account status and quota or usage checks;
+- visible usage metrics;
+- feedback;
+- public shared readings;
+- River shared documents;
+- River pins and presence;
+- team/contact membership;
+- optional Library sync;
+- optional command/mobile sync;
+- gated todos;
+- account deletion requests through a Supabase Edge Function.
 
-### What We Track
+The Supabase URL and publishable key are public client configuration. They are not service-role secrets. Access control must come from authentication, row-level security, Edge Functions, and server-side checks.
 
-- **Counts only** — Number of transcriptions, pastes, screenshots, etc.
-- **No content** — We never see your clipboard text, transcription audio, or screenshot images
-- **Your Stats** — View your own metrics anytime in Settings → Your Stats
+## River Shared Documents
 
-### What We Don't Track
+River is the account-backed shared markdown feature.
 
-| Never Collected | Stays On Your Device |
-|-----------------|---------------------|
-| Clipboard content | Stored locally only |
-| Transcription text/audio | Processed and stored locally |
-| Screenshot images | Local database only |
-| Auto-improved text | Uses your API key, we never see it |
-| Session timing or patterns | Not tracked |
-| What you do in other apps | Not visible to us |
+River stores shared markdown remotely in Supabase and keeps a local managed cache in `~/.fieldtheory/library/River (shared)`. Conflicts can be written under `~/.fieldtheory/library/Conflicts`.
 
----
+River should not be described as the same thing as full private Library sync.
 
-## What We Don't Do
+## Internal Sync
 
-- **No content collection** — We only see counts, never the actual content
-- **No advertising** — No ads, no ad tracking, no selling data
-- **No account required** — Full functionality without signing up
-- **No background data collection** — The app only processes data when you actively use it
-- **No third-party analytics** — No Mixpanel, Amplitude, or similar services
+Full Library sync and command mobile sync are internally gated. The main gate is `fieldTheoryInternalSyncEnabled` or `FIELD_THEORY_INTERNAL_SYNC_ENABLED`.
 
----
+When Library sync is enabled, markdown content from `~/.fieldtheory/library` and `~/.fieldtheory/librarian/artifacts` can be uploaded to Supabase `library_documents`, while River/shared paths are skipped. Deletes can become remote tombstones, and remote deletes can move local files to `~/.Trash`.
+
+Until the public product decision is final, these should be documented as internal or experimental rather than default public behavior.
+
+## Metrics
+
+If an account is used, Field Theory can sync visible feature usage counts and account/quota state. Public docs should keep the promise narrow: count-style usage data, not clipboard contents, transcription audio, screenshots, or private document contents unless a specific sharing or sync feature explicitly sends that content.
 
 ## Third-Party Services
 
-| Service | When Used | Data Shared | Their Privacy Policy |
-|---------|-----------|-------------|---------------------|
-| Anthropic (Claude) | Engineer feature only | Text you explicitly send | [anthropic.com/privacy](https://www.anthropic.com/privacy) |
-| Supabase | iOS sync only | Synced transcriptions/tasks | [supabase.com/privacy](https://supabase.com/privacy) |
-| Apple | App distribution | Standard App Store data | [apple.com/privacy](https://www.apple.com/privacy/) |
+| Service | When used | Data involved |
+| --- | --- | --- |
+| Supabase | Auth, account state, quota/usage, metrics, feedback, public sharing, River, and optional/internal sync | Account metadata, usage counts, shared document data, feedback, and any explicitly synced content |
+| GitHub | Release and updater infrastructure | Release metadata and update artifacts; experimental updater access may require maintainer GitHub auth |
+| Apple | macOS permissions, signing, notarization, distribution, and system integrations | Standard Apple/macOS platform data |
+| Local model and transcription providers | Optional local model/transcription setup | Depends on the selected local engine and downloaded model terms |
 
----
+If a feature sends data to another third-party API, that feature needs its own current privacy note before public release.
 
-## Your Rights
+## Account Deletion
 
-You have full control over your data:
+The current account deletion path calls a Supabase Edge Function and signs out. Do not assume that local app data is deleted unless the local deletion path is separately implemented and verified.
 
-- **Access**: All local data is stored in standard formats you can inspect
-- **Delete**: Uninstalling the app removes all local data
-- **Export**: Clipboard history and transcriptions are stored in SQLite (standard format)
-- **Opt-out**: Cloud features are optional and can be disabled at any time
+Public policy should distinguish:
 
----
+- remote account deletion;
+- synced/shared data deletion;
+- local data remaining on the user's Mac;
+- manual local cleanup steps.
 
 ## Security
 
-- Voice processing happens entirely on-device using the Whisper AI model
-- API keys are stored in your system keychain (macOS Keychain)
-- No sensitive data is logged or transmitted for debugging
-- Clipboard monitoring excludes password managers by default
+Field Theory uses an Electron preload boundary: renderer code asks Electron main for privileged actions instead of using Node directly.
 
----
+Sensitive capability areas include:
 
-## Children's Privacy
+- local Library and external markdown file writes;
+- clipboard history, screenshot, sketch, and paste automation;
+- external URL opening and system settings links;
+- local command execution against active documents;
+- agent launcher, Terminal launcher, and PTY shell sessions;
+- auth/session reads and account operations;
+- Supabase sync, sharing, feedback, metrics, quota, and team operations;
+- updater and experimental-update behavior.
 
-Field Theory is not directed at children under 13. We do not knowingly collect data from children.
-
----
-
-## Changes to This Policy
-
-We'll update this policy if our data practices change. The "Last Updated" date at the top reflects the most recent revision.
-
----
+See the root `SECURITY.md` before reporting or working on security-sensitive behavior.
 
 ## Contact
 
-Questions about this privacy policy?
+Security issues should not be filed publicly. Use the process in `SECURITY.md`.
 
-- **Email**: [your-email@example.com]
-- **GitHub**: [github.com/afar1/field-theory](https://github.com/afar1/field-theory)
-
----
-
-*Field Theory is open source. You can audit our code to verify these privacy claims.*
-
+General privacy contact details should be finalized before publication.
