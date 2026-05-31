@@ -13,7 +13,7 @@ import {
   sharedFilesCacheDir,
   sharedFilesRootDir,
 } from './fieldTheoryPaths';
-import { createFieldTheoryTestEnv } from '../../test-support/fieldTheoryTestEnv';
+import { createFieldTheoryTestEnv } from './testSupport/fieldTheoryTestEnv';
 
 describe('Field Theory path contract', () => {
   const homeDir = '/Users/tester';
