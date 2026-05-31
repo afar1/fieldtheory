@@ -2,13 +2,27 @@
 
 Date: May 31, 2026
 
-This audit records current working-tree findings for open-source readiness. It is not a full history-aware secret scan.
+This audit records current working-tree and git-history findings for open-source readiness. It is not a substitute for a dedicated secret scanner.
 
 ## Current working-tree results
 
 A tracked-file grep pass did not find obvious live plaintext secrets. The hits were mostly environment variable names, placeholders, code that reads secrets from environment variables, and maintainer-only release references.
 
 No `gitleaks`, `trufflehog`, or `detect-secrets` binary was available in the current shell, so this pass cannot prove repository history is clean.
+
+## Git history results
+
+A git-history grep pass was run for credential-shaped strings, secret environment variable names, private key markers, and the removed maintainer-local env path.
+
+Findings:
+
+- No tracked `.env`, `.env.local`, `.pem`, `.p8`, `.p12`, or `.mobileprovision` file additions were found by the targeted history command.
+- History contains expected hits for environment variable names such as `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GH_TOKEN`, `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`, and `APPLE_APP_SPECIFIC_PASSWORD`.
+- The current tree uses those names in server-side environment reads, package/release docs, tests, and open-source readiness audit notes. The pass did not intentionally print or preserve secret values in this document.
+- History contains the removed maintainer-local env path in older Electron main code and docs. The current working tree no longer uses that path as a runtime fallback.
+- History contains upstream `whisper.cpp` example hits for private-key-related regexes in dependency/example code. Those are not Field Theory credentials.
+
+This is meaningful evidence that obvious tracked credential files were not found by the targeted commands, but it is weaker than a dedicated scanner because it depends on the searched patterns.
 
 ## Fixed in this readiness pass
 
@@ -31,9 +45,9 @@ Some older non-Mac or agent-support docs still contain private paths, internal p
 
 The experimental updater configuration may remain public if it is clearly documented as maintainer-only and contains no secrets. The release token itself must never be committed.
 
-## History-aware audit still required
+## Dedicated scanner still required
 
-Before publication, run a history-aware scanner from the final public candidate:
+Before publication, run a dedicated history-aware scanner from the final public candidate:
 
 ```bash
 gitleaks detect --source . --redact --no-banner
@@ -55,5 +69,9 @@ git grep -n -I -E '(private source|afar1/oscar|field-releases|/Users/afar|/Users
 command -v gitleaks || true
 command -v trufflehog || true
 command -v detect-secrets || true
+git log --all --format='%h %ad %s' --date=short -S'GH_TOKEN' -S'FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN' -S'APPLE_APP_SPECIFIC_PASSWORD' -- .
+git log --all --format='%h %ad %s' --date=short -G'(ghp_|github_pat_|sk-[A-Za-z0-9_-]{20,}|BEGIN .*PRIVATE KEY|/Users/afar/dev/fieldtheory/.env.local)' -- .
+git log --all --format='%h %ad %s' --date=short --name-only -- .env .env.local '*.pem' '*.p8' '*.p12' '*.mobileprovision'
+git log --all --format='%h %ad %s' --date=short -G'(OPENAI_API_KEY|ANTHROPIC_API_KEY|SUPABASE_SERVICE_ROLE|SUPABASE_SERVICE_KEY|PRIVATE KEY|BEGIN RSA|BEGIN OPENSSH|AKIA[0-9A-Z]{16})' -- .
 git remote -v
 ```

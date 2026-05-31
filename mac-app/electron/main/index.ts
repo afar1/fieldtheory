@@ -178,7 +178,8 @@ import {
   type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
-import { MetricsManager, UserMetrics } from './metricsManager';
+import { MetricsManager } from './metricsManager';
+import { registerMetricsIpc } from './metricsIpc';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
@@ -6793,73 +6794,8 @@ function setupLibrarianIPCHandlers(): void {
     return result;
   });
 
-  // ===========================================================================
-  // Metrics IPC handlers - User-visible usage stats
-  // "The metrics you see are the metrics we see."
-  // ===========================================================================
-
-  // Get current metrics for display in Settings
-  ipcMain.handle('metrics:getMetrics', (): UserMetrics => {
-    return metricsManager?.getMetrics() ?? {
-      transcriptions: 0,
-      words_transcribed: 0,
-      words_improved: 0,
-      priority_mic_minutes: 0,
-      verbal_commands: 0,
-      command_launcher_uses: 0,
-      clipboard_items: 0,
-      pastes_used: 0,
-      stacks_created: 0,
-      autostacks_created: 0,
-      stacks_pasted: 0,
-      items_added_to_context: 0,
-      sketches_created: 0,
-      screenshots_taken: 0,
-      librarian_artifacts_created: 0,
-      librarian_artifacts_shared: 0,
-      commands_executed: 0,
-      commands_contributed: 0,
-      feedback_given: 0,
-    };
-  });
-
-  // Get metrics with sync status
-  ipcMain.handle('metrics:getMetricsWithStatus', (): { metrics: UserMetrics; lastSyncedAt: string | null; pendingSync: boolean } => {
-    return metricsManager?.getMetricsWithStatus() ?? {
-      metrics: {
-        transcriptions: 0,
-        words_transcribed: 0,
-        words_improved: 0,
-        priority_mic_minutes: 0,
-        verbal_commands: 0,
-        command_launcher_uses: 0,
-        clipboard_items: 0,
-        pastes_used: 0,
-        stacks_created: 0,
-        autostacks_created: 0,
-        stacks_pasted: 0,
-        items_added_to_context: 0,
-        sketches_created: 0,
-        screenshots_taken: 0,
-        librarian_artifacts_created: 0,
-        librarian_artifacts_shared: 0,
-        commands_executed: 0,
-        commands_contributed: 0,
-        feedback_given: 0,
-      },
-      lastSyncedAt: null,
-      pendingSync: false,
-    };
-  });
-
-  // Force sync to Supabase
-  ipcMain.handle('metrics:syncToSupabase', async (): Promise<boolean> => {
-    return metricsManager?.syncToSupabase() ?? false;
-  });
-
-  // Fetch from Supabase (merge with local)
-  ipcMain.handle('metrics:fetchFromSupabase', async (): Promise<boolean> => {
-    return metricsManager?.fetchFromSupabase() ?? false;
+  registerMetricsIpc({
+    getMetricsManager: () => metricsManager,
   });
 }
 

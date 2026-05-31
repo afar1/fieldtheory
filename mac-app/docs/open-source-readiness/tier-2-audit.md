@@ -16,10 +16,11 @@ Tier 2 is the architecture and boundary pass. Its job is to make the current Mac
 - Extracted the shell IPC handler family into `mac-app/electron/main/shellIpc.ts` with focused coverage for all three public `shell:*` channels.
 - Extracted the account status IPC handler family into `mac-app/electron/main/accountIpc.ts` with focused coverage for both public `account:*` invoke channels.
 - Extracted the Field Theory sync IPC handler family into `mac-app/electron/main/fieldTheorySyncIpc.ts` with focused coverage for both public `fieldTheorySync:*` invoke channels.
+- Extracted the metrics IPC handler family into `mac-app/electron/main/metricsIpc.ts` with focused coverage for local metrics reads and Supabase sync/fetch invocations.
 
 ## Code observations
 
-`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a public-release blocker, but it is the main contributor comprehension problem. The shell, account, and Field Theory sync handler families have moved out, but a new contributor still has to scan one very large integration file to find auth, River, commands, clipboard settings, updater behavior, and agent surfaces.
+`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a public-release blocker, but it is the main contributor comprehension problem. The shell, account, Field Theory sync, and metrics handler families have moved out, but a new contributor still has to scan one very large integration file to find auth, River, commands, clipboard settings, updater behavior, and agent surfaces.
 
 `mac-app/electron/preload.ts` is the real public capability surface. It is large, but it is also useful because it gives one place to see what the renderer can request. The new IPC map should be treated as a bridge between current code and a future generated contract.
 
@@ -68,6 +69,7 @@ Then move the higher-complexity owners:
 - Checked `mac-app/electron/main/shellIpc.ts` and `mac-app/electron/main/shellIpc.test.ts` for the extracted shell handler family.
 - Checked `mac-app/electron/main/accountIpc.ts` and `mac-app/electron/main/accountIpc.test.ts` for the extracted account handler family.
 - Checked `mac-app/electron/main/fieldTheorySyncIpc.ts` and `mac-app/electron/main/fieldTheorySyncIpc.test.ts` for the extracted sync handler family.
+- Checked `mac-app/electron/main/metricsIpc.ts` and `mac-app/electron/main/metricsIpc.test.ts` for the extracted metrics handler family.
 - Checked `mac-app/electron/main/releaseSyncPolicy.ts` for internal sync gate names.
 - Checked `mac-app/electron/main/preferences.ts` for Tasks tab preference state.
 

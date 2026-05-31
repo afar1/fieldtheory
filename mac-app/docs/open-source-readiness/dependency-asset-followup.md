@@ -50,12 +50,14 @@ The removed default `resources/chatterbox/reference-voice.wav` path was still re
 
 **NPM license metadata**
 
-`npm run license:summary` currently reports 1204 lockfile package entries and two entries without license metadata:
+`npm run license:summary` reports 1204 package entries and no missing license metadata after documented overrides.
+
+The package lock omits license fields for:
 
 - `agentmail@0.4.9` in runtime dependencies;
 - `spawn-command@0.0.2` in dev dependencies.
 
-Before publication, confirm the upstream package licenses manually or replace/remove the packages.
+Both package versions publish MIT license metadata on npm. The summary helper records explicit overrides with the exact `npm view` commands used as evidence.
 
 ## Audit status
 
