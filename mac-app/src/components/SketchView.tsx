@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import { useTheme } from '../contexts/ThemeContext';
-import '@excalidraw/excalidraw/index.css';
 
 type TranscriptItem = {
   id: number;

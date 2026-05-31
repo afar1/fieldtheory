@@ -1,16 +1,67 @@
 # Field Theory
 
-Field Theory is a closed-source macOS application for voice, clipboard,
-library, and local AI workflows.
+Field Theory is a local-first macOS application for writing, voice, clipboard, Library, command, and local AI workflows.
 
-For a concise repo map, start with [arch.md](arch.md).
-This repo is mixed on purpose: the active product center is `mac-app/`, while other top-level trees include mobile work, adjacent apps, and upstream/runtime code that should only be your first stop when the task clearly points there.
+This repository is being prepared for open source. The current codebase is the source of truth for the public documentation work; older README, privacy, architecture, and release notes may be stale and should be verified against code before being treated as product truth.
 
-This repository contains proprietary source code. It is not licensed for public
-copying, modification, redistribution, sublicensing, or sale.
+## Project Status
+
+Open-source preparation is in progress.
+
+The repository is not yet under a final open-source license. Until the license decision is made and the root [LICENSE](LICENSE) file is replaced, the existing proprietary license remains the governing license.
+
+## Where to Start
+
+- [Mac app README](mac-app/README.md): local development setup for the active Mac app.
+- [Open-source readiness docs](mac-app/docs/open-source-readiness/README.md): current code-derived map of the app, data flows, release boundaries, and pre-publication cleanup.
+- [Privacy policy draft](mac-app/PRIVACY_POLICY.md): current Mac data-flow policy draft.
+- [Security policy draft](SECURITY.md): current security reporting and sensitive-surface guidance.
+- [Third-party notices draft](THIRD_PARTY_NOTICES.md): dependency, model, and asset notice work needed before publication.
+- [Architecture sketch](arch.md): useful historical map, but verify against code when accuracy matters.
+
+## Repository Shape
+
+The active product center is `mac-app/`, an Electron + Vite + React macOS app.
+
+Important Mac app areas:
+
+- `mac-app/src`: renderer UI.
+- `mac-app/electron/preload.ts`: renderer capability bridge.
+- `mac-app/electron/main`: privileged main-process code, IPC handlers, local data access, auth, sync, River, updater, and OS integration.
+- `mac-app/scripts`: development, build, native setup, packaging, and release helper scripts.
+- `mac-app/resources` and `mac-app/public`: packaged resources and static assets.
+- `mac-app/docs/open-source-readiness`: fresh public-readiness documentation written from code inspection.
+
+Other top-level trees may contain mobile work, adjacent apps, runtime code, or project infrastructure. Start there only when the task clearly points there.
+
+## Local Development
+
+For the Mac app:
+
+```bash
+cd mac-app
+npm ci
+npm run dev
+```
+
+Local verification:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+See [mac-app/README.md](mac-app/README.md) for details.
+
+## Local-First, Not Local-Only
+
+Core Mac app workflows can run without login. The app also has account-backed surfaces, including auth, feedback, account/quota checks, metrics, public sharing, River shared documents, and internally gated sync features.
+
+Do not describe Field Theory as cloud-only or as purely local. The accurate public story is: local-first core, optional account-backed features, and explicit internal/experimental gates.
 
 ## License
 
-Copyright (c) 2026 Field Theory | Andrew Farah. All rights reserved.
+License decision pending.
 
-See [LICENSE](LICENSE).
+The current [LICENSE](LICENSE) is proprietary and remains in effect until it is intentionally replaced.
