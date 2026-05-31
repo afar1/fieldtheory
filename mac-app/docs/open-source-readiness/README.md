@@ -8,10 +8,13 @@ The immediate purpose is to make the app legible before making Tier 1 public dec
 
 - [Repo map](./repo-map.md): where the Mac app lives, which areas are current product surfaces, and which docs or assets need caution.
 - [Mac development setup](./mac-development-setup.md): the practical contributor path for installing, running, testing, and building the Mac app locally.
+- [Local data paths](./local-data-paths.md): which development runs can touch real local data and what contributors should do before destructive tests.
 - [Architecture overview](./architecture-overview.md): how the renderer, Electron main process, preload bridge, local Library, command launcher, auth, sync, River, and release pieces fit together.
 - [Privacy and security data flow](./privacy-security-data-flow.md): what the app stores locally, what reaches Supabase, which IPC surfaces are privileged, and what should be documented carefully.
+- [Auth session boundary review](./auth-session-boundary-review.md): where full Supabase sessions cross into renderer code and what narrower APIs should replace them later.
 - [Supabase account policy review](./supabase-account-policy-review.md): repo-visible evidence for account-backed wording, RLS assumptions, Edge Functions, and remaining live-project verification.
 - [Contributor versus maintainer workflows](./contributor-maintainer-workflows.md): which commands are safe for normal development and which require signing, release credentials, private updater access, or release branches.
+- [Release infrastructure boundary](./release-infrastructure-boundary.md): why packaging, updater feeds, signing, notarization, and release repositories remain maintainer-only.
 - [Refactor decision list](./refactor-decision-list.md): the code and documentation boundaries that should be cleaned up before a public release, grouped by priority.
 - [IPC capability map](./ipc-capability-map.md): every renderer global exposed by preload, grouped by capability class and contributor risk.
 - [Feature state inventory](./feature-state-inventory.md): which surfaces are public local, account-backed, internal-gated, disabled, experimental, maintainer-only, or dev-only.

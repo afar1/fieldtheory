@@ -38,7 +38,7 @@ Capability classes:
 | `teamAPI` | account-backed public surface | cloud | `team:*` handlers, `sharedTeamService.ts` | Team membership, contacts, invites, and shared document state. Requires auth. |
 | `authAPI` | account-backed public surface | auth-session, cloud, dev-internal | `auth:*` handlers, `authManager` | `auth:getSession` returns the current Supabase session to the renderer. Simulator/debug methods are development-oriented and should not be presented as product setup. |
 | `accountAPI` | account-backed public surface | local-read, cloud | `accountIpc.ts`, `account:*` handlers | Account status and manual refresh. Safer public account metadata path than full session access. |
-| `quotaAPI` | account-backed public surface | local-read, cloud | `quota:*` handlers | Usage/quota checks for gated features. |
+| `quotaAPI` | account-backed public surface | local-read, cloud | `quotaIpc.ts`, `quota:*` handlers | Usage/quota checks for gated features. |
 | `metricsAPI` | account-backed public surface | local-read, local-write, cloud | `metricsIpc.ts`, `metrics:*` handlers | Reads local usage metrics and can sync or fetch Supabase-backed metrics. |
 | `socialAPI` | account-backed public surface | cloud | social/feedback handlers | Feedback and social feedback behavior. Requires accurate public privacy language. |
 | `fieldTheorySyncAPI` | internal-gated surface | local-read, local-write, cloud | `fieldTheorySyncIpc.ts`, `releaseSyncPolicy.ts` | Full Library sync is controlled by local preference and internal environment gating. Do not document it as a default contributor feature. |
@@ -123,4 +123,4 @@ The smallest useful next code step is to create feature-owned IPC registration m
 - `registerUpdaterIpc`
 - `registerShellIpc`
 
-The first extracted modules are `registerShellIpc` in `mac-app/electron/main/shellIpc.ts`, `registerAccountIpc` in `mac-app/electron/main/accountIpc.ts`, `registerFieldTheorySyncIpc` in `mac-app/electron/main/fieldTheorySyncIpc.ts`, and `registerMetricsIpc` in `mac-app/electron/main/metricsIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.
+The first extracted modules are `registerShellIpc` in `mac-app/electron/main/shellIpc.ts`, `registerAccountIpc` in `mac-app/electron/main/accountIpc.ts`, `registerFieldTheorySyncIpc` in `mac-app/electron/main/fieldTheorySyncIpc.ts`, `registerMetricsIpc` in `mac-app/electron/main/metricsIpc.ts`, and `registerQuotaIpc` in `mac-app/electron/main/quotaIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.

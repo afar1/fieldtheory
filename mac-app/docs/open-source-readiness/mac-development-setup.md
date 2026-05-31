@@ -80,6 +80,8 @@ The app uses two broad local data locations:
 
 Development runs can mutate real local Field Theory data unless pointed at test paths. Be careful when testing Library, command launcher, sync, River, clipboard, and account features.
 
+There is not one supported environment variable that redirects every `~/.fieldtheory` path for the whole app. For destructive or sync-adjacent testing, use a separate macOS user, disposable machine profile, backed-up `~/.fieldtheory` directory, dedicated test account, or small test Library root. See [Local data paths](./local-data-paths.md).
+
 ## Native and model-related setup
 
 `npm run build` builds Electron TypeScript and Vite output. It does not do the full native packaging build.
@@ -107,5 +109,5 @@ Model binaries are not tracked in the repository. Public docs should distinguish
 - Add `mac-app/.env.example`.
 - Rewrite `mac-app/README.md` from the current code path.
 - Decide whether public contributors should use real Supabase development infrastructure, local Supabase, or local-only mode by default.
-- Document how to avoid mutating a maintainer's real `~/.fieldtheory` Library during tests and experiments.
+- Add a first-class contributor-safe dev profile that redirects both Electron `userData` and Field Theory home paths.
 - Publish a third-party notices or dependency license document.

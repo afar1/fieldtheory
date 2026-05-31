@@ -41,10 +41,12 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] Extract `account:*` IPC handlers from `main/index.ts` into `accountIpc.ts`.
 - [x] Extract `fieldTheorySync:*` IPC handlers from `main/index.ts` into `fieldTheorySyncIpc.ts`.
 - [x] Extract `metrics:*` IPC handlers from `main/index.ts` into `metricsIpc.ts`.
-- [ ] Extract the next low-risk IPC owner from `main/index.ts` if it clearly improves public comprehension.
-- [ ] Review auth/session renderer boundary and document or narrow token-bearing paths where safe.
-- [ ] Make contributor-safe local data paths clearer in docs and, if practical, add first-class dev/test overrides.
-- [ ] Reduce public confusion around release infrastructure.
+- [x] Extract `quota:*` IPC handlers from `main/index.ts` into `quotaIpc.ts`.
+- [ ] Extract another low-risk IPC owner from `main/index.ts` only if it clearly improves public comprehension.
+- [x] Review auth/session renderer boundary and document token-bearing paths that are not safe to narrow in this pass.
+- [x] Make contributor-safe local data paths clearer in docs.
+- [ ] Add first-class dev/test overrides for local data paths if practical in a future code pass.
+- [x] Reduce public confusion around release infrastructure.
 - [ ] Keep docs updated as code ownership changes.
 
 **Tier 3 useful polish after the baseline is honest**
@@ -59,16 +61,18 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] `npm test -- accountIpc.test.ts shellIpc.test.ts` passed with 12 tests.
 - [x] `npm test -- fieldTheorySyncIpc.test.ts accountIpc.test.ts shellIpc.test.ts` passed with 16 tests.
 - [x] `npm test -- metricsIpc.test.ts fieldTheorySyncIpc.test.ts accountIpc.test.ts shellIpc.test.ts` passed with 20 tests.
+- [x] `npm test -- quotaIpc.test.ts metricsIpc.test.ts fieldTheorySyncIpc.test.ts accountIpc.test.ts shellIpc.test.ts` passed with 25 tests.
 - [x] `npm run build` passed after the shell IPC extraction.
 - [x] `npm run build` passed after the account IPC extraction.
 - [x] `npm run build` passed after the Field Theory sync IPC extraction and private-reference cleanup.
-- [x] `npm run license:summary` passed and still reports 1204 package entries with 2 missing-license entries.
+- [x] `npm run license:summary` passed after documented overrides and reports 1204 package entries with zero missing-license entries.
 - [x] `npm audit --omit=dev --audit-level=high` passed with zero vulnerabilities.
 - [x] `npm run guard:package-safety` passed.
 - [x] `npm run guard:package-safety:experimental` passed.
 - [x] `git diff --check` passed after the shell IPC extraction.
-- [ ] Run updated focused tests for each new code boundary move.
+- [x] Run updated focused tests for each new code boundary move.
 - [x] `npm run build` passed after the metrics IPC extraction and audit documentation updates.
+- [x] `npm run build` passed after the quota IPC extraction and remaining boundary docs.
 - [x] `npm audit --omit=dev --audit-level=high` passed with zero vulnerabilities after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety` passed after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety:experimental` passed after the metrics IPC extraction and audit documentation updates.
