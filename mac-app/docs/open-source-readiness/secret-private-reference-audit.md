@@ -28,20 +28,22 @@ This is meaningful evidence that obvious tracked credential files were not found
 
 - Rewrote `mac-app/docs/RELEASE_WORKFLOW.md` so it no longer describes a private-source/public-release split.
 - Removed obviously private Cursor operational command docs for unrelated deploy, droplet, environment, dashboard, and release workflows.
+- Cleaned remaining Cursor, Claude, and older iOS doc examples that referenced maintainer-local paths or unrelated projects.
 - Replaced the contributor-facing release credential path in `CLAUDE.md` with maintainer-controlled credential language.
 - Removed the hardcoded maintainer local env path `/Users/afar/dev/fieldtheory/.env.local` from Electron main env lookup.
 - Replaced the experimental updater error string that named private release infrastructure with generic maintainer GitHub access language.
+- Added maintainer-only release infrastructure docs so updater feeds, signing, notarization, release repos, and release tokens are not presented as contributor setup.
 
-## Remaining tracked-file risks
+## Remaining tracked-file notes
 
-Some older non-Mac or agent-support docs still contain private paths, internal product history, or maintainer assumptions. They should be reviewed before publication:
+Current tracked-file searches still find intentional references to:
 
-- `.cursor` command, flow, and plan documents not removed in this pass;
-- `.claude` hook/settings files;
-- root `CLAUDE.md`;
-- older iOS build docs under `docs/`;
+- environment variable names used as placeholders or code-level configuration;
+- `field-releases`, which is the current production release feed;
+- absolute `~/.fieldtheory` examples in tests and docs;
 - experimental updater configuration in `mac-app/electron-builder.experimental.json`;
-- maintainer release channel constants in `mac-app/electron/main/buildChannel.ts`.
+- maintainer release channel constants in `mac-app/electron/main/buildChannel.ts`;
+- open-source readiness audit docs that intentionally include search patterns.
 
 The experimental updater configuration may remain public if it is clearly documented as maintainer-only and contains no secrets. The release token itself must never be committed.
 

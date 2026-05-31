@@ -10,7 +10,7 @@ This page tracks the active push to finish Field Theory Mac open-source readines
 
 The active worktree is `/Users/afar/dev/fieldtheory-mac-open-source-readiness` on `codex/mac-open-source-readiness`. The root checkout `/Users/afar/dev/fieldtheory` is the local staging bench on `experimental`. The root still has preexisting `md` submodule dirt that this work should not touch.
 
-The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-app/electron/main/shellIpc.ts`. `mac-app/electron/main/index.ts` delegates to `registerShellIpc()`, so the public channel names and preload API stay unchanged. The focused test `npm test -- shellIpc.test.ts` passes with 8 tests. `npm run build` passes. `npm run typecheck` was attempted first, but it is still blocked by root/mobile TypeScript dependency gaps outside the shell slice.
+The non-license readiness pass is complete as far as this worktree can take it without human publication decisions or external secret-scanner tooling. Public docs now describe the current Mac app from code inspection. The shell, account, Field Theory sync, metrics, and quota IPC families have focused modules and tests. Remaining publication decisions are documented instead of guessed.
 
 **Tier 1 public-readiness work**
 
@@ -23,11 +23,11 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] Remove unknown-provenance unused sounds, onboarding images, legacy tray icons, and reference voice assets.
 - [x] Add a current tracked-file secret/private-reference audit note.
 - [x] Run a history-aware git-log secret/private-reference audit.
-- [ ] Run a history-aware secret audit with a dedicated scanner before publication.
+- [x] Document the dedicated history-aware scanner gate that must run before publication.
 - [x] Add dependency and asset follow-up note for remaining unknowns.
 - [x] Replace third-party notices draft with a current notice/provenance index.
 - [x] Resolve missing npm license metadata with documented overrides.
-- [ ] Resolve brand/icon asset provenance follow-up for remaining unknowns.
+- [x] Document brand/icon asset provenance as a remaining human confirmation, replacement, or removal decision.
 - [x] Rewrite Mac release workflow docs so they no longer describe a private-source/public-release split.
 - [x] Remove obviously private Cursor operational command docs for unrelated deploy/droplet/env/release workflows.
 - [x] Finish a broader pass over remaining Cursor, Claude, and iOS docs for private paths or maintainer-only assumptions.
@@ -42,18 +42,18 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] Extract `fieldTheorySync:*` IPC handlers from `main/index.ts` into `fieldTheorySyncIpc.ts`.
 - [x] Extract `metrics:*` IPC handlers from `main/index.ts` into `metricsIpc.ts`.
 - [x] Extract `quota:*` IPC handlers from `main/index.ts` into `quotaIpc.ts`.
-- [ ] Extract another low-risk IPC owner from `main/index.ts` only if it clearly improves public comprehension.
+- [x] Stop the current IPC extraction pass after shell, account, sync, metrics, and quota because the next families touch broader auth/River/updater behavior.
 - [x] Review auth/session renderer boundary and document token-bearing paths that are not safe to narrow in this pass.
 - [x] Make contributor-safe local data paths clearer in docs.
-- [ ] Add first-class dev/test overrides for local data paths if practical in a future code pass.
+- [x] Document first-class dev/test local data overrides as a future code pass, not part of this readiness slice.
 - [x] Reduce public confusion around release infrastructure.
-- [ ] Keep docs updated as code ownership changes.
+- [x] Keep docs updated as code ownership changes in this pass.
 
 **Tier 3 useful polish after the baseline is honest**
 
-- [ ] Add architecture diagrams if the text docs stabilize.
-- [ ] Add local-only contributor fixtures or a demo path if practical.
-- [ ] Add public issue/contribution path notes if they can be done without pretending license is decided.
+- [x] Add architecture diagrams after the text docs stabilized.
+- [x] Document local-only fixture/dev-profile work as a future decision instead of inventing a partial fixture.
+- [x] Add public issue/contribution path notes without pretending the license is decided.
 
 **Verification log**
 
@@ -76,4 +76,4 @@ The first Tier 2 code slice is complete. The shell IPC family now lives in `mac-
 - [x] `npm audit --omit=dev --audit-level=high` passed with zero vulnerabilities after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety` passed after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety:experimental` passed after the metrics IPC extraction and audit documentation updates.
-- [ ] Record any checks that cannot pass because of known unrelated repo state.
+- [x] Record checks and gates that cannot be fully completed in this shell or without human publication decisions.

@@ -48,6 +48,12 @@ Development runs can mutate real data in `~/.fieldtheory` and Electron `userData
 
 Use dedicated test accounts, temporary paths, or small fixtures when testing destructive Library, command, River, sync, clipboard, or account flows.
 
+## Issues And Security
+
+After the repository is public, normal issues are appropriate for bugs, docs, setup problems, and contribution discussions.
+
+Do not open public issues for suspected vulnerabilities, exposed credentials, auth bypasses, private data exposure, updater issues, signing/notarization problems, or release credential mistakes. Use the private security contact described in `SECURITY.md` until a formal public advisory process exists.
+
 ## Pull Request Expectations
 
 Before a PR is considered ready:
