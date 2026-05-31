@@ -185,6 +185,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -8691,34 +8692,7 @@ function setupClipboardIPCHandlers(): void {
     return authManager?.isSuperAdmin() ?? false;
   });
 
-  // Open external URL in default browser (for Stripe checkout, etc).
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
-    if (!allowed.test(url)) {
-      log.warn('shell:openExternal blocked non-http URL: %s', url);
-      return;
-    }
-    await shell.openExternal(url);
-  });
-
-  // Reveal file in Finder (macOS).
-  ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
-    try {
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
-        await shell.openPath(fullPath);
-        return;
-      }
-    } catch {
-      // Fall through to the existing reveal behavior.
-    }
-    shell.showItemInFolder(fullPath);
-  });
-
-  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
-  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    win?.setRepresentedFilename(fullPath || '');
-  });
+  registerShellIpc();
 
   ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
     return launchAgentImproveInTerminal(request);
