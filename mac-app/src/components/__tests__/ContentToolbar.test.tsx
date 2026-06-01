@@ -136,7 +136,7 @@ describe('ContentToolbar', () => {
     expect(getContentToolbarProximityOpacity({ pointerX: 150, pointerY: 140, rect })).toBeLessThan(1);
   });
 
-  it('renders the toolbar pill at reduced resting opacity', () => {
+  it('renders the toolbar pill at reduced resting opacity without a border', () => {
     const { container } = render(
       <ContentToolbar
         showCopy={false}
@@ -145,8 +145,14 @@ describe('ContentToolbar', () => {
     );
 
     const pill = container.querySelector('[data-content-toolbar-pill]') as HTMLDivElement | null;
+    expect(pill).not.toBeNull();
     expect(pill?.style.opacity).toBe('0.6');
+    expect(pill?.style.border).toBe('1px solid transparent');
     expect(pill?.style.transform).toBe('scale(0.88)');
+
+    fireEvent.pointerEnter(pill as HTMLDivElement);
+    expect(pill?.style.opacity).toBe('1');
+    expect(pill?.style.border).toBe('1px solid #d1d5db');
   });
 
   it('groups visible toolbar actions with fewer dividers when fewer groups are shown', () => {
@@ -195,6 +201,31 @@ describe('ContentToolbar', () => {
     const immersiveButton = screen.getByRole('button', { name: 'Enter immersive view' });
     expect(terminalButton.compareDocumentPosition(immersiveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(terminalButton.nextElementSibling).toBe(immersiveButton);
+  });
+
+  it('keeps the active terminal button visible in dark mode', () => {
+    themeMock.value = {
+      ...themeMock.value,
+      bgSecondary: '#151922',
+      surface2: '#1f2937',
+      surface3: '#111827',
+      text: '#e5e7eb',
+      textSecondary: '#9ca3af',
+      border: '#374151',
+      isDark: true,
+    };
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        onToggleTerminal={vi.fn()}
+        terminalVisible
+      />
+    );
+
+    const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
+    expect(terminalButton.style.backgroundColor).toBe('#111827');
+    expect(terminalButton.style.color).toBe('#e5e7eb');
   });
 
   it('shows the content mode icon as a true rendered/markdown toggle', () => {
@@ -262,6 +293,23 @@ describe('ContentToolbar', () => {
     expect(screen.queryByRole('button', { name: 'Add Delete' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the customize dropdown surface fully opaque', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        onCopyPath={vi.fn()}
+        onToggleTerminal={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Customize toolbar' }));
+
+    const menu = document.querySelector('[data-content-toolbar-customize-menu]') as HTMLDivElement | null;
+    expect(menu).not.toBeNull();
+    expect(menu?.style.opacity).toBe('1');
+    expect(menu?.style.backgroundColor).toBe('#f8f7f4');
   });
 
   it('uses the Field Theory icon for Field Theory commands', () => {
