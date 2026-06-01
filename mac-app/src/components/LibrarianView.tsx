@@ -776,6 +776,9 @@ export type LibrarianMaxwellItem = {
 
 type MaxwellToolbarSelection = { start: number; end: number } | null;
 type TerminalPastePopover = { text: string; top: number; left: number } | null;
+const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
+const TERMINAL_PASTE_POPOVER_GAP_PX = 8;
+const TERMINAL_PASTE_POPOVER_EDGE_PX = 12;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
   | { mode: 'selection'; selection: { start: number; end: number } };
@@ -892,6 +895,24 @@ export function isPasteSelectionToTerminalShortcut(event: Pick<KeyboardEvent, 'a
     && event.altKey
     && !event.ctrlKey
     && !event.shiftKey;
+}
+
+export function getTerminalPastePopoverPosition(
+  rect: Pick<DOMRect, 'height' | 'right' | 'top'>,
+  viewport: { width: number; height: number },
+): { top: number; left: number } {
+  const maxLeft = viewport.width - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_EDGE_PX;
+  const maxTop = viewport.height - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_GAP_PX;
+  return {
+    top: Math.max(
+      TERMINAL_PASTE_POPOVER_GAP_PX,
+      Math.min(maxTop, rect.top + rect.height / 2 - TERMINAL_PASTE_POPOVER_SIZE_PX / 2),
+    ),
+    left: Math.max(
+      TERMINAL_PASTE_POPOVER_EDGE_PX,
+      Math.min(maxLeft, rect.right + TERMINAL_PASTE_POPOVER_GAP_PX),
+    ),
+  };
 }
 
 type MarkdownTextEdit = {
@@ -5604,8 +5625,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
       setTerminalPastePopover({
         text: selectedText,
-        top: Math.max(8, rect.top - 38),
-        left: Math.max(12, Math.min(window.innerWidth - 44, rect.left + rect.width / 2 - 15)),
+        ...getTerminalPastePopoverPosition(rect, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }),
       });
     };
 
@@ -10182,8 +10205,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               top: `${terminalPastePopover.top}px`,
               left: `${terminalPastePopover.left}px`,
               zIndex: 42,
-              width: '30px',
-              height: '30px',
+              width: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
+              height: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
               padding: 0,
               display: 'inline-flex',
               alignItems: 'center',
