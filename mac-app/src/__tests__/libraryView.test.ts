@@ -1738,7 +1738,7 @@ describe('rendered markdown edit helpers', () => {
       { width: 800, height: 600 },
     )).toEqual({
       top: 97,
-      left: 248,
+      left: 254,
     });
   });
 

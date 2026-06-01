@@ -1315,6 +1315,42 @@ describe('LibrarianView render', () => {
     expect(riverButton.style.borderStyle).toBe('none');
   });
 
+  it('anchors copy feedback to the editor pane when the terminal is open', async () => {
+    const relPath = 'briefs/Example CLI Org Scoped Benchmark Brief';
+    const page: WikiPage = {
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'Example CLI Org Scoped Benchmark Brief',
+      title: 'Example CLI Org Scoped Benchmark Brief',
+      lastUpdated: 1,
+      content: 'Benchmark body',
+      documentVersion: { mtimeMs: 1, size: 14, sha256: 'feedback-anchor' },
+    };
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Benchmark body');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy selected text or file path (⌘C)' }));
+
+    const feedback = await screen.findByRole('status');
+    const editorPane = container.querySelector('[data-ft-reader-editor-pane="true"]');
+    expect(feedback.textContent).toBe('Copied file path');
+    expect(editorPane?.contains(feedback)).toBe(true);
+  });
+
   it('refreshes River availability after auth session changes', async () => {
     let sessionChanged: ((session: unknown | null) => void) | null = null;
     let available = false;
