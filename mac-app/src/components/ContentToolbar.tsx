@@ -777,6 +777,7 @@ export default function ContentToolbar({
   const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id));
   const hasCustomizeMenuActions = availableToolbarActions.length > 0 || Boolean(showDelete && onDelete);
   const pillBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
+  const menuBackground = theme.isDark ? '#1f1f23' : '#f8f7f4';
   const pillBorder = theme.border;
   const toolbarIconMuted = theme.textSecondary;
   const toolbarIconPrimary = theme.textSecondary;
@@ -784,6 +785,7 @@ export default function ContentToolbar({
   const toolbarHover = theme.isDark ? theme.surface3 : theme.surface2;
   const toolbarActiveBackground = theme.isDark ? theme.surface3 : theme.surface2;
   const toolbarPillOpacity = typographyMenuOpen || customizeMenuOpen ? 1 : toolbarPointerOpacity;
+  const toolbarPillBorder = toolbarPillOpacity >= 1 ? pillBorder : 'transparent';
 
   const toolbarActionVisibleGroup = (id: ToolbarActionId) => (
     VISIBLE_TOOLBAR_ACTION_GROUPS.find((group) => group.actions.includes(id))?.id ?? id
@@ -965,6 +967,8 @@ export default function ContentToolbar({
     const textButton = id === 'copy' || id === 'edit';
     const primary = DEFAULT_PINNED_TOOLBAR_ACTIONS.includes(id);
     const disabled = (id === 'contentmode' && contentModeDisabled) || (id === 'meeting' && meetingDisabled);
+    const baseButtonStyle = toolbarButtonStyle(active, primary, textButton);
+    const actionColor = id === 'share' ? riverShareColor : id === 'meeting' && meetingRecording ? '#dc2626' : id === 'terminal' && terminalVisible && !theme.isDark ? '#10b981' : id === 'copy' && copied ? (theme.success ?? '#16a34a') : id === 'copypath' && copyPathActive ? (theme.success ?? '#16a34a') : baseButtonStyle.color;
     return (
       <button
         key={id}
@@ -975,10 +979,10 @@ export default function ContentToolbar({
         title={toolbarActionLabel(id)}
         aria-label={toolbarActionLabel(id)}
         style={{
-          ...toolbarButtonStyle(active, primary, textButton),
+          ...baseButtonStyle,
           cursor: disabled ? 'default' : 'pointer',
           opacity: disabled ? 0.45 : 1,
-          color: id === 'share' ? riverShareColor : id === 'meeting' && meetingRecording ? '#dc2626' : id === 'terminal' && terminalVisible ? '#10b981' : id === 'copy' && copied ? (theme.success ?? '#16a34a') : id === 'copypath' && copyPathActive ? (theme.success ?? '#16a34a') : toolbarButtonStyle(active, primary, textButton).color,
+          color: actionColor,
         }}
         onMouseEnter={(event) => {
           if (disabled) return;
@@ -986,9 +990,8 @@ export default function ContentToolbar({
           event.currentTarget.style.color = toolbarIconStrong;
         }}
         onMouseLeave={(event) => {
-          const base = toolbarButtonStyle(active, primary, textButton);
-          event.currentTarget.style.backgroundColor = String(base.backgroundColor ?? 'transparent');
-          event.currentTarget.style.color = String(id === 'share' ? riverShareColor : id === 'meeting' && meetingRecording ? '#dc2626' : id === 'terminal' && terminalVisible ? '#10b981' : base.color);
+          event.currentTarget.style.backgroundColor = String(baseButtonStyle.backgroundColor ?? 'transparent');
+          event.currentTarget.style.color = String(actionColor);
         }}
       >
         {renderToolbarIcon(id)}
@@ -1062,7 +1065,7 @@ export default function ContentToolbar({
             padding: '4px',
             borderRadius: '8px',
             backgroundColor: pillBackground,
-            border: `1px solid ${pillBorder}`,
+            border: `1px solid ${toolbarPillBorder}`,
             boxShadow: 'none',
             opacity: toolbarPillOpacity,
             transform: `scale(${CONTENT_TOOLBAR_SCALE})`,
@@ -1084,7 +1087,7 @@ export default function ContentToolbar({
                   <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.25" /><circle cx="8" cy="8" r="1.25" /><circle cx="12.5" cy="8" r="1.25" /></svg>
                 </button>
                 {customizeMenuOpen && (
-                  <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '252px', maxHeight: 'min(940px, calc(100vh - 92px))', overflowY: 'auto', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: pillBackground, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div data-content-toolbar-customize-menu style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '252px', maxHeight: 'min(940px, calc(100vh - 92px))', overflowY: 'auto', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: menuBackground, opacity: 1, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', padding: '6px 9px 7px', color: theme.textSecondary, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
                       <span>Toolbar</span>
                       <span style={{ fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '9px', letterSpacing: '0.04em', textTransform: 'none', opacity: 0.68 }}>+ / -</span>
@@ -1138,7 +1141,7 @@ export default function ContentToolbar({
       )}
 
       {typographyMenuOpen && hasTypographyMenu && (
-        <div ref={typographyMenuRef} style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '300px', maxWidth: 'min(300px, calc(100vw - 24px))', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: pillBackground, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <div ref={typographyMenuRef} style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '300px', maxWidth: 'min(300px, calc(100vw - 24px))', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: menuBackground, opacity: 1, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
             <div style={typographyMenuRowStyle}>
               <span style={typographyMenuLabelStyle}>Font</span>
