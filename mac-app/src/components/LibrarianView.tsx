@@ -104,6 +104,8 @@ import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
 import MarkdownCodeEditor, {
+  RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
@@ -776,6 +778,9 @@ export type LibrarianMaxwellItem = {
 
 type MaxwellToolbarSelection = { start: number; end: number } | null;
 type TerminalPastePopover = { text: string; top: number; left: number } | null;
+const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
+const TERMINAL_PASTE_POPOVER_GAP_PX = 8;
+const TERMINAL_PASTE_POPOVER_EDGE_PX = 12;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
   | { mode: 'selection'; selection: { start: number; end: number } };
@@ -892,6 +897,65 @@ export function isPasteSelectionToTerminalShortcut(event: Pick<KeyboardEvent, 'a
     && event.altKey
     && !event.ctrlKey
     && !event.shiftKey;
+}
+
+export function getTerminalPastePopoverPosition(
+  rect: Pick<DOMRect, 'height' | 'right' | 'top'>,
+  viewport: { width: number; height: number },
+): { top: number; left: number } {
+  const maxLeft = viewport.width - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_EDGE_PX;
+  const maxTop = viewport.height - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_GAP_PX;
+  return {
+    top: Math.max(
+      TERMINAL_PASTE_POPOVER_GAP_PX,
+      Math.min(maxTop, rect.top + rect.height / 2 - TERMINAL_PASTE_POPOVER_SIZE_PX / 2),
+    ),
+    left: Math.max(
+      TERMINAL_PASTE_POPOVER_EDGE_PX,
+      Math.min(maxLeft, rect.right + TERMINAL_PASTE_POPOVER_GAP_PX),
+    ),
+  };
+}
+
+export function getTerminalImagePastePath(src: string | null): string | null {
+  if (!src) return null;
+  try {
+    if (/^ftlocalfile:/i.test(src)) {
+      return decodeURIComponent(new URL(src.replace(/^ftlocalfile:/i, 'file:')).pathname);
+    }
+    if (/^file:/i.test(src)) {
+      return decodeURIComponent(new URL(src).pathname);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function collectTerminalPasteTextFromNode(node: Node, parts: string[]): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    parts.push(node.textContent ?? '');
+    return;
+  }
+  if (!(node instanceof Element)) return;
+
+  if (node.classList.contains(RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS)) {
+    const imagePath = getTerminalImagePastePath(node.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR));
+    if (imagePath) parts.push(imagePath);
+    return;
+  }
+
+  node.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+}
+
+export function getTerminalPasteTextFromSelection(selection: Selection | null): string {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
+  const parts: string[] = [];
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const fragment = selection.getRangeAt(index).cloneContents();
+    fragment.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+  }
+  return parts.join('');
 }
 
 type MarkdownTextEdit = {
@@ -5577,8 +5641,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     const updateSelectionPopover = () => {
       const selection = window.getSelection();
-      const selectedText = selection?.toString() ?? '';
-      if (!selection || selection.isCollapsed || !selectedText.trim() || selection.rangeCount === 0) {
+      const pasteText = getTerminalPasteTextFromSelection(selection);
+      if (!selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
         setTerminalPastePopover(null);
         return;
       }
@@ -5603,9 +5667,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
       setTerminalPastePopover({
-        text: selectedText,
-        top: Math.max(8, rect.top - 38),
-        left: Math.max(12, Math.min(window.innerWidth - 44, rect.left + rect.width / 2 - 15)),
+        text: pasteText,
+        ...getTerminalPastePopoverPosition(rect, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }),
       });
     };
 
@@ -5626,7 +5692,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
       if (!isPasteSelectionToTerminalShortcut(event)) return;
-      const text = terminalPastePopover?.text || window.getSelection()?.toString() || '';
+      const text = terminalPastePopover?.text || getTerminalPasteTextFromSelection(window.getSelection());
       if (!text.trim()) return;
       event.preventDefault();
       event.stopPropagation();
@@ -10182,8 +10248,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               top: `${terminalPastePopover.top}px`,
               left: `${terminalPastePopover.left}px`,
               zIndex: 42,
-              width: '30px',
-              height: '30px',
+              width: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
+              height: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
               padding: 0,
               display: 'inline-flex',
               alignItems: 'center',
