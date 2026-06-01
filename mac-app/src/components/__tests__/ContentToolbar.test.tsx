@@ -98,6 +98,40 @@ describe('ContentToolbar', () => {
     });
   });
 
+  it('dismisses toolbar dropdowns when their trigger is clicked again', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        showTextSize
+        textSize="normal"
+        onTextSizeChange={vi.fn()}
+        onCopyPath={vi.fn()}
+        maxwellCanAddCurrent
+      />
+    );
+
+    const textStyleButton = screen.getByLabelText('Text style');
+    fireEvent.click(textStyleButton);
+    expect(document.querySelector('[data-content-toolbar-typography-menu]')).toBeTruthy();
+    fireEvent.mouseDown(textStyleButton);
+    fireEvent.click(textStyleButton);
+    expect(document.querySelector('[data-content-toolbar-typography-menu]')).toBeNull();
+
+    const customizeButton = screen.getByRole('button', { name: 'Customize toolbar' });
+    fireEvent.click(customizeButton);
+    expect(document.querySelector('[data-content-toolbar-customize-menu]')).toBeTruthy();
+    fireEvent.mouseDown(customizeButton);
+    fireEvent.click(customizeButton);
+    expect(document.querySelector('[data-content-toolbar-customize-menu]')).toBeNull();
+
+    const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
+    fireEvent.click(fieldTheoryButton);
+    expect(screen.getByText('Local commands')).toBeTruthy();
+    fireEvent.mouseDown(fieldTheoryButton);
+    fireEvent.click(fieldTheoryButton);
+    expect(screen.queryByText('Local commands')).toBeNull();
+  });
+
   it('shows todo marker choices in the text style menu', () => {
     const onTodoMarkerChange = vi.fn();
 
@@ -258,8 +292,8 @@ describe('ContentToolbar', () => {
     expect(markdownButton.style.backgroundColor).not.toBe('transparent');
   });
 
-  it('aligns the Field Theory dropdown to the toolbar instead of its icon', () => {
-    render(
+  it('aligns the Field Theory dropdown to the toolbar instead of its icon', async () => {
+    const { container } = render(
       <ContentToolbar
         showCopy={false}
         maxwellCanAddCurrent
@@ -270,8 +304,12 @@ describe('ContentToolbar', () => {
     fireEvent.click(fieldTheoryButton);
 
     expect(fieldTheoryButton.parentElement?.style.position).toBe('');
-    const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
+    const menu = document.querySelector('[data-content-toolbar-maxwell-menu]') as HTMLDivElement;
     expect(menu.style.right).toBe('0px');
+    await waitFor(() => {
+      expect(container.querySelector('[data-content-toolbar-pill]')?.getAttribute('style')).toContain('opacity: 1');
+    });
+    expect(menu.style.zIndex).toBe('1002');
   });
 
   it('keeps delete in the overflow menu instead of the toolbar', () => {
@@ -310,6 +348,7 @@ describe('ContentToolbar', () => {
     expect(menu).not.toBeNull();
     expect(menu?.style.opacity).toBe('1');
     expect(menu?.style.backgroundColor).toBe('#f8f7f4');
+    expect(menu?.style.zIndex).toBe('1002');
   });
 
   it('uses the Field Theory icon for Field Theory commands', () => {
@@ -387,14 +426,17 @@ describe('ContentToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     expect(screen.getByText('Local commands')).toBeTruthy();
     const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
-    expect(menu.style.width).toBe('240px');
+    expect(menu.style.width).toBe('252px');
+    expect(menu.style.maxWidth).toBe('min(252px, calc(100vw - 24px))');
     expect(menu.style.top).toBe('calc(100% + 10px)');
     expect(menu.style.right).toBe('0px');
     expect(menu.style.padding).toBe('5px');
     expect(menu.style.gap).toBe('2px');
-    expect(menu.style.backgroundColor).toBe('#f5f4f2');
+    expect(menu.style.backgroundColor).toBe('#f8f7f4');
     expect(menu.style.borderRadius).toBe('8px');
     expect(menu.style.boxShadow).toBe('none');
+    expect(screen.getByText('Local commands').style.textTransform).toBe('uppercase');
+    expect(screen.getByText('A Maxwell Page').style.fontSize).toBe('13px');
     expect(screen.getByText('A Maxwell Page').compareDocumentPosition(screen.getByText('Z Maxwell Page')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('Commands/A Maxwell Page')).toBeNull();
     fireEvent.click(screen.getAllByText('Run')[0]);
@@ -477,15 +519,21 @@ describe('ContentToolbar', () => {
 
     fireEvent.click(screen.getByLabelText('Text style'));
 
-    const menu = screen.getByTitle('Book font').closest('div[style*="width: 300px"]') as HTMLDivElement | null;
+    const menu = document.querySelector('[data-content-toolbar-typography-menu]') as HTMLDivElement | null;
+    const pill = document.querySelector('[data-content-toolbar-pill]') as HTMLDivElement | null;
     expect(menu).toBeTruthy();
+    expect(pill?.contains(menu)).toBe(true);
     expect(menu?.style.top).toBe('calc(100% + 10px)');
     expect(menu?.style.right).toBe('0px');
+    expect(menu?.style.width).toBe('286px');
     expect(menu?.style.padding).toBe('5px');
     expect(menu?.style.gap).toBe('2px');
+    expect(menu?.style.transform).toBe('');
+    expect(menu?.style.zIndex).toBe('1002');
     const control = screen.getByTitle('Book font').parentElement as HTMLDivElement;
     expect(control.style.display).toBe('grid');
     expect(control.style.gridAutoColumns).toBe('minmax(0, 1fr)');
+    expect(control.closest('div[style*="grid-template-columns"]')?.getAttribute('style')).toContain('grid-template-columns: 52px minmax(0, 1fr)');
     expect((screen.getByTitle('Draft font') as HTMLButtonElement).style.minWidth).toBe('0');
   });
 });

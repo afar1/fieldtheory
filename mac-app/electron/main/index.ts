@@ -2973,6 +2973,13 @@ function getMeetingManager(): MeetingManager {
     onBlockedWrite: () => blockWrite(),
   });
   meetingManager.on('status', (status: MeetingSession) => {
+    if (status.status === 'idle') {
+      if (status.type === 'wiki' && status.relPath) {
+        recordRecentEntry({ kind: 'wiki', path: status.relPath, title: status.title, lastOpenedAt: Date.now() });
+      } else if (status.type === 'external') {
+        recordRecentExternalDocument(status.filePath, status.title);
+      }
+    }
     broadcastMeetingStatus(status);
   });
   meetingManager.on('summary-progress', (event: LocalLlmProgressEvent & { filePath?: string; runId?: string }) => {
@@ -3205,6 +3212,7 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
 
   const page = librarianManager.createScratchpadDefault();
   if (!page) return null;
+  recordRecentWikiPage(page);
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
   clipboardHistoryWindow.showLibrary(boundsToUse);
@@ -3212,6 +3220,56 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
     relPath: page.relPath,
   });
   return page;
+}
+
+function broadcastRecentChanged(): void {
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) w.webContents.send('recent:changed');
+  });
+}
+
+function recordRecentEntry(entry: RecentEntry): void {
+  if (!recentManager) return;
+  recentManager.visit(entry);
+  broadcastRecentChanged();
+}
+
+function recordRecentWikiPage(page: Pick<WikiPage, 'relPath' | 'title'> | null): void {
+  if (!page) return;
+  recordRecentEntry({
+    kind: 'wiki',
+    path: page.relPath,
+    title: page.title,
+    lastOpenedAt: Date.now(),
+  });
+}
+
+function recordRecentExternalDocument(absPath: string | null | undefined, title: string | null | undefined): void {
+  if (!absPath || !isLibraryTextDocumentPath(absPath)) return;
+  let canonical = absPath;
+  try {
+    canonical = fs.realpathSync(absPath);
+  } catch {
+    // The file may have just been reported by a watcher; keep the given path.
+  }
+  recordRecentEntry({
+    kind: 'external',
+    path: canonical,
+    title: title?.trim() || stripMarkdownFileExtension(path.basename(canonical)),
+    lastOpenedAt: Date.now(),
+  });
+}
+
+function recordRecentCreatedLibraryPage(page: WikiPage | null, rootPath: string): void {
+  if (!page) return;
+  const root = librarianManager?.getLibraryRoots().find((candidate) => (
+    path.resolve(candidate.path) === path.resolve(rootPath)
+  ));
+  if (root?.builtin) {
+    recordRecentWikiPage(page);
+    return;
+  }
+  recordRecentExternalDocument(page.absPath, page.title);
 }
 
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
@@ -5197,7 +5255,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+    const page = librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+    recordRecentCreatedLibraryPage(page, rootPath);
+    return page;
   });
 
   ipcMain.handle('library:createDir', (_event, rootPath: string, dirRelPath: string): boolean => {
@@ -5260,7 +5320,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createWikiFile(folderName, fileName);
+    const page = librarianManager.createWikiFile(folderName, fileName);
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:createFileWithDefaultTitle', (_event, folderName: string): WikiPage | null => {
@@ -5269,7 +5331,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createWikiFileWithDefaultTitle(folderName);
+    const page = librarianManager.createWikiFileWithDefaultTitle(folderName);
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
@@ -5287,7 +5351,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createScratchpadDefault();
+    const page = librarianManager.createScratchpadDefault();
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:openScratchpadDefault', (): WikiPage | null => {
@@ -5315,11 +5381,6 @@ function setupLibrarianIPCHandlers(): void {
   // Recent items (wiki + external). Returns the updated list so the renderer
   // can re-render without a second round-trip; also broadcasts `recent:changed`
   // so other windows/components (e.g. sidebar) drop stale entries immediately.
-  const broadcastRecentChanged = () => {
-    BrowserWindow.getAllWindows().forEach((w) => {
-      if (!w.isDestroyed()) w.webContents.send('recent:changed');
-    });
-  };
   ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
   ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] => {
     const next = recentManager?.visit(entry) ?? [];
@@ -7707,6 +7768,10 @@ function setupClipboardIPCHandlers(): void {
           cursorStatusManager?.showNoTargetError('Clipboard paste failed');
         }
       } else {
+        if (commandLauncherWindow?.isShowingOrVisible()) {
+          commandLauncherWindow.hide(false);
+        }
+
         // Dismiss panel mode before paste; app mode stays visible.
         if (clipboardHistoryWindow) {
           clipboardHistoryWindow.hideAfterPaste('paste-item');
@@ -9633,7 +9698,7 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
-  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; targetApp: { bundleId: string; name: string } | null }> => {
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext: boolean; targetApp: { bundleId: string; name: string } | null }> => {
     const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
     const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
     const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
@@ -9651,10 +9716,11 @@ function setupClipboardIPCHandlers(): void {
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
       integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+      hasActiveLibraryFileContext: Boolean(activeLibraryFileContext?.filePath),
       targetBundleId: targetApp?.bundleId ?? null,
       targetName: targetApp?.name ?? null,
     });
-    return { fieldTheoryActive, targetApp };
+    return { fieldTheoryActive, hasActiveLibraryFileContext: Boolean(activeLibraryFileContext?.filePath), targetApp };
   });
 
   ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
@@ -11824,6 +11890,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
+    recordRecentExternalDocument(reading.path, reading.title);
 
     // Record librarian artifact created metric
     metricsManager?.recordLibrarianArtifactCreated();
@@ -12071,6 +12138,10 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+  });
+  transcriberManager.setFieldTheoryTerminalInsertionTarget({
+    isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+    insertText: writeTextIntoFocusedCodexTerminal,
   });
   transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
     const result = await getMeetingManager().stopActiveMeeting();

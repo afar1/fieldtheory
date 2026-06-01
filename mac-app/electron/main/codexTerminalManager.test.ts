@@ -311,6 +311,27 @@ describe('CodexTerminalManager', () => {
     expect(ptys[0].written[0]).toBe('codex resume thread-1\r');
   });
 
+  it('can launch Cursor Agent for a new terminal session', () => {
+    const { manager, ptys, spawnPty } = createManager();
+    manager.createSession({ launchCommand: 'cursor agent' });
+
+    expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
+    expect(ptys[0].written).toEqual([]);
+    ptys[0].emit('data', promptFor(process.cwd()));
+    expect(ptys[0].written[0]).toBe('cursor agent\r');
+  });
+
+  it('can launch safe Cursor Agent resume and continue commands', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'cursor agent --resume chat-1' });
+    ptys[0].emit('data', promptFor(process.cwd()));
+    expect(ptys[0].written[0]).toBe('cursor agent --resume chat-1\r');
+
+    manager.createSession({ launchCommand: 'cursor agent --continue' });
+    ptys[1].emit('data', promptFor(process.cwd()));
+    expect(ptys[1].written[0]).toBe('cursor agent --continue\r');
+  });
+
   it('falls back to plain Codex for unsafe launch commands', () => {
     const { manager, ptys } = createManager();
     manager.createSession({ launchCommand: 'codex resume thread-1; echo no' });
@@ -318,6 +339,15 @@ describe('CodexTerminalManager', () => {
     ptys[0].emit('data', promptFor(process.cwd()));
 
     expect(ptys[0].written[0]).toBe('codex\r');
+  });
+
+  it('falls back to plain Cursor Agent for unsafe cursor launch commands', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'cursor agent --resume chat-1; echo no' });
+
+    ptys[0].emit('data', promptFor(process.cwd()));
+
+    expect(ptys[0].written[0]).toBe('cursor agent\r');
   });
 
   it('does not start Codex on the fallback timer for plain shell sessions', () => {
@@ -339,6 +369,17 @@ describe('CodexTerminalManager', () => {
     expect(ptys[0].written).toEqual(['codex\r']);
   });
 
+  it('falls back to starting Cursor Agent if a requested launch command waits on an undetected prompt', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'cursor agent' });
+
+    vi.advanceTimersByTime(1199);
+    expect(ptys[0].written).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(ptys[0].written).toEqual(['cursor agent\r']);
+  });
+
   it('detects prompt readiness from the visible cwd prompt text', () => {
     expect(isCodexTerminalPromptReady(`\x1b[0m${basename(process.cwd())} › `, process.cwd())).toBe(true);
     expect(isCodexTerminalPromptReady('codex\r\ncodex\r\n', process.cwd())).toBe(false);
@@ -347,7 +388,10 @@ describe('CodexTerminalManager', () => {
   it('detects Codex model work from the latest terminal status', () => {
     expect(isCodexTerminalModelRunActive('› Fix this experimental · Working · 5h 99%')).toBe(true);
     expect(isCodexTerminalModelRunActive('⠠⠛ Running  3.11k tokens')).toBe(true);
+    expect(isCodexTerminalModelRunActive('Cursor Agent · Thinking...')).toBe(true);
+    expect(isCodexTerminalModelRunActive('Cursor Agent · Generating...')).toBe(true);
     expect(isCodexTerminalModelRunActive('› Fix this experimental · Ready · 5h 99%')).toBe(false);
+    expect(isCodexTerminalModelRunActive('Cursor Agent · Done')).toBe(false);
   });
 
   it('exposes active model work without treating an idle terminal as running work', () => {

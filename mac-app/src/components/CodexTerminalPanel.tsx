@@ -21,6 +21,7 @@ interface CodexTerminalPanelProps {
   dockSideOverride?: CodexTerminalDockSide;
   extendToViewportTop?: boolean;
   focusRequestKey?: number;
+  layoutRefreshKey?: string | number | boolean;
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
   onFocusToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onTerminalFocusChange?: (focused: boolean) => void;
@@ -55,6 +56,7 @@ const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 const HISTORY_OVERLAY_WIDTH = 420;
 const INITIAL_REPLAY_RESIZE_SUPPRESSION_MS = 600;
 const INITIAL_REPLAY_ECHO_DEDUPE_MS = 900;
+const TERMINAL_LAYOUT_REFIT_DELAYS_MS = [50, 180];
 const GHOSTTY_DARK_BACKGROUND = '#0F1115';
 const GHOSTTY_DARK_FOREGROUND = '#E6EAF0';
 
@@ -279,6 +281,10 @@ export function shouldUseCompactRightDockToolbar(input: { dockSide: CodexTermina
   return effectiveDockSide === 'right' && input.rightWidth <= MIN_RIGHT_WIDTH + 72;
 }
 
+export function getTerminalLayoutRefitDelays(input: { visible: boolean }): number[] {
+  return input.visible ? TERMINAL_LAYOUT_REFIT_DELAYS_MS : [];
+}
+
 export function getTerminalTopExtension(input: { panelTop: number; previousTopExtension: number }): number {
   return Math.max(0, Math.round(input.panelTop + input.previousTopExtension));
 }
@@ -304,7 +310,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, layoutRefreshKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [terminalDarkMode, setTerminalDarkMode] = useState(() => readStoredCodexTerminalDarkMode(theme.isDark));
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
@@ -329,6 +335,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const [topExtension, setTopExtension] = useState(0);
   const topExtensionRef = useRef(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const terminalBodyRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
@@ -690,6 +697,16 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     return () => window.removeEventListener('resize', handleResize);
   }, [scheduleFitActiveTerminal]);
 
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const targets = [panelRef.current, terminalBodyRef.current].filter((target): target is HTMLDivElement => !!target);
+    if (!targets.length) return;
+    scheduleFitActiveTerminal();
+    const resizeObserver = new ResizeObserver(scheduleFitActiveTerminal);
+    for (const target of targets) resizeObserver.observe(target);
+    return () => resizeObserver.disconnect();
+  }, [scheduleFitActiveTerminal, visible]);
+
   useEffect(() => {
     const appearance = terminalAppearanceOptions(terminalDarkMode);
     for (const handle of terminalHandlesRef.current.values()) {
@@ -706,6 +723,17 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   useEffect(() => {
     scheduleFitActiveTerminal();
   }, [effectiveDockSide, scheduleFitActiveTerminal, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    scheduleFitActiveTerminal();
+    const timers = getTerminalLayoutRefitDelays({ visible }).map((delay) => (
+      window.setTimeout(scheduleFitActiveTerminal, delay)
+    ));
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [layoutRefreshKey, scheduleFitActiveTerminal, visible]);
 
   useEffect(() => {
     if (!shouldFocusTerminalForRequest({ visible, focusRequestKey })) return;
@@ -1366,7 +1394,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           </div>
         </div>
       )}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
+      <div ref={terminalBodyRef} style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
         <style>
           {terminalViewportStyleCss(terminalBackground)}
         </style>
