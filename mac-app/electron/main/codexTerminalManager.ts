@@ -145,8 +145,9 @@ const HISTORY_FILE_CACHE_MS = 2000;
 // index, so we never walk the entire (unbounded, multi-GB) sessions tree.
 const HISTORY_SCAN_LIMIT = 250;
 const CODEX_COMMAND = 'codex';
+const CURSOR_AGENT_COMMAND = 'cursor agent';
 const CODEX_LAUNCH_FALLBACK_MS = 1200;
-const SAFE_CODEX_LAUNCH_COMMAND_PATTERN = /^codex(?: resume [A-Za-z0-9_-]+)?$/;
+const SAFE_AGENT_LAUNCH_COMMAND_PATTERN = /^(?:codex(?: resume [A-Za-z0-9_-]+)?|cursor agent(?: --continue| --resume [A-Za-z0-9_-]+)?)$/;
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 const CODEX_INPUT_PLACEHOLDERS = [
   'Run /review on my current changes',
@@ -335,7 +336,8 @@ function sanitizeLaunchCommand(input: unknown): string | null {
   if (typeof input !== 'string') return null;
   const trimmed = input.replace(/[\r\n]+/g, ' ').trim();
   if (!trimmed) return null;
-  return SAFE_CODEX_LAUNCH_COMMAND_PATTERN.test(trimmed) ? trimmed : CODEX_COMMAND;
+  if (SAFE_AGENT_LAUNCH_COMMAND_PATTERN.test(trimmed)) return trimmed;
+  return trimmed.startsWith('cursor') ? CURSOR_AGENT_COMMAND : CODEX_COMMAND;
 }
 
 function formatHistoryPreview(records: Array<{ role: string; text: string }>, maxChars: number): string {
@@ -416,12 +418,14 @@ export function isCodexTerminalPromptReady(output: string, cwd: string): boolean
 
 export function isCodexTerminalModelRunActive(output: string): boolean {
   const visible = stripTerminalControlSequences(output).replace(/\r/g, '\n');
-  const statusMatches = Array.from(visible.matchAll(/(?:[•·]\s*)?(Ready|Working|Running|Composing|Editing)(?:\s*[·(]|\s+\d+(?:\.\d+)?[Kk]?\s+(?:tokens?|in|out)|\s+\.\.\.)/g));
+  const statusMatches = Array.from(visible.matchAll(/(?:[•·]\s*)?(Ready|Done|Idle|Working|Running|Composing|Editing|Thinking|Generating)(?:\s*[·(]|\s+\d+(?:\.\d+)?[Kk]?\s+(?:tokens?|in|out)|\s*\.\.\.)/g));
   const latestStatus = statusMatches.at(-1)?.[1] ?? null;
   return latestStatus === 'Working'
     || latestStatus === 'Running'
     || latestStatus === 'Composing'
-    || latestStatus === 'Editing';
+    || latestStatus === 'Editing'
+    || latestStatus === 'Thinking'
+    || latestStatus === 'Generating';
 }
 
 export class CodexTerminalManager {

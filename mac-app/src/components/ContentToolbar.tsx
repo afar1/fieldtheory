@@ -3,7 +3,7 @@
  * Provides consistent UI for editing, sharing, and navigation controls.
  */
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { SidebarMarkdownIcon, SidebarRiverIcon } from './SidebarIcons';
 
@@ -46,6 +46,84 @@ const TEXT_SIZE_OPTIONS: Array<{
   { id: 'normal', label: 'Normal', title: 'Normal text' },
   { id: 'large', label: 'Large', title: 'Large text' },
 ];
+
+function useToolbarDropdownDismiss(
+  open: boolean,
+  setOpen: (open: boolean) => void,
+  refs: ReadonlyArray<RefObject<Element | null>>,
+) {
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && refs.some((ref) => ref.current?.contains(target))) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, refs, setOpen]);
+}
+
+type ToolbarDropdownSurfaceProps = {
+  children: ReactNode;
+  width: string;
+  maxWidth?: string;
+  maxHeight?: string;
+  overflowY?: CSSProperties['overflowY'];
+  borderColor: string;
+  backgroundColor: string;
+  style?: CSSProperties;
+} & HTMLAttributes<HTMLDivElement>;
+
+const ToolbarDropdownSurface = forwardRef<HTMLDivElement, ToolbarDropdownSurfaceProps>(function ToolbarDropdownSurface({
+  children,
+  width,
+  maxWidth,
+  maxHeight,
+  overflowY,
+  borderColor,
+  backgroundColor,
+  style,
+  ...props
+}, ref) {
+  return (
+    <div
+      ref={ref}
+      {...props}
+      style={{
+        position: 'absolute',
+        top: 'calc(100% + 10px)',
+        right: 0,
+        zIndex: 1002,
+        width,
+        maxWidth,
+        maxHeight,
+        overflowY,
+        padding: '5px',
+        borderRadius: '8px',
+        border: `1px solid ${borderColor}`,
+        backgroundColor,
+        opacity: 1,
+        boxShadow: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+});
 
 interface ContentToolbarProps {
   // Content info
@@ -249,6 +327,7 @@ export function ContentToolbarMaxwellButton({
   onVisitItem,
   onRunItem,
   onRemoveItem,
+  onMenuOpenChange,
 }: {
   items: ContentToolbarMaxwellItem[];
   canAddCurrent: boolean;
@@ -257,39 +336,26 @@ export function ContentToolbarMaxwellButton({
   onVisitItem?: (id: string) => void;
   onRunItem?: (id: string) => void;
   onRemoveItem?: (id: string) => void;
+  onMenuOpenChange?: (open: boolean) => void;
 }) {
   const { theme } = useTheme();
   const [maxwellMenuOpen, setMaxwellMenuOpen] = useState(false);
   const maxwellMenuRef = useRef<HTMLDivElement | null>(null);
   const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
   const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
-  const menuBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
+  const menuBackground = theme.isDark ? '#1f1f23' : '#f8f7f4';
   const menuBorder = theme.border;
   const menuText = theme.text;
   const menuMutedText = theme.textSecondary;
-  const menuButtonBackground = theme.isDark ? theme.surface3 : theme.surface2;
+  const menuDivider = theme.border;
   const sortedItems = [...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
   const currentItemSaved = Boolean(currentItemId && items.some((item) => item.id === currentItemId));
 
   useEffect(() => {
-    if (!maxwellMenuOpen) return;
+    onMenuOpenChange?.(maxwellMenuOpen);
+  }, [maxwellMenuOpen, onMenuOpenChange]);
 
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && maxwellMenuRef.current?.contains(target)) return;
-      setMaxwellMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMaxwellMenuOpen(false);
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [maxwellMenuOpen]);
+  useToolbarDropdownDismiss(maxwellMenuOpen, setMaxwellMenuOpen, [maxwellMenuRef]);
 
   return (
     <div
@@ -346,30 +412,19 @@ export function ContentToolbarMaxwellButton({
       </button>
 
       {maxwellMenuOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 10px)',
-            right: 0,
-            zIndex: 21,
-            width: '240px',
-            maxWidth: 'min(260px, calc(100vw - 24px))',
-            padding: '5px',
-            borderRadius: '8px',
-            border: `1px solid ${menuBorder}`,
-            backgroundColor: menuBackground,
-            boxShadow: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '2px',
-          }}
-        >
+        <ToolbarDropdownSurface data-content-toolbar-maxwell-menu width="252px" maxWidth="min(252px, calc(100vw - 24px))" borderColor={menuBorder} backgroundColor={menuBackground}>
           <div
             style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: '8px',
               padding: '6px 9px 7px',
               color: menuMutedText,
-              fontSize: '11px',
+              fontSize: '10px',
               fontWeight: 700,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
               textAlign: 'left',
             }}
           >
@@ -379,12 +434,11 @@ export function ContentToolbarMaxwellButton({
             <div
               key={item.id}
               style={{
-                display: 'grid',
-                gridTemplateColumns: '18px minmax(0, 1fr) auto 20px',
-                gap: '4px',
+                display: 'flex',
                 alignItems: 'center',
-                padding: '3px 4px',
-                borderRadius: '8px',
+                gap: '10px',
+                padding: '7px 9px',
+                borderRadius: '7px',
               }}
             >
               <button
@@ -396,33 +450,27 @@ export function ContentToolbarMaxwellButton({
                 title="Open saved Field Theory page"
                 aria-label={`Open ${item.title}`}
                 style={{
-                  width: '18px',
-                  height: '20px',
+                  flex: 1,
+                  minWidth: 0,
                   padding: 0,
                   color: menuMutedText,
                   backgroundColor: 'transparent',
                   border: 'none',
-                  borderRadius: '5px',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <SidebarMarkdownIcon color={menuMutedText} />
-              </button>
-              <div
-                title={item.subtitle}
-                style={{
-                  minWidth: 0,
-                  padding: '1px 2px',
+                  gap: '10px',
                   textAlign: 'left',
+                  fontFamily: 'inherit',
                 }}
               >
-                <div style={{ fontSize: '12px', lineHeight: 1.25, color: menuText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: menuMutedText }}>
+                  <SidebarMarkdownIcon color="currentColor" />
+                </span>
+                <span title={item.subtitle} style={{ flex: 1, minWidth: 0, fontSize: '13px', lineHeight: 1.25, color: menuText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {item.title}
-                </div>
-              </div>
+                </span>
+              </button>
               <button
                 type="button"
                 title="Run this Field Theory page locally"
@@ -431,15 +479,16 @@ export function ContentToolbarMaxwellButton({
                   setMaxwellMenuOpen(false);
                 }}
                 style={{
-                  height: '20px',
-                  padding: '0 6px',
+                  height: '22px',
+                  padding: '0 3px',
                   color: menuText,
-                  backgroundColor: menuButtonBackground,
+                  backgroundColor: 'transparent',
                   border: 'none',
-                  borderRadius: '8px',
+                  borderRadius: '5px',
                   cursor: 'pointer',
-                  fontSize: '10px',
+                  fontSize: '12px',
                   fontWeight: 600,
+                  fontFamily: 'inherit',
                 }}
               >
                 Run
@@ -452,17 +501,18 @@ export function ContentToolbarMaxwellButton({
                   onRemoveItem?.(item.id);
                 }}
                 style={{
-                  width: '20px',
-                  height: '20px',
+                  width: '18px',
+                  height: '22px',
                   padding: 0,
                   color: menuMutedText,
                   backgroundColor: 'transparent',
                   border: 'none',
                   borderRadius: '5px',
                   cursor: 'pointer',
-                  fontSize: '13px',
+                  fontSize: '16px',
                   lineHeight: 1,
-                  opacity: 0.42,
+                  opacity: 0.58,
+                  fontFamily: 'inherit',
                 }}
               >
                 ×
@@ -470,10 +520,11 @@ export function ContentToolbarMaxwellButton({
             </div>
           ))}
           {items.length === 0 && (
-            <div style={{ padding: '5px 8px 7px', color: menuMutedText, fontSize: '11px', fontStyle: 'italic', lineHeight: 1.35, textAlign: 'right' }}>
+            <div style={{ padding: '7px 9px', color: menuMutedText, fontSize: '13px', lineHeight: 1.35, textAlign: 'left' }}>
               No saved Field Theory pages yet.
             </div>
           )}
+          <div style={{ height: '1px', backgroundColor: menuDivider, margin: '5px 4px' }} />
           <button
             type="button"
             disabled={!canAddCurrent}
@@ -485,22 +536,22 @@ export function ContentToolbarMaxwellButton({
               }
             }}
             style={{
-              height: '24px',
-              alignSelf: 'flex-end',
-              padding: '0 9px',
+              width: '100%',
+              padding: '7px 9px',
               color: menuMutedText,
-              backgroundColor: menuButtonBackground,
-              border: `1px solid ${menuBorder}`,
-              borderRadius: '8px',
+              backgroundColor: 'transparent',
+              border: 'none',
+              borderRadius: '7px',
               cursor: canAddCurrent ? 'pointer' : 'default',
               opacity: canAddCurrent ? 1 : 0.5,
-              fontSize: '10px',
-              textAlign: 'right',
+              fontSize: '13px',
+              fontFamily: 'inherit',
+              textAlign: 'left',
             }}
           >
             {currentItemSaved ? 'remove current page from Field Theory' : 'add current page'}
           </button>
-        </div>
+        </ToolbarDropdownSurface>
       )}
     </div>
   );
@@ -582,6 +633,7 @@ export default function ContentToolbar({
   const [copyPathHovered, setCopyPathHovered] = useState(false);
   const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
   const [customizeMenuOpen, setCustomizeMenuOpen] = useState(false);
+  const [maxwellMenuOpen, setMaxwellMenuOpen] = useState(false);
   const [toolbarPointerOpacity, setToolbarPointerOpacity] = useState(CONTENT_TOOLBAR_RESTING_OPACITY);
   const [pinnedActions, setPinnedActions] = useState<ToolbarActionId[]>(() => {
     try {
@@ -595,6 +647,7 @@ export default function ContentToolbar({
   });
   const toolbarPillRef = useRef<HTMLDivElement | null>(null);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
+  const typographyTriggerRef = useRef<HTMLButtonElement | null>(null);
   const customizeMenuRef = useRef<HTMLDivElement | null>(null);
   const copyPathLocalTimerRef = useRef<number | null>(null);
   const riverShareActive = shareStatus?.shared === true;
@@ -669,25 +722,7 @@ export default function ContentToolbar({
     return () => window.removeEventListener('pointermove', handlePointerMove);
   }, []);
 
-  useEffect(() => {
-    if (!typographyMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && typographyMenuRef.current?.contains(target)) return;
-      setTypographyMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setTypographyMenuOpen(false);
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [typographyMenuOpen]);
+  useToolbarDropdownDismiss(typographyMenuOpen, setTypographyMenuOpen, [typographyMenuRef, typographyTriggerRef]);
 
   useEffect(() => {
     try {
@@ -697,23 +732,7 @@ export default function ContentToolbar({
     }
   }, [pinnedActions]);
 
-  useEffect(() => {
-    if (!customizeMenuOpen) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && customizeMenuRef.current?.contains(target)) return;
-      setCustomizeMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setCustomizeMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [customizeMenuOpen]);
+  useToolbarDropdownDismiss(customizeMenuOpen, setCustomizeMenuOpen, [customizeMenuRef]);
 
   const canUseToolbarAction = (id: ToolbarActionId) => {
     if (id === 'textstyle') return hasTypographyMenu;
@@ -784,7 +803,8 @@ export default function ContentToolbar({
   const toolbarIconStrong = theme.text;
   const toolbarHover = theme.isDark ? theme.surface3 : theme.surface2;
   const toolbarActiveBackground = theme.isDark ? theme.surface3 : theme.surface2;
-  const toolbarPillOpacity = typographyMenuOpen || customizeMenuOpen ? 1 : toolbarPointerOpacity;
+  const toolbarDropdownOpen = typographyMenuOpen || customizeMenuOpen || maxwellMenuOpen;
+  const toolbarPillOpacity = toolbarDropdownOpen ? 1 : toolbarPointerOpacity;
   const toolbarPillBorder = toolbarPillOpacity >= 1 ? pillBorder : 'transparent';
 
   const toolbarActionVisibleGroup = (id: ToolbarActionId) => (
@@ -797,14 +817,14 @@ export default function ContentToolbar({
 
   const typographyMenuRowStyle: CSSProperties = {
     display: 'grid',
-    gridTemplateColumns: '68px minmax(0, 1fr)',
+    gridTemplateColumns: '52px minmax(0, 1fr)',
     alignItems: 'center',
-    gap: '10px',
-    padding: '7px 9px',
+    gap: '7px',
+    padding: '4px 6px',
   };
   const typographyMenuLabelStyle: CSSProperties = {
     minWidth: 0,
-    fontSize: '12px',
+    fontSize: '11px',
     color: theme.textSecondary,
   };
   const typographySegmentedControlStyle: CSSProperties = {
@@ -814,16 +834,16 @@ export default function ContentToolbar({
     gridAutoColumns: 'minmax(0, 1fr)',
     gap: '2px',
     padding: '2px',
-    borderRadius: '8px',
+    borderRadius: '7px',
     border: `1px solid ${pillBorder}`,
     backgroundColor: theme.isDark ? theme.surface1 : theme.background,
   };
   const typographySegmentButtonStyle = (active: boolean, fontSize: string = '12px', fontFamily?: string): CSSProperties => ({
     minWidth: 0,
     width: '100%',
-    padding: '3px 8px',
+    padding: '3px 7px',
     border: 'none',
-    borderRadius: '6px',
+    borderRadius: '5px',
     backgroundColor: active ? toolbarActiveBackground : 'transparent',
     color: active ? toolbarIconStrong : theme.textSecondary,
     cursor: 'pointer',
@@ -905,6 +925,7 @@ export default function ContentToolbar({
           onVisitItem={onMaxwellVisitItem}
           onRunItem={onMaxwellRunItem}
           onRemoveItem={onMaxwellRemoveItem}
+          onMenuOpenChange={setMaxwellMenuOpen}
         />
       );
     }
@@ -972,6 +993,7 @@ export default function ContentToolbar({
     return (
       <button
         key={id}
+        ref={id === 'textstyle' ? typographyTriggerRef : undefined}
         type="button"
         disabled={disabled}
         onMouseDown={(event) => { if (id === 'copypath') event.preventDefault(); }}
@@ -1019,6 +1041,7 @@ export default function ContentToolbar({
         margin: '0 -4px',
         padding: '0 4px',
         position: 'relative',
+        zIndex: toolbarDropdownOpen ? 1000 : undefined,
         // @ts-ignore - toolbar controls should be clickable/focusable; the spacer below owns dragging.
         WebkitAppRegion: 'no-drag',
       }}
@@ -1070,6 +1093,7 @@ export default function ContentToolbar({
             opacity: toolbarPillOpacity,
             transform: `scale(${CONTENT_TOOLBAR_SCALE})`,
             transformOrigin: 'center center',
+            zIndex: toolbarDropdownOpen ? 1001 : undefined,
             flexShrink: 0,
             transition: 'opacity 140ms ease, background-color 140ms ease, border-color 140ms ease',
             // @ts-ignore - opt out of the drag region so the click lands.
@@ -1087,7 +1111,7 @@ export default function ContentToolbar({
                   <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.25" /><circle cx="8" cy="8" r="1.25" /><circle cx="12.5" cy="8" r="1.25" /></svg>
                 </button>
                 {customizeMenuOpen && (
-                  <div data-content-toolbar-customize-menu style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '252px', maxHeight: 'min(940px, calc(100vh - 92px))', overflowY: 'auto', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: menuBackground, opacity: 1, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <ToolbarDropdownSurface data-content-toolbar-customize-menu width="252px" maxHeight="min(940px, calc(100vh - 92px))" overflowY="auto" borderColor={pillBorder} backgroundColor={menuBackground}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', padding: '6px 9px 7px', color: theme.textSecondary, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
                       <span>Toolbar</span>
                       <span style={{ fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '9px', letterSpacing: '0.04em', textTransform: 'none', opacity: 0.68 }}>+ / -</span>
@@ -1103,7 +1127,17 @@ export default function ContentToolbar({
                             const pinned = pinnedActions.includes(id);
                             return (
                               <button key={id} type="button" onClick={() => togglePinnedAction(id)} aria-label={`${pinned ? 'Remove' : 'Add'} ${toolbarActionLabel(id)}`} title={pinned ? 'Remove from toolbar' : 'Add to toolbar'} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 9px', border: 'none', borderRadius: '7px', backgroundColor: 'transparent', color: pinned ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontFamily: 'inherit' }}>
-                                <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{renderToolbarIcon(id)}</span>
+                                <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  {id === 'fieldtheory' ? (
+                                    <img
+                                      src={FIELD_THEORY_ICON_URL}
+                                      alt=""
+                                      aria-hidden="true"
+                                      draggable={false}
+                                      style={{ width: '14px', height: '14px', display: 'block', objectFit: 'contain', opacity: theme.isDark ? 0.88 : 0.72, filter: theme.isDark ? 'invert(1) brightness(1.35) contrast(1.08)' : 'none' }}
+                                    />
+                                  ) : renderToolbarIcon(id)}
+                                </span>
                                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolbarActionLabel(id)}</span>
                                 <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: 0.58 }}>{pinned ? '−' : '+'}</span>
                               </button>
@@ -1132,65 +1166,64 @@ export default function ContentToolbar({
                         </button>
                       </div>
                     )}
-                  </div>
+                  </ToolbarDropdownSurface>
                 )}
               </div>
             </>
           )}
-        </div>
-      )}
-
-      {typographyMenuOpen && hasTypographyMenu && (
-        <div ref={typographyMenuRef} style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '300px', maxWidth: 'min(300px, calc(100vw - 24px))', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: menuBackground, opacity: 1, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
-            <div style={typographyMenuRowStyle}>
-              <span style={typographyMenuLabelStyle}>Font</span>
-              <div style={typographySegmentedControlStyle}>
-                {typographyPresetOptions.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTypographyPresetChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === typographyPreset, '12px', option.fontFamily)}>{option.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {showTextSize && onTextSizeChange && (
-            <div style={typographyMenuRowStyle}>
-              <span style={typographyMenuLabelStyle}>Size</span>
-              <div style={typographySegmentedControlStyle}>
-                {TEXT_SIZE_OPTIONS.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTextSizeChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === textSize)}>{option.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {lineHeightOptions && lineHeightOptions.length > 0 && onLineHeightChange && (
-            <div style={typographyMenuRowStyle}>
-              <span style={typographyMenuLabelStyle}>Lines</span>
-              <div style={typographySegmentedControlStyle}>
-                {lineHeightOptions.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onLineHeightChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === lineHeight)}>{option.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {onUnorderedListMarkerChange && (
-            <div style={typographyMenuRowStyle}>
-              <span style={typographyMenuLabelStyle}>Bullets</span>
-              <div style={typographySegmentedControlStyle}>
-                {[{ id: 'dash' as const, label: '-', title: 'Dash unordered lists' }, { id: 'carrot' as const, label: '›', title: 'Carrot unordered lists' }].map((option) => (
-                  <button key={option.id} type="button" onClick={() => onUnorderedListMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === unorderedListMarker, option.id === 'carrot' ? '15px' : '12px')}>{option.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {onTodoMarkerChange && (
-            <div style={typographyMenuRowStyle}>
-              <span style={typographyMenuLabelStyle}>Todos</span>
-              <div style={typographySegmentedControlStyle}>
-                {[{ id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' }, { id: 'square' as const, label: '□', title: 'Square todo checkboxes' }].map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === todoMarker, '15px')}>{option.label}</button>
-                ))}
-              </div>
-            </div>
+          {typographyMenuOpen && hasTypographyMenu && (
+            <ToolbarDropdownSurface data-content-toolbar-typography-menu ref={typographyMenuRef} width="286px" maxWidth="min(286px, calc(100vw - 24px))" borderColor={pillBorder} backgroundColor={menuBackground}>
+              {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Font</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {typographyPresetOptions.map((option) => (
+                      <button key={option.id} type="button" onClick={() => onTypographyPresetChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === typographyPreset, '12px', option.fontFamily)}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {showTextSize && onTextSizeChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Size</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {TEXT_SIZE_OPTIONS.map((option) => (
+                      <button key={option.id} type="button" onClick={() => onTextSizeChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === textSize)}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {lineHeightOptions && lineHeightOptions.length > 0 && onLineHeightChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Lines</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {lineHeightOptions.map((option) => (
+                      <button key={option.id} type="button" onClick={() => onLineHeightChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === lineHeight)}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {onUnorderedListMarkerChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Bullets</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {[{ id: 'dash' as const, label: '-', title: 'Dash unordered lists' }, { id: 'carrot' as const, label: '›', title: 'Carrot unordered lists' }].map((option) => (
+                      <button key={option.id} type="button" onClick={() => onUnorderedListMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === unorderedListMarker, option.id === 'carrot' ? '15px' : '12px')}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {onTodoMarkerChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Todos</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {[{ id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' }, { id: 'square' as const, label: '□', title: 'Square todo checkboxes' }].map((option) => (
+                      <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === todoMarker, '15px')}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </ToolbarDropdownSurface>
           )}
         </div>
       )}
