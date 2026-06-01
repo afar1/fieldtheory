@@ -9271,6 +9271,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       enterEditMode();
                     }
                   }}
+                  contentMode={contentMode}
                   contentModeTitle={(() => {
                     const nextMode = getNextMarkdownContentMode(contentMode, { typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED });
                     if (nextMode === 'markdown') return activeIsMarkdownDocument ? 'Switch to Markdown source' : 'Switch to source';
