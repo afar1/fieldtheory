@@ -17,6 +17,9 @@ import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   EMBER_ITEM_ID,
+  LOCAL_WIKI_ADDED_EVENT,
+  LOCAL_WIKI_DELETED_EVENT,
+  LOCAL_WIKI_RENAMED_EVENT,
   dispatchLocalWikiAdded,
   dispatchLocalWikiDeleted,
   dispatchLocalWikiRenamed,
@@ -148,6 +151,13 @@ import {
   type WikiIndexInput,
   type WikiLinkTarget,
 } from '../utils/wikiLinks';
+import {
+  removeWikiIndexPages,
+  renameWikiIndexPages,
+  upsertWikiIndexPages,
+  wikiIndexPagesFromTree,
+  wikiTargetPartsFromUnresolvedTitle,
+} from '../utils/wikiIndexPages';
 
 const SketchView = lazy(() => import('./SketchView'));
 
@@ -3786,7 +3796,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+
+    const { folder, fileName, relPath } = wikiTargetPartsFromUnresolvedTitle(trimmed);
+    const existing = relPath ? await window.wikiAPI?.getPage(relPath) : null;
+    if (existing?.relPath) {
+      dispatchLocalWikiAdded(existing);
+      openWikiPage(existing.relPath);
+      return;
+    }
+
+    const page = await window.wikiAPI?.createFile(folder, fileName);
     if (page?.relPath) {
       dispatchLocalWikiAdded(page);
       openWikiPage(page.relPath);
@@ -8627,22 +8646,59 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => unsubscribe?.();
   }, [openWikiPage]);
 
-  // Keep a flat list of all wiki pages for resolving [[wikilinks]]. Reloaded
-  // on mount and whenever the wiki tree changes so links to newly created
-  // pages resolve without a reopen.
+  // Keep a flat list of all wiki pages for resolving [[wikilinks]]. The sidebar
+  // already patches its tree from local add/rename/delete events; the link index
+  // should follow the same incremental path so clicks work before a full rescan.
+  // Full getTree() reloads stay debounced as a reconciliation backstop.
   useEffect(() => {
-    if (!active) return;
-    const load = async () => {
+    let cancelled = false;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const loadFullIndex = async () => {
       const folders = await window.wikiAPI?.getTree();
-      if (!folders) return;
-      setWikiIndexPages(
-        folders.flatMap((f) => f.files.map((p) => ({ relPath: p.relPath, title: p.title, absPath: p.absPath }))),
-      );
+      if (cancelled || !folders) return;
+      setWikiIndexPages(wikiIndexPagesFromTree(folders));
     };
-    void load();
-    const unsubscribe = window.wikiAPI?.onPageChanged(() => { void load(); });
-    return () => unsubscribe?.();
-  }, [active]);
+
+    const scheduleFullReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        void loadFullIndex();
+      }, 250);
+    };
+
+    void loadFullIndex();
+    const unsubscribe = window.wikiAPI?.onPageChanged(scheduleFullReload);
+
+    const onLocalWikiAdded = (event: Event) => {
+      const page = (event as CustomEvent<WikiPage>).detail;
+      if (!page?.relPath) return;
+      setWikiIndexPages((prev) => upsertWikiIndexPages(prev, page));
+    };
+    const onLocalWikiRenamed = (event: Event) => {
+      const rename = (event as CustomEvent<LibraryRenameEvent>).detail;
+      if (!rename?.oldRelPath || !rename.newRelPath) return;
+      setWikiIndexPages((prev) => renameWikiIndexPages(prev, rename.oldRelPath, rename.newRelPath));
+    };
+    const onLocalWikiDeleted = (event: Event) => {
+      const payload = (event as CustomEvent<{ relPaths: string[] }>).detail;
+      if (!payload?.relPaths?.length) return;
+      setWikiIndexPages((prev) => removeWikiIndexPages(prev, payload.relPaths));
+    };
+
+    window.addEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+    window.addEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+    window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
+
+    return () => {
+      cancelled = true;
+      if (reloadTimer) clearTimeout(reloadTimer);
+      unsubscribe?.();
+      window.removeEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+      window.removeEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+      window.removeEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
+    };
+  }, []);
 
   useEffect(() => {
     if (!active) return;
