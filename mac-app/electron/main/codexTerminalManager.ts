@@ -147,6 +147,7 @@ const HISTORY_SCAN_LIMIT = 250;
 const CODEX_COMMAND = 'codex';
 const CODEX_LAUNCH_FALLBACK_MS = 1200;
 const SAFE_CODEX_LAUNCH_COMMAND_PATTERN = /^codex(?: resume [A-Za-z0-9_-]+)?$/;
+const SAFE_GEMMA_LAUNCH_COMMAND = 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf';
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 const CODEX_INPUT_PLACEHOLDERS = [
   'Run /review on my current changes',
@@ -335,6 +336,7 @@ function sanitizeLaunchCommand(input: unknown): string | null {
   if (typeof input !== 'string') return null;
   const trimmed = input.replace(/[\r\n]+/g, ' ').trim();
   if (!trimmed) return null;
+  if (trimmed === SAFE_GEMMA_LAUNCH_COMMAND) return trimmed;
   return SAFE_CODEX_LAUNCH_COMMAND_PATTERN.test(trimmed) ? trimmed : CODEX_COMMAND;
 }
 
