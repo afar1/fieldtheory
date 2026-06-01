@@ -12072,6 +12072,10 @@ async function initTranscriberSystem(): Promise<void> {
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
   });
+  transcriberManager.setFieldTheoryTerminalInsertionTarget({
+    isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+    insertText: writeTextIntoFocusedCodexTerminal,
+  });
   transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
     const result = await getMeetingManager().stopActiveMeeting();
     if (!result.success) {
