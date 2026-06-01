@@ -1,21 +1,46 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import ContentToolbar, { ContentToolbarMaxwellButton } from '../ContentToolbar';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import ContentToolbar, { ContentToolbarMaxwellButton, getContentToolbarProximityOpacity } from '../ContentToolbar';
+
+const themeMock = vi.hoisted(() => ({
+  value: {
+    accent: '#0f766e',
+    border: '#d1d5db',
+    background: '#faf9f7',
+    bgSecondary: '#f5f4f2',
+    surface1: '#f5f4f2',
+    surface2: '#ffffff',
+    surface3: '#ffffff',
+    text: '#111111',
+    textSecondary: '#666666',
+    success: '#16a34a',
+    isDark: false,
+  },
+}));
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
-    theme: {
-      accent: '#0f766e',
-      border: '#d1d5db',
-      text: '#111111',
-      textSecondary: '#666666',
-      success: '#16a34a',
-      isDark: false,
-    },
+    theme: themeMock.value,
   }),
 }));
 
 describe('ContentToolbar', () => {
+  beforeEach(() => {
+    themeMock.value = {
+      accent: '#0f766e',
+      border: '#d1d5db',
+      background: '#faf9f7',
+      bgSecondary: '#f5f4f2',
+      surface1: '#f5f4f2',
+      surface2: '#ffffff',
+      surface3: '#ffffff',
+      text: '#111111',
+      textSecondary: '#666666',
+      success: '#16a34a',
+      isDark: false,
+    };
+  });
+
   it('shows a clicked state after copying the path', async () => {
     vi.useFakeTimers();
     const onCopyPath = vi.fn(async () => {});
@@ -102,6 +127,143 @@ describe('ContentToolbar', () => {
     expect((spacer?.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag');
   });
 
+  it('dims the toolbar pill until the pointer gets close', () => {
+    const rect = { left: 100, right: 200, top: 50, bottom: 90 };
+
+    expect(getContentToolbarProximityOpacity({ pointerX: -20, pointerY: -20, rect })).toBe(0.6);
+    expect(getContentToolbarProximityOpacity({ pointerX: 150, pointerY: 45, rect })).toBe(1);
+    expect(getContentToolbarProximityOpacity({ pointerX: 150, pointerY: 140, rect })).toBeGreaterThan(0.6);
+    expect(getContentToolbarProximityOpacity({ pointerX: 150, pointerY: 140, rect })).toBeLessThan(1);
+  });
+
+  it('renders the toolbar pill at reduced resting opacity', () => {
+    const { container } = render(
+      <ContentToolbar
+        showCopy={false}
+        onCopyPath={vi.fn()}
+      />
+    );
+
+    const pill = container.querySelector('[data-content-toolbar-pill]') as HTMLDivElement | null;
+    expect(pill?.style.opacity).toBe('0.6');
+    expect(pill?.style.transform).toBe('scale(0.88)');
+  });
+
+  it('groups visible toolbar actions with fewer dividers when fewer groups are shown', () => {
+    const { container, rerender } = render(
+      <ContentToolbar
+        showCopy={false}
+        showTextSize
+        textSize="normal"
+        onTextSizeChange={vi.fn()}
+        onCopyPath={vi.fn()}
+        onToggleTerminal={vi.fn()}
+        onMeetingClick={vi.fn()}
+        maxwellCanAddCurrent
+        onOpenAgent={vi.fn()}
+        onOpenInNewWindow={vi.fn()}
+        onSwitchContentMode={vi.fn()}
+        onToggleFullScreen={vi.fn()}
+      />
+    );
+
+    expect(container.querySelectorAll('[data-content-toolbar-divider]')).toHaveLength(3);
+
+    rerender(
+      <ContentToolbar
+        showCopy={false}
+        showTextSize
+        textSize="normal"
+        onTextSizeChange={vi.fn()}
+        onCopyPath={vi.fn()}
+      />
+    );
+
+    expect(container.querySelectorAll('[data-content-toolbar-divider]')).toHaveLength(1);
+  });
+
+  it('places the terminal button directly before immersive view', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        onToggleTerminal={vi.fn()}
+        onToggleFullScreen={vi.fn()}
+      />
+    );
+
+    const terminalButton = screen.getByRole('button', { name: 'Open Terminal' });
+    const immersiveButton = screen.getByRole('button', { name: 'Enter immersive view' });
+    expect(terminalButton.compareDocumentPosition(immersiveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(terminalButton.nextElementSibling).toBe(immersiveButton);
+  });
+
+  it('shows the content mode icon as a true rendered/markdown toggle', () => {
+    const { rerender } = render(
+      <ContentToolbar
+        showCopy={false}
+        onSwitchContentMode={vi.fn()}
+        contentMode="rendered"
+        contentModeTitle="Switch to Markdown source"
+      />
+    );
+
+    const renderedButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
+    expect(renderedButton.querySelector('polyline')).toBeTruthy();
+    expect(renderedButton.querySelectorAll('path')).toHaveLength(0);
+    expect(renderedButton.style.backgroundColor).toBe('transparent');
+
+    rerender(
+      <ContentToolbar
+        showCopy={false}
+        onSwitchContentMode={vi.fn()}
+        contentMode="markdown"
+        contentModeTitle="Switch to rendered view"
+      />
+    );
+
+    const markdownButton = screen.getByRole('button', { name: 'Switch to rendered view' });
+    expect(markdownButton.querySelectorAll('path')).toHaveLength(3);
+    expect(markdownButton.querySelector('polyline')).toBeNull();
+    expect(markdownButton.style.backgroundColor).not.toBe('transparent');
+  });
+
+  it('aligns the Field Theory dropdown to the toolbar instead of its icon', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        maxwellCanAddCurrent
+      />
+    );
+
+    const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
+    fireEvent.click(fieldTheoryButton);
+
+    expect(fieldTheoryButton.parentElement?.style.position).toBe('');
+    const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
+    expect(menu.style.right).toBe('0px');
+  });
+
+  it('keeps delete in the overflow menu instead of the toolbar', () => {
+    const onDelete = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        onCopyPath={vi.fn()}
+        showDelete
+        onDelete={onDelete}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Customize toolbar' }));
+
+    expect(screen.queryByRole('button', { name: 'Add Delete' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the Field Theory icon for Field Theory commands', () => {
     const { container } = render(
       <ContentToolbarMaxwellButton
@@ -117,6 +279,35 @@ describe('ContentToolbar', () => {
     const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
     expect(fieldTheoryButton.textContent).toBe('');
     expect(container.querySelector('img[src="/field-theory-icon-black.png"]')).toBeTruthy();
+  });
+
+  it('keeps the Field Theory icon visible in dark mode', () => {
+    themeMock.value = {
+      ...themeMock.value,
+      border: '#333842',
+      background: '#15181e',
+      bgSecondary: '#1c1f26',
+      surface1: '#1c1f26',
+      surface2: '#22262e',
+      surface3: '#2a2e38',
+      text: '#e8e8e8',
+      textSecondary: '#a8a8a8',
+      isDark: true,
+    };
+
+    const { container } = render(
+      <ContentToolbarMaxwellButton
+        canAddCurrent
+        items={[]}
+      />
+    );
+
+    const icon = container.querySelector('img[src="/field-theory-icon-black.png"]') as HTMLImageElement | null;
+    expect(icon?.style.opacity).toBe('0.88');
+    expect(icon?.style.filter).toBe('invert(1) brightness(1.35) contrast(1.08)');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
+    expect(icon?.style.opacity).toBe('1');
   });
 
   it('shows local command controls and can remove saved Field Theory pages', () => {
@@ -146,8 +337,16 @@ describe('ContentToolbar', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
-    expect(screen.getByText('Run a local command')).toBeTruthy();
-    expect(screen.getByText('Run a local command').parentElement?.style.width).toBe('max-content');
+    expect(screen.getByText('Local commands')).toBeTruthy();
+    const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
+    expect(menu.style.width).toBe('240px');
+    expect(menu.style.top).toBe('calc(100% + 10px)');
+    expect(menu.style.right).toBe('0px');
+    expect(menu.style.padding).toBe('5px');
+    expect(menu.style.gap).toBe('2px');
+    expect(menu.style.backgroundColor).toBe('#f5f4f2');
+    expect(menu.style.borderRadius).toBe('8px');
+    expect(menu.style.boxShadow).toBe('none');
     expect(screen.getByText('A Maxwell Page').compareDocumentPosition(screen.getByText('Z Maxwell Page')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('Commands/A Maxwell Page')).toBeNull();
     fireEvent.click(screen.getAllByText('Run')[0]);
@@ -198,5 +397,47 @@ describe('ContentToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     fireEvent.click(screen.getByText('remove current page from Field Theory'));
     expect(onRemoveItem).toHaveBeenCalledWith('current-page');
+  });
+
+  it('keeps text style controls inside a bounded menu grid', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        typographyPreset="note"
+        typographyPresetOptions={[
+          { id: 'book', label: 'Book', title: 'Book font', fontFamily: 'Georgia, serif' },
+          { id: 'note', label: 'Note', title: 'Note font', fontFamily: 'system-ui' },
+          { id: 'draft', label: 'Draft', title: 'Draft font', fontFamily: 'monospace' },
+        ]}
+        onTypographyPresetChange={vi.fn()}
+        showTextSize
+        textSize="small"
+        onTextSizeChange={vi.fn()}
+        lineHeight="tight"
+        lineHeightOptions={[
+          { id: 'tight', label: 'Tight', title: 'Tight lines' },
+          { id: 'normal', label: 'Normal', title: 'Normal lines' },
+          { id: 'loose', label: 'Loose', title: 'Loose lines' },
+        ]}
+        onLineHeightChange={vi.fn()}
+        unorderedListMarker="dash"
+        onUnorderedListMarkerChange={vi.fn()}
+        todoMarker="square"
+        onTodoMarkerChange={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Text style'));
+
+    const menu = screen.getByTitle('Book font').closest('div[style*="width: 300px"]') as HTMLDivElement | null;
+    expect(menu).toBeTruthy();
+    expect(menu?.style.top).toBe('calc(100% + 10px)');
+    expect(menu?.style.right).toBe('0px');
+    expect(menu?.style.padding).toBe('5px');
+    expect(menu?.style.gap).toBe('2px');
+    const control = screen.getByTitle('Book font').parentElement as HTMLDivElement;
+    expect(control.style.display).toBe('grid');
+    expect(control.style.gridAutoColumns).toBe('minmax(0, 1fr)');
+    expect((screen.getByTitle('Draft font') as HTMLButtonElement).style.minWidth).toBe('0');
   });
 });
