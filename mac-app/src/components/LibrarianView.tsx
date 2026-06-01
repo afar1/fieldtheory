@@ -7,9 +7,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fra
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
-import ContentToolbar, { ContentToolbarFolderButton, ContentToolbarMaxwellButton } from './ContentToolbar';
-import ContentModeToggleButton from './ContentModeToggleButton';
-import ImmersiveToggle, { FOCUS_TOOLBAR_BUTTON_WIDTH } from './ImmersiveToggle';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import AgentKickoffModal from './AgentKickoffModal';
 import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -9223,7 +9221,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {focusToolbarControlsVisible && (
                 <ContentToolbar
                   filePath={activeReading?.path || undefined}
-                  isFullScreen={isFullScreen}
+                  isFullScreen={isFullScreen || focusImmersive}
+                  onToggleFullScreen={toggleFocusChromeShortcut}
                   dragSpacer={!focusChromeActive}
                   textSize={textSize}
                   onTextSizeChange={setTextSize}
@@ -9253,8 +9252,49 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   showFolder={!activeReadingToolbarIdentityVisible}
                   onCopy={shareStatus?.shared ? copyShareLink : undefined}
                   showCopy={!!shareStatus?.shared}
+                  shareStatus={sharedFileStatus}
+                  isSharing={isTogglingSharedFile}
+                  onToggleShare={handleToggleSharedFile}
+                  showShare={sharedFilesAvailable && (sharedFilesCanWrite || !!sharedFileStatus?.shared) && activeIsMarkdownDocument}
+                  shareTitle="Add to River (shared)"
+                  sharedTitle="Remove from River (shared)"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathTitle="Copy selected text or file path (⌘C)"
+                  onOpenInNewWindow={activeReadingPath && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external') ? openActiveDocumentInWindow : undefined}
+                  onSwitchContentMode={() => {
+                    const nextMode = getNextMarkdownContentMode(contentMode, { typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED });
+                    if (nextMode === 'rendered') {
+                      void exitEditMode();
+                    } else if (nextMode === 'typedown') {
+                      void switchToTypedownMode();
+                    } else if (activeReading) {
+                      enterEditMode();
+                    }
+                  }}
+                  contentModeTitle={(() => {
+                    const nextMode = getNextMarkdownContentMode(contentMode, { typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED });
+                    if (nextMode === 'markdown') return activeIsMarkdownDocument ? 'Switch to Markdown source' : 'Switch to source';
+                    if (nextMode === 'typedown') return 'Switch to Typedown';
+                    return 'Switch to rendered view';
+                  })()}
+                  contentModeDisabled={activeIsSourceOnlyDocument}
+                  onToggleHtmlLayout={activeIsHtmlDocument ? toggleActiveHtmlLayout : undefined}
+                  htmlLayoutTitle={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
+                  htmlLayoutActive={activeHtmlLayout === 'full'}
+                  onToggleTerminal={() => toggleCodexTerminalPanel()}
+                  terminalVisible={codexTerminalVisible}
+                  meetingTitle={meetingToolbarTitle}
+                  meetingRecording={meetingToolbarRecording}
+                  meetingDisabled={meetingToolbarDisabled}
+                  onMeetingClick={meetingToolbarVisible ? handleMeetingToolbarClick : undefined}
+                  maxwellItems={maxwellToolbarItems}
+                  maxwellCanAddCurrent={!!activeMaxwellItem}
+                  maxwellCurrentItemId={activeMaxwellItem?.id ?? null}
+                  onMaxwellAddCurrent={addActivePageToMaxwell}
+                  onMaxwellVisitItem={visitMaxwellItem}
+                  onMaxwellRunItem={runMaxwellItem}
+                  onMaxwellRemoveItem={removeMaxwellItem}
+                  onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
                 />
               )}
               {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
@@ -9291,119 +9331,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     </span>
                   ))}
                 </div>
-              )}
-
-              {meetingToolbarVisible && (
-                <button
-                  type="button"
-                  onClick={() => void handleMeetingToolbarClick()}
-                  disabled={meetingToolbarDisabled}
-                  title={meetingToolbarTitle}
-                  aria-label={meetingToolbarTitle}
-                  style={{
-                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    padding: 0,
-                    color: meetingToolbarRecording ? '#dc2626' : theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: meetingToolbarDisabled ? 'default' : 'pointer',
-                    opacity: meetingToolbarDisabled ? 0.65 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'background-color 0.15s ease, color 0.15s ease',
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (meetingToolbarDisabled) return;
-                    e.currentTarget.style.backgroundColor = meetingToolbarRecording
-                      ? 'rgba(220,38,38,0.08)'
-                      : theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                    e.currentTarget.style.color = meetingToolbarRecording ? '#b91c1c' : theme.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.color = meetingToolbarRecording ? '#dc2626' : theme.textSecondary;
-                  }}
-                >
-                  {meetingToolbarRecording ? (
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                      <rect x="4" y="4" width="8" height="8" rx="1.5" />
-                    </svg>
-                  ) : (
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
-                      <circle cx="8" cy="8" r="2.25" fill="currentColor" />
-                    </svg>
-                  )}
-                </button>
-              )}
-
-              {focusToolbarControlsVisible && (
-                <ContentToolbarMaxwellButton
-                  items={maxwellToolbarItems}
-                  canAddCurrent={!!activeMaxwellItem}
-                  currentItemId={activeMaxwellItem?.id ?? null}
-                  onAddCurrent={addActivePageToMaxwell}
-                  onVisitItem={visitMaxwellItem}
-                  onRunItem={runMaxwellItem}
-                  onRemoveItem={removeMaxwellItem}
-                />
-              )}
-
-              {/* Agent kickoff — opens a popup that dispatches the user's
-                  locally-installed Claude Code / Codex CLI against this file. */}
-              {LIBRARIAN_AGENT_KICKOFF_ENABLED && focusToolbarControlsVisible && activeReading?.path
-                && (selectedItemType === 'wiki' || selectedItemType === 'external')
-                && (
-                <button
-                  type="button"
-                  onClick={() => setAgentKickoffOpen(true)}
-                  title="Run a local agent on this file (Claude Code or Codex)"
-                  aria-label="Run agent on this file"
-                  style={{
-                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    padding: 0,
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    transition: 'background-color 0.15s ease, color 0.15s ease',
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                    e.currentTarget.style.color = theme.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.color = theme.textSecondary;
-                  }}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v4" />
-                    <path d="m6.41 6.41-2.83-2.83" />
-                    <path d="M2 12h4" />
-                    <path d="m6.41 17.59-2.83 2.83" />
-                    <path d="M12 18v4" />
-                    <path d="m17.59 17.59 2.83 2.83" />
-                    <path d="M18 12h4" />
-                    <path d="m17.59 6.41 2.83-2.83" />
-                    <circle cx="12" cy="12" r="4" />
-                  </svg>
-                </button>
               )}
 
               {fileFindOpen && (
@@ -9498,187 +9425,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 </button>
               )}
 
-              {/* Content mode toggle - raw markdown / rendered view */}
-              {focusToolbarControlsVisible && sharedFilesAvailable && (sharedFilesCanWrite || sharedFileStatus?.shared) && activeIsMarkdownDocument && (
-                <button
-                  type="button"
-                  onClick={handleToggleSharedFile}
-                  disabled={isTogglingSharedFile}
-                  style={{
-                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    padding: 0,
-                    fontSize: '11px',
-                    color: sharedFileStatus?.shared ? '#2563eb' : (theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)'),
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: isTogglingSharedFile ? 'default' : 'pointer',
-                    opacity: isTogglingSharedFile ? 0.6 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  title={sharedFileStatus?.shared ? 'Remove from River (shared)' : 'Add to River (shared)'}
-                  aria-label={sharedFileStatus?.shared ? 'Remove from River (shared)' : 'Add to River (shared)'}
-                >
-                  <SidebarRiverIcon
-                    color={sharedFileStatus?.shared ? '#2563eb' : (theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)')}
-                    style={{ opacity: isTogglingSharedFile ? 0.35 : 1 }}
-                  />
-                </button>
-              )}
-              {focusToolbarControlsVisible && activeReadingPath
-                && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
-                && (
-                  <button
-                    type="button"
-                    onClick={openActiveDocumentInWindow}
-                    title="Open in New Window"
-                    aria-label="Open in New Window"
-                    style={{
-                      height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                      width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                      boxSizing: 'border-box',
-                      padding: 0,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '5px',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      // @ts-ignore - opt out of the drag region so the click lands.
-                      WebkitAppRegion: 'no-drag',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                      e.currentTarget.style.color = theme.text;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.color = theme.textSecondary;
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M6 3H3.75C3.06 3 2.5 3.56 2.5 4.25v8C2.5 12.94 3.06 13.5 3.75 13.5h8c.69 0 1.25-.56 1.25-1.25V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M9 2.5h4.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M8.5 7.5 13.25 2.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
-                )}
-              {focusToolbarControlsVisible && (
-                <ContentModeToggleButton
-                  mode={contentMode}
-                  disabled={activeIsSourceOnlyDocument}
-                  sourceLabel={activeIsMarkdownDocument ? 'Switch to Markdown source' : 'Switch to source'}
-                  onSwitchToSource={() => {
-                    if (activeReading) enterEditMode();
-                  }}
-                  onSwitchToRendered={() => {
-                    void exitEditMode();
-                  }}
-                  onSwitchToTypedown={() => {
-                    void switchToTypedownMode();
-                  }}
-                  typedownEnabled={activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED}
-                />
-              )}
-              {focusToolbarControlsVisible && activeIsHtmlDocument && (
-                <button
-                  type="button"
-                  onClick={toggleActiveHtmlLayout}
-                  title={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
-                  aria-label={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
-                  aria-pressed={activeHtmlLayout === 'full'}
-                  style={{
-                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    boxSizing: 'border-box',
-                    padding: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: activeHtmlLayout === 'full' ? theme.text : theme.textSecondary,
-                    backgroundColor: activeHtmlLayout === 'full'
-                      ? (theme.isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                      : 'transparent',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                    // @ts-ignore - toolbar buttons should receive clicks.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  onMouseEnter={(event) => {
-                    event.currentTarget.style.backgroundColor = theme.hoverBg;
-                  }}
-                  onMouseLeave={(event) => {
-                    event.currentTarget.style.backgroundColor = activeHtmlLayout === 'full'
-                      ? (theme.isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                      : 'transparent';
-                  }}
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <rect x="2.5" y="3" width="11" height="10" rx="1.25" stroke="currentColor" strokeWidth="1.35" />
-                    {activeHtmlLayout === 'full' ? (
-                      <path d="M5 6h6M5 8h6M5 10h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    ) : (
-                      <path d="M6 6h4M6 8h4M6 10h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    )}
-                  </svg>
-                </button>
-              )}
-              {focusToolbarControlsVisible && (
-                <button
-                  type="button"
-                  onClick={() => toggleCodexTerminalPanel()}
-                  title={codexTerminalVisible ? 'Close Terminal' : 'Open Terminal'}
-                  aria-label={codexTerminalVisible ? 'Close Terminal' : 'Open Terminal'}
-                  style={{
-                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    boxSizing: 'border-box',
-                    padding: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: codexTerminalVisible ? '#10b981' : theme.textSecondary,
-                    backgroundColor: codexTerminalVisible
-                      ? (theme.isDark ? 'rgba(16,185,129,0.14)' : 'rgba(16,185,129,0.10)')
-                      : 'transparent',
-                    border: `1px solid ${codexTerminalVisible ? 'rgba(16,185,129,0.36)' : theme.border}`,
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
-                    <path d="m5.25 6 2 2-2 2M8.25 10.25h2.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              )}
-
-              {/* Immersive/fullscreen toggle sits to the right of the mode
-                  toggle so the editor controls stay grouped together. */}
-              <div
-                style={{
-                  marginLeft: focusToolbarControlsVisible ? undefined : 'auto',
-                  opacity: focusChromeScopedItemOpacity,
-                  pointerEvents: focusChromeScopedItemVisible ? 'auto' : 'none',
-                  transition: 'opacity 90ms linear',
-                }}
-              >
-                <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleFocusChromeShortcut} />
-              </div>
             </div>
           </div>
         )}
