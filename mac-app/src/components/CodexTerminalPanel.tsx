@@ -83,6 +83,13 @@ export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'alt
   return null;
 }
 
+export function isTerminalPasteSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey'>): boolean {
+  return event.metaKey
+    && !event.altKey
+    && !event.ctrlKey
+    && event.key.toLowerCase() === 'v';
+}
+
 export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
   return event.key === 'Tab'
     && event.ctrlKey
@@ -776,6 +783,13 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
+      if (isTerminalPasteSequence(event)) {
+        event.preventDefault();
+        void window.codexTerminalAPI?.readClipboardText().then((text) => {
+          if (text) void window.codexTerminalAPI?.input(sessionId, text);
+        });
+        return false;
+      }
       if (isTerminalPanelVisibilityToggleSequence(event)) {
         event.preventDefault();
         onTerminalFocusChange?.(false);
