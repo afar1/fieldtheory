@@ -43,6 +43,7 @@ import {
   type WikiLinkTarget,
   upsertMarkdownLinkRelationDocument,
 } from '../utils/wikiLinks';
+import { wikiTargetPartsFromUnresolvedTitle } from '../utils/wikiIndexPages';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
 const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
@@ -729,7 +730,15 @@ export default function CommandsView({
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+
+    const { folder, fileName, relPath } = wikiTargetPartsFromUnresolvedTitle(trimmed);
+    const existing = relPath ? await window.wikiAPI?.getPage(relPath) : null;
+    if (existing?.relPath) {
+      void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: existing.relPath });
+      return;
+    }
+
+    const page = await window.wikiAPI?.createFile(folder, fileName);
     if (page?.relPath) {
       void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: page.relPath });
     }
