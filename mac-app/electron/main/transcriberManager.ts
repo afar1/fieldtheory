@@ -143,6 +143,11 @@ type FieldTheoryMarkdownInsertionTarget = {
   insertText: (text: string) => boolean;
 };
 
+type FieldTheoryTerminalInsertionTarget = {
+  isAvailable: () => boolean;
+  insertText: (text: string) => boolean;
+};
+
 type MeetingCaptureHotkeyHandler = () => Promise<void>;
 
 export type { HotMicEngineReadiness, HotMicEngineStatus };
@@ -246,6 +251,7 @@ export class TranscriberManager extends EventEmitter {
   private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
   private lastExternalPasteTargetBundleId: string | null = null;
   private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
+  private fieldTheoryTerminalInsertionTarget: FieldTheoryTerminalInsertionTarget | null = null;
   private activeRecordingSource: RecordingInputSource | null = null;
   private activeMeetingCapture: MeetingCaptureSession | null = null;
   private meetingCaptureHotkeyHandler: MeetingCaptureHotkeyHandler | null = null;
@@ -382,6 +388,10 @@ export class TranscriberManager extends EventEmitter {
 
   setFieldTheoryMarkdownInsertionTarget(target: FieldTheoryMarkdownInsertionTarget | null): void {
     this.fieldTheoryMarkdownInsertionTarget = target;
+  }
+
+  setFieldTheoryTerminalInsertionTarget(target: FieldTheoryTerminalInsertionTarget | null): void {
+    this.fieldTheoryTerminalInsertionTarget = target;
   }
 
   setMeetingCaptureHotkeyHandler(handler: MeetingCaptureHotkeyHandler | null): void {
@@ -4685,9 +4695,19 @@ export class TranscriberManager extends EventEmitter {
       && (this.fieldTheoryMarkdownInsertionTarget?.isAvailable() ?? false);
   }
 
+  private canInsertIntoFieldTheoryTerminal(frontmostBundleId: string | null): boolean {
+    return this.isFieldTheoryBundleId(frontmostBundleId)
+      && (this.fieldTheoryTerminalInsertionTarget?.isAvailable() ?? false);
+  }
+
   private insertTextIntoFieldTheoryMarkdown(text: string): boolean {
     if (!text) return false;
     return this.fieldTheoryMarkdownInsertionTarget?.insertText(text) ?? false;
+  }
+
+  private insertTextIntoFieldTheoryTerminal(text: string): boolean {
+    if (!text) return false;
+    return this.fieldTheoryTerminalInsertionTarget?.insertText(text) ?? false;
   }
 
   private async typeIntoAppWithClipboardSync(
@@ -4716,8 +4736,23 @@ export class TranscriberManager extends EventEmitter {
   private async pasteTextIntoResolvedTarget(
     text: string,
     forcedTargetBundleId: string | null,
-    clearAfter: boolean
+    clearAfter: boolean,
+    useFieldTheoryTerminalTarget = false
   ): Promise<boolean> {
+    if (useFieldTheoryTerminalTarget) {
+      if (this.insertTextIntoFieldTheoryTerminal(text)) {
+        this.skipNextPasteFailedNotification = true;
+        return true;
+      }
+      clipboard.writeText(text);
+      this.clipboardManager?.syncClipboardHash();
+      this.emitPasteFailureAndMaybeClear(
+        'Field Theory terminal paste failed - copied to clipboard',
+        clearAfter
+      );
+      return false;
+    }
+
     if (forcedTargetBundleId) {
       const result = await this.typeIntoAppWithClipboardSync(forcedTargetBundleId, text, false);
       if (!result.success) {
@@ -4763,11 +4798,13 @@ export class TranscriberManager extends EventEmitter {
     // - If Field Theory is frontmost (user clicked our UI), fall back to the
     //   last known external app and inject there.
     const frontmostBundleId = await this.getFrontmostAppBundleId();
-    const useFieldTheoryMarkdownTarget = this.canInsertIntoFieldTheoryMarkdown(frontmostBundleId);
+    const useFieldTheoryTerminalTarget = this.canInsertIntoFieldTheoryTerminal(frontmostBundleId);
+    const useFieldTheoryMarkdownTarget = !useFieldTheoryTerminalTarget
+      && this.canInsertIntoFieldTheoryMarkdown(frontmostBundleId);
     const forcedTargetBundleId = useFieldTheoryMarkdownTarget
       ? null
       : this.resolveStandardPasteTargetBundleId(frontmostBundleId);
-    if (this.isFieldTheoryBundleId(frontmostBundleId) && !useFieldTheoryMarkdownTarget && !forcedTargetBundleId) {
+    if (this.isFieldTheoryBundleId(frontmostBundleId) && !useFieldTheoryTerminalTarget && !useFieldTheoryMarkdownTarget && !forcedTargetBundleId) {
       this.emitPasteFailureAndMaybeClear(
         'Field Theory has focus - press Cmd+V in your target app',
         clearAfter
@@ -4796,8 +4833,8 @@ export class TranscriberManager extends EventEmitter {
 
     // Detect app capabilities from the effective paste target.
     const effectiveTargetBundleId = forcedTargetBundleId ?? frontmostBundleId;
-    const isTerminal = isTerminalApp(effectiveTargetBundleId);
-    const isIDE = isIDEWithTerminal(effectiveTargetBundleId);
+    const isTerminal = useFieldTheoryTerminalTarget || isTerminalApp(effectiveTargetBundleId);
+    const isIDE = !useFieldTheoryTerminalTarget && isIDEWithTerminal(effectiveTargetBundleId);
     const pasteImagesAsPaths = isTerminal || isIDE;
     const mixedMultimodalPaste = shouldPasteMixedStackImagesFirst(effectiveTargetBundleId, items);
     const orderedItems = orderStackItemsForPaste(items, effectiveTargetBundleId);
@@ -4853,7 +4890,7 @@ export class TranscriberManager extends EventEmitter {
         }
 
         const payload = this.addFollowupTypingSpace(textContent);
-        if (!(await this.pasteTextIntoResolvedTarget(payload, forcedTargetBundleId, clearAfter))) {
+        if (!(await this.pasteTextIntoResolvedTarget(payload, forcedTargetBundleId, clearAfter, useFieldTheoryTerminalTarget))) {
           return;
         }
 
@@ -4878,9 +4915,23 @@ export class TranscriberManager extends EventEmitter {
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
-            clipboard.writeText(`${imagePath} `);
-            this.clipboardManager?.syncClipboardHash();
-            await this.pasteText(forcedTargetBundleId);
+            const imagePathText = `${imagePath} `;
+            if (useFieldTheoryTerminalTarget) {
+              if (!this.insertTextIntoFieldTheoryTerminal(imagePathText)) {
+                clipboard.writeText(imagePathText);
+                this.clipboardManager?.syncClipboardHash();
+                this.emitPasteFailureAndMaybeClear(
+                  'Field Theory terminal paste failed - copied to clipboard',
+                  clearAfter
+                );
+                return;
+              }
+              this.skipNextPasteFailedNotification = true;
+            } else {
+              clipboard.writeText(imagePathText);
+              this.clipboardManager?.syncClipboardHash();
+              await this.pasteText(forcedTargetBundleId);
+            }
           }
         } else {
           // For non-terminals, paste the actual image so multimodal apps can see it.
@@ -4898,7 +4949,7 @@ export class TranscriberManager extends EventEmitter {
       // Blank line between items for all apps.
       if (!mixedMultimodalPaste && itemIdx < orderedItems.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
-        if (!(await this.pasteTextIntoResolvedTarget('\n', forcedTargetBundleId, clearAfter))) {
+        if (!(await this.pasteTextIntoResolvedTarget('\n', forcedTargetBundleId, clearAfter, useFieldTheoryTerminalTarget))) {
           return;
         }
       }
