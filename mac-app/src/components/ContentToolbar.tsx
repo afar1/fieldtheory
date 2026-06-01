@@ -13,10 +13,14 @@ const ICON_SIZE_SMALL = 13; // Standard size for less prominent icons
 const COPY_PATH_FEEDBACK_MS = 1600;
 const FIELD_THEORY_ICON_URL = `${import.meta.env.BASE_URL}field-theory-icon-black.png`;
 const CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY = 'fieldtheory.contentToolbar.pinnedActions.v2';
+const CONTENT_TOOLBAR_SCALE = 0.88;
+const CONTENT_TOOLBAR_RESTING_OPACITY = 0.6;
+const CONTENT_TOOLBAR_REVEAL_DISTANCE_PX = 104;
+const CONTENT_TOOLBAR_FULL_OPACITY_DISTANCE_PX = 18;
 
 type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
 
-const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'terminal', 'meeting', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'immersive', 'copy', 'folder', 'rename', 'edit'];
+const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'meeting', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
 const DEFAULT_PINNED_TOOLBAR_ACTIONS: ToolbarActionId[] = PINNED_TOOLBAR_ACTION_ORDER;
 const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: ToolbarActionId[] }> = [
   { id: 'format', label: 'Format', actions: ['textstyle', 'contentmode', 'htmllayout'] },
@@ -25,6 +29,12 @@ const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: Toolbar
   { id: 'tools', label: 'Tools', actions: ['terminal', 'meeting'] },
   { id: 'view', label: 'View', actions: ['newwindow', 'immersive'] },
   { id: 'file', label: 'File', actions: ['folder', 'rename', 'edit'] },
+];
+const VISIBLE_TOOLBAR_ACTION_GROUPS: Array<{ id: string; actions: ToolbarActionId[] }> = [
+  { id: 'document', actions: ['textstyle', 'copypath'] },
+  { id: 'field', actions: ['meeting', 'fieldtheory', 'agent', 'share'] },
+  { id: 'view', actions: ['newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive'] },
+  { id: 'file', actions: ['copy', 'folder', 'rename', 'edit'] },
 ];
 
 const TEXT_SIZE_OPTIONS: Array<{
@@ -123,6 +133,7 @@ interface ContentToolbarProps {
 
   onOpenInNewWindow?: () => void;
   onSwitchContentMode?: () => void | Promise<void>;
+  contentMode?: 'markdown' | 'rendered' | 'typedown';
   contentModeTitle?: string;
   contentModeDisabled?: boolean;
   onToggleHtmlLayout?: () => void;
@@ -149,6 +160,40 @@ export type ContentToolbarMaxwellItem = {
   title: string;
   subtitle: string;
 };
+
+export function getContentToolbarProximityOpacity(input: {
+  pointerX: number;
+  pointerY: number;
+  rect: Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'>;
+  revealDistancePx?: number;
+  fullOpacityDistancePx?: number;
+  restingOpacity?: number;
+}): number {
+  const restingOpacity = Math.max(0, Math.min(1, input.restingOpacity ?? CONTENT_TOOLBAR_RESTING_OPACITY));
+  const revealDistancePx = Math.max(0, input.revealDistancePx ?? CONTENT_TOOLBAR_REVEAL_DISTANCE_PX);
+  const fullOpacityDistancePx = Math.max(0, Math.min(revealDistancePx, input.fullOpacityDistancePx ?? CONTENT_TOOLBAR_FULL_OPACITY_DISTANCE_PX));
+  const { bottom, left, right, top } = input.rect;
+  if (
+    !Number.isFinite(input.pointerX) ||
+    !Number.isFinite(input.pointerY) ||
+    !Number.isFinite(bottom) ||
+    !Number.isFinite(left) ||
+    !Number.isFinite(right) ||
+    !Number.isFinite(top) ||
+    revealDistancePx <= 0
+  ) {
+    return restingOpacity;
+  }
+
+  const dx = input.pointerX < left ? left - input.pointerX : input.pointerX > right ? input.pointerX - right : 0;
+  const dy = input.pointerY < top ? top - input.pointerY : input.pointerY > bottom ? input.pointerY - bottom : 0;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= fullOpacityDistancePx) return 1;
+  if (distance >= revealDistancePx) return restingOpacity;
+
+  const fadeRatio = 1 - ((distance - fullOpacityDistancePx) / Math.max(1, revealDistancePx - fullOpacityDistancePx));
+  return Number((restingOpacity + (1 - restingOpacity) * fadeRatio).toFixed(3));
+}
 
 export function ContentToolbarFolderButton({
   onShowInFolder,
@@ -216,8 +261,13 @@ export function ContentToolbarMaxwellButton({
   const { theme } = useTheme();
   const [maxwellMenuOpen, setMaxwellMenuOpen] = useState(false);
   const maxwellMenuRef = useRef<HTMLDivElement | null>(null);
-  const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-  const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+  const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+  const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
+  const menuBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
+  const menuBorder = theme.border;
+  const menuText = theme.text;
+  const menuMutedText = theme.textSecondary;
+  const menuButtonBackground = theme.isDark ? theme.surface3 : theme.surface2;
   const sortedItems = [...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
   const currentItemSaved = Boolean(currentItemId && items.some((item) => item.id === currentItemId));
 
@@ -245,7 +295,6 @@ export function ContentToolbarMaxwellButton({
     <div
       ref={maxwellMenuRef}
       style={{
-        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         marginLeft: '2px',
@@ -290,8 +339,8 @@ export function ContentToolbarMaxwellButton({
             height: '14px',
             display: 'block',
             objectFit: 'contain',
-            opacity: maxwellMenuOpen ? 0.94 : 0.72,
-            filter: theme.isDark ? 'invert(1)' : 'none',
+            opacity: theme.isDark ? (maxwellMenuOpen ? 1 : 0.88) : (maxwellMenuOpen ? 0.94 : 0.72),
+            filter: theme.isDark ? 'invert(1) brightness(1.35) contrast(1.08)' : 'none',
           }}
         />
       </button>
@@ -300,44 +349,42 @@ export function ContentToolbarMaxwellButton({
         <div
           style={{
             position: 'absolute',
-            top: '28px',
+            top: 'calc(100% + 10px)',
             right: 0,
             zIndex: 21,
-            width: 'max-content',
-            minWidth: '176px',
+            width: '240px',
             maxWidth: 'min(260px, calc(100vw - 24px))',
             padding: '5px',
             borderRadius: '8px',
-            border: `1px solid ${theme.border}`,
-            backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
-            boxShadow: theme.isDark ? '0 12px 30px rgba(0,0,0,0.32)' : '0 12px 30px rgba(0,0,0,0.14)',
-            backdropFilter: 'blur(14px)',
+            border: `1px solid ${menuBorder}`,
+            backgroundColor: menuBackground,
+            boxShadow: 'none',
             display: 'flex',
             flexDirection: 'column',
-            gap: '4px',
+            gap: '2px',
           }}
         >
           <div
             style={{
-              padding: '1px 5px 3px',
-              color: theme.textSecondary,
-              fontSize: '10px',
-              fontWeight: 600,
+              padding: '6px 9px 7px',
+              color: menuMutedText,
+              fontSize: '11px',
+              fontWeight: 700,
               textAlign: 'left',
             }}
           >
-            Run a local command
+            Local commands
           </div>
           {sortedItems.map((item) => (
             <div
               key={item.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'auto minmax(72px, max-content) auto auto',
+                gridTemplateColumns: '18px minmax(0, 1fr) auto 20px',
                 gap: '4px',
                 alignItems: 'center',
-                padding: '2px',
-                borderRadius: '6px',
+                padding: '3px 4px',
+                borderRadius: '8px',
               }}
             >
               <button
@@ -352,7 +399,7 @@ export function ContentToolbarMaxwellButton({
                   width: '18px',
                   height: '20px',
                   padding: 0,
-                  color: theme.textSecondary,
+                  color: menuMutedText,
                   backgroundColor: 'transparent',
                   border: 'none',
                   borderRadius: '5px',
@@ -362,7 +409,7 @@ export function ContentToolbarMaxwellButton({
                   justifyContent: 'center',
                 }}
               >
-                <SidebarMarkdownIcon color={theme.textSecondary} />
+                <SidebarMarkdownIcon color={menuMutedText} />
               </button>
               <div
                 title={item.subtitle}
@@ -372,7 +419,7 @@ export function ContentToolbarMaxwellButton({
                   textAlign: 'left',
                 }}
               >
-                <div style={{ fontSize: '11px', lineHeight: 1.25, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: '12px', lineHeight: 1.25, color: menuText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {item.title}
                 </div>
               </div>
@@ -386,10 +433,10 @@ export function ContentToolbarMaxwellButton({
                 style={{
                   height: '20px',
                   padding: '0 6px',
-                  color: theme.textSecondary,
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                  color: menuText,
+                  backgroundColor: menuButtonBackground,
                   border: 'none',
-                  borderRadius: '5px',
+                  borderRadius: '8px',
                   cursor: 'pointer',
                   fontSize: '10px',
                   fontWeight: 600,
@@ -408,7 +455,7 @@ export function ContentToolbarMaxwellButton({
                   width: '20px',
                   height: '20px',
                   padding: 0,
-                  color: theme.textSecondary,
+                  color: menuMutedText,
                   backgroundColor: 'transparent',
                   border: 'none',
                   borderRadius: '5px',
@@ -423,7 +470,7 @@ export function ContentToolbarMaxwellButton({
             </div>
           ))}
           {items.length === 0 && (
-            <div style={{ padding: '4px 8px 6px', color: theme.textSecondary, fontSize: '10px', fontStyle: 'italic', lineHeight: 1.35, textAlign: 'right' }}>
+            <div style={{ padding: '5px 8px 7px', color: menuMutedText, fontSize: '11px', fontStyle: 'italic', lineHeight: 1.35, textAlign: 'right' }}>
               No saved Field Theory pages yet.
             </div>
           )}
@@ -441,10 +488,10 @@ export function ContentToolbarMaxwellButton({
               height: '24px',
               alignSelf: 'flex-end',
               padding: '0 9px',
-              color: canAddCurrent ? theme.textSecondary : theme.textSecondary,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-              border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}`,
-              borderRadius: '5px',
+              color: menuMutedText,
+              backgroundColor: menuButtonBackground,
+              border: `1px solid ${menuBorder}`,
+              borderRadius: '8px',
               cursor: canAddCurrent ? 'pointer' : 'default',
               opacity: canAddCurrent ? 1 : 0.5,
               fontSize: '10px',
@@ -508,6 +555,7 @@ export default function ContentToolbar({
   copyPathTitle = 'Copy file path (⌘C)',
   onOpenInNewWindow,
   onSwitchContentMode,
+  contentMode = 'rendered',
   contentModeTitle = 'Switch content mode',
   contentModeDisabled = false,
   onToggleHtmlLayout,
@@ -534,6 +582,7 @@ export default function ContentToolbar({
   const [copyPathHovered, setCopyPathHovered] = useState(false);
   const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
   const [customizeMenuOpen, setCustomizeMenuOpen] = useState(false);
+  const [toolbarPointerOpacity, setToolbarPointerOpacity] = useState(CONTENT_TOOLBAR_RESTING_OPACITY);
   const [pinnedActions, setPinnedActions] = useState<ToolbarActionId[]>(() => {
     try {
       const parsed = JSON.parse(window.localStorage.getItem(CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY) ?? 'null');
@@ -544,6 +593,7 @@ export default function ContentToolbar({
       return DEFAULT_PINNED_TOOLBAR_ACTIONS;
     }
   });
+  const toolbarPillRef = useRef<HTMLDivElement | null>(null);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
   const customizeMenuRef = useRef<HTMLDivElement | null>(null);
   const copyPathLocalTimerRef = useRef<number | null>(null);
@@ -601,6 +651,22 @@ export default function ContentToolbar({
         window.clearTimeout(copyPathLocalTimerRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const rect = toolbarPillRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const nextOpacity = getContentToolbarProximityOpacity({
+        pointerX: event.clientX,
+        pointerY: event.clientY,
+        rect,
+      });
+      setToolbarPointerOpacity((current) => current === nextOpacity ? current : nextOpacity);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    return () => window.removeEventListener('pointermove', handlePointerMove);
   }, []);
 
   useEffect(() => {
@@ -709,16 +775,62 @@ export default function ContentToolbar({
 
   const availableToolbarActions = PINNED_TOOLBAR_ACTION_ORDER.filter(canUseToolbarAction);
   const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id));
-  const pillBackground = theme.isDark ? '#27272b' : '#f1eee8';
-  const pillBorder = theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)';
-  const toolbarIconMuted = theme.isDark ? 'rgba(234,234,242,0.42)' : 'rgba(20,20,24,0.44)';
-  const toolbarIconPrimary = theme.isDark ? 'rgba(245,245,251,0.84)' : 'rgba(20,20,24,0.72)';
-  const toolbarIconStrong = theme.isDark ? 'rgba(245,245,251,0.92)' : 'rgba(14,14,18,0.9)';
-  const toolbarHover = theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const hasCustomizeMenuActions = availableToolbarActions.length > 0 || Boolean(showDelete && onDelete);
+  const pillBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
+  const pillBorder = theme.border;
+  const toolbarIconMuted = theme.textSecondary;
+  const toolbarIconPrimary = theme.textSecondary;
+  const toolbarIconStrong = theme.text;
+  const toolbarHover = theme.isDark ? theme.surface3 : theme.surface2;
+  const toolbarActiveBackground = theme.isDark ? theme.surface3 : theme.surface2;
+  const toolbarPillOpacity = typographyMenuOpen || customizeMenuOpen ? 1 : toolbarPointerOpacity;
 
-  const toolbarDivider = (
-    <span aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: pillBorder, flexShrink: 0 }} />
+  const toolbarActionVisibleGroup = (id: ToolbarActionId) => (
+    VISIBLE_TOOLBAR_ACTION_GROUPS.find((group) => group.actions.includes(id))?.id ?? id
   );
+
+  const renderToolbarDivider = (key?: string) => (
+    <span key={key} data-content-toolbar-divider aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: pillBorder, flexShrink: 0 }} />
+  );
+
+  const typographyMenuRowStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: '68px minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '7px 9px',
+  };
+  const typographyMenuLabelStyle: CSSProperties = {
+    minWidth: 0,
+    fontSize: '12px',
+    color: theme.textSecondary,
+  };
+  const typographySegmentedControlStyle: CSSProperties = {
+    minWidth: 0,
+    display: 'grid',
+    gridAutoFlow: 'column',
+    gridAutoColumns: 'minmax(0, 1fr)',
+    gap: '2px',
+    padding: '2px',
+    borderRadius: '8px',
+    border: `1px solid ${pillBorder}`,
+    backgroundColor: theme.isDark ? theme.surface1 : theme.background,
+  };
+  const typographySegmentButtonStyle = (active: boolean, fontSize: string = '12px', fontFamily?: string): CSSProperties => ({
+    minWidth: 0,
+    width: '100%',
+    padding: '3px 8px',
+    border: 'none',
+    borderRadius: '6px',
+    backgroundColor: active ? toolbarActiveBackground : 'transparent',
+    color: active ? toolbarIconStrong : theme.textSecondary,
+    cursor: 'pointer',
+    fontSize,
+    fontFamily,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  });
 
   const toolbarButtonStyle = (active = false, primary = false, text = false): CSSProperties => ({
     width: text ? 'auto' : '28px',
@@ -726,7 +838,7 @@ export default function ContentToolbar({
     height: '28px',
     padding: text ? '0 11px' : 0,
     color: active ? toolbarIconStrong : primary ? toolbarIconPrimary : toolbarIconMuted,
-    backgroundColor: active ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent',
+    backgroundColor: active ? toolbarActiveBackground : 'transparent',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
@@ -742,6 +854,15 @@ export default function ContentToolbar({
   const renderToolbarIcon = (id: ToolbarActionId) => {
     if (id === 'textstyle') return <span style={{ fontFamily: 'Georgia, serif', fontSize: '14px', fontWeight: 500 }}>A</span>;
     if (id === 'contentmode') {
+      if (contentMode === 'markdown') {
+        return (
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" aria-hidden="true">
+            <path d="M3 4.25h10" />
+            <path d="M3 8h10" />
+            <path d="M3 11.75h7" />
+          </svg>
+        );
+      }
       return (
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="5 4 2 8 5 12" />
@@ -840,7 +961,7 @@ export default function ContentToolbar({
         </span>
       );
     }
-    const active = (id === 'textstyle' && typographyMenuOpen) || (id === 'contentmode' && !contentModeDisabled) || (id === 'htmllayout' && htmlLayoutActive) || (id === 'copypath' && copyPathActive) || (id === 'copy' && copied) || (id === 'share' && riverShareActive) || (id === 'terminal' && terminalVisible) || (id === 'meeting' && meetingRecording) || (id === 'immersive' && isFullScreen);
+    const active = (id === 'textstyle' && typographyMenuOpen) || (id === 'contentmode' && contentMode === 'markdown') || (id === 'htmllayout' && htmlLayoutActive) || (id === 'copypath' && copyPathActive) || (id === 'copy' && copied) || (id === 'share' && riverShareActive) || (id === 'terminal' && terminalVisible) || (id === 'meeting' && meetingRecording) || (id === 'immersive' && isFullScreen);
     const textButton = id === 'copy' || id === 'edit';
     const primary = DEFAULT_PINNED_TOOLBAR_ACTIONS.includes(id);
     const disabled = (id === 'contentmode' && contentModeDisabled) || (id === 'meeting' && meetingDisabled);
@@ -875,7 +996,14 @@ export default function ContentToolbar({
     );
   };
 
-  const renderPinnedToolbarGroups = () => visiblePinnedActions.map(renderToolbarAction);
+  const renderPinnedToolbarGroups = () => visiblePinnedActions.flatMap((id, index) => {
+    const action = renderToolbarAction(id);
+    if (index === 0) return [action];
+    const previous = visiblePinnedActions[index - 1];
+    return toolbarActionVisibleGroup(previous) === toolbarActionVisibleGroup(id)
+      ? [action]
+      : [renderToolbarDivider(`${previous}-${id}-divider`), action];
+  });
 
   return (
     <div
@@ -922,19 +1050,25 @@ export default function ContentToolbar({
         </>
       ) : (
         <div
+          ref={toolbarPillRef}
+          data-content-toolbar-pill
+          onFocusCapture={() => setToolbarPointerOpacity(1)}
+          onPointerEnter={() => setToolbarPointerOpacity(1)}
           style={{
             position: 'relative',
             display: 'inline-flex',
             alignItems: 'center',
             gap: '2px',
             padding: '4px',
-            borderRadius: '11px',
+            borderRadius: '8px',
             backgroundColor: pillBackground,
             border: `1px solid ${pillBorder}`,
-            boxShadow: theme.isDark
-              ? '0 10px 28px -14px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.04)'
-              : '0 10px 28px -16px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.65)',
+            boxShadow: 'none',
+            opacity: toolbarPillOpacity,
+            transform: `scale(${CONTENT_TOOLBAR_SCALE})`,
+            transformOrigin: 'center center',
             flexShrink: 0,
+            transition: 'opacity 140ms ease, background-color 140ms ease, border-color 140ms ease',
             // @ts-ignore - opt out of the drag region so the click lands.
             WebkitAppRegion: 'no-drag',
           }}
@@ -942,15 +1076,15 @@ export default function ContentToolbar({
           {visiblePinnedActions.length > 0 ? renderPinnedToolbarGroups() : (
             <span style={{ fontSize: '12px', color: toolbarIconMuted, padding: '0 8px', whiteSpace: 'nowrap' }}>No actions yet</span>
           )}
-          {availableToolbarActions.length > 0 && (
+          {hasCustomizeMenuActions && (
             <>
-              {visiblePinnedActions.length > 0 && toolbarDivider}
+              {visiblePinnedActions.length > 0 && renderToolbarDivider('customize-divider')}
               <div ref={customizeMenuRef} style={{ position: 'relative', display: 'inline-flex' }}>
                 <button type="button" onClick={() => setCustomizeMenuOpen((open) => !open)} title="Customize toolbar" aria-label="Customize toolbar" style={toolbarButtonStyle(customizeMenuOpen)}>
                   <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.25" /><circle cx="8" cy="8" r="1.25" /><circle cx="12.5" cy="8" r="1.25" /></svg>
                 </button>
                 {customizeMenuOpen && (
-                  <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '252px', maxHeight: 'min(940px, calc(100vh - 92px))', overflowY: 'auto', padding: '5px', borderRadius: '11px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? '#161619' : '#fffaf2', boxShadow: theme.isDark ? '0 22px 48px -18px rgba(0,0,0,0.85)' : '0 18px 42px -20px rgba(0,0,0,0.28)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '252px', maxHeight: 'min(940px, calc(100vh - 92px))', overflowY: 'auto', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: pillBackground, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', padding: '6px 9px 7px', color: theme.textSecondary, fontSize: '10px', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
                       <span>Toolbar</span>
                       <span style={{ fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '9px', letterSpacing: '0.04em', textTransform: 'none', opacity: 0.68 }}>+ / -</span>
@@ -975,70 +1109,82 @@ export default function ContentToolbar({
                         </div>
                       );
                     })}
+                    {showDelete && onDelete && (
+                      <div>
+                        <div style={{ height: '1px', backgroundColor: pillBorder, margin: '5px 4px' }} />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomizeMenuOpen(false);
+                            onDelete();
+                          }}
+                          aria-label="Delete"
+                          title="Delete"
+                          style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 9px', border: 'none', borderRadius: '7px', backgroundColor: 'transparent', color: '#dc2626', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontFamily: 'inherit' }}
+                        >
+                          <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
+                          </span>
+                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Delete</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            </>
-          )}
-          {showDelete && onDelete && (
-            <>
-              {toolbarDivider}
-              <button type="button" onClick={onDelete} title="Delete" aria-label="Delete" style={toolbarButtonStyle(false)}>
-                <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
-              </button>
             </>
           )}
         </div>
       )}
 
       {typographyMenuOpen && hasTypographyMenu && (
-        <div ref={typographyMenuRef} style={{ position: 'absolute', top: '38px', right: '42px', zIndex: 30, width: '214px', padding: '7px', borderRadius: '11px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? '#161619' : '#fffaf2', boxShadow: theme.isDark ? '0 22px 48px -18px rgba(0,0,0,0.85)' : '0 18px 42px -20px rgba(0,0,0,0.28)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+        <div ref={typographyMenuRef} style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 30, width: '300px', maxWidth: 'min(300px, calc(100vw - 24px))', padding: '5px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: pillBackground, boxShadow: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 5px' }}>
-              <span style={{ width: '50px', flex: 'none', fontSize: '12px', color: theme.textSecondary }}>Font</span>
-              <div style={{ display: 'inline-flex', gap: '2px', padding: '2px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+            <div style={typographyMenuRowStyle}>
+              <span style={typographyMenuLabelStyle}>Font</span>
+              <div style={typographySegmentedControlStyle}>
                 {typographyPresetOptions.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTypographyPresetChange(option.id)} title={option.title} style={{ minWidth: '24px', padding: '3px 9px', border: 'none', borderRadius: '6px', backgroundColor: option.id === typographyPreset ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent', color: option.id === typographyPreset ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', fontSize: '12px', fontFamily: option.fontFamily }}>{option.label}</button>
+                  <button key={option.id} type="button" onClick={() => onTypographyPresetChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === typographyPreset, '12px', option.fontFamily)}>{option.label}</button>
                 ))}
               </div>
             </div>
           )}
           {showTextSize && onTextSizeChange && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 5px' }}>
-              <span style={{ width: '50px', flex: 'none', fontSize: '12px', color: theme.textSecondary }}>Size</span>
-              <div style={{ display: 'inline-flex', gap: '2px', padding: '2px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+            <div style={typographyMenuRowStyle}>
+              <span style={typographyMenuLabelStyle}>Size</span>
+              <div style={typographySegmentedControlStyle}>
                 {TEXT_SIZE_OPTIONS.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTextSizeChange(option.id)} title={option.title} style={{ minWidth: '24px', padding: '3px 9px', border: 'none', borderRadius: '6px', backgroundColor: option.id === textSize ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent', color: option.id === textSize ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', fontSize: '12px' }}>{option.label}</button>
+                  <button key={option.id} type="button" onClick={() => onTextSizeChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === textSize)}>{option.label}</button>
                 ))}
               </div>
             </div>
           )}
           {lineHeightOptions && lineHeightOptions.length > 0 && onLineHeightChange && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 5px' }}>
-              <span style={{ width: '50px', flex: 'none', fontSize: '12px', color: theme.textSecondary }}>Lines</span>
-              <div style={{ display: 'inline-flex', gap: '2px', padding: '2px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+            <div style={typographyMenuRowStyle}>
+              <span style={typographyMenuLabelStyle}>Lines</span>
+              <div style={typographySegmentedControlStyle}>
                 {lineHeightOptions.map((option) => (
-                  <button key={option.id} type="button" onClick={() => onLineHeightChange(option.id)} title={option.title} style={{ minWidth: '24px', padding: '3px 9px', border: 'none', borderRadius: '6px', backgroundColor: option.id === lineHeight ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent', color: option.id === lineHeight ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', fontSize: '12px' }}>{option.label}</button>
+                  <button key={option.id} type="button" onClick={() => onLineHeightChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === lineHeight)}>{option.label}</button>
                 ))}
               </div>
             </div>
           )}
           {onUnorderedListMarkerChange && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 5px' }}>
-              <span style={{ width: '50px', flex: 'none', fontSize: '12px', color: theme.textSecondary }}>Bullets</span>
-              <div style={{ display: 'inline-flex', gap: '2px', padding: '2px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+            <div style={typographyMenuRowStyle}>
+              <span style={typographyMenuLabelStyle}>Bullets</span>
+              <div style={typographySegmentedControlStyle}>
                 {[{ id: 'dash' as const, label: '-', title: 'Dash unordered lists' }, { id: 'carrot' as const, label: '›', title: 'Carrot unordered lists' }].map((option) => (
-                  <button key={option.id} type="button" onClick={() => onUnorderedListMarkerChange(option.id)} title={option.title} style={{ minWidth: '32px', padding: '3px 9px', border: 'none', borderRadius: '6px', backgroundColor: option.id === unorderedListMarker ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent', color: option.id === unorderedListMarker ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', fontSize: option.id === 'carrot' ? '15px' : '12px' }}>{option.label}</button>
+                  <button key={option.id} type="button" onClick={() => onUnorderedListMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === unorderedListMarker, option.id === 'carrot' ? '15px' : '12px')}>{option.label}</button>
                 ))}
               </div>
             </div>
           )}
           {onTodoMarkerChange && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 5px' }}>
-              <span style={{ width: '50px', flex: 'none', fontSize: '12px', color: theme.textSecondary }}>Todos</span>
-              <div style={{ display: 'inline-flex', gap: '2px', padding: '2px', borderRadius: '8px', border: `1px solid ${pillBorder}`, backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+            <div style={typographyMenuRowStyle}>
+              <span style={typographyMenuLabelStyle}>Todos</span>
+              <div style={typographySegmentedControlStyle}>
                 {[{ id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' }, { id: 'square' as const, label: '□', title: 'Square todo checkboxes' }].map((option) => (
-                  <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={{ minWidth: '32px', padding: '3px 9px', border: 'none', borderRadius: '6px', backgroundColor: option.id === todoMarker ? (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)') : 'transparent', color: option.id === todoMarker ? toolbarIconStrong : theme.textSecondary, cursor: 'pointer', fontSize: '15px' }}>{option.label}</button>
+                  <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === todoMarker, '15px')}>{option.label}</button>
                 ))}
               </div>
             </div>

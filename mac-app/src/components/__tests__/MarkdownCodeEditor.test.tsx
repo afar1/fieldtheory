@@ -1156,7 +1156,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 	    underline.parent.remove();
 	  });
 
-	  it('toggles rendered task checkboxes through the markdown source', () => {
+	  it('toggles rendered task checkboxes through the markdown source without moving the cursor', () => {
 	    const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
@@ -1170,18 +1170,20 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     const checkboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     expect(checkboxes).toHaveLength(4);
 
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
     checkboxes[0].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [ ] open\n- [x] done\n[] bare');
-    expect(view.state.selection.main.from).toBe(5);
+    expect(view.state.selection.main.from).toBe(view.state.doc.length);
 
     const nextCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     nextCheckboxes[1].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[] bare');
-    expect(view.state.selection.main.from).toBe(12);
+    expect(view.state.selection.main.from).toBe(view.state.doc.length);
 
     const finalCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     finalCheckboxes[3].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[x] bare');
+    expect(view.state.selection.main.from).toBe(view.state.doc.length);
 
     view.destroy();
     parent.remove();
