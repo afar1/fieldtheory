@@ -7,6 +7,7 @@ import {
   getUnreplayedInitialData,
   isTerminalFocusToggleSequence,
   isTerminalPanelVisibilityToggleSequence,
+  isTerminalPasteSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
   resolveCodexTerminalDockSide,
@@ -94,6 +95,15 @@ describe('nativeTerminalNavigationSequence', () => {
     expect(nativeTerminalNavigationSequence(event({ key: 'ArrowLeft', metaKey: true, shiftKey: true }))).toBeNull();
     expect(nativeTerminalNavigationSequence(event({ key: 'ArrowRight', altKey: true, ctrlKey: true }))).toBeNull();
     expect(nativeTerminalNavigationSequence(event({ key: 'a', metaKey: true }))).toBeNull();
+  });
+});
+
+describe('isTerminalPasteSequence', () => {
+  it('captures Command+V and Command+Shift+V for xterm paste', () => {
+    expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true }))).toBe(true);
+    expect(isTerminalPasteSequence(keyboardEvent({ key: 'V', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true, altKey: true }))).toBe(false);
+    expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 });
 
