@@ -1172,10 +1172,12 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     checkboxes[0].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [ ] open\n- [x] done\n[] bare');
+    expect(view.state.selection.main.from).toBe(5);
 
     const nextCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     nextCheckboxes[1].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[] bare');
+    expect(view.state.selection.main.from).toBe(12);
 
     const finalCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     finalCheckboxes[3].click();

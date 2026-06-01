@@ -1047,6 +1047,7 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
     private readonly sourceTo: number,
     private readonly checkFrom: number,
     private readonly checkTo: number,
+    private readonly contentFrom: number,
   ) {
     super();
   }
@@ -1056,7 +1057,8 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
       && other.sourceFrom === this.sourceFrom
       && other.sourceTo === this.sourceTo
       && other.checkFrom === this.checkFrom
-      && other.checkTo === this.checkTo;
+      && other.checkTo === this.checkTo
+      && other.contentFrom === this.contentFrom;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -1081,7 +1083,7 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
           to: this.checkTo,
           insert: this.checked ? ' ' : 'x',
         },
-        selection: { anchor: this.checkTo },
+        selection: { anchor: this.contentFrom },
       });
       window.setTimeout(() => view.focus(), 0);
     });
@@ -1307,9 +1309,11 @@ export function getRenderedMarkdownTaskMarkerLayoutStyle(): Record<string, strin
     display: 'inline-block',
     position: 'absolute',
     left: 'calc(var(--ft-rendered-list-indent, 0ch) + 0.5em)',
-    width: '1.05em',
-    height: '1.05em',
-    minWidth: '1.05em',
+    top: '50%',
+    width: '0.9em',
+    height: '0.9em',
+    minWidth: '0.9em',
+    transform: 'translateY(-50%)',
   };
 }
 
@@ -2097,6 +2101,7 @@ function pushRenderedMarkdownEditorLineDecorations(
           markerTo,
           checkFrom,
           checkFrom + taskMatch[3].length,
+          contentFrom,
         ),
       }).range(markerFrom, contentFrom),
     );
@@ -2647,7 +2652,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             } : {}),
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
-            opacity: 0.68,
+            opacity: 0.78,
           },
           '&.cm-focused': {
             outline: 'none',
@@ -2990,12 +2995,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
             ...getRenderedMarkdownTaskMarkerLayoutStyle(),
-            verticalAlign: '-0.14em',
-            accentColor: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
+            margin: '0',
+            verticalAlign: '-0.1em',
+            accentColor: linkColor ?? (theme.isDark ? '#8fb7ff' : '#2563eb'),
             cursor: 'pointer',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS}`]: {
-            opacity: 0.68,
+            opacity: 0.74,
           },
         },
         { dark: theme.isDark },
