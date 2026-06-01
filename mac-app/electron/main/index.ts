@@ -39,6 +39,7 @@ import {
   persistableLibraryDocumentWindowBounds,
   type LibraryDocumentWindowTarget,
 } from './documentWindow';
+import { DocumentPresenceManager } from './documentPresence';
 import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
@@ -2350,6 +2351,7 @@ let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let libraryDocumentWindowManager: LibraryDocumentWindowManager | null = null;
+let documentPresenceManager: DocumentPresenceManager | null = null;
 let authManager: AuthManager | null = null;
 let userDataManager: UserDataManager | null = null;
 let feedbackManager: FeedbackManager | null = null;
@@ -2388,6 +2390,7 @@ type ActiveLibraryFileContext = {
   title: string;
 };
 let activeLibraryFileContext: ActiveLibraryFileContext | null = null;
+const documentPresenceWindows = new WeakSet<BrowserWindow>();
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
@@ -2433,9 +2436,12 @@ function cleanupFileWatchersBeforeQuit(): Promise<void> {
       librarianManager?.destroy(),
       taggedDocsManager?.destroy(),
       bookmarksManager?.stopWatcher(),
+      documentPresenceManager?.flush(),
     ]);
+    documentPresenceManager?.destroy();
     librarianManager = null;
     taggedDocsManager = null;
+    documentPresenceManager = null;
     bookmarksWatcherStarted = false;
     appQuitWatcherCleanupComplete = true;
   })().finally(() => {
@@ -4696,6 +4702,21 @@ function getLibraryDocumentWindowManager(): LibraryDocumentWindowManager {
     );
   }
   return libraryDocumentWindowManager;
+}
+
+function getDocumentPresenceManager(): DocumentPresenceManager {
+  if (!documentPresenceManager) {
+    documentPresenceManager = new DocumentPresenceManager();
+  }
+  return documentPresenceManager;
+}
+
+function registerDocumentPresenceWindow(win: BrowserWindow): void {
+  if (documentPresenceWindows.has(win)) return;
+  documentPresenceWindows.add(win);
+  const windowId = String(win.id);
+  win.on('focus', () => getDocumentPresenceManager().focusWindow(windowId));
+  win.on('closed', () => getDocumentPresenceManager().closeWindow(windowId));
 }
 
 function normalizeLibraryDocumentWindowTarget(target: Partial<LibraryDocumentWindowTarget> | null | undefined): LibraryDocumentWindowTarget | null {
@@ -9640,16 +9661,23 @@ function setupClipboardIPCHandlers(): void {
     return activeLibraryFileContext;
   });
 
-  ipcMain.handle('commands:setActiveLibraryFileContext', (_event, context: ActiveLibraryFileContext | null): boolean => {
+  ipcMain.handle('commands:setActiveLibraryFileContext', (event, context: ActiveLibraryFileContext | null): boolean => {
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (sourceWindow) registerDocumentPresenceWindow(sourceWindow);
+    const windowId = sourceWindow ? String(sourceWindow.id) : null;
+
     if (context === null) {
       activeLibraryFileContext = null;
+      if (windowId) getDocumentPresenceManager().clearWindow(windowId);
       return true;
     }
     if (
       (context.type !== 'wiki' && context.type !== 'external') ||
-      !context.rootPath ||
-      !context.relPath ||
+      typeof context.rootPath !== 'string' ||
+      typeof context.relPath !== 'string' ||
+      typeof context.filePath !== 'string' ||
       !context.filePath ||
+      typeof context.title !== 'string' ||
       !context.title
     ) {
       return false;
@@ -9661,6 +9689,9 @@ function setupClipboardIPCHandlers(): void {
       filePath: context.filePath,
       title: context.title,
     };
+    if (windowId) {
+      getDocumentPresenceManager().setWindowDocument(windowId, activeLibraryFileContext, sourceWindow?.isFocused() ?? false);
+    }
     return true;
   });
 
