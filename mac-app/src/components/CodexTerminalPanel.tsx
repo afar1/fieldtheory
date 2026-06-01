@@ -84,6 +84,13 @@ export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'alt
   return null;
 }
 
+export function isTerminalPasteSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey'>): boolean {
+  return event.metaKey
+    && !event.altKey
+    && !event.ctrlKey
+    && event.key.toLowerCase() === 'v';
+}
+
 export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
   return event.key === 'Tab'
     && event.ctrlKey
@@ -786,6 +793,13 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
+      if (isTerminalPasteSequence(event)) {
+        event.preventDefault();
+        void window.codexTerminalAPI?.readClipboardText().then((text) => {
+          if (text) void window.codexTerminalAPI?.input(sessionId, text);
+        });
+        return false;
+      }
       if (isTerminalPanelVisibilityToggleSequence(event)) {
         event.preventDefault();
         onTerminalFocusChange?.(false);
@@ -1189,15 +1203,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             Restart
           </button>
         )}
-        <button
-          type="button"
-          aria-label="Start Gemma 4 terminal"
-          onClick={() => void createSession({ title: 'Gemma 4', launchCommand: 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf' })}
-          title="Start Gemma 4 in the terminal"
-          style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '58px', padding: 0, ...(toolbarItemOffset ?? {}) }}
-        >
-          Gemma
-        </button>
         <button
           type="button"
           aria-label={terminalDarkMode ? 'Use light terminal' : 'Use dark terminal'}
