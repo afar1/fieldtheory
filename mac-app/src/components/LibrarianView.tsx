@@ -788,6 +788,7 @@ type MaxwellToolbarSelection = { start: number; end: number } | null;
 type TerminalPastePopover = { text: string; top: number; left: number } | null;
 const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
 const TERMINAL_PASTE_POPOVER_GAP_PX = 8;
+const TERMINAL_PASTE_POPOVER_SIDE_GAP_PX = 14;
 const TERMINAL_PASTE_POPOVER_EDGE_PX = 12;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
@@ -920,7 +921,7 @@ export function getTerminalPastePopoverPosition(
     ),
     left: Math.max(
       TERMINAL_PASTE_POPOVER_EDGE_PX,
-      Math.min(maxLeft, rect.right + TERMINAL_PASTE_POPOVER_GAP_PX),
+      Math.min(maxLeft, rect.right + TERMINAL_PASTE_POPOVER_SIDE_GAP_PX),
     ),
   };
 }
@@ -8931,6 +8932,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
+  const readerStatusFeedback = copyFeedbackLabel ? (
+    <div
+      role="status"
+      data-ft-reader-status-feedback="true"
+      style={{
+        position: 'absolute',
+        left: '50%',
+        bottom: '14px',
+        transform: 'translateX(-50%)',
+        padding: '4px 8px',
+        borderRadius: '5px',
+        fontSize: '11px',
+        color: theme.isDark ? '#d1fae5' : '#065f46',
+        backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
+        border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
+        pointerEvents: 'none',
+        zIndex: 6,
+      }}
+    >
+      {copyFeedbackLabel}
+    </div>
+  ) : null;
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -9111,6 +9135,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         )}
         {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (
         <div
+          data-ft-reader-editor-pane="true"
           style={{
             flex: 1,
             display: 'flex',
@@ -10115,6 +10140,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             </svg>
           </button>
         )}
+        {readerStatusFeedback}
         </div>
         )}
         <CodexTerminalPanel
@@ -10196,28 +10222,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               </Fragment>
             ))}
           </div>
-        </div>
-      )}
-
-      {copyFeedbackLabel && (
-        <div
-          role="status"
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: '14px',
-            transform: 'translateX(-50%)',
-            padding: '4px 8px',
-            borderRadius: '5px',
-            fontSize: '11px',
-            color: theme.isDark ? '#d1fae5' : '#065f46',
-            backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
-            border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
-            pointerEvents: 'none',
-            zIndex: 6,
-          }}
-        >
-          {copyFeedbackLabel}
         </div>
       )}
 
