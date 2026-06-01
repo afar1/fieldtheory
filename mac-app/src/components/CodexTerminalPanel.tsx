@@ -1260,7 +1260,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: terminalDarkMode ? '#e6eaf0' : terminalMutedText,
             backgroundColor: terminalDarkMode ? '#202833' : 'transparent',
             ...(toolbarItemOffset ?? {}),
           }}
@@ -1496,14 +1495,14 @@ function DockSideIcon({ side }: { side: CodexTerminalDockSide }) {
 
 function TerminalThemeIcon({ dark }: { dark: boolean }) {
   return (
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none">
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
       {dark ? (
-        <path d="M11.7 12.7A5.8 5.8 0 0 1 3.3 4.3a5.9 5.9 0 0 0 8.4 8.4Z" fill="currentColor" />
-      ) : (
         <>
-          <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
-          <path d="M8 1.7v1.2M8 13.1v1.2M14.3 8h-1.2M2.9 8H1.7M12.5 3.5l-.8.8M4.3 11.7l-.8.8M12.5 12.5l-.8-.8M4.3 4.3l-.8-.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+          <circle cx="8" cy="8" r="2.6" strokeWidth="1.45" />
+          <path d="M8 1.8v1.4M8 12.8v1.4M14.2 8h-1.4M3.2 8H1.8M12.4 3.6l-1 1M4.6 11.4l-1 1M12.4 12.4l-1-1M4.6 4.6l-1-1" strokeWidth="1.45" />
         </>
+      ) : (
+        <path d="M11.8 11.7A5.2 5.2 0 0 1 4.3 4.2a4.5 4.5 0 1 0 7.5 7.5Z" strokeWidth="1.65" />
       )}
     </svg>
   );
