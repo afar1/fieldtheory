@@ -16,6 +16,12 @@ import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import MaxwellHistoryPopover from './MaxwellHistoryPopover';
 import { ImagePreviewFrame } from './ImagePreviewOverlay';
+import {
+  dispatchCodexTerminalDarkModeSync,
+  getLinkedCodexTerminalDarkModeUpdate,
+  readStoredCodexTerminalDarkMode,
+  writeStoredCodexTerminalDarkMode,
+} from './codexTerminalTheme';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
@@ -2837,7 +2843,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       // Shift+Cmd+L to toggle light/dark mode.
       if (isThemeToggleShortcut(e)) {
         e.preventDefault();
+        const terminalDarkMode = readStoredCodexTerminalDarkMode(theme.isDark);
+        const nextTerminalDarkMode = getLinkedCodexTerminalDarkModeUpdate(theme.isDark, terminalDarkMode);
         toggleDarkMode();
+        if (nextTerminalDarkMode !== null) {
+          writeStoredCodexTerminalDarkMode(nextTerminalDarkMode);
+          dispatchCodexTerminalDarkModeSync(nextTerminalDarkMode);
+        }
         return;
       }
 
@@ -3712,7 +3724,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, theme.isDark, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   

@@ -4,6 +4,12 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useTheme, type Theme } from '../contexts/ThemeContext';
+import {
+  CODEX_TERMINAL_DARK_MODE_SYNC_EVENT,
+  readStoredCodexTerminalDarkMode,
+  writeStoredCodexTerminalDarkMode,
+  type CodexTerminalDarkModeSyncEvent,
+} from './codexTerminalTheme';
 
 type CodexTerminalSessionSummary = Awaited<ReturnType<NonNullable<Window['codexTerminalAPI']>['create']>>;
 type CodexTerminalPageContext = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
@@ -30,7 +36,6 @@ const CODEX_TERMINAL_ACTIVE_SESSION_STORAGE_KEY = 'fieldtheory.codexTerminal.act
 const CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.bottomHeight';
 const CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.rightWidth';
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
-const CODEX_TERMINAL_DARK_MODE_STORAGE_KEY = 'fieldtheory.codexTerminal.darkMode';
 const DEFAULT_BOTTOM_HEIGHT = 320;
 const DEFAULT_RIGHT_WIDTH = 520;
 const MIN_BOTTOM_HEIGHT = 220;
@@ -301,11 +306,7 @@ function clampRightWidth(value: number): number {
 
 export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
-  const [terminalDarkMode, setTerminalDarkMode] = useState(() => (
-    localStorage.getItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY) === null
-      ? theme.isDark
-      : localStorage.getItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY) === 'true'
-  ));
+  const [terminalDarkMode, setTerminalDarkMode] = useState(() => readStoredCodexTerminalDarkMode(theme.isDark));
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
@@ -555,8 +556,18 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   }, [visibleIntent]);
 
   useEffect(() => {
-    localStorage.setItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY, String(terminalDarkMode));
+    writeStoredCodexTerminalDarkMode(terminalDarkMode);
   }, [terminalDarkMode]);
+
+  useEffect(() => {
+    const handleTerminalDarkModeSync = (event: Event) => {
+      const nextDarkMode = (event as CodexTerminalDarkModeSyncEvent).detail?.darkMode;
+      if (typeof nextDarkMode === 'boolean') setTerminalDarkMode(nextDarkMode);
+    };
+
+    window.addEventListener(CODEX_TERMINAL_DARK_MODE_SYNC_EVENT, handleTerminalDarkModeSync);
+    return () => window.removeEventListener(CODEX_TERMINAL_DARK_MODE_SYNC_EVENT, handleTerminalDarkModeSync);
+  }, []);
 
   useEffect(() => {
     if (activeSessionId) {
@@ -1208,15 +1219,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             Restart
           </button>
         )}
-        <button
-          type="button"
-          aria-label="Start Gemma 4 terminal"
-          onClick={() => void createSession({ title: 'Gemma 4', launchCommand: 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf' })}
-          title="Start Gemma 4 in the terminal"
-          style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '58px', padding: 0, ...(toolbarItemOffset ?? {}) }}
-        >
-          Gemma
-        </button>
         <button
           type="button"
           aria-label={terminalDarkMode ? 'Use light terminal' : 'Use dark terminal'}
