@@ -3015,7 +3015,7 @@ function CommandLauncher() {
         setPreviewPayload(null);
         return;
       }
-      prepareLauncherForNextOpen();
+      prepareLauncherForNextOpen({ revealWhenReady: false });
       commandsAPI.launcherClose({ generation: launcherGenerationRef.current });
     } else if (shouldExitLauncherClipboardSearch({ active: clipboardSearchActive, query, key: e.key })) {
       e.preventDefault();

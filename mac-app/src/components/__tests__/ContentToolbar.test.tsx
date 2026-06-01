@@ -304,7 +304,7 @@ describe('ContentToolbar', () => {
     fireEvent.click(fieldTheoryButton);
 
     expect(fieldTheoryButton.parentElement?.style.position).toBe('');
-    const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
+    const menu = document.querySelector('[data-content-toolbar-maxwell-menu]') as HTMLDivElement;
     expect(menu.style.right).toBe('0px');
     await waitFor(() => {
       expect(container.querySelector('[data-content-toolbar-pill]')?.getAttribute('style')).toContain('opacity: 1');
@@ -426,14 +426,17 @@ describe('ContentToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     expect(screen.getByText('Local commands')).toBeTruthy();
     const menu = screen.getByText('Local commands').parentElement as HTMLDivElement;
-    expect(menu.style.width).toBe('240px');
+    expect(menu.style.width).toBe('252px');
+    expect(menu.style.maxWidth).toBe('min(252px, calc(100vw - 24px))');
     expect(menu.style.top).toBe('calc(100% + 10px)');
     expect(menu.style.right).toBe('0px');
     expect(menu.style.padding).toBe('5px');
     expect(menu.style.gap).toBe('2px');
-    expect(menu.style.backgroundColor).toBe('#f5f4f2');
+    expect(menu.style.backgroundColor).toBe('#f8f7f4');
     expect(menu.style.borderRadius).toBe('8px');
     expect(menu.style.boxShadow).toBe('none');
+    expect(screen.getByText('Local commands').style.textTransform).toBe('uppercase');
+    expect(screen.getByText('A Maxwell Page').style.fontSize).toBe('13px');
     expect(screen.getByText('A Maxwell Page').compareDocumentPosition(screen.getByText('Z Maxwell Page')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('Commands/A Maxwell Page')).toBeNull();
     fireEvent.click(screen.getAllByText('Run')[0]);
