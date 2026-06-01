@@ -1210,6 +1210,15 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
         )}
         <button
           type="button"
+          aria-label="Start Gemma 4 terminal"
+          onClick={() => void createSession({ title: 'Gemma 4', launchCommand: 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf' })}
+          title="Start Gemma 4 in the terminal"
+          style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '58px', padding: 0, ...(toolbarItemOffset ?? {}) }}
+        >
+          Gemma
+        </button>
+        <button
+          type="button"
           aria-label={terminalDarkMode ? 'Use light terminal' : 'Use dark terminal'}
           aria-pressed={terminalDarkMode}
           onClick={() => setTerminalDarkMode((current) => !current)}
