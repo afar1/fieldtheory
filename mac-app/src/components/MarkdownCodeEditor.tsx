@@ -1070,6 +1070,10 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
     checkbox.setAttribute('aria-label', this.checked ? 'Mark task incomplete' : 'Mark task complete');
     checkbox.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
     checkbox.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
+    checkbox.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
     checkbox.addEventListener('mousedown', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1083,7 +1087,6 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
           to: this.checkTo,
           insert: this.checked ? ' ' : 'x',
         },
-        selection: { anchor: this.contentFrom },
       });
       window.setTimeout(() => view.focus(), 0);
     });
