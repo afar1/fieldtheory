@@ -391,7 +391,7 @@ interface LauncherCommandsAPI {
     useMemory?: boolean;
   }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
-  getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; targetApp?: ClipboardRunningApp | null }>;
+  getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
   toggleActiveLibraryLineNumbers?: () => Promise<{ success: boolean; error?: string }>;
@@ -655,10 +655,15 @@ const getStyles = (isDark: boolean) => ({
     color: isDark ? '#fff' : '#171717',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
+  defaultPanelControls: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    flexShrink: 0,
+  },
   defaultPanelToggle: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '5px',
     height: '22px',
     padding: '0 6px',
     border: 'none',
@@ -671,11 +676,22 @@ const getStyles = (isDark: boolean) => ({
     cursor: 'pointer',
     flexShrink: 0,
   },
-  defaultPanelCaret: {
-    width: '10px',
+  defaultPanelTabButton: {
+    height: '18px',
+    padding: '0 5px',
+    border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)'}`,
+    borderRadius: '4px',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.055)' : 'rgba(0, 0, 0, 0.035)',
+    color: isDark ? '#a8a8a8' : '#6b6b6b',
+    fontSize: '9px',
+    lineHeight: '12px',
+    fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+    letterSpacing: '0.01em',
+    cursor: 'pointer',
+    flexShrink: 0,
     display: 'inline-flex',
+    alignItems: 'center',
     justifyContent: 'center',
-    color: isDark ? '#707070' : '#858585',
   },
   namespaceTag: {
     display: 'inline-flex',
@@ -3405,7 +3421,7 @@ function CommandLauncher() {
       closeForInvocation({ skipActivation: true });
       return true;
     };
-    const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
+    const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, hasActiveLibraryFileContext: false, targetApp: null }));
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
     const invocationId = nextLauncherTraceId('invocation');
@@ -3423,7 +3439,7 @@ function CommandLauncher() {
       insertWikiLink: options.insertWikiLink ?? false,
     });
     if (item.type === 'clipboard-item' || item.type === 'clipboard-stack') {
-      if (latestContext?.fieldTheoryActive && commandsAPI.insertClipboardItemsAsMarkdown) {
+      if (latestContext?.fieldTheoryActive && latestContext?.hasActiveLibraryFileContext && commandsAPI.insertClipboardItemsAsMarkdown) {
         const itemIds = item.type === 'clipboard-stack'
           ? await getClipboardLauncherStackItemIds(item)
           : typeof item.clipboardItemId === 'number'
@@ -3443,10 +3459,6 @@ function CommandLauncher() {
         return;
       }
       const targetBundleId = latestContext?.targetApp?.bundleId;
-      if (!targetBundleId) {
-        showInvocationError('paste-clipboard-launcher-no-target', 'No external target app available', 'No external target app available');
-        return;
-      }
       if (item.type === 'clipboard-stack') {
         const itemIds = await getClipboardLauncherStackItemIds(item);
         if (itemIds.length > 0) {
@@ -3954,19 +3966,28 @@ function CommandLauncher() {
           style={styles.input}
         />
         {!namespaceLabel && query.trim() === '' && (
-          <button
-            type="button"
-            aria-label={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource}`}
-            title={`${launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'} (Tab switches)`}
-            style={styles.defaultPanelToggle}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={handleDefaultPanelToggleClick}
-          >
-            <span>{launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}</span>
-            <span style={styles.defaultPanelCaret} aria-hidden="true">
-              {launcherDefaultPanelExpanded ? 'v' : '>'}
-            </span>
-          </button>
+          <span style={styles.defaultPanelControls}>
+            <button
+              type="button"
+              aria-label={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource}`}
+              title={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}`}
+              style={styles.defaultPanelToggle}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleDefaultPanelToggleClick}
+            >
+              <span>{launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}</span>
+            </button>
+            <button
+              type="button"
+              aria-label={`Switch to ${launcherDefaultPanelSource === 'recents' ? 'Clipboard' : 'Recents'}`}
+              title={`Tab switches to ${launcherDefaultPanelSource === 'recents' ? 'Clipboard' : 'Recents'}`}
+              style={styles.defaultPanelTabButton}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={switchDefaultPanelSource}
+            >
+              Tab
+            </button>
+          </span>
         )}
       </div>
 
