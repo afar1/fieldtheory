@@ -51,6 +51,7 @@ import {
   getScrollRatio,
   getScrollTopForRatio,
   isCodexTerminalEventTarget,
+  isPasteSelectionToTerminalShortcut,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   isRenderedTaskListItem,
@@ -1701,38 +1702,32 @@ describe('rendered markdown edit helpers', () => {
 	    });
 	  });
 
-	  it('creates inline formatting placeholders from rendered shortcuts with no selection', () => {
+	  it('ignores empty inline formatting shortcuts in rendered mode', () => {
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'b', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toEqual({
-	      nextValue: 'hello ****',
-	      selectionStart: 8,
-	      selectionEnd: 8,
-	    });
+	    })).toBeNull();
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'i', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toEqual({
-	      nextValue: 'hello **',
-	      selectionStart: 7,
-	      selectionEnd: 7,
-	    });
+	    })).toBeNull();
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'u', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toEqual({
-	      nextValue: 'hello <u></u>',
-	      selectionStart: 9,
-	      selectionEnd: 9,
-	    });
+	    })).toBeNull();
 	  });
+
+  it('recognizes the paste selection to terminal hotkey', () => {
+    expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true, altKey: true }))).toBe(true);
+    expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true }))).toBe(false);
+    expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true, altKey: true, shiftKey: true }))).toBe(false);
+  });
 
 	  it('wraps selected text with inline formatting markers', () => {
 	    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'bold')).toEqual({
