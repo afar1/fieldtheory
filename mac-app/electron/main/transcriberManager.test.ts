@@ -845,6 +845,50 @@ describe('TranscriberManager standard paste target fallback', () => {
     );
   });
 
+  it('inserts recording text into a focused Field Theory terminal when Field Theory is frontmost', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const insertText = vi.fn(() => true);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn(() => ({ id: 1, type: 'transcript', content: 'ask cursor this' })),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      fieldTheoryMarkdownInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText: vi.fn(() => true),
+      },
+      fieldTheoryTerminalInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'ask cursor this',
+      skipNextPasteFailedNotification: false,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(insertText).toHaveBeenCalledWith('ask cursor this ');
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.fieldTheoryMarkdownInsertionTarget.insertText).not.toHaveBeenCalled();
+    expect(manager.skipNextPasteFailedNotification).toBe(true);
+    expect(manager.emit).not.toHaveBeenCalledWith(
+      'paste-failed',
+      'Field Theory has focus - press Cmd+V in your target app',
+      expect.any(String),
+    );
+  });
+
   it('inserts text and screenshot stacks as markdown into a focused Field Theory editor', async () => {
     const typeIntoApp = vi.fn(async () => ({ success: true }));
     const insertText = vi.fn(() => true);
