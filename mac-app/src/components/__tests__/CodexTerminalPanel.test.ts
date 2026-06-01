@@ -188,10 +188,10 @@ describe('getTerminalDataAfterInitialReplayEcho', () => {
 
 describe('terminalTheme', () => {
   it('uses the Ghostty dark palette and visible light ANSI values', () => {
-    expect(terminalTheme(false)?.background).toBe('#f7f2e8');
-    expect(terminalTheme(false)?.foreground).toBe('#111827');
+    expect(terminalTheme(false)?.background).toBe('#f4ecdc');
+    expect(terminalTheme(false)?.foreground).toBe('#0f172a');
     expect(terminalTheme(false)?.white).toBe('#374151');
-    expect(terminalTheme(false)?.brightBlack).toBe('#4b5563');
+    expect(terminalTheme(false)?.brightBlack).toBe('#374151');
     expect(terminalTheme(false)?.brightWhite).toBe('#111827');
     expect(terminalTheme(true)?.background).toBe('#0F1115');
     expect(terminalTheme(true)?.foreground).toBe('#E6EAF0');
@@ -201,7 +201,7 @@ describe('terminalTheme', () => {
   });
 
   it('raises light terminal contrast for diff backgrounds', () => {
-    expect(terminalContrastRatio(false)).toBe(4.5);
+    expect(terminalContrastRatio(false)).toBe(7);
     expect(terminalContrastRatio(true)).toBe(1);
   });
 });
