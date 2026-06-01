@@ -52,6 +52,7 @@ import {
   getScrollTopForRatio,
   isCodexTerminalEventTarget,
   isPasteSelectionToTerminalShortcut,
+  getTerminalPastePopoverPosition,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   isRenderedTaskListItem,
@@ -1727,6 +1728,26 @@ describe('rendered markdown edit helpers', () => {
     expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true, altKey: true }))).toBe(true);
     expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true }))).toBe(false);
     expect(isPasteSelectionToTerminalShortcut(mkKey({ key: 't', metaKey: true, altKey: true, shiftKey: true }))).toBe(false);
+  });
+
+  it('positions the terminal paste button to the right of the selected text', () => {
+    expect(getTerminalPastePopoverPosition(
+      { top: 100, right: 240, height: 24 },
+      { width: 800, height: 600 },
+    )).toEqual({
+      top: 97,
+      left: 248,
+    });
+  });
+
+  it('keeps the terminal paste button inside the viewport', () => {
+    expect(getTerminalPastePopoverPosition(
+      { top: 590, right: 790, height: 24 },
+      { width: 800, height: 600 },
+    )).toEqual({
+      top: 562,
+      left: 758,
+    });
   });
 
 	  it('wraps selected text with inline formatting markers', () => {
