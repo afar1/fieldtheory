@@ -3014,6 +3014,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const latestMarkdownCursorSnapshotRef = useRef<(MarkdownCodeEditorSelectionSnapshot & { timestamp: number; stage: string }) | null>(null);
   const editorCursorSettleTimerRef = useRef<number | null>(null);
   const pendingRenderedEditorSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const pendingRenderedDeleteScrollRestoreRef = useRef<{ path: string | null; scrollTop: number } | null>(null);
   const terminalReturnEditorSelectionRef = useRef<{ mode: MarkdownContentMode; start: number; end: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
@@ -5510,6 +5511,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, []);
 
+  const captureRenderedDeleteSelectionScroll = useCallback((event: KeyboardEvent) => {
+    if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+    const editor = renderedMarkdownEditorRef.current;
+    const selection = editor?.getSelectionRange();
+    const scrollEl = contentScrollRef.current;
+    if (!selection || selection.start === selection.end || !scrollEl) return;
+    pendingRenderedDeleteScrollRestoreRef.current = {
+      path: activeReadingPathRef.current,
+      scrollTop: scrollEl.scrollTop,
+    };
+    recordRenderedEditorDebug('rendered-delete-scroll-captured', {
+      key: event.key,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+      scrollTop: scrollEl.scrollTop,
+    });
+  }, [recordRenderedEditorDebug]);
+
+  const restorePendingRenderedDeleteScroll = useCallback(() => {
+    const pending = pendingRenderedDeleteScrollRestoreRef.current;
+    if (!pending) return;
+    pendingRenderedDeleteScrollRestoreRef.current = null;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (pending.path !== activeReadingPathRef.current) return;
+        const scrollEl = contentScrollRef.current;
+        if (!scrollEl) return;
+        const maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        scrollEl.scrollTop = Math.max(0, Math.min(pending.scrollTop, maxScrollTop));
+        updateRenderedDocumentTopFade(scrollEl);
+        recordRenderedEditorDebug('rendered-delete-scroll-restored', {
+          scrollTop: scrollEl.scrollTop,
+        });
+      });
+    });
+  }, [recordRenderedEditorDebug, updateRenderedDocumentTopFade]);
+
   const activateRenderedTextEditing = useCallback((selection?: { start: number; end: number } | null) => {
     if (!activeReading) return;
     const bodyLength = displaySourceBody.length;
@@ -5760,6 +5798,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     setMarkdownWikiLinkCompletion(null);
     requestRenderedContentSave(nextContent);
+    restorePendingRenderedDeleteScroll();
     if (startedAt > 0) {
       recordRenderedEditorDebug('apply-rendered-editor-body', {
         durationMs: performance.now() - startedAt,
@@ -5780,6 +5819,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markWritingActive,
     recordRenderedEditorDebug,
     requestRenderedContentSave,
+    restorePendingRenderedDeleteScroll,
     scheduleRenderedReactCommit,
   ]);
 
@@ -5845,9 +5885,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [applyRenderedEditorBody, focusRenderedEditor]);
 
-	  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
-	    const completion = markdownWikiLinkCompletion;
-	    if (completion) {
+  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
+    captureRenderedDeleteSelectionScroll(event);
+    const completion = markdownWikiLinkCompletion;
+    if (completion) {
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -6107,6 +6148,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeReading,
     applyRenderedEditorBody,
     applyRenderedWikiLinkSuggestion,
+    captureRenderedDeleteSelectionScroll,
     clearRenderedEditingState,
     canNavigateBack,
     canNavigateForward,
