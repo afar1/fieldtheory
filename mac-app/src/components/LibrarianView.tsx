@@ -775,6 +775,7 @@ export type LibrarianMaxwellItem = {
 };
 
 type MaxwellToolbarSelection = { start: number; end: number } | null;
+type TerminalPastePopover = { text: string; top: number; left: number } | null;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
   | { mode: 'selection'; selection: { start: number; end: number } };
@@ -883,6 +884,14 @@ export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): Ma
       end: Math.max(selection.start, selection.end),
     },
   };
+}
+
+export function isPasteSelectionToTerminalShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key.toLowerCase() === 't'
+    && event.metaKey
+    && event.altKey
+    && !event.ctrlKey
+    && !event.shiftKey;
 }
 
 type MarkdownTextEdit = {
@@ -1429,6 +1438,7 @@ export function getRenderedMarkdownShortcutEdit(input: {
 }): MarkdownTextEdit | null {
   const formattingKind = getMarkdownFormattingShortcut(input.event);
   if (formattingKind) {
+    if (input.selectionStart === input.selectionEnd) return null;
     return getMarkdownFormattingEdit(
       input.value,
       input.selectionStart,
@@ -3051,6 +3061,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
   const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
+  const [terminalPastePopover, setTerminalPastePopover] = useState<TerminalPastePopover>(null);
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
@@ -5544,6 +5555,86 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const handleCodexTerminalLauncherTargetSessionChange = useCallback((sessionId: string | null) => {
     void window.codexTerminalAPI?.setLauncherTargetSession?.(sessionId);
   }, []);
+
+  const pasteTextToCodexTerminal = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !window.codexTerminalAPI) return;
+    captureTerminalReturnEditorSelection();
+    handleCodexTerminalVisibleChange(true);
+    setSuppressAutoHideTerminal(true);
+    const sessions = await window.codexTerminalAPI.list();
+    let target = sessions.find((session) => !session.exitedAt) ?? null;
+    if (!target) {
+      target = await window.codexTerminalAPI.create({ auto: true, title: 'Terminal 1' });
+    }
+    if (!target) return;
+    await window.codexTerminalAPI.setLauncherTargetSession?.(target.id);
+    await window.codexTerminalAPI.input(target.id, text);
+    setTerminalPastePopover(null);
+    setCodexTerminalFocusRequestKey((key) => key + 1);
+  }, [captureTerminalReturnEditorSelection, handleCodexTerminalVisibleChange]);
+
+  useEffect(() => {
+    const updateSelectionPopover = () => {
+      const selection = window.getSelection();
+      const selectedText = selection?.toString() ?? '';
+      if (!selection || selection.isCollapsed || !selectedText.trim() || selection.rangeCount === 0) {
+        setTerminalPastePopover(null);
+        return;
+      }
+      const anchor = selection.anchorNode;
+      const focus = selection.focusNode;
+      const readerPane = readerPaneRef.current;
+      const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+      const focusElement = focus instanceof Element ? focus : focus?.parentElement ?? null;
+      if (
+        !readerPane
+        || (anchor && !readerPane.contains(anchor))
+        || (focus && !readerPane.contains(focus))
+        || Boolean(anchorElement?.closest('[data-ft-codex-terminal-panel="true"]'))
+        || Boolean(focusElement?.closest('[data-ft-codex-terminal-panel="true"]'))
+      ) {
+        setTerminalPastePopover(null);
+        return;
+      }
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      if (rect.width <= 0 && rect.height <= 0) {
+        setTerminalPastePopover(null);
+        return;
+      }
+      setTerminalPastePopover({
+        text: selectedText,
+        top: Math.max(8, rect.top - 38),
+        left: Math.max(12, Math.min(window.innerWidth - 44, rect.left + rect.width / 2 - 15)),
+      });
+    };
+
+    document.addEventListener('selectionchange', updateSelectionPopover);
+    window.addEventListener('mouseup', updateSelectionPopover, true);
+    window.addEventListener('keyup', updateSelectionPopover, true);
+    window.addEventListener('scroll', updateSelectionPopover, true);
+    window.addEventListener('resize', updateSelectionPopover);
+    return () => {
+      document.removeEventListener('selectionchange', updateSelectionPopover);
+      window.removeEventListener('mouseup', updateSelectionPopover, true);
+      window.removeEventListener('keyup', updateSelectionPopover, true);
+      window.removeEventListener('scroll', updateSelectionPopover, true);
+      window.removeEventListener('resize', updateSelectionPopover);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
+      if (!isPasteSelectionToTerminalShortcut(event)) return;
+      const text = terminalPastePopover?.text || window.getSelection()?.toString() || '';
+      if (!text.trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void pasteTextToCodexTerminal(text);
+    };
+    window.addEventListener('keydown', handleSelectionTerminalHotkey, true);
+    return () => window.removeEventListener('keydown', handleSelectionTerminalHotkey, true);
+  }, [pasteTextToCodexTerminal, terminalPastePopover?.text]);
 
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
@@ -10076,6 +10167,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         />
         </div>
         {inlineDrawDialog}
+        {terminalPastePopover && (
+          <button
+            type="button"
+            aria-label="Paste selection to terminal"
+            title="Paste selection to terminal (⌘⌥T)"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={() => void pasteTextToCodexTerminal(terminalPastePopover.text)}
+            style={{
+              position: 'fixed',
+              top: `${terminalPastePopover.top}px`,
+              left: `${terminalPastePopover.left}px`,
+              zIndex: 42,
+              width: '30px',
+              height: '30px',
+              padding: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: theme.isDark ? '#e5e7eb' : '#111827',
+              backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '7px',
+              boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.38)' : '0 8px 24px rgba(0,0,0,0.16)',
+              cursor: 'pointer',
+              // @ts-ignore - toolbar button should receive clicks in the frameless window.
+              WebkitAppRegion: 'no-drag',
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
+              <path d="m5.15 6.05 1.8 1.95-1.8 1.95M8.15 10.1h2.55" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         </div>
         )}
         <CodexTerminalPanel

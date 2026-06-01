@@ -311,6 +311,16 @@ describe('CodexTerminalManager', () => {
     expect(ptys[0].written[0]).toBe('codex resume thread-1\r');
   });
 
+  it('can launch the Gemma 4 local runner command', () => {
+    const { manager, ptys } = createManager();
+    const command = 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf';
+    manager.createSession({ launchCommand: command });
+
+    ptys[0].emit('data', promptFor(process.cwd()));
+
+    expect(ptys[0].written[0]).toBe(`${command}\r`);
+  });
+
   it('falls back to plain Codex for unsafe launch commands', () => {
     const { manager, ptys } = createManager();
     manager.createSession({ launchCommand: 'codex resume thread-1; echo no' });
