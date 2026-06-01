@@ -104,6 +104,8 @@ import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
 import MarkdownCodeEditor, {
+  RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
@@ -913,6 +915,47 @@ export function getTerminalPastePopoverPosition(
       Math.min(maxLeft, rect.right + TERMINAL_PASTE_POPOVER_GAP_PX),
     ),
   };
+}
+
+export function getTerminalImagePastePath(src: string | null): string | null {
+  if (!src) return null;
+  try {
+    if (/^ftlocalfile:/i.test(src)) {
+      return decodeURIComponent(new URL(src.replace(/^ftlocalfile:/i, 'file:')).pathname);
+    }
+    if (/^file:/i.test(src)) {
+      return decodeURIComponent(new URL(src).pathname);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function collectTerminalPasteTextFromNode(node: Node, parts: string[]): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    parts.push(node.textContent ?? '');
+    return;
+  }
+  if (!(node instanceof Element)) return;
+
+  if (node.classList.contains(RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS)) {
+    const imagePath = getTerminalImagePastePath(node.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR));
+    if (imagePath) parts.push(imagePath);
+    return;
+  }
+
+  node.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+}
+
+export function getTerminalPasteTextFromSelection(selection: Selection | null): string {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
+  const parts: string[] = [];
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const fragment = selection.getRangeAt(index).cloneContents();
+    fragment.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+  }
+  return parts.join('');
 }
 
 type MarkdownTextEdit = {
@@ -5598,8 +5641,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     const updateSelectionPopover = () => {
       const selection = window.getSelection();
-      const selectedText = selection?.toString() ?? '';
-      if (!selection || selection.isCollapsed || !selectedText.trim() || selection.rangeCount === 0) {
+      const pasteText = getTerminalPasteTextFromSelection(selection);
+      if (!selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
         setTerminalPastePopover(null);
         return;
       }
@@ -5624,7 +5667,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
       setTerminalPastePopover({
-        text: selectedText,
+        text: pasteText,
         ...getTerminalPastePopoverPosition(rect, {
           width: window.innerWidth,
           height: window.innerHeight,
@@ -5649,7 +5692,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
       if (!isPasteSelectionToTerminalShortcut(event)) return;
-      const text = terminalPastePopover?.text || window.getSelection()?.toString() || '';
+      const text = terminalPastePopover?.text || getTerminalPasteTextFromSelection(window.getSelection());
       if (!text.trim()) return;
       event.preventDefault();
       event.stopPropagation();
