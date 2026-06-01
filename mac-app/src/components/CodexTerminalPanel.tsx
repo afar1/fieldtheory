@@ -952,6 +952,11 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const terminalChrome = terminalDarkMode ? '#15181e' : '#e8ddcc';
   const terminalSoftBorder = terminalDarkMode ? '#242832' : '#cabca8';
   const terminalMutedText = terminalDarkMode ? '#8a8f99' : '#514b43';
+  const terminalText = terminalDarkMode ? GHOSTTY_DARK_FOREGROUND : '#111827';
+  const terminalActiveBackground = terminalDarkMode ? '#202833' : 'rgba(16,185,129,0.12)';
+  const terminalInactiveTabBackground = terminalDarkMode ? '#171b22' : 'transparent';
+  const terminalActiveBorder = terminalDarkMode ? '#2f5f4b' : 'rgba(16,185,129,0.42)';
+  const terminalRaisedBackground = terminalDarkMode ? '#171b22' : '#f0eadf';
   const toolbarTopInset = effectiveDockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0;
   const toolbarItemOffset: CSSProperties | undefined = toolbarTopInset > 0 ? { marginTop: `${toolbarTopInset}px` } : undefined;
 
@@ -1071,8 +1076,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: historyOpen ? theme.text : theme.textSecondary,
-            backgroundColor: historyOpen ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
+            color: historyOpen ? terminalText : terminalMutedText,
+            backgroundColor: historyOpen ? terminalActiveBackground : 'transparent',
             flexShrink: 0,
             ...(toolbarItemOffset ?? {}),
           }}
@@ -1091,11 +1096,11 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 alignItems: 'center',
                 overflow: 'hidden',
                 borderRadius: '6px',
-                border: `1px solid ${active ? (theme.isDark ? '#2f5f4b' : 'rgba(16,185,129,0.42)') : terminalSoftBorder}`,
+                border: `1px solid ${active ? terminalActiveBorder : terminalSoftBorder}`,
                 backgroundColor: active
-                  ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)')
-                  : (theme.isDark ? '#171b22' : 'transparent'),
-                color: active ? theme.text : theme.textSecondary,
+                  ? terminalActiveBackground
+                  : terminalInactiveTabBackground,
+                color: active ? terminalText : terminalMutedText,
                 flexShrink: 0,
                 ...(toolbarItemOffset ?? {}),
               }}
@@ -1126,7 +1131,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
                 {!compactRightDockToolbar && (
-                  <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
+                  <span style={{ color: terminalMutedText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
                 )}
               </button>
               <button
@@ -1183,7 +1188,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           </span>
         )}
         <div style={{ flex: 1, minWidth: '12px' }} />
-        {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
+        {terminalStatus && <span style={{ color: terminalMutedText, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
           <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active terminal" style={{ ...toolbarButtonStyle(theme, terminalDarkMode), ...(toolbarItemOffset ?? {}) }}>
             Restart
@@ -1211,7 +1216,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: terminalDarkMode ? '#e6eaf0' : theme.textSecondary,
+            color: terminalDarkMode ? '#e6eaf0' : terminalMutedText,
             backgroundColor: terminalDarkMode ? '#202833' : 'transparent',
             ...(toolbarItemOffset ?? {}),
           }}
@@ -1243,7 +1248,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             borderTop: `1px solid ${terminalSoftBorder}`,
             borderBottom: `1px solid ${terminalSoftBorder}`,
             backgroundColor: terminalChrome,
-            boxShadow: theme.isDark ? '-18px 0 38px rgba(0,0,0,0.34)' : '-18px 0 34px rgba(0,0,0,0.12)',
+            boxShadow: terminalDarkMode ? '-18px 0 38px rgba(0,0,0,0.34)' : '-18px 0 34px rgba(0,0,0,0.12)',
             ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
           }}
         >
@@ -1260,7 +1265,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 borderRadius: '5px',
                 padding: '0 8px',
                 backgroundColor: terminalBackground,
-                color: theme.text,
+                color: terminalText,
+                caretColor: terminalText,
                 fontSize: '11px',
                 outline: 'none',
               }}
@@ -1270,7 +1276,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             </button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr)', minHeight: 0, flex: 1 }}>
-            <div style={{ minHeight: 0, overflowY: 'auto', borderRight: `1px solid ${terminalSoftBorder}`, backgroundColor: theme.isDark ? '#12151a' : '#e8dfd1' }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', borderRight: `1px solid ${terminalSoftBorder}`, backgroundColor: terminalDarkMode ? '#12151a' : '#e8dfd1' }}>
               {historyLoading && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>Loading...</div>}
               {!historyLoading && historyEntries.length === 0 && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>No threads found</div>}
               {historyEntries.map((entry) => {
@@ -1287,8 +1293,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                       gap: '6px',
                       padding: '7px 7px 7px 9px',
                       borderBottom: `1px solid ${terminalSoftBorder}`,
-                      backgroundColor: active ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
-                      color: active ? theme.text : theme.textSecondary,
+                      backgroundColor: active ? terminalActiveBackground : 'transparent',
+                      color: active ? terminalText : terminalMutedText,
                     }}
                   >
                     <button
@@ -1321,8 +1327,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                         padding: 0,
                         border: `1px solid ${terminalSoftBorder}`,
                         borderRadius: '5px',
-                        backgroundColor: theme.isDark ? '#171b22' : '#f0eadf',
-                        color: theme.textSecondary,
+                        backgroundColor: terminalRaisedBackground,
+                        color: terminalMutedText,
                         cursor: 'pointer',
                       }}
                     >
@@ -1332,13 +1338,13 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 );
               })}
             </div>
-            <div style={{ minHeight: 0, overflowY: 'auto', padding: '12px', backgroundColor: terminalBackground, color: theme.text }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', padding: '12px', backgroundColor: terminalBackground, color: terminalText }}>
               {historyError && <div style={{ color: '#ef4444', fontSize: '11px' }}>{historyError}</div>}
               {!historyError && historyPreview && (
                 <>
-                  <div style={{ marginBottom: '8px', color: theme.text, fontSize: '12px', fontWeight: 700 }}>{historyPreview.title || 'Codex thread'}</div>
+                  <div style={{ marginBottom: '8px', color: terminalText, fontSize: '12px', fontWeight: 700 }}>{historyPreview.title || 'Codex thread'}</div>
                   <div style={{ marginBottom: '10px', color: terminalMutedText, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(historyPreview.cwd ?? '')}</div>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: theme.text, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '11px', lineHeight: 1.45 }}>{historyPreview.preview || 'No readable preview available.'}</pre>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: terminalText, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '11px', lineHeight: 1.45 }}>{historyPreview.preview || 'No readable preview available.'}</pre>
                 </>
               )}
             </div>
