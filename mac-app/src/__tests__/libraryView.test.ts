@@ -53,6 +53,8 @@ import {
   isCodexTerminalEventTarget,
   isPasteSelectionToTerminalShortcut,
   getTerminalPastePopoverPosition,
+  getTerminalImagePastePath,
+  getTerminalPasteTextFromSelection,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   isRenderedTaskListItem,
@@ -1748,6 +1750,36 @@ describe('rendered markdown edit helpers', () => {
       top: 562,
       left: 758,
     });
+  });
+
+  it('converts local rendered image urls to terminal file paths', () => {
+    expect(getTerminalImagePastePath('ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory/image.png')).toBe(
+      '/Users/afar/Library/Application Support/fieldtheory/image.png',
+    );
+    expect(getTerminalImagePastePath('file:///Users/afar/Desktop/shot.png')).toBe('/Users/afar/Desktop/shot.png');
+    expect(getTerminalImagePastePath('https://example.com/image.png')).toBeNull();
+  });
+
+  it('replaces rendered images with file paths in terminal paste selections', () => {
+    const root = document.createElement('div');
+    root.innerHTML = [
+      '<span>before </span>',
+      '<span class="cm-rendered-markdown-image" data-cm-rendered-markdown-image-src="ftlocalfile:///Users/afar/Notes/figures/shot.png">',
+      '<img src="ftlocalfile:///Users/afar/Notes/figures/shot.png" alt="Shot">',
+      '<span>Shot</span>',
+      '</span>',
+      '<span> after</span>',
+    ].join('');
+    document.body.appendChild(root);
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    expect(getTerminalPasteTextFromSelection(selection)).toBe('before /Users/afar/Notes/figures/shot.png after');
+
+    root.remove();
   });
 
 	  it('wraps selected text with inline formatting markers', () => {
