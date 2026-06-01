@@ -79,9 +79,9 @@ const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
 const LIBRARY_ICON_COLOR_STORAGE_KEY = 'library-sidebar-icon-color-indices';
 const LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY = 'library-sidebar-icon-color-order';
 const LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY = 'library-new-doc-location';
-const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
-const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
-const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
+export const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
+export const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
+export const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const LIBRARY_SIDEBAR_ICON_COLOR_PALETTE = [
   '#8a8a8a',
