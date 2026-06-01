@@ -10026,6 +10026,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           dockSideOverride={effectiveCodexTerminalDockSide !== codexTerminalDockSide ? effectiveCodexTerminalDockSide : undefined}
           extendToViewportTop={focusChromeActive && effectiveCodexTerminalDockSide === 'right'}
           focusRequestKey={codexTerminalFocusRequestKey}
+          layoutRefreshKey={focusChromeActive}
           onDockSideChange={setCodexTerminalDockSide}
           onFocusToggleShortcut={toggleTerminalEditorFocus}
           onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}

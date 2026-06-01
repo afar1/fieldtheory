@@ -14,6 +14,7 @@ import {
   shouldSendBackendResize,
   shouldFocusTerminalForRequest,
   shouldUseCompactRightDockToolbar,
+  getTerminalLayoutRefitDelays,
   getTerminalTopExtension,
   terminalAppearanceOptions,
   terminalContrastRatio,
@@ -133,6 +134,13 @@ describe('shouldFocusTerminalForRequest', () => {
     expect(shouldFocusTerminalForRequest({ visible: true, focusRequestKey: 1 })).toBe(true);
     expect(shouldFocusTerminalForRequest({ visible: true, focusRequestKey: 0 })).toBe(false);
     expect(shouldFocusTerminalForRequest({ visible: false, focusRequestKey: 1 })).toBe(false);
+  });
+});
+
+describe('getTerminalLayoutRefitDelays', () => {
+  it('schedules delayed refits only while the terminal is visible', () => {
+    expect(getTerminalLayoutRefitDelays({ visible: true })).toEqual([50, 180]);
+    expect(getTerminalLayoutRefitDelays({ visible: false })).toEqual([]);
   });
 });
 
