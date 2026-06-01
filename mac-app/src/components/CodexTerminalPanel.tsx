@@ -30,6 +30,7 @@ const CODEX_TERMINAL_ACTIVE_SESSION_STORAGE_KEY = 'fieldtheory.codexTerminal.act
 const CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.bottomHeight';
 const CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.rightWidth';
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
+const CODEX_TERMINAL_DARK_MODE_STORAGE_KEY = 'fieldtheory.codexTerminal.darkMode';
 const DEFAULT_BOTTOM_HEIGHT = 320;
 const DEFAULT_RIGHT_WIDTH = 520;
 const MIN_BOTTOM_HEIGHT = 220;
@@ -180,8 +181,8 @@ export function formatTerminalCwdLabel(input: string): string {
 
 export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
-    background: isDark ? GHOSTTY_DARK_BACKGROUND : '#f7f2e8',
-    foreground: isDark ? GHOSTTY_DARK_FOREGROUND : '#111827',
+    background: isDark ? GHOSTTY_DARK_BACKGROUND : '#f4ecdc',
+    foreground: isDark ? GHOSTTY_DARK_FOREGROUND : '#0f172a',
     cursor: isDark ? '#7AA2F7' : '#047857',
     cursorAccent: isDark ? GHOSTTY_DARK_BACKGROUND : undefined,
     selectionBackground: isDark ? '#ffffff' : '#b7d9cb',
@@ -194,7 +195,7 @@ export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
     magenta: isDark ? '#BB9AF7' : '#6d28d9',
     cyan: isDark ? '#7DCFFF' : '#0e7490',
     white: isDark ? '#C0CAF5' : '#374151',
-    brightBlack: isDark ? '#414868' : '#4b5563',
+    brightBlack: isDark ? '#414868' : '#374151',
     brightRed: isDark ? '#FF899D' : '#b91c1c',
     brightGreen: isDark ? '#B9F27C' : '#047857',
     brightYellow: isDark ? '#F5C97A' : '#a16207',
@@ -206,7 +207,7 @@ export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
 }
 
 export function terminalContrastRatio(isDark: boolean): number {
-  return isDark ? 1 : 4.5;
+  return isDark ? 1 : 7;
 }
 
 export function terminalAppearanceOptions(isDark: boolean): Pick<ITerminalOptions, 'cursorBlink' | 'cursorStyle' | 'cursorWidth' | 'fontFamily' | 'fontSize' | 'fontWeight' | 'fontWeightBold' | 'letterSpacing' | 'lineHeight' | 'minimumContrastRatio' | 'theme'> {
@@ -293,6 +294,11 @@ function clampRightWidth(value: number): number {
 
 export default function CodexTerminalPanel({ visible, visibleIntent = visible, pageContext, dockSideOverride, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onResizeActiveChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
+  const [terminalDarkMode, setTerminalDarkMode] = useState(() => (
+    localStorage.getItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY) === null
+      ? theme.isDark
+      : localStorage.getItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY) === 'true'
+  ));
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
@@ -542,6 +548,10 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   }, [visibleIntent]);
 
   useEffect(() => {
+    localStorage.setItem(CODEX_TERMINAL_DARK_MODE_STORAGE_KEY, String(terminalDarkMode));
+  }, [terminalDarkMode]);
+
+  useEffect(() => {
     if (activeSessionId) {
       localStorage.setItem(CODEX_TERMINAL_ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
     } else {
@@ -663,7 +673,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   }, [scheduleFitActiveTerminal]);
 
   useEffect(() => {
-    const appearance = terminalAppearanceOptions(theme.isDark);
+    const appearance = terminalAppearanceOptions(terminalDarkMode);
     for (const handle of terminalHandlesRef.current.values()) {
       // Assign only the appearance keys. Spreading handle.term.options back in
       // would re-include the readonly cols/rows, which xterm rejects after
@@ -673,7 +683,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       handle.term.options = { ...appearance };
       handle.term.refresh(0, Math.max(0, handle.term.rows - 1));
     }
-  }, [theme.isDark]);
+  }, [terminalDarkMode]);
 
   useEffect(() => {
     scheduleFitActiveTerminal();
@@ -757,7 +767,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     const term = new Terminal({
       convertEol: true,
       scrollback: 8000,
-      ...terminalAppearanceOptions(theme.isDark),
+      ...terminalAppearanceOptions(terminalDarkMode),
     });
     term.loadAddon(fit);
     term.loadAddon(webLinks);
@@ -840,7 +850,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     term.onData((data) => {
       void window.codexTerminalAPI?.input(sessionId, data);
     });
-  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, scheduleFitActiveTerminal, theme.isDark]);
+  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, scheduleFitActiveTerminal, terminalDarkMode]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);
@@ -938,10 +948,15 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     };
   const activeCwd = activeSession?.cwd ?? '';
   const activeCwdLabel = formatTerminalCwdLabel(activeCwd);
-  const terminalBackground = theme.isDark ? GHOSTTY_DARK_BACKGROUND : '#f0eadf';
-  const terminalChrome = theme.isDark ? '#15181e' : '#ebe3d6';
-  const terminalSoftBorder = theme.isDark ? '#242832' : '#ded3c2';
-  const terminalMutedText = theme.isDark ? '#8a8f99' : '#635f58';
+  const terminalBackground = terminalDarkMode ? GHOSTTY_DARK_BACKGROUND : '#f4ecdc';
+  const terminalChrome = terminalDarkMode ? '#15181e' : '#e8ddcc';
+  const terminalSoftBorder = terminalDarkMode ? '#242832' : '#cabca8';
+  const terminalMutedText = terminalDarkMode ? '#8a8f99' : '#514b43';
+  const terminalText = terminalDarkMode ? GHOSTTY_DARK_FOREGROUND : '#111827';
+  const terminalActiveBackground = terminalDarkMode ? '#202833' : 'rgba(16,185,129,0.12)';
+  const terminalInactiveTabBackground = terminalDarkMode ? '#171b22' : 'transparent';
+  const terminalActiveBorder = terminalDarkMode ? '#2f5f4b' : 'rgba(16,185,129,0.42)';
+  const terminalRaisedBackground = terminalDarkMode ? '#171b22' : '#f0eadf';
   const toolbarTopInset = effectiveDockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0;
   const toolbarItemOffset: CSSProperties | undefined = toolbarTopInset > 0 ? { marginTop: `${toolbarTopInset}px` } : undefined;
 
@@ -1055,14 +1070,14 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           }}
           title={historyOpen ? 'Close Codex history' : 'Open Codex history'}
           style={{
-            ...toolbarButtonStyle(theme),
+            ...toolbarButtonStyle(theme, terminalDarkMode),
             width: '26px',
             padding: 0,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: historyOpen ? theme.text : theme.textSecondary,
-            backgroundColor: historyOpen ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
+            color: historyOpen ? terminalText : terminalMutedText,
+            backgroundColor: historyOpen ? terminalActiveBackground : 'transparent',
             flexShrink: 0,
             ...(toolbarItemOffset ?? {}),
           }}
@@ -1081,11 +1096,11 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 alignItems: 'center',
                 overflow: 'hidden',
                 borderRadius: '6px',
-                border: `1px solid ${active ? (theme.isDark ? '#2f5f4b' : 'rgba(16,185,129,0.42)') : terminalSoftBorder}`,
+                border: `1px solid ${active ? terminalActiveBorder : terminalSoftBorder}`,
                 backgroundColor: active
-                  ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)')
-                  : (theme.isDark ? '#171b22' : 'transparent'),
-                color: active ? theme.text : theme.textSecondary,
+                  ? terminalActiveBackground
+                  : terminalInactiveTabBackground,
+                color: active ? terminalText : terminalMutedText,
                 flexShrink: 0,
                 ...(toolbarItemOffset ?? {}),
               }}
@@ -1116,7 +1131,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
                 {!compactRightDockToolbar && (
-                  <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
+                  <span style={{ color: terminalMutedText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(session.cwd)}</span>
                 )}
               </button>
               <button
@@ -1149,7 +1164,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             </div>
           );
         })}
-        <button type="button" onClick={() => void createSession()} title="New terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
+        <button type="button" onClick={() => void createSession()} title="New terminal (⌘T)" style={{ ...toolbarButtonStyle(theme, terminalDarkMode), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
           +
         </button>
         {activeCwd && effectiveDockSide === 'bottom' && (
@@ -1173,22 +1188,51 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           </span>
         )}
         <div style={{ flex: 1, minWidth: '12px' }} />
-        {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
+        {terminalStatus && <span style={{ color: terminalMutedText, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
-          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active terminal" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
+          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active terminal" style={{ ...toolbarButtonStyle(theme, terminalDarkMode), ...(toolbarItemOffset ?? {}) }}>
             Restart
           </button>
         )}
         <button
           type="button"
+          aria-label="Start Gemma 4 terminal"
+          onClick={() => void createSession({ title: 'Gemma 4', launchCommand: 'cd mac-app && npm run build:gemma && node scripts/gemma-generate.mjs --model resources/models/gemma-4-E4B-it-Q4_K_M.gguf' })}
+          title="Start Gemma 4 in the terminal"
+          style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '58px', padding: 0, ...(toolbarItemOffset ?? {}) }}
+        >
+          Gemma
+        </button>
+        <button
+          type="button"
+          aria-label={terminalDarkMode ? 'Use light terminal' : 'Use dark terminal'}
+          aria-pressed={terminalDarkMode}
+          onClick={() => setTerminalDarkMode((current) => !current)}
+          title={terminalDarkMode ? 'Use light terminal' : 'Use dark terminal'}
+          style={{
+            ...toolbarButtonStyle(theme, terminalDarkMode),
+            width: '28px',
+            padding: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: terminalDarkMode ? '#e6eaf0' : terminalMutedText,
+            backgroundColor: terminalDarkMode ? '#202833' : 'transparent',
+            ...(toolbarItemOffset ?? {}),
+          }}
+        >
+          <TerminalThemeIcon dark={terminalDarkMode} />
+        </button>
+        <button
+          type="button"
           aria-label={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
           onClick={() => updateDockSide(dockSide === 'bottom' ? 'right' : 'bottom')}
           title={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
-          style={{ ...toolbarButtonStyle(theme), width: '34px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...(toolbarItemOffset ?? {}) }}
+          style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '34px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...(toolbarItemOffset ?? {}) }}
         >
           <DockSideIcon side={dockSide === 'bottom' ? 'right' : 'bottom'} />
         </button>
-        <button type="button" onClick={() => onVisibleChange(false)} title="Close terminal panel" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
+        <button type="button" onClick={() => onVisibleChange(false)} title="Close terminal panel" style={{ ...toolbarButtonStyle(theme, terminalDarkMode), ...(toolbarItemOffset ?? {}) }}>
           Close
         </button>
       </div>
@@ -1204,7 +1248,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
             borderTop: `1px solid ${terminalSoftBorder}`,
             borderBottom: `1px solid ${terminalSoftBorder}`,
             backgroundColor: terminalChrome,
-            boxShadow: theme.isDark ? '-18px 0 38px rgba(0,0,0,0.34)' : '-18px 0 34px rgba(0,0,0,0.12)',
+            boxShadow: terminalDarkMode ? '-18px 0 38px rgba(0,0,0,0.34)' : '-18px 0 34px rgba(0,0,0,0.12)',
             ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
           }}
         >
@@ -1221,17 +1265,18 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 borderRadius: '5px',
                 padding: '0 8px',
                 backgroundColor: terminalBackground,
-                color: theme.text,
+                color: terminalText,
+                caretColor: terminalText,
                 fontSize: '11px',
                 outline: 'none',
               }}
             />
-            <button type="button" onClick={() => setHistoryOpen(false)} title="Close Codex history" style={{ ...toolbarButtonStyle(theme), width: '24px', padding: 0 }}>
+            <button type="button" onClick={() => setHistoryOpen(false)} title="Close Codex history" style={{ ...toolbarButtonStyle(theme, terminalDarkMode), width: '24px', padding: 0 }}>
               ×
             </button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr)', minHeight: 0, flex: 1 }}>
-            <div style={{ minHeight: 0, overflowY: 'auto', borderRight: `1px solid ${terminalSoftBorder}`, backgroundColor: theme.isDark ? '#12151a' : '#e8dfd1' }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', borderRight: `1px solid ${terminalSoftBorder}`, backgroundColor: terminalDarkMode ? '#12151a' : '#e8dfd1' }}>
               {historyLoading && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>Loading...</div>}
               {!historyLoading && historyEntries.length === 0 && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>No threads found</div>}
               {historyEntries.map((entry) => {
@@ -1248,8 +1293,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                       gap: '6px',
                       padding: '7px 7px 7px 9px',
                       borderBottom: `1px solid ${terminalSoftBorder}`,
-                      backgroundColor: active ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
-                      color: active ? theme.text : theme.textSecondary,
+                      backgroundColor: active ? terminalActiveBackground : 'transparent',
+                      color: active ? terminalText : terminalMutedText,
                     }}
                   >
                     <button
@@ -1282,8 +1327,8 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                         padding: 0,
                         border: `1px solid ${terminalSoftBorder}`,
                         borderRadius: '5px',
-                        backgroundColor: theme.isDark ? '#171b22' : '#f0eadf',
-                        color: theme.textSecondary,
+                        backgroundColor: terminalRaisedBackground,
+                        color: terminalMutedText,
                         cursor: 'pointer',
                       }}
                     >
@@ -1293,13 +1338,13 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
                 );
               })}
             </div>
-            <div style={{ minHeight: 0, overflowY: 'auto', padding: '12px', backgroundColor: terminalBackground, color: theme.text }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', padding: '12px', backgroundColor: terminalBackground, color: terminalText }}>
               {historyError && <div style={{ color: '#ef4444', fontSize: '11px' }}>{historyError}</div>}
               {!historyError && historyPreview && (
                 <>
-                  <div style={{ marginBottom: '8px', color: theme.text, fontSize: '12px', fontWeight: 700 }}>{historyPreview.title || 'Codex thread'}</div>
+                  <div style={{ marginBottom: '8px', color: terminalText, fontSize: '12px', fontWeight: 700 }}>{historyPreview.title || 'Codex thread'}</div>
                   <div style={{ marginBottom: '10px', color: terminalMutedText, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(historyPreview.cwd ?? '')}</div>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: theme.text, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '11px', lineHeight: 1.45 }}>{historyPreview.preview || 'No readable preview available.'}</pre>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: terminalText, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '11px', lineHeight: 1.45 }}>{historyPreview.preview || 'No readable preview available.'}</pre>
                 </>
               )}
             </div>
@@ -1405,15 +1450,30 @@ function DockSideIcon({ side }: { side: CodexTerminalDockSide }) {
   );
 }
 
-function toolbarButtonStyle(theme: Theme): CSSProperties {
-  const borderColor = theme.isDark ? theme.border : '#cbbfad';
+function TerminalThemeIcon({ dark }: { dark: boolean }) {
+  return (
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none">
+      {dark ? (
+        <path d="M11.7 12.7A5.8 5.8 0 0 1 3.3 4.3a5.9 5.9 0 0 0 8.4 8.4Z" fill="currentColor" />
+      ) : (
+        <>
+          <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M8 1.7v1.2M8 13.1v1.2M14.3 8h-1.2M2.9 8H1.7M12.5 3.5l-.8.8M4.3 11.7l-.8.8M12.5 12.5l-.8-.8M4.3 4.3l-.8-.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function toolbarButtonStyle(theme: Theme, terminalDarkMode = theme.isDark): CSSProperties {
+  const borderColor = terminalDarkMode ? '#2f3541' : '#b9aa96';
   return {
     height: '24px',
     padding: '0 8px',
     border: `1px solid ${borderColor}`,
     borderRadius: '5px',
     backgroundColor: 'transparent',
-    color: theme.textSecondary,
+    color: terminalDarkMode ? '#aab1bd' : '#514b43',
     cursor: 'pointer',
     fontSize: '11px',
     fontWeight: 400,
