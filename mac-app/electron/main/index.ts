@@ -191,6 +191,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { readCodexTerminalPasteText } from './codexTerminalClipboard';
 import { registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
@@ -6862,6 +6863,13 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle(CodexTerminalIPCChannels.READ_CLIPBOARD_TEXT, (): string => {
     return clipboard.readText();
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.READ_TERMINAL_PASTE_TEXT, async (): Promise<string> => {
+    return readCodexTerminalPasteText({
+      clipboard,
+      imageExporter: clipboardManager,
+    });
   });
 
   ipcMain.handle(CodexTerminalIPCChannels.WRITE_CLIPBOARD_TEXT, (_event, text: string): boolean => {
