@@ -888,7 +888,7 @@ describe('BrowserLibraryApp', () => {
       state: 'pro',
       trialEndsAt: null,
       nextTrialResetAt: null,
-    }));
+    } as const));
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = () => <div data-testid="library-view">Library</div>;
     const CommandsView = () => <div data-testid="commands-view">Commands</div>;
@@ -945,7 +945,7 @@ describe('BrowserLibraryApp', () => {
       relPath: 'briefs/Claude Pro Token Use Audit Prompt Brief.md',
       filePath: '/Users/afar/.fieldtheory/library/briefs/Claude Pro Token Use Audit Prompt Brief.md',
       title: 'Claude Pro Token Use Audit Prompt Brief',
-    }));
+    } as const));
     Object.defineProperty(window, 'shellAPI', {
       configurable: true,
       value: {
@@ -1733,7 +1733,7 @@ describe('BrowserLibraryApp', () => {
     });
 
     unmount();
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
 
     const bookmarksRender = render(
       <BrowserLibraryApp
@@ -1749,7 +1749,7 @@ describe('BrowserLibraryApp', () => {
     });
 
     bookmarksRender.unmount();
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
 
     render(
       <BrowserLibraryApp
@@ -1764,7 +1764,7 @@ describe('BrowserLibraryApp', () => {
       expect(window.__fieldTheoryBrowserReportActiveSurface).toHaveBeenCalledWith('ember');
     });
 
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
     act(() => {
       window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
     });
@@ -1911,7 +1911,7 @@ describe('BrowserLibraryApp', () => {
       });
     });
 
-    expect(window.wikiAPI.openScratchpadDefault).toHaveBeenCalled();
+    expect(window.wikiAPI!.openScratchpadDefault).toHaveBeenCalled();
     expect(await screen.findByTestId('library-view')).toBeTruthy();
     expect(screen.getByText('scratchpad/June 2.md')).toBeTruthy();
   });

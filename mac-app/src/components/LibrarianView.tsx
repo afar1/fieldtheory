@@ -176,6 +176,8 @@ import {
   wikiTargetPartsFromUnresolvedTitle,
 } from '../utils/wikiIndexPages';
 
+type ActiveLibraryFileContext = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveLibraryFileContext']>>>>;
+
 const SketchView = lazy(() => import('./SketchView'));
 
 type FieldTheoryMarkdownTarget = {
@@ -6018,7 +6020,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
         const activeElement = document.activeElement;
         const latestEditorSnapshot = latestMarkdownCursorSnapshotRef.current;
-        if (activeElement instanceof Element && shouldPreserveEditorSelectionPastePopover({
+        if (activeElement instanceof Element && latestEditorSnapshot && shouldPreserveEditorSelectionPastePopover({
           activeElement,
           latestEditorSnapshot,
         })) {
