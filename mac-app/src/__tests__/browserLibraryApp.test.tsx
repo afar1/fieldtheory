@@ -1,7 +1,8 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserLibraryApp } from '../browser-library';
+import { BrowserLibraryApp, syncRendererStorage } from '../browser-library';
+import { SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY } from '../utils/editorShortcuts';
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -114,5 +115,25 @@ describe('BrowserLibraryApp', () => {
       openMarkdownListener?.({ kind: 'library', path: 'library' });
     });
     await waitFor(() => expect(screen.getByTestId('library-view')).toBeTruthy());
+  });
+
+  it('syncs shared-file hotkey preference changes into the Browser Library view', async () => {
+    const changed = vi.fn();
+    window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', changed);
+
+    await syncRendererStorage(async () => ({
+      available: true,
+      values: {
+        [SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY]: 'Command+Shift+R',
+      },
+    }) as any);
+
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(
+      SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
+      'Command+Shift+R',
+    );
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', changed);
   });
 });

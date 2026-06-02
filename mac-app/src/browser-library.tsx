@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { useTheme } from './contexts/ThemeContext';
 import MaxwellHistoryPopover from './components/MaxwellHistoryPopover';
 import './styles.css';
-import { isSidebarToggleShortcut } from './utils/editorShortcuts';
+import { isSidebarToggleShortcut, SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY } from './utils/editorShortcuts';
 
 type BrowserHelperConfig = {
   api: string;
@@ -51,6 +51,7 @@ const RENDERER_STORAGE_SYNC_KEYS = [
   'librarian-last-selection',
   'librarian-editor-session',
   'fieldtheory.lineNumbers',
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
   'librarian-sidebar-width',
   LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY,
   'bookmarks-view-mode',
@@ -256,9 +257,12 @@ function dispatchRendererStorageChange(key: string, oldValue: string | null, new
   window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
     detail: { key, oldValue, newValue },
   }));
+  if (key === SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY) {
+    window.dispatchEvent(new Event('fieldtheory:shared-file-toggle-hotkey-changed'));
+  }
 }
 
-async function syncRendererStorage(
+export async function syncRendererStorage(
   request: ReturnType<typeof createBrowserHelperClient>,
   options: RendererStorageApplyOptions = {},
 ): Promise<void> {
