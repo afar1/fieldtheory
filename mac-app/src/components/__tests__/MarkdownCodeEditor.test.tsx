@@ -1161,7 +1161,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 	    underline.parent.remove();
 	  });
 
-	  it('toggles rendered task checkboxes through the markdown source without moving the cursor', () => {
+  it('toggles rendered task checkboxes through the markdown source without moving the cursor', () => {
 	    const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
@@ -1192,6 +1192,34 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('does not focus rendered task checkboxes when the editor was not already focused', async () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [ ] open',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    outside.focus();
+    const checkbox = parent.querySelector<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`);
+    if (!checkbox) throw new Error('Rendered task checkbox missing');
+
+    checkbox.click();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(view.state.doc.toString()).toBe('- [x] open');
+    expect(document.activeElement).toBe(outside);
+
+    view.destroy();
+    parent.remove();
+    outside.remove();
   });
 
   it('hides task marker spacing inside the rendered marker column', () => {

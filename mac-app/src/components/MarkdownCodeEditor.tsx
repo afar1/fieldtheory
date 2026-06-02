@@ -1086,6 +1086,7 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
     checkbox.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      const shouldRestoreFocus = view.hasFocus;
       view.dispatch({
         changes: {
           from: this.checkFrom,
@@ -1093,7 +1094,9 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
           insert: this.checked ? ' ' : 'x',
         },
       });
-      window.setTimeout(() => view.focus(), 0);
+      if (shouldRestoreFocus) {
+        window.setTimeout(() => view.focus(), 0);
+      }
     });
     return checkbox;
   }
