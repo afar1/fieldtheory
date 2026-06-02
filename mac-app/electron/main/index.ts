@@ -34,12 +34,14 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { BrowserHelperDocumentService } from './browserHelperDocumentService';
+import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
 import {
   LibraryDocumentWindowManager,
   persistableLibraryDocumentWindowBounds,
   type LibraryDocumentWindowTarget,
 } from './documentWindow';
-import { DocumentPresenceManager } from './documentPresence';
+import { DocumentPresenceManager, type DocumentPresenceContext } from './documentPresence';
 import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
@@ -2038,10 +2040,11 @@ function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
 function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
   return Boolean(
-    librarianMarkdownEditorFocused &&
-    clipboardWindow &&
-    !clipboardWindow.isDestroyed() &&
-    clipboardWindow.isVisible()
+    (librarianMarkdownEditorFocused &&
+      clipboardWindow &&
+      !clipboardWindow.isDestroyed() &&
+      clipboardWindow.isVisible()) ||
+    (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
   );
 }
 
@@ -2049,15 +2052,19 @@ function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
   return Boolean(
     activeLibraryFileContext &&
-    clipboardWindow &&
-    !clipboardWindow.isDestroyed() &&
-    clipboardWindow.isVisible()
+    ((clipboardWindow &&
+      !clipboardWindow.isDestroyed() &&
+      clipboardWindow.isVisible()) ||
+      browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
   );
 }
 
 function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasFocusedFieldTheoryMarkdownInsertionTarget()) {
     return false;
+  }
+  if (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)) {
+    return browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
   }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
@@ -2067,8 +2074,26 @@ function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
     return false;
   }
+  if (
+    (browserLibraryMarkdownEditorFocused ||
+      !clipboardHistoryWindow?.getWindow() ||
+      clipboardHistoryWindow.getWindow()?.isDestroyed() ||
+      !clipboardHistoryWindow.getWindow()?.isVisible()) &&
+    browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
+  ) {
+    return browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
+  }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
+}
+
+function handleBrowserLibraryReplaceSelectedTextResult(result: { requestId?: string; success?: boolean }): void {
+  if (!result.requestId) return;
+  const pending = pendingBrowserLibraryReplaceSelectedText.get(result.requestId);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingBrowserLibraryReplaceSelectedText.delete(result.requestId);
+  pending.resolve(result.success === true);
 }
 
 function writeTextIntoFocusedCodexTerminal(text: string): boolean {
@@ -2084,6 +2109,35 @@ async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
 }): Promise<boolean> {
+  if (
+    input.expectedText &&
+    input.replacementText &&
+    browserLibraryMarkdownEditorFocused &&
+    browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
+  ) {
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingBrowserLibraryReplaceSelectedText.delete(requestId);
+        resolve(false);
+      }, 600);
+      pendingBrowserLibraryReplaceSelectedText.set(requestId, { resolve, timeout });
+      const sent = browserHelperServer?.emitNativeEventToClient(activeBrowserLibraryClientId, {
+        type: 'librarian:replaceSelectedMarkdownText',
+        request: {
+          requestId,
+          expectedText: input.expectedText,
+          replacementText: input.replacementText,
+        },
+      });
+      if (!sent) {
+        clearTimeout(timeout);
+        pendingBrowserLibraryReplaceSelectedText.delete(requestId);
+        resolve(false);
+      }
+    });
+  }
+
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
   if (
     !input.expectedText ||
@@ -2366,6 +2420,7 @@ let quotaManager: QuotaManager | null = null;
 let accountStatusManager: AccountStatusManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let browserHelperServer: BrowserHelperServer | null = null;
 let markdownAssetsConsolidated = false;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
@@ -2378,6 +2433,846 @@ let meetingManager: MeetingManager | null = null;
 let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
+let runNativeLocalCommand = async (_rawRequest: unknown): Promise<LocalCommandRunResult> => ({
+  success: false,
+  error: 'Field Theory command system is not ready',
+});
+
+function isDocumentVersionLike(value: unknown): value is DocumentVersion {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<DocumentVersion>;
+  return typeof candidate.mtimeMs === 'number'
+    && typeof candidate.size === 'number'
+    && typeof candidate.sha256 === 'string';
+}
+
+function documentVersionsEqual(left: DocumentVersion, right: DocumentVersion): boolean {
+  return left.mtimeMs === right.mtimeMs
+    && left.size === right.size
+    && left.sha256 === right.sha256;
+}
+
+function renameExternalLibraryFile(absPath: string, newName: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null {
+  try {
+    const canonical = fs.realpathSync(absPath);
+    if (!isLibraryTextDocumentPath(canonical)) return null;
+    const trimmed = newName.trim();
+    if (!trimmed) return null;
+    const extension = path.extname(canonical) || '.md';
+    const nextFileName = libraryTextDocumentFileNameFromUserInput(trimmed, extension);
+    if (!nextFileName) return null;
+    const nextPath = path.join(path.dirname(canonical), nextFileName);
+    if (nextPath === canonical) {
+      const content = fs.readFileSync(canonical, 'utf-8');
+      const stats = fs.statSync(canonical);
+      return {
+        path: canonical,
+        name: path.basename(canonical),
+        content,
+        mtime: Math.floor(stats.mtimeMs),
+        documentVersion: readDocumentVersion(canonical),
+      };
+    }
+    if (fs.existsSync(nextPath)) {
+      try {
+        if (fs.realpathSync(nextPath) !== fs.realpathSync(canonical)) return null;
+      } catch {
+        return null;
+      }
+    }
+    fs.renameSync(canonical, nextPath);
+    const content = fs.readFileSync(nextPath, 'utf-8');
+    const stats = fs.statSync(nextPath);
+    const title = stripMarkdownFileExtension(path.basename(nextPath));
+    const libraryRoot = librarianManager?.getLibraryRoots().find((root) => {
+      if (root.builtin) return false;
+      const relative = path.relative(root.path, canonical);
+      return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    });
+    if (libraryRoot && librarianManager) {
+      const detectedAt = Date.now();
+      const event: LibraryRenameEvent = {
+        rootPath: libraryRoot.path,
+        oldRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, canonical).split(path.sep).join('/')),
+        newRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, nextPath).split(path.sep).join('/')),
+        oldAbsPath: canonical,
+        newAbsPath: nextPath,
+        builtin: false,
+        source: 'external',
+        detectedAt,
+      };
+      traceLibraryRename('external-rename-record', {
+        oldAbsPath: canonical,
+        newAbsPath: nextPath,
+        oldRelPath: event.oldRelPath,
+        newRelPath: event.newRelPath,
+      });
+      librarianManager.recordLibraryRename(event);
+    }
+    librarianManager?.recordWatchedReadingRename(canonical, nextPath);
+    recentManager?.remove('external', canonical);
+    recentManager?.visit({ kind: 'external', path: nextPath, title, lastOpenedAt: Date.now() });
+    broadcastRecentChanged();
+    return {
+      path: nextPath,
+      name: path.basename(nextPath),
+      content,
+      mtime: Math.floor(stats.mtimeMs),
+      documentVersion: readDocumentVersion(nextPath),
+    };
+  } catch (error) {
+    log.error(`external:rename failed for ${absPath}:`, error);
+    return null;
+  }
+}
+
+async function shareLibrarianReading(filePath: string): Promise<{ slug: string; url: string } | null> {
+  if (!authManager?.isAuthenticated()) {
+    return null;
+  }
+
+  const reading = librarianManager?.getReading(filePath);
+  if (!reading) {
+    return null;
+  }
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) {
+    return null;
+  }
+
+  let authorName: string | null = null;
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', session.user.id)
+      .single();
+    if (profile?.first_name && profile?.last_name) {
+      authorName = `${profile.first_name} ${profile.last_name}`;
+    } else if (profile?.first_name) {
+      authorName = profile.first_name;
+    }
+  } catch {
+    // Ignore profile fetch errors.
+  }
+
+  const { data: existing } = await supabase
+    .from('shared_readings')
+    .select('slug, is_public')
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .single();
+
+  if (existing) {
+    if (!existing.is_public) {
+      await supabase
+        .from('shared_readings')
+        .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
+        .eq('source_path', filePath)
+        .eq('user_id', session.user.id);
+    }
+    return {
+      slug: existing.slug,
+      url: `https://librarian.fieldtheory.dev/${existing.slug}`,
+    };
+  }
+
+  const slugify = (text: string): string =>
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 50);
+
+  const baseSlug = slugify(reading.title);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const randomSuffix = crypto.randomBytes(3).toString('hex');
+    const slug = `${baseSlug}-${randomSuffix}`;
+
+    const { data, error } = await supabase
+      .from('shared_readings')
+      .insert({
+        user_id: session.user.id,
+        slug,
+        title: reading.title,
+        content: reading.content,
+        author_name: authorName,
+        source_path: filePath,
+        is_public: true,
+      })
+      .select('slug')
+      .single();
+
+    if (!error && data) {
+      metricsManager?.recordLibrarianArtifactShared();
+      return {
+        slug: data.slug,
+        url: `https://librarian.fieldtheory.dev/${data.slug}`,
+      };
+    }
+
+    if (error?.code === '23505') {
+      continue;
+    }
+
+    log.error('Librarian share failed:', error);
+    return null;
+  }
+
+  log.error('Librarian share failed: max retries exceeded');
+  return null;
+}
+
+async function unshareLibrarianReading(filePath: string): Promise<boolean> {
+  if (!authManager?.isAuthenticated()) return false;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return false;
+
+  const { error } = await supabase
+    .from('shared_readings')
+    .update({ is_public: false })
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id);
+
+  if (error) {
+    log.error('Librarian unshare failed:', error);
+    return false;
+  }
+
+  return true;
+}
+
+async function getLibrarianShareStatus(filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> {
+  if (!authManager?.isAuthenticated()) return null;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return null;
+
+  const { data, error } = await supabase
+    .from('shared_readings')
+    .select('slug, is_public')
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .single();
+
+  if (error || !data) {
+    return { shared: false };
+  }
+
+  if (!data.is_public) {
+    return { shared: false };
+  }
+
+  return {
+    shared: true,
+    slug: data.slug,
+    url: `https://librarian.fieldtheory.dev/${data.slug}`,
+  };
+}
+
+async function updateSharedLibrarianReading(filePath: string, content: string, title: string): Promise<boolean> {
+  if (!authManager?.isAuthenticated()) return false;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return false;
+
+  let authorName: string | null = null;
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', session.user.id)
+      .single();
+    if (profile?.first_name && profile?.last_name) {
+      authorName = `${profile.first_name} ${profile.last_name}`;
+    } else if (profile?.first_name) {
+      authorName = profile.first_name;
+    }
+  } catch {
+    // Ignore profile fetch errors.
+  }
+
+  const { error } = await supabase
+    .from('shared_readings')
+    .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .eq('is_public', true);
+
+  if (error) {
+    log.error('Librarian update shared reading failed:', error);
+    return false;
+  }
+
+  return true;
+}
+
+async function startBrowserHelperIfEnabled(): Promise<void> {
+  if (process.env.FIELD_THEORY_BROWSER_HELPER !== '1') return;
+  if (!librarianManager || browserHelperServer) return;
+
+  const manager = librarianManager;
+  const createFallbackDocumentService = () => new BrowserHelperDocumentService(manager.getLibraryRoots().map((root) => root.path));
+  const nativeWikiPage = (page: ReturnType<LibrarianManager['getWikiPage']>) => page
+    ? {
+      ...page,
+      rootPath: manager.getWikiRoot(),
+      documentKind: page.documentKind ?? 'markdown',
+    }
+    : null;
+  browserHelperServer = new BrowserHelperServer({
+    service: {
+      getRoots: () => createFallbackDocumentService().getRoots(),
+      getLibraryRoots: () => manager.getLibraryRoots(),
+      addLibraryRoot: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const added = manager.addLibraryRoot(dirPath);
+        syncTaggedDocsRootsFromLibrary();
+        return added;
+      },
+      removeLibraryRoot: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        const removed = manager.removeLibraryRoot(dirPath);
+        syncTaggedDocsRootsFromLibrary();
+        return removed;
+      },
+      getWikiTree: () => manager.getWikiTree(),
+      getWikiPage: (relPath) => nativeWikiPage(manager.getWikiPage(relPath)),
+      findWikiPageByDocumentVersion: (version, previousRelPath) => manager.findWikiPageByDocumentVersion(version, previousRelPath),
+      saveWikiPage: (relPath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return manager.saveWikiPage(relPath, content, expectedVersion);
+      },
+      createWikiFile: (folderRelPath, fileName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return nativeWikiPage(manager.createWikiFile(folderRelPath, fileName));
+      },
+      createWikiFileWithDefaultTitle: (folderRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return nativeWikiPage(manager.createWikiFileWithDefaultTitle(folderRelPath));
+      },
+      createScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
+      openScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
+      createWikiDir: (dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.createWikiDir(dirRelPath);
+      },
+      deleteWikiPage: (relPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteWikiPage(relPath);
+      },
+      renameWikiPage: (relPath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return manager.renameWikiPage(relPath, newName);
+      },
+      createLibraryFile: (rootPath, folderRelPath, fileName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = manager.createLibraryFile(rootPath, folderRelPath, fileName);
+        return page ? { ...page, rootPath, documentKind: page.documentKind ?? 'markdown' } : null;
+      },
+      createLibraryDir: (rootPath, dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.createLibraryDir(rootPath, dirRelPath);
+      },
+      deleteLibraryDir: (rootPath, dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteLibraryDir(rootPath, dirRelPath);
+      },
+      moveLibraryItem: (rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return manager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
+      },
+      openExternal: (filePath) => createFallbackDocumentService().openExternal(filePath),
+      saveExternal: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return createFallbackDocumentService().saveExternal(filePath, content, expectedVersion);
+      },
+      findLibraryFileByDocumentVersion: (version, previousAbsPath) => {
+        const candidatePaths: string[] = [];
+        const collectFiles = (nodes: WikiNode[]) => {
+          for (const node of nodes) {
+            if (node.kind === 'file') {
+              candidatePaths.push(node.absPath);
+            } else {
+              collectFiles(node.children);
+            }
+          }
+        };
+        for (const root of manager.getLibraryRoots()) {
+          if (root.builtin) continue;
+          collectFiles(root.tree);
+        }
+        const previousDir = previousAbsPath ? path.dirname(previousAbsPath) : null;
+        const sortedPaths = previousDir
+          ? candidatePaths.sort((left, right) => {
+            const leftSameDir = path.dirname(left) === previousDir ? 0 : 1;
+            const rightSameDir = path.dirname(right) === previousDir ? 0 : 1;
+            return leftSameDir - rightSameDir;
+          })
+          : candidatePaths;
+        for (const candidatePath of sortedPaths) {
+          if (candidatePath === previousAbsPath) continue;
+          try {
+            const candidateVersion = readDocumentVersion(candidatePath);
+            if (!documentVersionsEqual(candidateVersion, version)) continue;
+            return createFallbackDocumentService().openExternal(candidatePath);
+          } catch {}
+        }
+        return null;
+      },
+      renameExternal: (filePath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const renamed = renameExternalLibraryFile(filePath, newName);
+        return renamed;
+      },
+      deleteExternal: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteExternalLibraryFile(filePath);
+      },
+      getDocument: (ref) => createFallbackDocumentService().getDocument(ref),
+      saveDocument: (ref, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return createFallbackDocumentService().saveDocument(ref, content, expectedVersion);
+      },
+    },
+    staticDir: path.join(app.getAppPath(), 'dist'),
+    nativeBridge: {
+      getHiddenFolders: () => librarianManager?.getHiddenDefaultFolders() ?? [],
+      setFolderHidden: (folderId, hidden) => librarianManager?.setDefaultFolderHidden(folderId, hidden) ?? [],
+      getReadings: () => librarianManager?.getReadings() ?? [],
+      getReading: (filePath) => librarianManager?.getReading(filePath) ?? null,
+      saveReading: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return librarianManager?.saveReading(filePath, content, isDocumentVersionLike(expectedVersion) ? expectedVersion : null) ?? { ok: false, reason: 'error' };
+      },
+      deleteReading: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.deleteReading(filePath) ?? false;
+      },
+      getShareStatus: (filePath) => getLibrarianShareStatus(filePath),
+      shareReading: (filePath) => shareLibrarianReading(filePath),
+      unshareReading: (filePath) => unshareLibrarianReading(filePath),
+      updateSharedReading: (filePath, content, title) => updateSharedLibrarianReading(filePath, content, title),
+      muteForToday: () => librarianManager?.muteForToday() ?? false,
+      isMutedForToday: () => librarianManager?.isMutedForToday() ?? false,
+      unmute: () => librarianManager?.unmute() ?? false,
+      setMarkdownEditorFocused: (focused, clientId) => {
+        browserLibraryMarkdownEditorFocused = Boolean(focused);
+        if (browserLibraryMarkdownEditorFocused) {
+          activeBrowserLibraryClientId = clientId ?? null;
+          librarianMarkdownEditorFocused = false;
+        } else if (!clientId || activeBrowserLibraryClientId === clientId) {
+          activeBrowserLibraryClientId = null;
+        }
+      },
+      replaceSelectedMarkdownTextResult: (result) => handleBrowserLibraryReplaceSelectedTextResult(result),
+      listRecent: () => recentManager?.list() ?? [],
+      visitRecent: (entry) => {
+        const next = recentManager?.visit(entry) ?? [];
+        broadcastRecentChanged();
+        return next;
+      },
+      removeRecent: (kind, entryPath) => {
+        const next = recentManager?.remove(kind, entryPath) ?? [];
+        broadcastRecentChanged();
+        return next;
+      },
+      listTaggedDocs: () => taggedDocsManager?.list() ?? [],
+      markTaggedDocRead: (ulid) => taggedDocsManager?.markRead(ulid) ?? null,
+      markAllTaggedDocsRead: () => taggedDocsManager?.markAllRead() ?? [],
+      rescanTaggedDocs: () => taggedDocsManager?.rescan() ?? [],
+      getSharedFilesAvailability: async () => {
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
+        return sharedSyncService.getAvailability();
+      },
+      getSharedFileStatus: async (filePath) => {
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        return sharedSyncService.getShareStatus(filePath);
+      },
+      shareSharedFile: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false };
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        const result = await sharedSyncService.shareFile(input as SharedFileShareInput);
+        if (result.shared) librarianManager?.emit('library:changed');
+        return result;
+      },
+      unshareSharedFile: async (filePath) => {
+        if (!canWriteFieldTheoryContent()) return false;
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return false;
+        const result = await sharedSyncService.unshareFile(filePath);
+        if (result) librarianManager?.emit('library:changed');
+        return result;
+      },
+      syncSharedFiles: async () => {
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+        const result = await sharedSyncService.syncOnce();
+        if (result.written > 0 || result.removed > 0 || result.created > 0) {
+          librarianManager?.emit('library:changed');
+        }
+        broadcastSharedFilePinsChanged();
+        return result;
+      },
+      updateSharedFileContent: async (sharedId, content, expectedRevision, documentPath) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
+        if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+        return result;
+      },
+      setActivePresence: async (sharedId) => {
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        return sharedSyncService.setActivePresence(sharedId);
+      },
+      getPinnedItemIds: async () => {
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        return sharedSyncService.getPinnedSidebarItemIds();
+      },
+      setPinned: async (filePath, pinned) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+        refreshFieldTheorySyncServices();
+        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+        return sharedSyncService.setPinned(filePath, pinned);
+      },
+      initializeCommands: async () => {
+        await commandsManager?.initialize();
+      },
+      getWatchedCommandDirs: () => commandsManager?.getWatchedDirs() ?? [],
+      addWatchedCommandDir: async (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return await commandsManager?.addWatchedDir(dirPath) ?? null;
+      },
+      removeWatchedCommandDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return commandsManager?.removeWatchedDir(dirPath) ?? false;
+      },
+      getDefaultCommandDirectory: () => commandsManager?.getDefaultDirectory() ?? '',
+      createDefaultCommandDirectory: async () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return await commandsManager?.createDefaultDirectory() ?? null;
+      },
+      getCommands: () => commandsManager?.getCommands().map(cmd => ({
+        name: cmd.name,
+        displayName: cmd.displayName,
+        filePath: cmd.filePath,
+        lastModified: cmd.lastModified,
+      })) ?? [],
+      getCommandByPath: (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
+      getMarkdownPreview: (filePath) => loadMarkdownPreview(filePath),
+      saveCommand: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return commandsManager?.saveCommand(filePath, content, isDocumentVersionLike(expectedVersion) ? expectedVersion : null) ?? { ok: false, reason: 'error' };
+      },
+      createCommand: (directoryPath, name, content) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return commandsManager?.createCommand(directoryPath, name, content) ?? null;
+      },
+      deleteCommand: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return commandsManager?.deleteCommand(filePath) ?? false;
+      },
+      renameCommand: (oldFilePath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return commandsManager?.renameCommand(oldFilePath, newName) ?? null;
+      },
+      shareCommand: async (command) => {
+        refreshFieldTheorySyncServices();
+        if (!canUseFieldTheorySync()) return { error: fieldTheorySyncDisabledError() };
+        const supabase = authManager?.getSupabaseClient();
+        if (!supabase) return { error: 'Not authenticated' };
+        const session = await authManager?.getSession();
+        if (!session) return { error: 'Please log in to share commands' };
+        const commandInput = command as { name?: unknown; content?: unknown };
+        const { data, error } = await supabase
+          .from('popular_commands')
+          .insert({
+            name: typeof commandInput.name === 'string' ? commandInput.name : '',
+            content: typeof commandInput.content === 'string' ? commandInput.content : '',
+            copy_count: 0,
+            contributed_by: session.user?.id || null,
+          })
+          .select()
+          .single();
+        if (error) {
+          log.error('Failed to share command:', error);
+          return { error: error.message };
+        }
+        return { data };
+      },
+      unshareCommand: async (commandId) => {
+        refreshFieldTheorySyncServices();
+        if (!canUseFieldTheorySync()) return { error: fieldTheorySyncDisabledError() };
+        const supabase = authManager?.getSupabaseClient();
+        if (!supabase) return { error: 'Not authenticated' };
+        const { error } = await supabase
+          .from('popular_commands')
+          .delete()
+          .eq('id', commandId);
+        if (error) {
+          log.error('Failed to unshare command:', error);
+          return { error: error.message };
+        }
+        return { success: true };
+      },
+      runLocalCommand: (request) => runNativeLocalCommand(request),
+      listMaxwellRuns: (limit) => listNativeMaxwellRuns(limit),
+      getMaxwellMemory: () => getMaxwellMemoryState(),
+      saveMaxwellMemory: (request) => saveNativeMaxwellMemory(request),
+      cancelMaxwellRun: (runId) => cancelNativeMaxwellRun(runId),
+      undoMaxwellRun: (runId) => undoNativeMaxwellRun(runId),
+      redoMaxwellRun: (runId) => redoNativeMaxwellRun(runId),
+      getActiveMeeting: () => {
+        try {
+          return getMeetingManager().getActiveSession();
+        } catch {
+          return null;
+        }
+      },
+      startMeetingHere: async () => {
+        try {
+          return await getMeetingManager().startHere(activeLibraryFileContext ? { ...activeLibraryFileContext } : null);
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'Meeting action failed' };
+        }
+      },
+      stopMeeting: async () => {
+        try {
+          return await getMeetingManager().stopActiveMeeting();
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'Meeting action failed' };
+        }
+      },
+      getBookmarks: () => ensureBookmarksManager().getSnapshot(),
+      syncBookmarksIfStale: () => syncBookmarksFromCliIfStale(),
+      copyBookmarkForAgent: (id) => {
+        const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+        const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) {
+          return { success: false, error: 'Bookmark not found' };
+        }
+        try {
+          clipboard.writeText(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+          clipboardManager?.syncClipboardHash();
+          return { success: true };
+        } catch (error) {
+          log.error('Error copying bookmark for agent:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      openExternal: (href) => {
+        shell.openExternal(href);
+        return true;
+      },
+      showItemInFolder: (filePath) => {
+        shell.showItemInFolder(filePath);
+        return true;
+      },
+      pickFolder: async () => {
+        const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+        if (result.canceled) return null;
+        return result.filePaths[0] ?? null;
+      },
+      openDocumentWindow: (target) => {
+        if (!target || typeof target !== 'object') return { success: false, error: 'Invalid document target' };
+        const normalized = normalizeLibraryDocumentWindowTarget(target as Partial<LibraryDocumentWindowTarget>);
+        if (!normalized) return { success: false, error: 'Invalid document window target' };
+        getLibraryDocumentWindowManager().open(normalized);
+        return { success: true };
+      },
+      copyImageForDocument: (documentPath, imagePath, alt) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      copyImageDataUrlForDocument: (documentPath, dataUrl, alt) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      makeImagesPortable: (documentPath, content) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { content, copied: 0, rewritten: 0, missing: 0 };
+        }
+        return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      deleteUnusedCopiedImages: (documentPath, removedMarkdown, remainingContent) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { deleted: 0, skipped: 0, missing: 0 };
+        }
+        return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
+      getRendererStorage: () => getBrowserLibraryRendererStorage(),
+      setRendererStorage: (key, value) => setBrowserLibraryRendererStorage(key, value),
+    },
+    reportCurrentDocument: (context, clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      if (clientId) {
+        browserLibraryContextByClientId.set(clientId, context);
+        if (activeBrowserLibrarySurfaceClientId === clientId) {
+          promoteBrowserLibraryClientContext(clientId);
+        }
+      } else {
+        activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
+        activeLibraryFileContextSourceId = windowId;
+      }
+      getDocumentPresenceManager().setWindowDocument(windowId, context, true);
+    },
+    clearCurrentDocument: (clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      if (clientId) {
+        browserLibraryContextByClientId.delete(clientId);
+      }
+      if (activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      getDocumentPresenceManager().clearWindow(windowId);
+    },
+    setActiveClient: (clientId) => {
+      if (!clientId) return;
+      activeBrowserLibrarySurfaceClientId = clientId;
+      promoteBrowserLibraryClientContext(clientId);
+    },
+    onClientDisconnected: (clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      getDocumentPresenceManager().closeWindow(windowId);
+      if (clientId) {
+        browserLibraryContextByClientId.delete(clientId);
+      }
+      if (activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (!clientId || activeBrowserLibrarySurfaceClientId === clientId) {
+        activeBrowserLibrarySurfaceClientId = null;
+      }
+      if (!clientId || activeBrowserLibraryClientId === clientId) {
+        browserLibraryMarkdownEditorFocused = false;
+        activeBrowserLibraryClientId = null;
+      }
+    },
+  });
+  const address = await browserHelperServer.start();
+  const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
+  const browserUrl = devServer
+    ? `${devServer}/browser-library.html?api=${encodeURIComponent(`http://${address.host}:${address.port}`)}&token=${encodeURIComponent(address.token)}`
+    : `${address.url}&api=${encodeURIComponent(`http://${address.host}:${address.port}`)}`;
+  log.info('Field Theory browser helper listening at %s', browserUrl);
+}
 let librarySyncService: LibrarySyncService | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let sharedSyncService: SharedSyncService | null = null;
@@ -2391,11 +3286,114 @@ type ActiveLibraryFileContext = {
   title: string;
 };
 let activeLibraryFileContext: ActiveLibraryFileContext | null = null;
+let activeLibraryFileContextSourceId: string | null = null;
+const browserLibraryContextByClientId = new Map<string, DocumentPresenceContext>();
 const documentPresenceWindows = new WeakSet<BrowserWindow>();
+
+function browserLibraryWindowId(clientId: string | null | undefined): string {
+  return clientId ? `browser-helper:${clientId}` : 'browser-helper';
+}
+
+function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
+  return {
+    type: context.type,
+    rootPath: context.rootPath,
+    relPath: context.relPath,
+    filePath: context.filePath,
+    title: context.title,
+  };
+}
+
+function promoteBrowserLibraryClientContext(clientId: string | null | undefined): void {
+  if (!clientId) return;
+  const context = browserLibraryContextByClientId.get(clientId);
+  if (!context) return;
+  activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
+  activeLibraryFileContextSourceId = browserLibraryWindowId(clientId);
+}
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
+  'library-sort-mode',
+  'wiki-expanded-folders',
+  'wiki-recent-collapsed',
+  'library-pinned-item-ids',
+  'library-sidebar-icon-color-indices',
+  'library-sidebar-icon-color-order',
+  'library-new-doc-location',
+  'fieldtheory.libraryRenameTrace',
+  'fieldtheory.contentToolbar.pinnedActions.v2',
+  'librarian-text-size',
+  'librarian-typography-preset',
+  'librarian-line-height',
+  'librarian-unordered-list-marker',
+  'librarian-todo-marker',
+  'librarian-maxwell-items',
+  'librarian-html-layout-by-path',
+  'librarian-last-selection',
+  'librarian-editor-session',
+  'fieldtheory-line-numbers',
+  'fieldtheory-rendered-edit-click-mode',
+  'fieldtheory-text-cursor-blink',
+  'fieldtheory-rendered-text-cursor-style',
+  'fieldtheory-rendered-block-cursor-opacity',
+  'fieldtheory-shared-file-toggle-hotkey',
+  'librarian-sidebar-width',
+  'librarian-sidebar-collapsed',
+  'bookmarks-view-mode',
+  'bookmarks-show-text',
+  'commands-text-size',
+  'commands-sidebar-width',
+  'darkMode',
+  'glassEffect',
+  'accentPreset',
+  'darkModeIntensity',
+  'fieldtheory-rendered-editor-debug',
+] as const;
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
+
+async function getBrowserLibraryRendererStorage(): Promise<{ available: boolean; values: Record<string, string | null> }> {
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return { available: false, values: {} };
+  const values = await webContents.executeJavaScript(`
+    (() => {
+      const keys = ${JSON.stringify(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS)};
+      const values = {};
+      for (const key of keys) values[key] = window.localStorage.getItem(key);
+      return values;
+    })()
+  `, true).catch(() => null);
+  return values && typeof values === 'object'
+    ? { available: true, values: values as Record<string, string | null> }
+    : { available: false, values: {} };
+}
+
+async function setBrowserLibraryRendererStorage(key: string, value: string | null): Promise<void> {
+  if (!BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) return;
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  await webContents.executeJavaScript(`
+    (() => {
+      const key = ${JSON.stringify(key)};
+      const value = ${JSON.stringify(value)};
+      if (value === null) {
+        window.localStorage.removeItem(key);
+      } else {
+        window.localStorage.setItem(key, value);
+      }
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
+    })()
+  `, true).catch(() => {});
+}
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+let browserLibraryMarkdownEditorFocused = false;
+let activeBrowserLibraryClientId: string | null = null;
+let activeBrowserLibrarySurfaceClientId: string | null = null;
+const pendingBrowserLibraryReplaceSelectedText = new Map<string, {
+  resolve: (success: boolean) => void;
+  timeout: NodeJS.Timeout;
+}>();
 let codexTerminalManager: CodexTerminalManager | null = null;
 let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
@@ -2407,6 +3405,24 @@ let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
 let globalImproveInFlight = false;
+
+function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, options: { broadcastFallback?: boolean } = {}): boolean {
+  if (
+    activeBrowserLibrarySurfaceClientId &&
+    browserHelperServer?.hasNativeEventClient(activeBrowserLibrarySurfaceClientId)
+  ) {
+    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, event);
+    return true;
+  }
+  if (options.broadcastFallback !== false) {
+    browserHelperServer?.emitNativeEvent(event);
+  }
+  return false;
+}
+
+function emitBrowserLibraryLauncherTarget(target: unknown): boolean {
+  return emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target });
+}
 
 function ensureBookmarksManager(): BookmarksManager {
   if (!bookmarksManager) {
@@ -2421,6 +3437,7 @@ function ensureBookmarksWatcher(): void {
   const manager = ensureBookmarksManager();
   manager.startWatcher();
   manager.on('bookmarks:changed', () => {
+    browserHelperServer?.emitNativeEvent({ type: 'bookmarks:changed' });
     BrowserWindow.getAllWindows().forEach((w) => {
       if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
     });
@@ -2525,6 +3542,7 @@ async function getLauncherFileIcon(filePath: string): Promise<LauncherFileIconRe
 
 function emitLocalCommandStatus(status: Omit<LocalCommandStatus, 'updatedAt'>): LocalCommandStatus {
   const payload = { ...status, updatedAt: Date.now() };
+  browserHelperServer?.emitNativeEvent({ type: 'commands:localCommandStatus', status: payload });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send(CommandsIPCChannels.LOCAL_COMMAND_STATUS, payload);
@@ -2849,6 +3867,7 @@ async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
 }
 
 function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedFilePresenceUser[] }): void {
+  browserHelperServer?.emitNativeEvent({ type: 'sharedFiles:presenceChanged', payload });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('sharedFiles:presenceChanged', payload);
@@ -2857,6 +3876,7 @@ function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedF
 }
 
 function broadcastSharedFilePinsChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'sharedFiles:pinsChanged' });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('sharedFiles:pinsChanged');
@@ -2865,6 +3885,7 @@ function broadcastSharedFilePinsChanged(): void {
 }
 
 function broadcastTeamChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'team:changed' });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('team:changed');
@@ -2950,6 +3971,7 @@ function getQuitBlockingActivities() {
 }
 
 function broadcastMeetingStatus(status: MeetingSession): void {
+  browserHelperServer?.emitNativeEvent({ type: 'meetings:status', session: status });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('meetings:status', status);
@@ -3119,6 +4141,212 @@ function emitMaxwellCancelFailure(error: string, run?: MaxwellRunRecord | null):
   };
 }
 
+function listNativeMaxwellRuns(rawLimit?: unknown): MaxwellRunSummary[] {
+  const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 20;
+  try {
+    return getMaxwellRunManager().listRuns(limit).map(summarizeMaxwellRun);
+  } catch (error) {
+    log.warn('Could not list Maxwell runs:', error);
+    return [];
+  }
+}
+
+async function saveNativeMaxwellMemory(rawRequest: unknown): Promise<MaxwellMemorySaveResult> {
+  if (!rawRequest || typeof rawRequest !== 'object') {
+    return { success: false, error: 'Invalid Maxwell memory request' };
+  }
+  const request = rawRequest as { enabled?: unknown; content?: unknown };
+  const content = typeof request.content === 'string' ? request.content : '';
+  const enabled = request.enabled !== false;
+  if (content.length > MAXWELL_MEMORY_MAX_CHARS) {
+    return {
+      success: false,
+      error: `Maxwell memory is too large (${content.length} characters, limit ${MAXWELL_MEMORY_MAX_CHARS}).`,
+      memory: getMaxwellMemoryState(),
+    };
+  }
+  try {
+    const memoryPath = getMaxwellMemoryPath();
+    fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
+    fs.writeFileSync(memoryPath, content, 'utf8');
+    await preferencesManager?.save({ maxwellMemoryEnabled: enabled });
+    return { success: true, memory: getMaxwellMemoryState() };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not save Maxwell memory';
+    log.warn('Could not save Maxwell memory:', error);
+    return { success: false, error: message, memory: getMaxwellMemoryState() };
+  }
+}
+
+function cancelNativeMaxwellRun(rawRunId: unknown): MaxwellCancelResult {
+  if (typeof rawRunId !== 'string' || !rawRunId.trim()) {
+    return emitMaxwellCancelFailure('Invalid Maxwell run id');
+  }
+  const runId = rawRunId.trim();
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellCancelFailure('Maxwell run not found');
+  }
+  if (activeMaxwellLocalRun?.runId !== runId) {
+    return emitMaxwellCancelFailure('Maxwell run is not active', run);
+  }
+  activeMaxwellLocalRun.cancelled = true;
+  getLocalLlmManager().stop();
+  const cancelled = manager.markError(runId, 'cancelled', 'Maxwell run cancelled') ?? run;
+  emitLocalCommandStatus({
+    status: 'notice',
+    message: 'Maxwell run cancelled',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'cancelled',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(cancelled),
+  };
+}
+
+function undoNativeMaxwellRun(rawRunId: unknown): MaxwellUndoResult {
+  if (!librarianManager) {
+    return emitMaxwellUndoFailure('not-ready', 'Field Theory library is not ready');
+  }
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return emitMaxwellUndoFailure('blocked', 'Field Theory is read-only');
+  }
+  const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+  if (!runId) {
+    return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+  }
+
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+  }
+
+  let currentVersion: DocumentVersion;
+  let currentContent: string;
+  try {
+    currentVersion = readDocumentVersion(run.targetPath);
+    currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+  } catch {
+    return emitMaxwellUndoFailure('not-found', 'Current document no longer exists', run);
+  }
+
+  const undo = manager.prepareUndo(runId, currentVersion, currentContent);
+  if (!undo.ok) {
+    const error = undo.reason === 'conflict'
+      ? 'Current document changed since Maxwell saved this result'
+      : 'This Maxwell run cannot be undone';
+    return emitMaxwellUndoFailure(undo.reason, error, undo.run ?? run);
+  }
+
+  const saveResult = undo.targetType === 'wiki'
+    ? undo.targetRelPath
+      ? librarianManager.saveWikiPage(undo.targetRelPath, undo.preContent, undo.expectedVersion)
+      : { ok: false as const, reason: 'not-found' as const }
+    : librarianManager.saveReading(undo.targetPath, undo.preContent, undo.expectedVersion);
+
+  if (!saveResult.ok) {
+    const error = saveResult.reason === 'conflict'
+      ? 'Current document changed while Maxwell was undoing this run'
+      : `Could not undo Maxwell run: ${saveResult.reason}`;
+    return emitMaxwellUndoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+  }
+
+  const reverted = manager.markReverted(runId, saveResult.version) ?? run;
+  emitLocalCommandStatus({
+    status: 'success',
+    message: `Undid ${run.commandName}`,
+    detail: 'Restored previous document version',
+    eventKind: 'file_change',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'done',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(reverted),
+    filePath: run.targetPath,
+    commandName: run.commandName,
+  };
+}
+
+function redoNativeMaxwellRun(rawRunId: unknown): MaxwellRedoResult {
+  if (!librarianManager) {
+    return emitMaxwellRedoFailure('not-ready', 'Field Theory library is not ready');
+  }
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return emitMaxwellRedoFailure('blocked', 'Field Theory is read-only');
+  }
+  const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+  if (!runId) {
+    return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+  }
+
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+  }
+
+  let currentVersion: DocumentVersion;
+  let currentContent: string;
+  try {
+    currentVersion = readDocumentVersion(run.targetPath);
+    currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+  } catch {
+    return emitMaxwellRedoFailure('not-found', 'Current document no longer exists', run);
+  }
+
+  const redo = manager.prepareRedo(runId, currentVersion, currentContent);
+  if (!redo.ok) {
+    const error = redo.reason === 'conflict'
+      ? 'Current document changed since Maxwell was undone'
+      : 'This Maxwell run cannot be redone';
+    return emitMaxwellRedoFailure(redo.reason, error, redo.run ?? run);
+  }
+
+  const saveResult = redo.targetType === 'wiki'
+    ? redo.targetRelPath
+      ? librarianManager.saveWikiPage(redo.targetRelPath, redo.postContent, redo.expectedVersion)
+      : { ok: false as const, reason: 'not-found' as const }
+    : librarianManager.saveReading(redo.targetPath, redo.postContent, redo.expectedVersion);
+
+  if (!saveResult.ok) {
+    const error = saveResult.reason === 'conflict'
+      ? 'Current document changed while Maxwell was redoing this run'
+      : `Could not redo Maxwell run: ${saveResult.reason}`;
+    return emitMaxwellRedoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+  }
+
+  const redone = manager.markRedone(runId, saveResult.version) ?? run;
+  emitLocalCommandStatus({
+    status: 'success',
+    message: `Redid ${run.commandName}`,
+    detail: 'Reapplied Maxwell result',
+    eventKind: 'file_change',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'done',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(redone),
+    filePath: run.targetPath,
+    commandName: run.commandName,
+  };
+}
+
 function isActiveMaxwellRunCancelled(runId: string | undefined): boolean {
   return !!runId && activeMaxwellLocalRun?.runId === runId && activeMaxwellLocalRun.cancelled;
 }
@@ -3201,7 +4429,7 @@ async function installOrAccessLocalLlmModel(model: string): Promise<{ success: b
 }
 
 function openScratchpadDefaultFromHotkey(): WikiPage | null {
-  if (!librarianManager || !clipboardHistoryWindow) return null;
+  if (!librarianManager) return null;
   if (!canWriteFieldTheoryContent()) {
     blockWrite();
     return null;
@@ -3214,6 +4442,12 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   const page = librarianManager.createScratchpadDefault();
   if (!page) return null;
   recordRecentWikiPage(page);
+  if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openScratchpad', relPath: page.relPath }, { broadcastFallback: false })) {
+    return page;
+  }
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
   clipboardHistoryWindow.showLibrary(boundsToUse);
@@ -3224,6 +4458,7 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
 }
 
 function broadcastRecentChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'recent:changed' });
   BrowserWindow.getAllWindows().forEach((w) => {
     if (!w.isDestroyed()) w.webContents.send('recent:changed');
   });
@@ -3259,6 +4494,31 @@ function recordRecentExternalDocument(absPath: string | null | undefined, title:
     title: title?.trim() || stripMarkdownFileExtension(path.basename(canonical)),
     lastOpenedAt: Date.now(),
   });
+}
+
+function loadMarkdownPreview(filePath: string): { title: string; filePath: string; content: string } | null {
+  if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
+    return null;
+  }
+  try {
+    const canonicalPath = fs.realpathSync(filePath);
+    const stat = fs.statSync(canonicalPath);
+    if (!stat.isFile()) return null;
+
+    let content = fs.readFileSync(canonicalPath, 'utf-8');
+    if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
+      content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
+    }
+
+    return {
+      title: path.basename(canonicalPath),
+      filePath: canonicalPath,
+      content,
+    };
+  } catch (error) {
+    log.warn('Failed to load markdown preview:', error);
+    return null;
+  }
 }
 
 function recordRecentCreatedLibraryPage(page: WikiPage | null, rootPath: string): void {
@@ -4775,7 +6035,13 @@ function registerDocumentPresenceWindow(win: BrowserWindow): void {
   documentPresenceWindows.add(win);
   const windowId = String(win.id);
   win.on('focus', () => getDocumentPresenceManager().focusWindow(windowId));
-  win.on('closed', () => getDocumentPresenceManager().closeWindow(windowId));
+  win.on('closed', () => {
+    getDocumentPresenceManager().closeWindow(windowId);
+    if (activeLibraryFileContextSourceId === windowId) {
+      activeLibraryFileContext = null;
+      activeLibraryFileContextSourceId = null;
+    }
+  });
 }
 
 function normalizeLibraryDocumentWindowTarget(target: Partial<LibraryDocumentWindowTarget> | null | undefined): LibraryDocumentWindowTarget | null {
@@ -4995,6 +6261,10 @@ function routeOpenMarkdown(inputPath: string): void {
     log.info(`open-file: ignoring unsupported or unreadable path: ${inputPath}`);
     return;
   }
+  const browserHandled = resolved.kind === 'wiki'
+    ? emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath: resolved.relPath }, { broadcastFallback: false })
+    : emitBrowserLibraryNavigationEvent({ type: 'external:openPage', absPath: resolved.absPath }, { broadcastFallback: false });
+  if (browserHandled) return;
   if (!clipboardHistoryWindow) {
     log.info('open-file: main window not ready, queueing');
     pendingOpenMarkdownPath = inputPath;
@@ -5625,6 +6895,7 @@ function setupLibrarianIPCHandlers(): void {
       traceLibraryRename('broadcast-wiki-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:changed' });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
           w.webContents.send('wiki:changed');
@@ -5641,6 +6912,8 @@ function setupLibrarianIPCHandlers(): void {
         newRelPath: event.newRelPath,
         ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:renamed', event });
+      browserHelperServer?.emitNativeEvent({ type: 'library:renamed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
           w.webContents.send('wiki:renamed', event);
@@ -5653,6 +6926,7 @@ function setupLibrarianIPCHandlers(): void {
       traceLibraryRename('broadcast-library-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'library:changed' });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:changed');
       });
@@ -5666,6 +6940,7 @@ function setupLibrarianIPCHandlers(): void {
         newRelPath: event.newRelPath,
         ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'library:renamed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:renamed', event);
       });
@@ -5677,6 +6952,7 @@ function setupLibrarianIPCHandlers(): void {
         recentManager.remove('wiki', relPath);
         broadcastRecentChanged();
       }
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:deleted', relPath });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('wiki:deleted', relPath);
       });
@@ -5931,6 +7207,10 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.on('librarian:setMarkdownEditorFocused', (_event, focused: boolean) => {
     librarianMarkdownEditorFocused = Boolean(focused);
+    if (librarianMarkdownEditorFocused) {
+      browserLibraryMarkdownEditorFocused = false;
+      activeBrowserLibraryClientId = null;
+    }
   });
 
   // ===========================================================================
@@ -6476,201 +7756,22 @@ function setupLibrarianIPCHandlers(): void {
 
   // Share a reading publicly
   ipcMain.handle('librarian:shareReading', async (_event, filePath: string): Promise<{ slug: string; url: string } | null> => {
-    if (!authManager?.isAuthenticated()) {
-      return null;
-    }
-
-    const reading = librarianManager?.getReading(filePath);
-    if (!reading) {
-      return null;
-    }
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) {
-      return null;
-    }
-
-    // Get author name from profile (first + last for "First L." format)
-    let authorName: string | null = null;
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('first_name, last_name')
-        .eq('id', session.user.id)
-        .single();
-      if (profile?.first_name && profile?.last_name) {
-        authorName = `${profile.first_name} ${profile.last_name}`;
-      } else if (profile?.first_name) {
-        authorName = profile.first_name;
-      }
-    } catch {
-      // Ignore profile fetch errors
-    }
-
-    // Check if this reading was previously shared (re-sharing)
-    const { data: existing } = await supabase
-      .from('shared_readings')
-      .select('slug, is_public')
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .single();
-
-    if (existing) {
-      // Re-enable existing share
-      if (!existing.is_public) {
-        await supabase
-          .from('shared_readings')
-          .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
-          .eq('source_path', filePath)
-          .eq('user_id', session.user.id);
-      }
-      return {
-        slug: existing.slug,
-        url: `https://librarian.fieldtheory.dev/${existing.slug}`,
-      };
-    }
-
-    // Generate slug: title-abc123
-    const slugify = (text: string): string =>
-      text
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 50);
-
-    const baseSlug = slugify(reading.title);
-
-    // Try up to 3 times with different random suffixes
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const randomSuffix = crypto.randomBytes(3).toString('hex');
-      const slug = `${baseSlug}-${randomSuffix}`;
-
-      const { data, error } = await supabase
-        .from('shared_readings')
-        .insert({
-          user_id: session.user.id,
-          slug,
-          title: reading.title,
-          content: reading.content,
-          author_name: authorName,
-          source_path: filePath,
-          is_public: true,
-        })
-        .select('slug')
-        .single();
-
-      if (!error && data) {
-        metricsManager?.recordLibrarianArtifactShared();
-        return {
-          slug: data.slug,
-          url: `https://librarian.fieldtheory.dev/${data.slug}`,
-        };
-      }
-
-      // If unique constraint violation, try again with new suffix
-      if (error?.code === '23505') {
-        continue;
-      }
-
-      log.error('Librarian share failed:', error);
-      return null;
-    }
-
-    log.error('Librarian share failed: max retries exceeded');
-    return null;
+    return shareLibrarianReading(filePath);
   });
 
   // Unshare a reading (soft delete)
   ipcMain.handle('librarian:unshareReading', async (_event, filePath: string): Promise<boolean> => {
-    if (!authManager?.isAuthenticated()) return false;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return false;
-
-    const { error } = await supabase
-      .from('shared_readings')
-      .update({ is_public: false })
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id);
-
-    if (error) {
-      log.error('Librarian unshare failed:', error);
-      return false;
-    }
-
-    return true;
+    return unshareLibrarianReading(filePath);
   });
 
   // Check if a reading is shared
   ipcMain.handle('librarian:getShareStatus', async (_event, filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> => {
-    if (!authManager?.isAuthenticated()) return null;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return null;
-
-    const { data, error } = await supabase
-      .from('shared_readings')
-      .select('slug, is_public')
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .single();
-
-    if (error || !data) {
-      return { shared: false };
-    }
-
-    if (!data.is_public) {
-      return { shared: false };
-    }
-
-    return {
-      shared: true,
-      slug: data.slug,
-      url: `https://librarian.fieldtheory.dev/${data.slug}`,
-    };
+    return getLibrarianShareStatus(filePath);
   });
 
   // Update a shared reading's content
   ipcMain.handle('librarian:updateSharedReading', async (_event, filePath: string, content: string, title: string): Promise<boolean> => {
-    if (!authManager?.isAuthenticated()) return false;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return false;
-
-    // Get author name from profile
-    let authorName: string | null = null;
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('first_name, last_name')
-        .eq('id', session.user.id)
-        .single();
-      if (profile?.first_name && profile?.last_name) {
-        authorName = `${profile.first_name} ${profile.last_name}`;
-      } else if (profile?.first_name) {
-        authorName = profile.first_name;
-      }
-    } catch {
-      // Ignore profile fetch errors
-    }
-
-    const { error } = await supabase
-      .from('shared_readings')
-      .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .eq('is_public', true);
-
-    if (error) {
-      log.error('Librarian update shared reading failed:', error);
-      return false;
-    }
-
-    return true;
+    return updateSharedLibrarianReading(filePath, content, title);
   });
 
   // Mute librarian for today
@@ -9481,28 +10582,7 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, async (_event, filePath: string) => {
-    if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
-      return null;
-    }
-    try {
-      const canonicalPath = fs.realpathSync(filePath);
-      const stat = fs.statSync(canonicalPath);
-      if (!stat.isFile()) return null;
-
-      let content = fs.readFileSync(canonicalPath, 'utf-8');
-      if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
-        content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
-      }
-
-      return {
-        title: path.basename(canonicalPath),
-        filePath: canonicalPath,
-        content,
-      };
-    } catch (error) {
-      log.warn('Failed to load markdown preview:', error);
-      return null;
-    }
+    return loadMarkdownPreview(filePath);
   });
 
   // =========================================================================
@@ -9741,7 +10821,10 @@ function setupClipboardIPCHandlers(): void {
     const windowId = sourceWindow ? String(sourceWindow.id) : null;
 
     if (context === null) {
-      activeLibraryFileContext = null;
+      if (!windowId || activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
       if (windowId) getDocumentPresenceManager().clearWindow(windowId);
       return true;
     }
@@ -9763,6 +10846,7 @@ function setupClipboardIPCHandlers(): void {
       filePath: context.filePath,
       title: context.title,
     };
+    activeLibraryFileContextSourceId = windowId;
     if (windowId) {
       getDocumentPresenceManager().setWindowDocument(windowId, activeLibraryFileContext, sourceWindow?.isFocused() ?? false);
     }
@@ -9813,11 +10897,12 @@ function setupClipboardIPCHandlers(): void {
       clipboardHistoryWindow.focusExistingWindow();
     }
     commandLauncherWindow?.hide(true);
+    browserHelperServer?.emitNativeEvent({ type: 'commands:toggleLineNumbersFromLauncher' });
     window.webContents.send('commands:toggleLineNumbersFromLauncher');
     return { success: true };
   });
 
-  ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {
+  runNativeLocalCommand = async (rawRequest: unknown): Promise<LocalCommandRunResult> => {
     if (!commandsManager || !librarianManager) {
       emitLocalCommandStatus({
         status: 'error',
@@ -10189,16 +11274,14 @@ function setupClipboardIPCHandlers(): void {
         activeMaxwellLocalRun = null;
       }
     }
+  };
+
+  ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {
+    return runNativeLocalCommand(rawRequest);
   });
 
   ipcMain.handle(CommandsIPCChannels.LIST_MAXWELL_RUNS, (_event, rawLimit?: unknown): MaxwellRunSummary[] => {
-    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 20;
-    try {
-      return getMaxwellRunManager().listRuns(limit).map(summarizeMaxwellRun);
-    } catch (error) {
-      log.warn('Could not list Maxwell runs:', error);
-      return [];
-    }
+    return listNativeMaxwellRuns(rawLimit);
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_MAXWELL_MEMORY, (): MaxwellMemoryState => {
@@ -10206,199 +11289,19 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.SAVE_MAXWELL_MEMORY, async (_event, rawRequest: unknown): Promise<MaxwellMemorySaveResult> => {
-    if (!rawRequest || typeof rawRequest !== 'object') {
-      return { success: false, error: 'Invalid Maxwell memory request' };
-    }
-    const request = rawRequest as { enabled?: unknown; content?: unknown };
-    const content = typeof request.content === 'string' ? request.content : '';
-    const enabled = request.enabled !== false;
-    if (content.length > MAXWELL_MEMORY_MAX_CHARS) {
-      return {
-        success: false,
-        error: `Maxwell memory is too large (${content.length} characters, limit ${MAXWELL_MEMORY_MAX_CHARS}).`,
-        memory: getMaxwellMemoryState(),
-      };
-    }
-    try {
-      const memoryPath = getMaxwellMemoryPath();
-      fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
-      fs.writeFileSync(memoryPath, content, 'utf8');
-      await preferencesManager?.save({ maxwellMemoryEnabled: enabled });
-      return { success: true, memory: getMaxwellMemoryState() };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not save Maxwell memory';
-      log.warn('Could not save Maxwell memory:', error);
-      return { success: false, error: message, memory: getMaxwellMemoryState() };
-    }
+    return saveNativeMaxwellMemory(rawRequest);
   });
 
   ipcMain.handle(CommandsIPCChannels.CANCEL_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellCancelResult => {
-    if (typeof rawRunId !== 'string' || !rawRunId.trim()) {
-      return emitMaxwellCancelFailure('Invalid Maxwell run id');
-    }
-    const runId = rawRunId.trim();
-    const manager = getMaxwellRunManager();
-    const run = manager.getRun(runId);
-    if (!run) {
-      return emitMaxwellCancelFailure('Maxwell run not found');
-    }
-    if (activeMaxwellLocalRun?.runId !== runId) {
-      return emitMaxwellCancelFailure('Maxwell run is not active', run);
-    }
-    activeMaxwellLocalRun.cancelled = true;
-    getLocalLlmManager().stop();
-    const cancelled = manager.markError(runId, 'cancelled', 'Maxwell run cancelled') ?? run;
-    emitLocalCommandStatus({
-      status: 'notice',
-      message: 'Maxwell run cancelled',
-      commandName: run.commandName,
-      filePath: run.targetPath,
-      mode: run.mode,
-      runId,
-      phase: 'cancelled',
-    });
-    return {
-      success: true,
-      run: summarizeMaxwellRun(cancelled),
-    };
+    return cancelNativeMaxwellRun(rawRunId);
   });
 
   ipcMain.handle(CommandsIPCChannels.UNDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellUndoResult => {
-    if (!librarianManager) {
-      return emitMaxwellUndoFailure('not-ready', 'Field Theory library is not ready');
-    }
-    if (!canWriteFieldTheoryContent()) {
-      blockWrite();
-      return emitMaxwellUndoFailure('blocked', 'Field Theory is read-only');
-    }
-    const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
-    if (!runId) {
-      return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
-    }
-
-    const manager = getMaxwellRunManager();
-    const run = manager.getRun(runId);
-    if (!run) {
-      return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
-    }
-
-    let currentVersion: DocumentVersion;
-    let currentContent: string;
-    try {
-      currentVersion = readDocumentVersion(run.targetPath);
-      currentContent = fs.readFileSync(run.targetPath, 'utf-8');
-    } catch {
-      return emitMaxwellUndoFailure('not-found', 'Current document no longer exists', run);
-    }
-
-    const undo = manager.prepareUndo(runId, currentVersion, currentContent);
-    if (!undo.ok) {
-      const error = undo.reason === 'conflict'
-        ? 'Current document changed since Maxwell saved this result'
-        : 'This Maxwell run cannot be undone';
-      return emitMaxwellUndoFailure(undo.reason, error, undo.run ?? run);
-    }
-
-    const saveResult = undo.targetType === 'wiki'
-      ? undo.targetRelPath
-        ? librarianManager.saveWikiPage(undo.targetRelPath, undo.preContent, undo.expectedVersion)
-        : { ok: false as const, reason: 'not-found' as const }
-      : librarianManager.saveReading(undo.targetPath, undo.preContent, undo.expectedVersion);
-
-    if (!saveResult.ok) {
-      const error = saveResult.reason === 'conflict'
-        ? 'Current document changed while Maxwell was undoing this run'
-        : `Could not undo Maxwell run: ${saveResult.reason}`;
-      return emitMaxwellUndoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
-    }
-
-    const reverted = manager.markReverted(runId, saveResult.version) ?? run;
-    emitLocalCommandStatus({
-      status: 'success',
-      message: `Undid ${run.commandName}`,
-      detail: 'Restored previous document version',
-      eventKind: 'file_change',
-      commandName: run.commandName,
-      filePath: run.targetPath,
-      mode: run.mode,
-      runId,
-      phase: 'done',
-    });
-    return {
-      success: true,
-      run: summarizeMaxwellRun(reverted),
-      filePath: run.targetPath,
-      commandName: run.commandName,
-    };
+    return undoNativeMaxwellRun(rawRunId);
   });
 
   ipcMain.handle(CommandsIPCChannels.REDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellRedoResult => {
-    if (!librarianManager) {
-      return emitMaxwellRedoFailure('not-ready', 'Field Theory library is not ready');
-    }
-    if (!canWriteFieldTheoryContent()) {
-      blockWrite();
-      return emitMaxwellRedoFailure('blocked', 'Field Theory is read-only');
-    }
-    const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
-    if (!runId) {
-      return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
-    }
-
-    const manager = getMaxwellRunManager();
-    const run = manager.getRun(runId);
-    if (!run) {
-      return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
-    }
-
-    let currentVersion: DocumentVersion;
-    let currentContent: string;
-    try {
-      currentVersion = readDocumentVersion(run.targetPath);
-      currentContent = fs.readFileSync(run.targetPath, 'utf-8');
-    } catch {
-      return emitMaxwellRedoFailure('not-found', 'Current document no longer exists', run);
-    }
-
-    const redo = manager.prepareRedo(runId, currentVersion, currentContent);
-    if (!redo.ok) {
-      const error = redo.reason === 'conflict'
-        ? 'Current document changed since Maxwell was undone'
-        : 'This Maxwell run cannot be redone';
-      return emitMaxwellRedoFailure(redo.reason, error, redo.run ?? run);
-    }
-
-    const saveResult = redo.targetType === 'wiki'
-      ? redo.targetRelPath
-        ? librarianManager.saveWikiPage(redo.targetRelPath, redo.postContent, redo.expectedVersion)
-        : { ok: false as const, reason: 'not-found' as const }
-      : librarianManager.saveReading(redo.targetPath, redo.postContent, redo.expectedVersion);
-
-    if (!saveResult.ok) {
-      const error = saveResult.reason === 'conflict'
-        ? 'Current document changed while Maxwell was redoing this run'
-        : `Could not redo Maxwell run: ${saveResult.reason}`;
-      return emitMaxwellRedoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
-    }
-
-    const redone = manager.markRedone(runId, saveResult.version) ?? run;
-    emitLocalCommandStatus({
-      status: 'success',
-      message: `Redid ${run.commandName}`,
-      detail: 'Reapplied Maxwell result',
-      eventKind: 'file_change',
-      commandName: run.commandName,
-      filePath: run.targetPath,
-      mode: run.mode,
-      runId,
-      phase: 'done',
-    });
-    return {
-      success: true,
-      run: summarizeMaxwellRun(redone),
-      filePath: run.targetPath,
-      commandName: run.commandName,
-    };
+    return redoNativeMaxwellRun(rawRunId);
   });
 
   ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' | 'typedown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
@@ -10414,6 +11317,19 @@ function setupClipboardIPCHandlers(): void {
         path: target?.path ?? null,
       });
       return { success: false, error: 'Invalid markdown target' };
+    }
+    if (
+      target.kind !== 'clipboard' &&
+      emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target }, { broadcastFallback: false })
+    ) {
+      commandLauncherWindow?.hide(true);
+      appendCommandLauncherTrace('open-field-theory-markdown-success', {
+        kind: target.kind,
+        path: target.path,
+        contentMode: target.contentMode ?? null,
+        target: 'browser-library',
+      });
+      return { success: true };
     }
     if (!clipboardHistoryWindow) {
       appendCommandLauncherTrace('open-field-theory-markdown-error', {
@@ -10443,6 +11359,7 @@ function setupClipboardIPCHandlers(): void {
     }
 
     commandLauncherWindow?.hide(true);
+    emitBrowserLibraryLauncherTarget(target);
     clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
     appendCommandLauncherTrace('open-field-theory-markdown-success', {
       kind: target.kind,
@@ -10453,11 +11370,19 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('commands:insertMarkdownText', async (_event, text: string) => {
-    if (!clipboardHistoryWindow || !text) {
+    if (!text) {
       return { success: false, error: 'No markdown editor target' };
     }
     commandLauncherWindow?.hide(true);
-    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+    if (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)) {
+      const sent = browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
+      return sent ? { success: true } : { success: false, error: 'No markdown editor target' };
+    }
+    const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+    if (!clipboardWindow || clipboardWindow.isDestroyed()) {
+      return { success: false, error: 'No markdown editor target' };
+    }
+    clipboardWindow.webContents.send('librarian:insertMarkdownText', text);
     return { success: true };
   });
 
@@ -11892,6 +12817,9 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
   recentManager = new RecentManager();
+  void startBrowserHelperIfEnabled().catch((error) => {
+    log.warn('Failed to start Field Theory browser helper: %s', error instanceof Error ? error.message : String(error));
+  });
 
   // Initialize bookmarks manager for reading synced X bookmarks.
   ensureBookmarksManager();
@@ -11912,6 +12840,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingAdded', reading);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingAdded', reading });
 
     // Check if muted for today - halts interruption even if existing sessions create artifacts
     const isMuted = librarianManager!.isMutedForToday();
@@ -11964,6 +12893,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingUpdated', reading);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingUpdated', reading });
   });
 
   librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
@@ -11978,6 +12908,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingRenamed', event);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingRenamed', event });
   });
 
   // Broadcast reading-removed events to all windows
@@ -11987,6 +12918,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingRemoved', filePath);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingRemoved', filePath });
   });
 
   // Connect quota manager to tray for menu bar display
@@ -12092,6 +13024,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
   agentKickoffManager.on('status', (event: AgentKickoffStatusEvent) => {
+    browserHelperServer?.emitNativeEvent({ type: 'agent:kickoffStatus', event });
     BrowserWindow.getAllWindows().forEach((w) => {
       if (!w.isDestroyed()) w.webContents.send('agent:kickoffStatus', event);
     });
@@ -12444,14 +13377,16 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Broadcast commands changes to all windows.
   commandsManager.on('commandsChanged', (commands: PortableCommand[]) => {
+    const commandInfos = commands.map((cmd: PortableCommand) => ({
+      name: cmd.name,
+      displayName: cmd.displayName,
+      filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
+    }));
+    browserHelperServer?.emitNativeEvent({ type: 'commands:changed', commands: commandInfos });
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
-        window.webContents.send(CommandsIPCChannels.COMMANDS_CHANGED, commands.map((cmd: PortableCommand) => ({
-          name: cmd.name,
-          displayName: cmd.displayName,
-          filePath: cmd.filePath,
-          lastModified: cmd.lastModified,
-        })));
+        window.webContents.send(CommandsIPCChannels.COMMANDS_CHANGED, commandInfos);
       }
     });
   });
@@ -12555,6 +13490,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   taggedDocsManager.on('updated', (docs: TaggedDoc[]) => {
     trayManager?.setTaggedDocsUnreadCount(docs.filter((doc) => doc.unread).length);
+    browserHelperServer?.emitNativeEvent({ type: 'taggedDocs:updated', docs });
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
         win.webContents.send(TaggedDocsIPCChannels.UPDATED, docs);
@@ -12563,6 +13499,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   taggedDocsManager.on('scanProgress', (progress: TaggedDocsScanProgress) => {
+    browserHelperServer?.emitNativeEvent({ type: 'taggedDocs:scanProgress', progress });
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
         win.webContents.send(TaggedDocsIPCChannels.SCAN_PROGRESS, progress);
@@ -12679,6 +13616,8 @@ async function initTranscriberSystem(): Promise<void> {
   authManager.on('sessionChanged', async (session) => {
     logUserState(session ? 'login' : 'logout');
     taggedDocsManager?.setIdentity(session?.user?.email ?? null);
+
+    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session });
 
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
@@ -12955,13 +13894,21 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const relPath = resolved?.kind === 'wiki'
         ? resolved.relPath
         : path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+      if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath }, { broadcastFallback: false })) {
+        if (immersive) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+        }
+        return;
+      }
 
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.showLibrary(boundsToUse);
+        emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath });
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
         if (immersive) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -12983,7 +13930,14 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (librarianManager) {
         const reading = librarianManager.getReading(decodedPath);
         if (reading) {
+          if (emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path }, { broadcastFallback: false })) {
+            if (fullscreen) {
+              emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+            }
+            return;
+          }
           // Send the reading path to the renderer to display it
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path });
           clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
         }
       }
@@ -12995,6 +13949,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
         clipboardHistoryWindow.showLibrary(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -14259,6 +15214,8 @@ if (!gotTheLock) {
 
     librarySyncService?.dispose();
     void sharedSyncService?.dispose();
+    void browserHelperServer?.stop();
+    browserHelperServer = null;
     commandSyncService?.destroy();
     todoStore?.destroy();
     localLlmManager?.stop();
