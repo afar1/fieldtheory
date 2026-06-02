@@ -107,6 +107,24 @@ describe('DocumentPresenceManager', () => {
       ],
     });
   });
+
+  it('stores selected text for current-document consumers', () => {
+    manager.setWindowDocument('browser-helper', {
+      ...makeContext('/library/a.md', 'A'),
+      selectionStart: 2,
+      selectionEnd: 6,
+      selectionText: 'body',
+    }, true);
+
+    const state = manager.getState();
+
+    expect(state.documents[0]).toMatchObject({
+      path: '/library/a.md',
+      selectionStart: 2,
+      selectionEnd: 6,
+      selectionText: 'body',
+    });
+  });
 });
 
 function makeContext(filePath: string, title: string) {
