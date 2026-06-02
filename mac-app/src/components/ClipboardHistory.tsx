@@ -579,7 +579,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       appForwardHistoryRef.current = [];
     }
     appNavigationSurfaceRef.current = nextSurface;
-  }, [setLocalCommandStatus, showSettings, viewMode]);
+  }, [showSettings, viewMode]);
   const applyAppNavigationSurface = useCallback((surface: AppNavigationSurface) => {
     appHistoryNavigationRef.current = true;
     if (surface === 'settings') {
