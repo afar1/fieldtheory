@@ -2210,38 +2210,7 @@ function BrowserLibraryFooter(props: {
   const [isWindowVisible, setIsWindowVisible] = React.useState(() => document.visibilityState === 'visible');
   const [authSession, setAuthSession] = React.useState<{ user?: { id?: string } } | null>(null);
   const [cachedTier, setCachedTier] = React.useState<'free' | 'pro'>('free');
-  const [allTimeStats, setAllTimeStats] = React.useState({
-    stacks: 0,
-    transcriptions: 0,
-    screenshots: 0,
-    improved: 0,
-    words: 0,
-    voiceCommands: 0,
-    commandsUsed: 0,
-    autoStacks: 0,
-  });
-  const [currentStatIndex, setCurrentStatIndex] = React.useState(0);
-  const [statFading, setStatFading] = React.useState(false);
   const showFocusStatusOverlay = !hidden && !interactive && !!footerStatusLabel;
-  const formatNumber = React.useCallback((value: number) => {
-    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-    if (value >= 1000) return value.toLocaleString();
-    return String(value);
-  }, []);
-  const statItems = React.useMemo(() => [
-    { value: allTimeStats.words, singular: 'word transcribed', plural: 'words transcribed' },
-    { value: allTimeStats.improved, singular: 'word auto-improved', plural: 'words auto-improved' },
-    { value: allTimeStats.voiceCommands, singular: 'voice command', plural: 'voice commands' },
-    { value: allTimeStats.commandsUsed, singular: 'command launched', plural: 'commands launched' },
-    { value: allTimeStats.autoStacks, singular: 'autostack created', plural: 'autostacks created' },
-  ], [allTimeStats]);
-  const nextStat = React.useCallback(() => {
-    setStatFading(true);
-    window.setTimeout(() => {
-      setCurrentStatIndex((index) => (index + 1) % statItems.length);
-      setStatFading(false);
-    }, 150);
-  }, [statItems.length]);
   React.useEffect(() => {
     const refreshCallsign = () => {
       const request = window.authAPI?.getCallsign?.();
@@ -2282,31 +2251,6 @@ function BrowserLibraryFooter(props: {
       unsubscribe?.();
     };
   }, []);
-  React.useEffect(() => {
-    if (!isWindowVisible || !window.metricsAPI) return;
-    let cancelled = false;
-    const loadMetrics = () => {
-      void window.metricsAPI?.getMetrics?.()
-        .then((metrics: any) => {
-          if (cancelled || !metrics) return;
-          setAllTimeStats({
-            stacks: metrics.stacks_created || 0,
-            transcriptions: metrics.transcriptions || 0,
-            screenshots: metrics.screenshots_taken || 0,
-            improved: metrics.words_improved || 0,
-            words: metrics.words_transcribed || 0,
-            voiceCommands: metrics.verbal_commands || 0,
-            commandsUsed: metrics.command_launcher_uses || 0,
-            autoStacks: metrics.autostacks_created || 0,
-          });
-        })
-        .catch(() => {});
-    };
-    void window.metricsAPI.fetchFromSupabase?.().finally(loadMetrics);
-    return () => {
-      cancelled = true;
-    };
-  }, [isWindowVisible, authSession?.user?.id]);
   React.useEffect(() => {
     if (!isWindowVisible || !window.quotaAPI) return;
     let cancelled = false;
@@ -2398,26 +2342,9 @@ function BrowserLibraryFooter(props: {
             onCancel={() => void cancelLocalCommandRun()}
           />
         ) : authSession && cachedTier === 'pro' ? (
-          <>
-            <span style={{ fontWeight: 500 }}>Pro:</span>
-            <span
-              style={{
-                opacity: statFading ? 0 : 1,
-                transition: 'opacity 0.15s ease',
-                cursor: 'pointer',
-              }}
-              onClick={nextStat}
-            >
-              {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1
-                ? statItems[currentStatIndex]?.singular
-                : statItems[currentStatIndex]?.plural}
-            </span>
-          </>
+          <span style={{ fontWeight: 500 }}>Pro</span>
         ) : authSession ? (
-          <>
-            <span style={{ fontWeight: 500 }}>Basic:</span>
-            <span>{formatNumber(allTimeStats.words)} words transcribed</span>
-          </>
+          <span style={{ fontWeight: 500 }}>Basic</span>
         ) : null}
       </div>
       {!footerStatusLabel ? (
