@@ -51,6 +51,26 @@ const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
 const COMMANDS_MARKDOWN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 22.2;
 const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const COMMANDS_RENDERED_CONTENT_BOTTOM_SCROLL_SPACE_PX = 44.4;
+const COMMANDS_TEXT_SIZE_STORAGE_KEY = 'commands-text-size';
+const COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY = 'commands-sidebar-width';
+const COMMANDS_RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
+const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
+type CommandsTextSize = 'small' | 'normal' | 'large';
+
+function loadCommandsTextSize(): CommandsTextSize {
+  const saved = localStorage.getItem(COMMANDS_TEXT_SIZE_STORAGE_KEY);
+  return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
+}
+
+function loadCommandsSidebarWidth(): number {
+  const saved = localStorage.getItem(COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY);
+  const parsed = saved ? parseInt(saved, 10) : NaN;
+  return Number.isFinite(parsed) ? parsed : 180;
+}
+
+function isCommandsStorageKey(key: string | null | undefined): boolean {
+  return key === COMMANDS_TEXT_SIZE_STORAGE_KEY || key === COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY;
+}
 
 export function getCommandsContentTopPadding(input: {
   isEditing: boolean;
@@ -302,17 +322,11 @@ export default function CommandsView({
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // Text size
-  const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
-    const saved = localStorage.getItem('commands-text-size');
-    return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
-  });
+  const [textSize, setTextSize] = useState<CommandsTextSize>(loadCommandsTextSize);
   const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
 
   // Layout
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('commands-sidebar-width');
-    return saved ? parseInt(saved, 10) : 180;
-  });
+  const [sidebarWidth, setSidebarWidth] = useState(loadCommandsSidebarWidth);
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
@@ -320,6 +334,7 @@ export default function CommandsView({
   const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editTextareaFocusedRef = useRef(false);
   const commandContentRef = useRef<HTMLDivElement | null>(null);
   const wikiIndexRef = useRef<WikiIndex | null>(null);
   const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
@@ -435,13 +450,38 @@ export default function CommandsView({
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
     if (isResizing) return;
-    localStorage.setItem('commands-sidebar-width', String(sidebarWidth));
+    localStorage.setItem(COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
   }, [isResizing, sidebarWidth]);
 
   // Persist text size preference
   useEffect(() => {
-    localStorage.setItem('commands-text-size', textSize);
+    localStorage.setItem(COMMANDS_TEXT_SIZE_STORAGE_KEY, textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    const applyStoredCommandPreferences = () => {
+      const nextTextSize = loadCommandsTextSize();
+      const nextSidebarWidth = loadCommandsSidebarWidth();
+      setTextSize((current) => current === nextTextSize ? current : nextTextSize);
+      setSidebarWidth((current) => current === nextSidebarWidth ? current : nextSidebarWidth);
+      sidebarWidthRef.current = nextSidebarWidth;
+      if (!isResizing) applySidebarWidth(nextSidebarWidth);
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      if (isCommandsStorageKey(key)) applyStoredCommandPreferences();
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isCommandsStorageKey(key)) applyStoredCommandPreferences();
+    };
+    window.addEventListener(COMMANDS_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(COMMANDS_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [applySidebarWidth, isResizing]);
 
   useEffect(() => {
     const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
@@ -460,50 +500,6 @@ export default function CommandsView({
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
   }, [onFocusChromeActiveChange]);
-
-  // Mock popular commands (fallback if Supabase unavailable)
-  const getMockCommands = useCallback((): PopularCommand[] => [
-    {
-      id: 'mock-1',
-      name: 'learn',
-      content: 'Periodically you will learn something from talking to me. Document your learnings in a markdown file in the learnings/ directory.',
-      copy_count: 42,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-2',
-      name: 'refactor',
-      content: 'Refactor the selected code to be more readable, maintainable, and follow best practices. Explain what changes you made and why.',
-      copy_count: 38,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-3',
-      name: 'review',
-      content: 'Review this code for bugs, security issues, and opportunities for improvement. Be thorough and specific.',
-      copy_count: 35,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-4',
-      name: 'commit',
-      content: 'Create a git commit with a clear, concise message following conventional commit standards.',
-      copy_count: 31,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-5',
-      name: 'pr',
-      content: 'Create a pull request with a clear description of changes, testing done, and any relevant context.',
-      copy_count: 28,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-  ], []);
 
   useEffect(() => {
     let alive = true;
@@ -545,20 +541,20 @@ export default function CommandsView({
             .order('created_at', { ascending: false });
 
           if (error) throw error;
-          setPopularCommands(data || getMockCommands());
+          setPopularCommands(data ?? []);
         } else {
-          setPopularCommands(getMockCommands());
+          setPopularCommands([]);
         }
       } catch (err) {
         console.error('Failed to fetch popular commands:', err);
-        setPopularCommands(getMockCommands());
+        setPopularCommands([]);
       } finally {
         setPopularLoading(false);
       }
     };
 
     fetchPopular();
-  }, [viewMode, fieldTheorySyncEnabled, popularCommands.length, getMockCommands]);
+  }, [viewMode, fieldTheorySyncEnabled, popularCommands.length]);
 
   // Filter popular commands
   const filteredPopularCommands = useMemo(() => {
@@ -643,6 +639,7 @@ export default function CommandsView({
     }
     return null;
   }, [selectedCommand, viewMode]);
+  const hasSelectedCommand = Boolean(selectedCommand);
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!selectedCommand) return [];
@@ -1055,6 +1052,17 @@ export default function CommandsView({
     return () => window.librarianAPI?.setMarkdownEditorFocused?.(false);
   }, []);
 
+  const reportCurrentMarkdownEditorFocus = useCallback(() => {
+    window.librarianAPI?.setMarkdownEditorFocused?.(editTextareaFocusedRef.current);
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    };
+  }, [reportCurrentMarkdownEditorFocus]);
+
   // Listen for commands changes. Also refresh on window focus as a safety
   // net — fs.watch with recursive:true is flaky on macOS for renames, so
   // external filename changes can be missed until the user comes back.
@@ -1062,14 +1070,16 @@ export default function CommandsView({
     const unsubscribe = window.commandsAPI?.onCommandsChanged((updatedCommands) => {
       setCommands(updatedCommands);
     });
-    const onFocus = async () => {
+    const reloadCommands = async () => {
       const fresh = await window.commandsAPI?.getCommands();
       if (fresh) setCommands(fresh);
     };
-    window.addEventListener('focus', onFocus);
+    window.addEventListener('focus', reloadCommands);
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadCommands);
     return () => {
       unsubscribe?.();
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', reloadCommands);
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadCommands);
     };
   }, []);
 
@@ -1080,8 +1090,10 @@ export default function CommandsView({
       if (!cancelled && result) setReadings(result);
     };
     void load();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     };
   }, []);
 
@@ -1097,13 +1109,20 @@ export default function CommandsView({
     };
     void load();
     const unsubscribe = window.wikiAPI?.onPageChanged?.(() => { void load(); });
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     return () => {
       cancelled = true;
       unsubscribe?.();
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     };
   }, []);
 
   useEffect(() => {
+    if (!hasSelectedCommand) {
+      setMarkdownLinkRelationDocuments([]);
+      return;
+    }
+
     let cancelled = false;
     const load = async () => {
       const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
@@ -1161,7 +1180,7 @@ export default function CommandsView({
     return () => {
       cancelled = true;
     };
-  }, [commandIndexPages, readings, wikiIndex, wikiIndexPages]);
+  }, [commandIndexPages, hasSelectedCommand, readings, wikiIndex, wikiIndexPages]);
 
   // Check if selected command is already shared
   useEffect(() => {
@@ -2318,9 +2337,13 @@ export default function CommandsView({
                   value={editContent}
                   onFocus={() => {
                     sidebarKeyboardActiveRef.current = false;
+                    editTextareaFocusedRef.current = true;
                     window.librarianAPI?.setMarkdownEditorFocused?.(true);
                   }}
-                  onBlur={() => window.librarianAPI?.setMarkdownEditorFocused?.(false)}
+                  onBlur={() => {
+                    editTextareaFocusedRef.current = false;
+                    window.librarianAPI?.setMarkdownEditorFocused?.(false);
+                  }}
                   onChange={(e) => setEditContent(e.target.value)}
                   onKeyDown={handleEditTextareaKeyDown}
                   style={{

@@ -30,6 +30,18 @@ interface ThemeContextType {
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
+const DARK_MODE_KEY = 'darkMode';
+const GLASS_EFFECT_KEY = 'glassEffect';
+const ACCENT_PRESET_KEY = 'accentPreset';
+const DARK_MODE_INTENSITY_KEY = 'darkModeIntensity';
+
+export function isThemeRendererStoragePreferenceKey(key: string | null | undefined): boolean {
+  return key === DARK_MODE_KEY ||
+    key === GLASS_EFFECT_KEY ||
+    key === ACCENT_PRESET_KEY ||
+    key === DARK_MODE_INTENSITY_KEY;
+}
 
 export function resolveStartupThemePreference(input: {
   localSaved: string | null;
@@ -137,7 +149,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [isDark, setIsDark] = useState(() => {
     // Default to light mode, check localStorage for saved preference
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode');
+      const saved = localStorage.getItem(DARK_MODE_KEY);
       if (saved !== null) {
         return saved === 'true';
       }
@@ -148,7 +160,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [glassEnabled, setGlassEnabled] = useState(() => {
     // Default to enabled, check localStorage for saved preference.
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('glassEffect');
+      const saved = localStorage.getItem(GLASS_EFFECT_KEY);
       if (saved !== null) {
         return saved === 'true';
       }
@@ -158,7 +170,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const [accentPreset, setAccentPresetState] = useState<AccentPreset>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('accentPreset');
+      const saved = localStorage.getItem(ACCENT_PRESET_KEY);
       if (saved && saved in accentPresets) {
         return saved as AccentPreset;
       }
@@ -168,7 +180,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const [darkModeIntensity, setDarkModeIntensityState] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkModeIntensity');
+      const saved = localStorage.getItem(DARK_MODE_INTENSITY_KEY);
       if (saved !== null) {
         const parsed = parseInt(saved, 10);
         if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) {
@@ -185,7 +197,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     const unsubscribe = window.themeAPI.onThemeChanged((newIsDark: boolean) => {
       setIsDark(newIsDark);
-      localStorage.setItem('darkMode', String(newIsDark));
+      localStorage.setItem(DARK_MODE_KEY, String(newIsDark));
     });
 
     // Prefer renderer localStorage on startup. The main-process preference can
@@ -193,7 +205,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // renderer already has an explicit choice.
     window.themeAPI.getTheme?.().then((savedIsDark: boolean) => {
       const resolved = resolveStartupThemePreference({
-        localSaved: localStorage.getItem('darkMode'),
+        localSaved: localStorage.getItem(DARK_MODE_KEY),
         mainIsDark: savedIsDark,
         currentIsDark: isDark,
       });
@@ -204,17 +216,66 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         setIsDark(resolved.nextIsDark);
       }
       if (resolved.writeLocalStorage) {
-        localStorage.setItem('darkMode', String(resolved.nextIsDark));
+        localStorage.setItem(DARK_MODE_KEY, String(resolved.nextIsDark));
       }
     });
 
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const applyStoredThemePreferences = (key: string | null | undefined) => {
+      if (key !== null && key !== undefined && !isThemeRendererStoragePreferenceKey(key)) return;
+      const syncAll = key === null || key === undefined;
+
+      if (syncAll || key === DARK_MODE_KEY) {
+        const saved = localStorage.getItem(DARK_MODE_KEY);
+        if (saved !== null) setIsDark(saved === 'true');
+      }
+
+      if (syncAll || key === GLASS_EFFECT_KEY) {
+        const saved = localStorage.getItem(GLASS_EFFECT_KEY);
+        if (saved !== null) setGlassEnabled(saved === 'true');
+      }
+
+      if (syncAll || key === ACCENT_PRESET_KEY) {
+        const saved = localStorage.getItem(ACCENT_PRESET_KEY);
+        if (saved && saved in accentPresets) setAccentPresetState(saved as AccentPreset);
+      }
+
+      if (syncAll || key === DARK_MODE_INTENSITY_KEY) {
+        const saved = localStorage.getItem(DARK_MODE_INTENSITY_KEY);
+        if (saved === null) return;
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) setDarkModeIntensityState(parsed);
+      }
+    };
+
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      applyStoredThemePreferences(key);
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isThemeRendererStoragePreferenceKey(key)) {
+        applyStoredThemePreferences(key);
+      }
+    };
+
+    window.addEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
   const toggleDarkMode = () => {
     const newValue = !isDark;
     setIsDark(newValue);
-    localStorage.setItem('darkMode', String(newValue));
+    localStorage.setItem(DARK_MODE_KEY, String(newValue));
 
     // Notify main process to sync to other windows
     window.themeAPI?.setTheme?.(newValue);
@@ -223,18 +284,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const toggleGlass = () => {
     const newValue = !glassEnabled;
     setGlassEnabled(newValue);
-    localStorage.setItem('glassEffect', String(newValue));
+    localStorage.setItem(GLASS_EFFECT_KEY, String(newValue));
   };
 
   const setAccentPreset = (preset: AccentPreset) => {
     setAccentPresetState(preset);
-    localStorage.setItem('accentPreset', preset);
+    localStorage.setItem(ACCENT_PRESET_KEY, preset);
   };
 
   const setDarkModeIntensity = (intensity: number) => {
     const clamped = Math.max(0, Math.min(100, intensity));
     setDarkModeIntensityState(clamped);
-    localStorage.setItem('darkModeIntensity', String(clamped));
+    localStorage.setItem(DARK_MODE_INTENSITY_KEY, String(clamped));
   };
 
   // Build the theme with accent color and intensity applied
