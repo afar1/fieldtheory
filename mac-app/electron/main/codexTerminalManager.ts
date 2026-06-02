@@ -17,6 +17,7 @@ export const CodexTerminalIPCChannels = {
   KILL: 'codexTerminal:kill',
   RENAME: 'codexTerminal:rename',
   READ_CLIPBOARD_TEXT: 'codexTerminal:readClipboardText',
+  READ_TERMINAL_PASTE_TEXT: 'codexTerminal:readTerminalPasteText',
   WRITE_CLIPBOARD_TEXT: 'codexTerminal:writeClipboardText',
   ATTACH_PAGE_CONTEXT: 'codexTerminal:attachPageContext',
   SET_LAUNCHER_TARGET_SESSION: 'codexTerminal:setLauncherTargetSession',
