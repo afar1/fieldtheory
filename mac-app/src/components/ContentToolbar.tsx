@@ -17,6 +17,7 @@ const CONTENT_TOOLBAR_SCALE = 0.88;
 const CONTENT_TOOLBAR_RESTING_OPACITY = 0.6;
 const CONTENT_TOOLBAR_REVEAL_DISTANCE_PX = 104;
 const CONTENT_TOOLBAR_FULL_OPACITY_DISTANCE_PX = 18;
+const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 
 type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
 
@@ -36,6 +37,29 @@ const VISIBLE_TOOLBAR_ACTION_GROUPS: Array<{ id: string; actions: ToolbarActionI
   { id: 'view', actions: ['newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive'] },
   { id: 'file', actions: ['copy', 'folder', 'rename', 'edit'] },
 ];
+const KNOWN_TOOLBAR_ACTIONS = new Set(TOOLBAR_ACTION_GROUPS.flatMap((group) => group.actions));
+
+function parsePinnedToolbarActions(value: string | null): ToolbarActionId[] {
+  try {
+    const parsed = JSON.parse(value ?? 'null');
+    if (!Array.isArray(parsed)) return DEFAULT_PINNED_TOOLBAR_ACTIONS;
+    return parsed.filter((id): id is ToolbarActionId => KNOWN_TOOLBAR_ACTIONS.has(id as ToolbarActionId));
+  } catch {
+    return DEFAULT_PINNED_TOOLBAR_ACTIONS;
+  }
+}
+
+function readPinnedToolbarActions(storage: Pick<Storage, 'getItem'> = window.localStorage): ToolbarActionId[] {
+  try {
+    return parsePinnedToolbarActions(storage.getItem(CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY));
+  } catch {
+    return DEFAULT_PINNED_TOOLBAR_ACTIONS;
+  }
+}
+
+function toolbarActionIdsEqual(left: readonly ToolbarActionId[], right: readonly ToolbarActionId[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
 
 const TEXT_SIZE_OPTIONS: Array<{
   id: 'small' | 'normal' | 'large';
@@ -645,16 +669,7 @@ export default function ContentToolbar({
   const [customizeMenuOpen, setCustomizeMenuOpen] = useState(false);
   const [maxwellMenuOpen, setMaxwellMenuOpen] = useState(false);
   const [toolbarPointerOpacity, setToolbarPointerOpacity] = useState(CONTENT_TOOLBAR_RESTING_OPACITY);
-  const [pinnedActions, setPinnedActions] = useState<ToolbarActionId[]>(() => {
-    try {
-      const parsed = JSON.parse(window.localStorage.getItem(CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY) ?? 'null');
-      if (!Array.isArray(parsed)) return DEFAULT_PINNED_TOOLBAR_ACTIONS;
-      const known = new Set(TOOLBAR_ACTION_GROUPS.flatMap((group) => group.actions));
-      return parsed.filter((id): id is ToolbarActionId => known.has(id as ToolbarActionId));
-    } catch {
-      return DEFAULT_PINNED_TOOLBAR_ACTIONS;
-    }
-  });
+  const [pinnedActions, setPinnedActions] = useState<ToolbarActionId[]>(() => readPinnedToolbarActions());
   const toolbarPillRef = useRef<HTMLDivElement | null>(null);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
   const typographyTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -735,6 +750,20 @@ export default function ContentToolbar({
   }, []);
 
   useToolbarDropdownDismiss(typographyMenuOpen, setTypographyMenuOpen, [typographyMenuRef, typographyTriggerRef]);
+
+  useEffect(() => {
+    const handleRendererStorageChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ key?: string | null; newValue?: string | null }>).detail;
+      if (detail?.key !== CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY) return;
+      const next = detail.newValue === undefined
+        ? readPinnedToolbarActions()
+        : parsePinnedToolbarActions(detail.newValue);
+      setPinnedActions((current) => toolbarActionIdsEqual(current, next) ? current : next);
+    };
+
+    window.addEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    return () => window.removeEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+  }, []);
 
   useEffect(() => {
     try {

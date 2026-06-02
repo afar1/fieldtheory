@@ -13,7 +13,8 @@ export type BrowserHelperServerOptions = {
   service: BrowserHelperDocumentServiceLike;
   reportCurrentDocument?: (context: DocumentPresenceContext, clientId?: string | null) => void;
   clearCurrentDocument?: (clientId?: string | null) => void;
-  setActiveClient?: (clientId?: string | null) => void;
+  setActiveClient?: (clientId?: string | null, surface?: BrowserHelperClientSurface | null) => void;
+  clearActiveClient?: (clientId?: string | null) => void;
   onClientDisconnected?: (clientId: string | null) => void;
   nativeBridge?: BrowserHelperNativeBridge;
   token?: string;
@@ -58,6 +59,8 @@ export type BrowserHelperServerAddress = {
   url: string;
 };
 
+export type BrowserHelperClientSurface = 'library' | 'commands' | 'bookmarks' | 'ember';
+
 export type BrowserHelperNativeEvent =
   | { type: 'wiki:changed' }
   | { type: 'wiki:deleted'; relPath: string }
@@ -71,6 +74,8 @@ export type BrowserHelperNativeEvent =
   | { type: 'librarian:readingUpdated'; reading: unknown }
   | { type: 'librarian:readingRemoved'; filePath: string }
   | { type: 'librarian:readingRenamed'; event: unknown }
+  | { type: 'librarian:newReadingAvailable'; readingPath: string }
+  | { type: 'librarian:showNewReading'; readingPath: string }
   | { type: 'librarian:showReading'; readingPath: string }
   | { type: 'librarian:setFullscreen'; fullscreen: boolean }
   | { type: 'librarian:insertMarkdownText'; text: string }
@@ -82,14 +87,27 @@ export type BrowserHelperNativeEvent =
   | { type: 'sharedFiles:presenceChanged'; payload: unknown }
   | { type: 'sharedFiles:pinsChanged' }
   | { type: 'commands:changed'; commands: unknown[] }
+  | { type: 'commands:directoryChanged'; directoryPath: string | null }
   | { type: 'commands:localCommandStatus'; status: unknown }
   | { type: 'commands:openMarkdownFromLauncher'; target: unknown }
   | { type: 'commands:toggleLineNumbersFromLauncher' }
   | { type: 'meetings:status'; session: unknown }
   | { type: 'auth:sessionChanged'; session: unknown | null }
+  | { type: 'quota:tierChanged'; tier: 'free' | 'pro' }
+  | { type: 'quota:changed'; data: unknown }
   | { type: 'team:changed' }
   | { type: 'bookmarks:changed' }
-  | { type: 'agent:kickoffStatus'; event: unknown };
+  | { type: 'updater:checkingForUpdate' }
+  | { type: 'updater:updateAvailable'; info: unknown }
+  | { type: 'updater:updateNotAvailable' }
+  | { type: 'updater:downloadProgress'; percent: number }
+  | { type: 'updater:updateDownloaded'; info: unknown }
+  | { type: 'updater:installing' }
+  | { type: 'updater:error'; error: string }
+  | { type: 'agent:kickoffProgress'; event: unknown }
+  | { type: 'agent:kickoffStatus'; event: unknown }
+  | { type: 'theme:changed'; isDark: boolean }
+  | { type: 'renderer-storage:changed'; key: string; value: string | null };
 
 export type BrowserHelperRendererStorageSnapshot = {
   available: boolean;
@@ -97,8 +115,18 @@ export type BrowserHelperRendererStorageSnapshot = {
 };
 
 export type BrowserHelperNativeBridge = {
+  getAuthSession?: () => unknown | Promise<unknown>;
+  getAuthCallsign?: () => string | null | Promise<string | null>;
+  getMetrics?: () => unknown | Promise<unknown>;
+  fetchMetricsFromSupabase?: () => boolean | Promise<boolean>;
+  getQuotas?: () => unknown | Promise<unknown>;
+  getTheme?: () => boolean | Promise<boolean>;
+  setTheme?: (isDark: boolean) => void | Promise<void>;
+  getHotkey?: (id: string) => string | null | Promise<string | null>;
   getHiddenFolders?: () => string[];
   setFolderHidden?: (folderId: string, hidden: boolean) => string[];
+  recordRecentWikiPage?: (page: unknown) => void | Promise<void>;
+  recordRecentCreatedLibraryPage?: (page: unknown, rootPath: string) => void | Promise<void>;
   getReadings?: () => unknown[] | Promise<unknown[]>;
   getReading?: (filePath: string) => unknown | Promise<unknown>;
   saveReading?: (filePath: string, content: string, expectedVersion?: unknown) => unknown | Promise<unknown>;
@@ -107,9 +135,35 @@ export type BrowserHelperNativeBridge = {
   shareReading?: (filePath: string) => unknown | Promise<unknown>;
   unshareReading?: (filePath: string) => boolean | Promise<boolean>;
   updateSharedReading?: (filePath: string, content: string, title: string) => boolean | Promise<boolean>;
+  isLibrarianEnabled?: () => boolean | Promise<boolean>;
+  setLibrarianEnabled?: (enabled: boolean) => boolean | Promise<boolean>;
+  isLibrarianSetupComplete?: () => boolean | Promise<boolean>;
+  setLibrarianSetupComplete?: (complete: boolean) => void | Promise<void>;
+  createWelcomeArtifact?: (dirPath: string) => boolean | Promise<boolean>;
+  getLibrarianWatchedDirs?: () => unknown[] | Promise<unknown[]>;
+  addLibrarianWatchedDir?: (dirPath: string) => unknown | Promise<unknown>;
+  removeLibrarianWatchedDir?: (dirPath: string) => boolean | Promise<boolean>;
+  browseLibrarianDirectory?: () => string | null | Promise<string | null>;
+  getDiscoveryFrequency?: () => string | Promise<string>;
+  setDiscoveryFrequency?: (frequency: string) => boolean | Promise<boolean>;
+  getUserExpertiseContext?: () => string | undefined | Promise<string | undefined>;
+  setUserExpertiseContext?: (context: string | undefined) => boolean | Promise<boolean>;
+  getClaudeCodeStatus?: () => string | Promise<string>;
+  isStateEnforcedHookInstalled?: () => boolean | Promise<boolean>;
+  installStateEnforcedHook?: () => boolean | Promise<boolean>;
+  uninstallStateEnforcedHook?: () => boolean | Promise<boolean>;
+  isCursorHookInstalled?: () => boolean | Promise<boolean>;
+  installCursorHook?: () => boolean | Promise<boolean>;
+  uninstallCursorHook?: () => boolean | Promise<boolean>;
+  isCodexHookInstalled?: () => boolean | Promise<boolean>;
+  installCodexHook?: () => boolean | Promise<boolean>;
+  uninstallCodexHook?: () => boolean | Promise<boolean>;
+  pollLibrarianStatus?: () => unknown | Promise<unknown>;
   muteForToday?: () => boolean | Promise<boolean>;
   isMutedForToday?: () => boolean | Promise<boolean>;
   unmute?: () => boolean | Promise<boolean>;
+  setBrowserLibraryImmersiveDismissable?: (dismissable: boolean, clientId?: string | null) => void | Promise<void>;
+  setBrowserLibrarySizeKey?: (key: 'fields' | 'library' | 'canvas' | 'draw', clientId?: string | null) => void | Promise<void>;
   setMarkdownEditorFocused?: (focused: boolean, clientId?: string | null) => void | Promise<void>;
   replaceSelectedMarkdownTextResult?: (result: { requestId?: string; success?: boolean }) => void | Promise<void>;
   listRecent?: () => RecentEntry[];
@@ -136,6 +190,11 @@ export type BrowserHelperNativeBridge = {
   createDefaultCommandDirectory?: () => string | null | Promise<string | null>;
   getCommands?: () => unknown[] | Promise<unknown[]>;
   getCommandByPath?: (filePath: string) => unknown | Promise<unknown>;
+  getCommandDirectory?: () => string | null | Promise<string | null>;
+  setCommandDirectory?: (directoryPath: string | null) => unknown | Promise<unknown>;
+  getCommandDirectories?: () => unknown[] | Promise<unknown[]>;
+  refreshCommands?: () => unknown[] | Promise<unknown[]>;
+  getCommandContent?: (commandName: string) => unknown | Promise<unknown>;
   getMarkdownPreview?: (filePath: string) => unknown | Promise<unknown>;
   saveCommand?: (filePath: string, content: string, expectedVersion?: unknown) => unknown | Promise<unknown>;
   createCommand?: (directoryPath: string, name: string, content?: string) => unknown | Promise<unknown>;
@@ -150,14 +209,41 @@ export type BrowserHelperNativeBridge = {
   cancelMaxwellRun?: (runId: string) => unknown | Promise<unknown>;
   undoMaxwellRun?: (runId: string) => unknown | Promise<unknown>;
   redoMaxwellRun?: (runId: string) => unknown | Promise<unknown>;
+  archiveActiveLibraryFile?: () => unknown | Promise<unknown>;
+  toggleActiveLibraryLineNumbers?: () => unknown | Promise<unknown>;
   getActiveMeeting?: () => unknown | Promise<unknown>;
   startMeetingHere?: () => unknown | Promise<unknown>;
   stopMeeting?: () => unknown | Promise<unknown>;
   getBookmarks?: () => unknown | Promise<unknown>;
+  getBookmarkDataSource?: () => unknown | Promise<unknown>;
   syncBookmarksIfStale?: () => unknown | Promise<unknown>;
+  getBookmarkAuthors?: () => unknown[] | Promise<unknown[]>;
+  getAuthorBookmarks?: (handle: string) => unknown[] | Promise<unknown[]>;
+  getTaxonomyBookmarks?: (filePaths: string[]) => unknown[] | Promise<unknown[]>;
+  searchBookmarks?: (query: string) => unknown[] | Promise<unknown[]>;
+  saveWebBookmarkUrl?: (url: string) => unknown | Promise<unknown>;
+  getActiveWebPageForBookmark?: () => unknown | Promise<unknown>;
+  saveActiveWebPageBookmark?: () => unknown | Promise<unknown>;
+  invokeBookmark?: (id: string) => unknown | Promise<unknown>;
+  sendBookmarkToCodex?: (id: string) => unknown | Promise<unknown>;
   copyBookmarkForAgent?: (id: string) => unknown | Promise<unknown>;
+  invokeBookmarkAuthorTimeline?: (handle: string) => unknown | Promise<unknown>;
+  getBookmarkMediaDirectory?: () => string | null | Promise<string | null>;
+  getBookmarkMediaFilePath?: (filename: string) => string | null | Promise<string | null>;
+  getAppVersion?: () => string | Promise<string>;
+  isUpdaterEnabled?: () => boolean | Promise<boolean>;
+  getUpdaterStatus?: () => unknown | Promise<unknown>;
+  checkForUpdates?: () => unknown | Promise<unknown>;
+  downloadUpdate?: () => unknown | Promise<unknown>;
+  installUpdate?: () => unknown | Promise<unknown>;
+  dismissUpdate?: () => unknown | Promise<unknown>;
   openExternal?: (href: string) => boolean | Promise<boolean>;
   showItemInFolder?: (filePath: string) => boolean | Promise<boolean>;
+  setRepresentedFilename?: (filePath: string, clientId?: string | null) => void | Promise<void>;
+  pasteIntoCodexInput?: (text: string) => unknown | Promise<unknown>;
+  openFieldTheoryMarkdownInNativeApp?: (target: unknown) => unknown | Promise<unknown>;
+  getClipboardImagePath?: () => string | null | Promise<string | null>;
+  savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: unknown }) => string | null | Promise<string | null>;
   pickFolder?: () => string | null | Promise<string | null>;
   openDocumentWindow?: (target: unknown) => unknown | Promise<unknown>;
   copyImageForDocument?: (documentPath: string, imagePath: string, alt?: string) => unknown | Promise<unknown>;
@@ -165,15 +251,21 @@ export type BrowserHelperNativeBridge = {
   makeImagesPortable?: (documentPath: string, content: string) => unknown | Promise<unknown>;
   deleteUnusedCopiedImages?: (documentPath: string, removedMarkdown: string, remainingContent: string) => unknown | Promise<unknown>;
   getFieldTheorySyncStatus?: () => unknown | Promise<unknown>;
+  startAgentKickoff?: (args: unknown) => unknown | Promise<unknown>;
+  cancelAgentKickoff?: (runId: string) => boolean | Promise<boolean>;
   getRendererStorage?: () => BrowserHelperRendererStorageSnapshot | Promise<BrowserHelperRendererStorageSnapshot>;
   setRendererStorage?: (key: string, value: string | null) => void | Promise<void>;
+  appendRenderedEditorDebug?: (entry: unknown) => unknown | Promise<unknown>;
+  clearRenderedEditorDebugLog?: () => unknown | Promise<unknown>;
+  getActiveLibraryFileContext?: () => unknown | Promise<unknown>;
 };
 
 export class BrowserHelperServer {
   private readonly service: BrowserHelperDocumentServiceLike;
   private readonly reportCurrentDocument?: (context: DocumentPresenceContext, clientId?: string | null) => void;
   private readonly clearCurrentDocument?: (clientId?: string | null) => void;
-  private readonly setActiveClient?: (clientId?: string | null) => void;
+  private readonly setActiveClient?: (clientId?: string | null, surface?: BrowserHelperClientSurface | null) => void;
+  private readonly clearActiveClient?: (clientId?: string | null) => void;
   private readonly onClientDisconnected?: (clientId: string | null) => void;
   private readonly nativeBridge: BrowserHelperNativeBridge;
   private readonly token: string;
@@ -188,6 +280,7 @@ export class BrowserHelperServer {
     this.reportCurrentDocument = options.reportCurrentDocument;
     this.clearCurrentDocument = options.clearCurrentDocument;
     this.setActiveClient = options.setActiveClient;
+    this.clearActiveClient = options.clearActiveClient;
     this.onClientDisconnected = options.onClientDisconnected;
     this.nativeBridge = options.nativeBridge ?? {};
     this.token = options.token ?? crypto.randomBytes(16).toString('hex');
@@ -298,7 +391,14 @@ export class BrowserHelperServer {
       }
 
       if (req.method === 'POST' && parsed.pathname === '/native/client-active') {
-        this.setActiveClient?.(readBrowserClientId(req));
+        const body = await readJsonBody(req);
+        this.setActiveClient?.(readBrowserClientId(req), readBrowserClientSurface(body.surface));
+        writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'DELETE' && parsed.pathname === '/native/client-active') {
+        this.clearActiveClient?.(readBrowserClientId(req));
         writeJson(res, 200, { ok: true }, req.headers.origin);
         return;
       }
@@ -314,6 +414,19 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'POST' && parsed.pathname === '/native/diagnostics/rendered-editor-debug') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.appendRenderedEditorDebug?.(body.entry) ?? { ok: false, path: '', error: 'Diagnostics bridge unavailable' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'DELETE' && parsed.pathname === '/native/diagnostics/rendered-editor-debug') {
+        const result = await this.nativeBridge.clearRenderedEditorDebugLog?.() ?? { ok: false, path: '', error: 'Diagnostics bridge unavailable' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/renderer-storage') {
         const body = await readJsonBody(req);
         const key = typeof body.key === 'string' ? body.key : '';
@@ -324,6 +437,57 @@ export class BrowserHelperServer {
         }
         await this.nativeBridge.setRendererStorage?.(key, value);
         writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/theme') {
+        const isDark = await this.nativeBridge.getTheme?.() ?? false;
+        writeJson(res, 200, { ok: true, isDark }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/auth/session') {
+        const session = await this.nativeBridge.getAuthSession?.() ?? null;
+        writeJson(res, 200, { ok: true, session }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/auth/callsign') {
+        const callsign = await this.nativeBridge.getAuthCallsign?.() ?? null;
+        writeJson(res, 200, { ok: true, callsign }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/metrics') {
+        const metrics = await this.nativeBridge.getMetrics?.() ?? null;
+        writeJson(res, 200, { ok: true, metrics }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/metrics/fetch-from-supabase') {
+        const success = await this.nativeBridge.fetchMetricsFromSupabase?.() ?? false;
+        writeJson(res, 200, { ok: true, success: success === true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/quota/quotas') {
+        const quotas = await this.nativeBridge.getQuotas?.() ?? null;
+        writeJson(res, 200, { ok: true, quotas }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/theme') {
+        const body = await readJsonBody(req);
+        const isDark = body.isDark === true;
+        await this.nativeBridge.setTheme?.(isDark);
+        writeJson(res, 200, { ok: true, isDark }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/hotkey') {
+        const id = String(parsed.searchParams.get('id') ?? '');
+        const hotkey = id ? await this.nativeBridge.getHotkey?.(id) ?? null : null;
+        writeJson(res, 200, { ok: true, hotkey }, req.headers.origin);
         return;
       }
 
@@ -379,7 +543,7 @@ export class BrowserHelperServer {
       if (req.method === 'GET' && parsed.pathname === '/native/wiki/page') {
         const page = this.service.getWikiPage(String(parsed.searchParams.get('relPath') ?? ''));
         if (!page) {
-          writeJson(res, 403, { ok: false, error: 'Document not allowed' }, req.headers.origin);
+          writeJson(res, 200, { ok: true, page: null }, req.headers.origin);
           return;
         }
         writeJson(res, 200, { ok: true, page }, req.headers.origin);
@@ -420,6 +584,7 @@ export class BrowserHelperServer {
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const fileName = typeof body.fileName === 'string' ? body.fileName : '';
         const page = this.service.createWikiFile(folderRelPath, fileName);
+        if (page) await this.nativeBridge.recordRecentWikiPage?.(page);
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -428,6 +593,7 @@ export class BrowserHelperServer {
         const body = await readJsonBody(req);
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const page = this.service.createWikiFileWithDefaultTitle(folderRelPath);
+        if (page) await this.nativeBridge.recordRecentWikiPage?.(page);
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -472,7 +638,7 @@ export class BrowserHelperServer {
       if (req.method === 'GET' && parsed.pathname === '/native/external/open') {
         const file = this.service.openExternal(String(parsed.searchParams.get('path') ?? ''));
         if (!file) {
-          writeJson(res, 403, { ok: false, error: 'Document not allowed' }, req.headers.origin);
+          writeJson(res, 200, { ok: true, file: null }, req.headers.origin);
           return;
         }
         writeJson(res, 200, { ok: true, file }, req.headers.origin);
@@ -485,6 +651,7 @@ export class BrowserHelperServer {
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const fileName = typeof body.fileName === 'string' ? body.fileName : '';
         const page = this.service.createLibraryFile(rootPath, folderRelPath, fileName);
+        if (page) await this.nativeBridge.recordRecentCreatedLibraryPage?.(page, rootPath);
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -626,6 +793,17 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/status') {
+        const status = await this.nativeBridge.pollLibrarianStatus?.() ?? {
+          pendingPath: null,
+          edits: 0,
+          threshold: 5,
+          didReset: false,
+        };
+        writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'GET' && parsed.pathname === '/native/librarian/reading') {
         const filePath = String(parsed.searchParams.get('path') ?? '');
         const reading = filePath ? await this.nativeBridge.getReading?.(filePath) ?? null : null;
@@ -691,6 +869,112 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/enabled') {
+        writeJson(res, 200, { ok: true, enabled: await this.nativeBridge.isLibrarianEnabled?.() ?? false }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/enabled') {
+        const body = await readJsonBody(req);
+        const enabled = await this.nativeBridge.setLibrarianEnabled?.(body.enabled === true) ?? false;
+        writeJson(res, 200, { ok: true, enabled }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/setup-complete') {
+        writeJson(res, 200, { ok: true, complete: await this.nativeBridge.isLibrarianSetupComplete?.() ?? true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/setup-complete') {
+        const body = await readJsonBody(req);
+        await this.nativeBridge.setLibrarianSetupComplete?.(body.complete === true);
+        writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/welcome-artifact') {
+        const body = await readJsonBody(req);
+        const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
+        const created = dirPath ? await this.nativeBridge.createWelcomeArtifact?.(dirPath) ?? false : false;
+        writeJson(res, 200, { ok: true, created }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/watched-dirs') {
+        writeJson(res, 200, { ok: true, dirs: await this.nativeBridge.getLibrarianWatchedDirs?.() ?? [] }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/watched-dirs') {
+        const body = await readJsonBody(req);
+        const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
+        const dir = dirPath ? await this.nativeBridge.addLibrarianWatchedDir?.(dirPath) ?? null : null;
+        writeJson(res, dir ? 200 : 400, { ok: Boolean(dir), dir }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'DELETE' && parsed.pathname === '/native/librarian/watched-dirs') {
+        const body = await readJsonBody(req);
+        const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
+        const success = dirPath ? await this.nativeBridge.removeLibrarianWatchedDir?.(dirPath) ?? false : false;
+        writeJson(res, 200, { ok: true, success }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/browse-directory') {
+        writeJson(res, 200, { ok: true, dirPath: await this.nativeBridge.browseLibrarianDirectory?.() ?? null }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/discovery-frequency') {
+        writeJson(res, 200, { ok: true, frequency: await this.nativeBridge.getDiscoveryFrequency?.() ?? 'sometimes' }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/discovery-frequency') {
+        const body = await readJsonBody(req);
+        const frequency = typeof body.frequency === 'string' ? body.frequency : '';
+        const success = await this.nativeBridge.setDiscoveryFrequency?.(frequency) ?? false;
+        writeJson(res, 200, { ok: true, success }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/user-expertise-context') {
+        writeJson(res, 200, { ok: true, context: await this.nativeBridge.getUserExpertiseContext?.() ?? null }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/user-expertise-context') {
+        const body = await readJsonBody(req);
+        const context = typeof body.context === 'string' ? body.context : undefined;
+        const success = await this.nativeBridge.setUserExpertiseContext?.(context) ?? false;
+        writeJson(res, 200, { ok: true, success }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/librarian/claude-code-status') {
+        writeJson(res, 200, { ok: true, status: await this.nativeBridge.getClaudeCodeStatus?.() ?? 'not-installed' }, req.headers.origin);
+        return;
+      }
+
+      const librarianHookRoute = matchLibrarianHookRoute(parsed.pathname);
+      if (librarianHookRoute) {
+        const hookBridge = getLibrarianHookBridge(this.nativeBridge, librarianHookRoute);
+        if (req.method === 'GET') {
+          writeJson(res, 200, { ok: true, installed: await hookBridge.isInstalled?.() ?? false }, req.headers.origin);
+          return;
+        }
+        if (req.method === 'POST') {
+          writeJson(res, 200, { ok: true, success: await hookBridge.install?.() ?? false }, req.headers.origin);
+          return;
+        }
+        if (req.method === 'DELETE') {
+          writeJson(res, 200, { ok: true, success: await hookBridge.uninstall?.() ?? false }, req.headers.origin);
+          return;
+        }
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/librarian/mute-for-today') {
         writeJson(res, 200, { ok: true, muted: await this.nativeBridge.muteForToday?.() ?? false }, req.headers.origin);
         return;
@@ -703,6 +987,27 @@ export class BrowserHelperServer {
 
       if (req.method === 'POST' && parsed.pathname === '/native/librarian/unmute') {
         writeJson(res, 200, { ok: true, muted: !(await this.nativeBridge.unmute?.() ?? false) }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/immersive-dismissable') {
+        const body = await readJsonBody(req);
+        const clientId = typeof body.clientId === 'string' ? body.clientId : readBrowserClientId(req);
+        await this.nativeBridge.setBrowserLibraryImmersiveDismissable?.(body.dismissable === true, clientId);
+        writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/librarian/size-key') {
+        const body = await readJsonBody(req);
+        const key = body.key;
+        if (key !== 'fields' && key !== 'library' && key !== 'canvas' && key !== 'draw') {
+          writeJson(res, 400, { ok: false, error: 'Invalid size key' }, req.headers.origin);
+          return;
+        }
+        const clientId = typeof body.clientId === 'string' ? body.clientId : readBrowserClientId(req);
+        await this.nativeBridge.setBrowserLibrarySizeKey?.(key, clientId);
+        writeJson(res, 200, { ok: true }, req.headers.origin);
         return;
       }
 
@@ -856,6 +1161,36 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/commands/directory') {
+        writeJson(res, 200, { ok: true, directory: await this.nativeBridge.getCommandDirectory?.() ?? null }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/commands/directory') {
+        const body = await readJsonBody(req);
+        const directoryPath = typeof body.directoryPath === 'string' ? body.directoryPath : null;
+        const result = await this.nativeBridge.setCommandDirectory?.(directoryPath) ?? { success: false, error: 'Commands are not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/commands/directories') {
+        writeJson(res, 200, { ok: true, directories: await this.nativeBridge.getCommandDirectories?.() ?? [] }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/commands/refresh') {
+        writeJson(res, 200, { ok: true, commands: await this.nativeBridge.refreshCommands?.() ?? [] }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/commands/content') {
+        const commandName = String(parsed.searchParams.get('name') ?? '');
+        const content = commandName ? await this.nativeBridge.getCommandContent?.(commandName) ?? null : null;
+        writeJson(res, 200, { ok: true, content }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/commands/watched-dir') {
         const body = await readJsonBody(req);
         const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
@@ -968,6 +1303,25 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'POST' && parsed.pathname === '/native/agent-kickoff/start') {
+        const args = await readJsonBody(req);
+        const result = await this.nativeBridge.startAgentKickoff?.(args) ?? {
+          ok: false,
+          runId: '',
+          error: 'Agent kickoff is not available',
+        };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/agent-kickoff/cancel') {
+        const body = await readJsonBody(req);
+        const runId = typeof body.runId === 'string' ? body.runId : '';
+        const success = runId ? await this.nativeBridge.cancelAgentKickoff?.(runId) ?? false : false;
+        writeJson(res, 200, { ok: true, success }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/commands/run-local') {
         const body = await readJsonBody(req);
         const result = await this.nativeBridge.runLocalCommand?.(body) ?? { success: false, error: 'Field Theory command system is not ready' };
@@ -1020,6 +1374,18 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'POST' && parsed.pathname === '/native/commands/archive-active-library-file') {
+        const result = await this.nativeBridge.archiveActiveLibraryFile?.() ?? { success: false, error: 'Archive is not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/commands/toggle-active-line-numbers') {
+        const result = await this.nativeBridge.toggleActiveLibraryLineNumbers?.() ?? { success: false, error: 'Line number toggle is not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'GET' && parsed.pathname === '/native/meetings/active') {
         const session = await this.nativeBridge.getActiveMeeting?.() ?? null;
         writeJson(res, 200, { ok: true, session }, req.headers.origin);
@@ -1044,8 +1410,80 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/source') {
+        const source = await this.nativeBridge.getBookmarkDataSource?.() ?? null;
+        writeJson(res, 200, { ok: true, source }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/sync-if-stale') {
         const result = await this.nativeBridge.syncBookmarksIfStale?.() ?? { status: 'unavailable' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/authors') {
+        const authors = await this.nativeBridge.getBookmarkAuthors?.() ?? [];
+        writeJson(res, 200, { ok: true, authors }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/author') {
+        const handle = String(parsed.searchParams.get('handle') ?? '');
+        const bookmarks = handle ? await this.nativeBridge.getAuthorBookmarks?.(handle) ?? [] : [];
+        writeJson(res, 200, { ok: true, bookmarks }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/taxonomy') {
+        const body = await readJsonBody(req);
+        const filePaths = Array.isArray(body.filePaths)
+          ? body.filePaths.filter((filePath: unknown): filePath is string => typeof filePath === 'string')
+          : [];
+        const bookmarks = await this.nativeBridge.getTaxonomyBookmarks?.(filePaths) ?? [];
+        writeJson(res, 200, { ok: true, bookmarks }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/search') {
+        const query = String(parsed.searchParams.get('query') ?? '');
+        const bookmarks = query ? await this.nativeBridge.searchBookmarks?.(query) ?? [] : [];
+        writeJson(res, 200, { ok: true, bookmarks }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/save-web-url') {
+        const body = await readJsonBody(req);
+        const url = typeof body.url === 'string' ? body.url : '';
+        const result = url ? await this.nativeBridge.saveWebBookmarkUrl?.(url) ?? { success: false, error: 'Bookmarks are not available' } : { success: false, error: 'URL is required' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/active-web-page') {
+        const result = await this.nativeBridge.getActiveWebPageForBookmark?.() ?? { success: false, error: 'Bookmarks are not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/save-active-web-page') {
+        const result = await this.nativeBridge.saveActiveWebPageBookmark?.() ?? { success: false, error: 'Bookmarks are not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/invoke') {
+        const body = await readJsonBody(req);
+        const id = typeof body.id === 'string' ? body.id : '';
+        const result = id ? await this.nativeBridge.invokeBookmark?.(id) ?? { success: false, error: 'Bookmarks are not available' } : { success: false, error: 'Bookmark id is required' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/send-to-codex') {
+        const body = await readJsonBody(req);
+        const id = typeof body.id === 'string' ? body.id : '';
+        const result = id ? await this.nativeBridge.sendBookmarkToCodex?.(id) ?? { success: false, error: 'Bookmarks are not available' } : { success: false, error: 'Bookmark id is required' };
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
@@ -1054,6 +1492,71 @@ export class BrowserHelperServer {
         const body = await readJsonBody(req);
         const id = typeof body.id === 'string' ? body.id : '';
         const result = id ? await this.nativeBridge.copyBookmarkForAgent?.(id) ?? { success: false, error: 'Bookmarks are not available' } : { success: false, error: 'Bookmark id is required' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/invoke-author-timeline') {
+        const body = await readJsonBody(req);
+        const handle = typeof body.handle === 'string' ? body.handle : '';
+        const result = handle ? await this.nativeBridge.invokeBookmarkAuthorTimeline?.(handle) ?? { success: false, error: 'Bookmarks are not available' } : { success: false, error: 'Author handle is required' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname.startsWith('/native/bookmarks/media/')) {
+        const filename = bookmarkMediaFilenameFromPathname(parsed.pathname);
+        if (!filename) {
+          writeJson(res, 404, { ok: false, error: 'Not found' }, req.headers.origin);
+          return;
+        }
+        const mediaDir = await this.nativeBridge.getBookmarkMediaDirectory?.() ?? null;
+        const filePath = await this.nativeBridge.getBookmarkMediaFilePath?.(filename)
+          ?? (mediaDir ? path.join(mediaDir, filename) : null);
+        if (!filePath || !mediaDir || !this.writeNativeFileInside(filePath, mediaDir, res, req.headers.origin)) {
+          writeJson(res, 404, { ok: false, error: 'Not found' }, req.headers.origin);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/app/version') {
+        const version = await this.nativeBridge.getAppVersion?.() ?? '0.0.0';
+        writeJson(res, 200, { ok: true, version }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/updater/enabled') {
+        const enabled = await this.nativeBridge.isUpdaterEnabled?.() ?? false;
+        writeJson(res, 200, { ok: true, enabled }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/updater/status') {
+        const status = await this.nativeBridge.getUpdaterStatus?.() ?? null;
+        writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/updater/check') {
+        const result = await this.nativeBridge.checkForUpdates?.() ?? null;
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/updater/download') {
+        const result = await this.nativeBridge.downloadUpdate?.() ?? null;
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/updater/install') {
+        const result = await this.nativeBridge.installUpdate?.() ?? null;
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/updater/dismiss') {
+        const result = await this.nativeBridge.dismissUpdate?.() ?? null;
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
@@ -1074,15 +1577,67 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'POST' && parsed.pathname === '/native/shell/represented-filename') {
+        const body = await readJsonBody(req);
+        const filePath = typeof body.filePath === 'string' ? body.filePath : '';
+        const clientId = typeof body.clientId === 'string' ? body.clientId : readBrowserClientId(req);
+        await this.nativeBridge.setRepresentedFilename?.(filePath, clientId);
+        writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/shell/paste-into-codex-input') {
+        const body = await readJsonBody(req);
+        const text = typeof body.text === 'string' ? body.text : '';
+        const result = text.trim()
+          ? await this.nativeBridge.pasteIntoCodexInput?.(text) ?? { success: false, error: 'Codex paste is not available' }
+          : { success: false, error: 'No selected text' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/shell/open-field-theory-markdown') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.openFieldTheoryMarkdownInNativeApp?.(body.target) ?? { success: false, error: 'Field Theory open is not available' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/clipboard/image-path') {
+        const path = await this.nativeBridge.getClipboardImagePath?.() ?? null;
+        writeJson(res, 200, { ok: true, path }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/clipboard/pasted-image-file') {
+        const body = await readJsonBody(req);
+        const name = typeof body.name === 'string' ? body.name : null;
+        const type = typeof body.type === 'string' ? body.type : null;
+        const data = Array.isArray(body.data)
+          ? Uint8Array.from(body.data.map((value) => Number(value) & 0xff))
+          : null;
+        const path = data
+          ? await this.nativeBridge.savePastedImageFile?.({ name, type, data }) ?? null
+          : null;
+        writeJson(res, path ? 200 : 400, { ok: Boolean(path), path }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/current') {
         const body = await readJsonBody(req);
-        const context = this.readNativeCurrentContext(body);
+        const context = await this.readNativeCurrentContext(body);
         if (!context) {
           writeJson(res, 403, { ok: false, error: 'Document not allowed' }, req.headers.origin);
           return;
         }
         this.reportCurrentDocument?.(context, readBrowserClientId(req));
         writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/current') {
+        const context = await this.nativeBridge.getActiveLibraryFileContext?.() ?? null;
+        writeJson(res, 200, { ok: true, context }, req.headers.origin);
         return;
       }
 
@@ -1193,6 +1748,42 @@ export class BrowserHelperServer {
     return true;
   }
 
+  private writeNativeFile(filePath: string, res: http.ServerResponse, origin?: string): boolean {
+    let realFilePath: string;
+    try {
+      realFilePath = fs.realpathSync(filePath);
+      if (!fs.statSync(realFilePath).isFile()) return false;
+    } catch {
+      return false;
+    }
+
+    const body = fs.readFileSync(realFilePath);
+    res.writeHead(200, {
+      ...corsHeaders(origin),
+      'Content-Type': contentTypeForPath(realFilePath),
+      'Content-Length': body.byteLength,
+      'Cache-Control': 'private, max-age=3600',
+    });
+    res.end(body);
+    return true;
+  }
+
+  private writeNativeFileInside(filePath: string, baseDir: string, res: http.ServerResponse, origin?: string): boolean {
+    let realBaseDir: string;
+    let realFilePath: string;
+    try {
+      realBaseDir = fs.realpathSync(baseDir);
+      realFilePath = fs.realpathSync(filePath);
+      const relativePath = path.relative(realBaseDir, realFilePath);
+      if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return false;
+      if (!fs.statSync(realFilePath).isFile()) return false;
+    } catch {
+      return false;
+    }
+
+    return this.writeNativeFile(realFilePath, res, origin);
+  }
+
   private openEventStream(req: http.IncomingMessage, res: http.ServerResponse): void {
     const parsed = new URL(req.url ?? '/', `http://${req.headers.host ?? `${this.host}:${this.port}`}`);
     const clientId = normalizedBrowserClientId(parsed.searchParams.get('clientId'));
@@ -1224,7 +1815,7 @@ export class BrowserHelperServer {
     return entries;
   }
 
-  private readNativeCurrentContext(body: Record<string, unknown>): DocumentPresenceContext | null {
+  private async readNativeCurrentContext(body: Record<string, unknown>): Promise<DocumentPresenceContext | null> {
     const type = body.type === 'external' ? 'external' : 'wiki';
     if (type === 'wiki') {
       const relPath = typeof body.relPath === 'string' ? body.relPath : typeof body.path === 'string' ? body.path : '';
@@ -1244,11 +1835,22 @@ export class BrowserHelperServer {
 
     const filePath = typeof body.filePath === 'string' ? body.filePath : typeof body.path === 'string' ? body.path : '';
     const file = this.service.openExternal(filePath);
-    if (!file) return null;
+    if (!file) return this.readNativeReadingCurrentContext(body, filePath);
+    const requestedRootPath = typeof body.rootPath === 'string' ? path.resolve(body.rootPath) : '';
+    const requestedRelPath = typeof body.relPath === 'string' ? body.relPath.replace(/\\/g, '/') : '';
+    const requestedFilePath = requestedRootPath && requestedRelPath
+      ? path.resolve(requestedRootPath, requestedRelPath.match(/\.(?:md|markdown|mdx|html?|css)$/i) ? requestedRelPath : `${requestedRelPath}.md`)
+      : '';
+    const canPreserveRootRelativeIdentity = Boolean(
+      requestedRootPath &&
+      requestedRelPath &&
+      isPathInside(requestedRootPath, file.path) &&
+      requestedFilePath === path.resolve(file.path),
+    );
     return {
       type,
-      rootPath: path.dirname(file.path),
-      relPath: path.basename(file.path),
+      rootPath: canPreserveRootRelativeIdentity ? requestedRootPath : path.dirname(file.path),
+      relPath: canPreserveRootRelativeIdentity ? requestedRelPath : path.basename(file.path),
       filePath: file.path,
       title: file.title,
       selectionStart: numberField(body.selectionStart),
@@ -1256,6 +1858,31 @@ export class BrowserHelperServer {
       selectionText: typeof body.selectionText === 'string' ? body.selectionText : null,
     };
   }
+
+  private async readNativeReadingCurrentContext(body: Record<string, unknown>, filePath: string): Promise<DocumentPresenceContext | null> {
+    if (!filePath) return null;
+    const reading = await this.nativeBridge.getReading?.(filePath);
+    if (!isNativeReading(reading)) return null;
+    return {
+      type: 'external',
+      rootPath: path.dirname(reading.path),
+      relPath: path.basename(reading.path),
+      filePath: reading.path,
+      title: reading.title,
+      selectionStart: numberField(body.selectionStart),
+      selectionEnd: numberField(body.selectionEnd),
+      selectionText: typeof body.selectionText === 'string' ? body.selectionText : null,
+    };
+  }
+}
+
+function isNativeReading(value: unknown): value is { path: string; title: string } {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    typeof (value as { path?: unknown }).path === 'string' &&
+    typeof (value as { title?: unknown }).title === 'string',
+  );
 }
 
 function readDocumentRef(parsed: URL, body: Record<string, unknown> = {}): { rootId: string; relPath: string } {
@@ -1304,12 +1931,68 @@ function normalizedBrowserClientId(value: string | null | undefined): string | n
   return /^[a-zA-Z0-9_-]{8,80}$/.test(trimmed) ? trimmed : null;
 }
 
+function readBrowserClientSurface(value: unknown): BrowserHelperClientSurface | null {
+  return value === 'library' || value === 'commands' || value === 'bookmarks' || value === 'ember'
+    ? value
+    : null;
+}
+
+type LibrarianHookRoute = 'state-enforced' | 'cursor' | 'codex';
+
+function matchLibrarianHookRoute(pathname: string): LibrarianHookRoute | null {
+  if (pathname === '/native/librarian/state-enforced-hook') return 'state-enforced';
+  if (pathname === '/native/librarian/cursor-hook') return 'cursor';
+  if (pathname === '/native/librarian/codex-hook') return 'codex';
+  return null;
+}
+
+function getLibrarianHookBridge(
+  bridge: BrowserHelperNativeBridge,
+  route: LibrarianHookRoute,
+): {
+  isInstalled?: () => boolean | Promise<boolean>;
+  install?: () => boolean | Promise<boolean>;
+  uninstall?: () => boolean | Promise<boolean>;
+} {
+  if (route === 'state-enforced') {
+    return {
+      isInstalled: bridge.isStateEnforcedHookInstalled,
+      install: bridge.installStateEnforcedHook,
+      uninstall: bridge.uninstallStateEnforcedHook,
+    };
+  }
+  if (route === 'cursor') {
+    return {
+      isInstalled: bridge.isCursorHookInstalled,
+      install: bridge.installCursorHook,
+      uninstall: bridge.uninstallCursorHook,
+    };
+  }
+  return {
+    isInstalled: bridge.isCodexHookInstalled,
+    install: bridge.installCodexHook,
+    uninstall: bridge.uninstallCodexHook,
+  };
+}
+
 function staticRelativePath(pathname: string): string | null {
   const decoded = decodeURIComponent(pathname);
   if (decoded === '/' || decoded === '/browser-library.html') return 'browser-library.html';
   if (!decoded.startsWith('/assets/')) return null;
   const relativePath = decoded.slice(1);
   return relativePath.includes('\0') ? null : relativePath;
+}
+
+function bookmarkMediaFilenameFromPathname(pathname: string): string | null {
+  const rawFilename = pathname.slice('/native/bookmarks/media/'.length);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawFilename);
+  } catch {
+    return null;
+  }
+  const filename = path.basename(decoded);
+  return filename && filename === decoded ? filename : null;
 }
 
 function contentTypeForPath(filePath: string): string {
@@ -1319,6 +2002,11 @@ function contentTypeForPath(filePath: string): string {
   if (ext === '.css') return 'text/css; charset=utf-8';
   if (ext === '.svg') return 'image/svg+xml';
   if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.mp4') return 'video/mp4';
+  if (ext === '.webm') return 'video/webm';
   if (ext === '.woff2') return 'font/woff2';
   return 'application/octet-stream';
 }

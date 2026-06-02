@@ -54,9 +54,11 @@ describe('CommandsView layout helpers', () => {
 
 describe('CommandsView command naming', () => {
   let insertMarkdownTextHandler: ((text: string) => void) | null = null;
+  let storage: Map<string, string>;
 
   beforeEach(() => {
     insertMarkdownTextHandler = null;
+    storage = new Map();
     const existingCommand = {
       name: 'existing',
       displayName: 'existing',
@@ -90,6 +92,7 @@ describe('CommandsView command naming', () => {
       value: {
         getReadings: vi.fn(async () => []),
         getReading: vi.fn(async () => null),
+        setMarkdownEditorFocused: vi.fn(),
         onInsertMarkdownText: vi.fn((callback: (text: string) => void) => {
           insertMarkdownTextHandler = callback;
           return () => {
@@ -107,11 +110,23 @@ describe('CommandsView command naming', () => {
         onPageChanged: vi.fn(() => () => {}),
       },
     });
+    Object.defineProperty(window, 'fieldTheorySyncAPI', {
+      configurable: true,
+      value: {
+        getStatus: vi.fn(async () => ({ enabled: false })),
+        setLocalEnabled: vi.fn(async (enabled: boolean) => ({ enabled })),
+      },
+    });
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
-        getItem: vi.fn(() => null),
-        setItem: vi.fn(),
+        getItem: vi.fn((key: string) => storage.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage.set(key, value);
+        }),
+        removeItem: vi.fn((key: string) => {
+          storage.delete(key);
+        }),
       },
     });
     Object.defineProperty(window, 'alert', {
@@ -166,6 +181,83 @@ describe('CommandsView command naming', () => {
     });
   });
 
+  it('does not show fake shared commands when the real shared source is unavailable', async () => {
+    window.fieldTheorySyncAPI!.getStatus = vi.fn(async () => ({ enabled: true }));
+    window.commandsAPI!.getCommands = vi.fn(async () => []);
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText('Shared'));
+
+    await waitFor(() => {
+      expect(screen.queryByText('learn')).toBeNull();
+      expect(screen.queryByText('refactor')).toBeNull();
+      expect(screen.queryByText('review')).toBeNull();
+    });
+    expect(screen.getByText('Select a command')).toBeTruthy();
+  });
+
+  it('does not hydrate linked document bodies before a command is selected', async () => {
+    window.commandsAPI!.getCommands = vi.fn(async () => []);
+    window.commandsAPI!.getCommandByPath = vi.fn(async () => null);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath: 'scratchpad/linked-note',
+        absPath: '/tmp/wiki/linked-note.md',
+        name: 'linked-note',
+        title: 'Linked Note',
+        lastUpdated: 1,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath: 'scratchpad/linked-note',
+      absPath: '/tmp/wiki/linked-note.md',
+      name: 'linked-note',
+      title: 'Linked Note',
+      lastUpdated: 1,
+      content: 'Linked body',
+      documentVersion: { mtimeMs: 1, size: 11, sha256: 'linked-note' },
+    }));
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/artifact.md',
+      title: 'artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 1,
+      mtime: 1,
+    }]);
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/artifact.md',
+      title: 'artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 1,
+      mtime: 1,
+      content: 'Artifact body',
+      documentVersion: { mtimeMs: 1, size: 13, sha256: 'artifact' },
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Select a command');
+    await waitFor(() => {
+      expect(window.wikiAPI!.getTree).toHaveBeenCalled();
+      expect(window.librarianAPI!.getReadings).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(window.wikiAPI!.getPage).not.toHaveBeenCalled();
+    expect(window.librarianAPI!.getReading).not.toHaveBeenCalled();
+    expect(window.commandsAPI!.getCommandByPath).not.toHaveBeenCalled();
+  });
+
   it('keeps the launcher-provided command selected after async command loading', async () => {
     const commands = [
       {
@@ -215,6 +307,60 @@ describe('CommandsView command naming', () => {
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
     expect(editor.value).toContain('Rendered selection text\n[[refactor]]');
+  });
+
+  it('re-reports focused command editor state when the Browser helper reconnects', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    fireEvent.focus(editor);
+    await waitFor(() => {
+      expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+    });
+
+    vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+  });
+
+  it('updates mounted command display preferences when native renderer storage changes', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    const sidebar = document.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement;
+    expect(sidebar.style.width).toBe('180px');
+
+    act(() => {
+      storage.set('commands-sidebar-width', '260');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'commands-sidebar-width', value: '260' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(sidebar.style.width).toBe('260px');
+      expect(sidebar.style.minWidth).toBe('260px');
+    });
+
+    fireEvent.click(screen.getByTitle('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    expect(editor.style.fontSize).toBe('14px');
+
+    act(() => {
+      storage.set('commands-text-size', 'large');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'commands-text-size', value: 'large' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(editor.style.fontSize).toBe('16px');
+    });
   });
 
   it('uses shared history navigation from the commands toolbar and bracket shortcuts', async () => {
@@ -436,6 +582,100 @@ describe('CommandsView command naming', () => {
     });
 
     expect(getCommandByPath).not.toHaveBeenCalled();
+  });
+
+  it('reloads commands when the Browser helper event stream reconnects', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 1,
+    };
+    const getCommands = vi.fn()
+      .mockResolvedValueOnce([existingCommand])
+      .mockResolvedValueOnce([existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommands = getCommands;
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: filePath.endsWith('review.md') ? 1 : 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: filePath },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nReview content\n'
+        : '# existing\n\nExisting content\n',
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Existing content');
+    expect(screen.queryByText('review')).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await screen.findByText('review');
+    expect(getCommands).toHaveBeenCalledTimes(2);
+  });
+
+  it('reloads artifact link sources when the Browser helper event stream reconnects', async () => {
+    const getReadings = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        path: '/tmp/library/reconnect-artifact.md',
+        title: 'Reconnect Artifact',
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: 0,
+        mtime: 0,
+      }]);
+    window.librarianAPI!.getReadings = getReadings;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    expect(getReadings).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(getReadings).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('reloads wiki link sources when the Browser helper event stream reconnects', async () => {
+    const getTree = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        name: 'scratchpad',
+        files: [{
+          relPath: 'scratchpad/reconnect-wiki',
+          title: 'Reconnect Wiki',
+        }],
+      }]);
+    window.wikiAPI!.getTree = getTree;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    expect(getTree).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(getTree).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('autosaves markdown edits without toolbar save controls', async () => {
