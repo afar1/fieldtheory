@@ -2,7 +2,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import {
+  documentSaveConflictIfVersionChanged,
+  documentSaveResultForSharedConflict,
+  documentSaveResultForUpdatedFile,
+  readDocumentVersion,
+  writeTextFileWithConflictGuard,
+} from './documentSaveGuard';
 
 const tempDirs: string[] = [];
 
@@ -59,5 +65,51 @@ describe('document save guard', () => {
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('# Original\n');
     expect(fs.readdirSync(dir).filter((name) => name.includes('.tmp'))).toEqual([]);
+  });
+
+  it('returns a document save result for a refreshed shared cache file', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'shared.md');
+    fs.writeFileSync(filePath, '# Remote update\n');
+
+    const result = documentSaveResultForUpdatedFile(filePath);
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    if (result.ok) {
+      expect(result.version.sha256).toBe(readDocumentVersion(filePath).sha256);
+    }
+  });
+
+  it('maps a remote shared edit conflict to the normal document conflict shape', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'shared.md');
+    fs.writeFileSync(filePath, '# Remote content\n');
+
+    const result = documentSaveResultForSharedConflict('# Remote content\n', filePath);
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: '# Remote content\n',
+    }));
+    if (!result.ok) {
+      expect(result.currentVersion?.sha256).toBe(readDocumentVersion(filePath).sha256);
+    }
+  });
+
+  it('reports a conflict when a shared cache file changed since the editor opened', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'shared.md');
+    fs.writeFileSync(filePath, '# Original\n');
+    const expectedVersion = readDocumentVersion(filePath);
+    fs.writeFileSync(filePath, '# Remote refresh\n');
+
+    const result = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: '# Remote refresh\n',
+    }));
   });
 });

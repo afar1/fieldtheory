@@ -98,3 +98,47 @@ export function writeTextFileWithConflictGuard(
     return { ok: false, reason: 'error' };
   }
 }
+
+export function documentSaveResultForUpdatedFile(filePath: string): DocumentSaveResult {
+  try {
+    return { ok: true, version: readDocumentVersion(filePath) };
+  } catch {
+    return { ok: false, reason: 'not-found' };
+  }
+}
+
+export function documentSaveConflictIfVersionChanged(
+  filePath: string,
+  expectedVersion?: DocumentVersion | null,
+): DocumentSaveResult | null {
+  if (!expectedVersion) return null;
+  try {
+    const currentVersion = readDocumentVersion(filePath);
+    if (documentVersionsMatch(currentVersion, expectedVersion)) return null;
+    return {
+      ok: false,
+      reason: 'conflict',
+      currentContent: fs.readFileSync(filePath, 'utf-8'),
+      currentVersion,
+    };
+  } catch {
+    return { ok: false, reason: 'not-found' };
+  }
+}
+
+export function documentSaveResultForSharedConflict(
+  currentContent: string,
+  cachePath?: string,
+): DocumentSaveResult {
+  if (!cachePath) return { ok: false, reason: 'conflict', currentContent };
+  try {
+    return {
+      ok: false,
+      reason: 'conflict',
+      currentContent,
+      currentVersion: readDocumentVersion(cachePath),
+    };
+  } catch {
+    return { ok: false, reason: 'conflict', currentContent };
+  }
+}
