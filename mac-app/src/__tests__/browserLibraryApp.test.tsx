@@ -906,8 +906,8 @@ describe('BrowserLibraryApp', () => {
       />,
     );
 
-    expect(await screen.findByText('Pro:')).toBeTruthy();
-    expect(await screen.findByText('1,234 words transcribed')).toBeTruthy();
+    expect(await screen.findByText('Pro')).toBeTruthy();
+    expect(screen.queryByText('1,234 words transcribed')).toBeNull();
   });
 
   it('shows native local command status in the Browser Library footer and can cancel a run', async () => {
