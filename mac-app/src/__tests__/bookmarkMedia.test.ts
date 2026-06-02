@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '../utils/bookmarkMedia';
+
+afterEach(() => {
+  delete window.fieldTheoryBookmarkMediaAPI;
+});
 
 describe('localMediaUrl', () => {
   it('returns null when image is undefined', () => {
@@ -20,6 +24,34 @@ describe('localMediaUrl', () => {
         localFilename: '12345-abcdef.jpg',
       })
     ).toBe('ftmedia://media/12345-abcdef.jpg');
+  });
+
+  it('encodes fallback ftmedia:// filenames', () => {
+    expect(
+      localMediaUrl({
+        url: 'https://x',
+        width: 1,
+        height: 1,
+        type: 'photo',
+        localFilename: 'saved image 1.jpg',
+      })
+    ).toBe('ftmedia://media/saved%20image%201.jpg');
+  });
+
+  it('uses the browser helper media resolver when present', () => {
+    window.fieldTheoryBookmarkMediaAPI = {
+      mediaUrl: (filename) => `http://127.0.0.1:59971/native/bookmarks/media/${filename}?token=test-token`,
+    };
+
+    expect(
+      localMediaUrl({
+        url: 'https://x',
+        width: 1,
+        height: 1,
+        type: 'photo',
+        localFilename: '12345-abcdef.jpg',
+      })
+    ).toBe('http://127.0.0.1:59971/native/bookmarks/media/12345-abcdef.jpg?token=test-token');
   });
 });
 

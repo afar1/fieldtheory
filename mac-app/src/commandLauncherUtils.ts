@@ -441,7 +441,7 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 }
 
 export type LauncherFieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: MarkdownContentMode;
   selectionStart?: number;

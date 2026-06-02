@@ -3,7 +3,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { List, RowComponentProps, useDynamicRowHeight } from 'react-window';
 import { localAvatarUrl, localMediaUrls } from '../utils/bookmarkMedia';
 import { wrapLines } from '../utils/bookmarkCardHeight';
-import { copyBookmarkContent } from '../utils/bookmarkCopy';
+import { copyBookmarkContent, sendBookmarkToCodex } from '../utils/bookmarkCopy';
 
 function formatPostedAt(raw: string): string {
   if (!raw) return '';
@@ -71,10 +71,11 @@ interface RowProps {
   copiedBookmarkId: string | null;
   hoverBookmarkId: string | null;
   onCopyBookmark: (bookmarkId: string) => void;
+  onSendBookmarkToCodex: (bookmarkId: string) => void;
   onHoverBookmark: (bookmarkId: string | null) => void;
 }
 
-function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId, onCopyBookmark, onHoverBookmark }: RowComponentProps<RowProps>) {
+function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId, onCopyBookmark, onSendBookmarkToCodex, onHoverBookmark }: RowComponentProps<RowProps>) {
   const bm = bookmarks[index];
   const mediaUrls = localMediaUrls(bm.images).slice(0, 4);
   const avatarUrl = localAvatarUrl(bm);
@@ -121,6 +122,9 @@ function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId
                 <img
                   src={avatarUrl}
                   alt=""
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none';
+                  }}
                   style={{ width: '16px', height: '16px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
                 />
               )}
@@ -150,6 +154,9 @@ function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId
                     key={idx}
                     src={src}
                     alt=""
+                    onError={(event) => {
+                      event.currentTarget.style.display = 'none';
+                    }}
                     style={{
                       width: '100%',
                       height: '100%',
@@ -165,6 +172,43 @@ function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId
             )}
           </div>
         </a>
+        <button
+          type="button"
+          aria-label="Send bookmark to Codex"
+          title="Send bookmark to Codex"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onSendBookmarkToCodex(bm.id);
+          }}
+          style={{
+            position: 'absolute',
+            top: '8px',
+            right: '40px',
+            width: '26px',
+            height: '26px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: theme.text,
+            backgroundColor: theme.isDark ? 'rgba(18,18,20,0.78)' : 'rgba(255,255,255,0.88)',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            cursor: 'pointer',
+            opacity: copyVisible ? 1 : 0,
+            pointerEvents: copyVisible ? 'auto' : 'none',
+            transition: 'opacity 0.14s ease, color 0.14s ease, transform 0.14s ease',
+            transform: copyVisible ? 'translateY(0)' : 'translateY(-2px)',
+            boxShadow: theme.isDark ? '0 6px 16px rgba(0,0,0,0.32)' : '0 6px 16px rgba(0,0,0,0.12)',
+            zIndex: 2,
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+            <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" opacity="0.82" />
+            <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" opacity="0.38" />
+          </svg>
+        </button>
         <button
           type="button"
           aria-label={copied ? 'Copied' : 'Copy bookmark content'}
@@ -212,7 +256,7 @@ function Row({ index, style, bookmarks, theme, copiedBookmarkId, hoverBookmarkId
   );
 }
 
-export default function BookmarksList({ bookmarks }: { bookmarks: Bookmark[] }) {
+export default function BookmarksList({ bookmarks, onActionFeedback }: { bookmarks: Bookmark[]; onActionFeedback?: (message: string) => void }) {
   const { theme } = useTheme();
   const [hoverBookmarkId, setHoverBookmarkId] = useState<string | null>(null);
   const [copiedBookmarkId, setCopiedBookmarkId] = useState<string | null>(null);
@@ -228,6 +272,11 @@ export default function BookmarksList({ bookmarks }: { bookmarks: Bookmark[] }) 
       copiedTimerRef.current = setTimeout(() => setCopiedBookmarkId(null), 1200);
     });
   }, []);
+  const handleSendBookmarkToCodex = useCallback((bookmarkId: string) => {
+    void sendBookmarkToCodex(bookmarkId).then((success) => {
+      if (success) onActionFeedback?.('Bookmark sent to Codex');
+    });
+  }, [onActionFeedback]);
 
   useEffect(() => {
     return () => {
@@ -248,6 +297,7 @@ export default function BookmarksList({ bookmarks }: { bookmarks: Bookmark[] }) 
             copiedBookmarkId,
             hoverBookmarkId,
             onCopyBookmark: handleCopyBookmark,
+            onSendBookmarkToCodex: handleSendBookmarkToCodex,
             onHoverBookmark: setHoverBookmarkId,
           }}
           style={{ height: '100%' }}

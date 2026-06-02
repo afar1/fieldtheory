@@ -49,6 +49,14 @@ export function prefetchBookmarks(): void {
 
 /** Subscribe to change events (from file watcher via IPC). */
 export function onBookmarksChanged(cb: (s: BookmarksSnapshot) => void): () => void {
+  subscribeToChanges();
   listeners.add(cb);
   return () => listeners.delete(cb);
+}
+
+export function resetBookmarksCacheForTests(): void {
+  cached = null;
+  inflight = null;
+  listeners.clear();
+  changeSubscribed = false;
 }
