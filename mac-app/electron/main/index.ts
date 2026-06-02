@@ -3331,6 +3331,7 @@ const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
   'librarian-last-selection',
   'librarian-editor-session',
   'fieldtheory.lineNumbers',
+  'fieldtheory-shared-file-toggle-hotkey',
   'librarian-sidebar-width',
   'librarian-sidebar-collapsed',
   'bookmarks-view-mode',

@@ -505,6 +505,7 @@ describe('BrowserHelperServer', () => {
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
     const values: Record<string, string | null> = {
       'library-pinned-item-ids': '["wiki:Plan"]',
+      'fieldtheory-shared-file-toggle-hotkey': 'Command+Shift+R',
     };
     const server = new BrowserHelperServer({
       service: new BrowserHelperDocumentService([root]),
@@ -527,6 +528,7 @@ describe('BrowserHelperServer', () => {
     });
 
     expect(listResponse.body.values['library-pinned-item-ids']).toBe('["wiki:Plan"]');
+    expect(listResponse.body.values['fieldtheory-shared-file-toggle-hotkey']).toBe('Command+Shift+R');
     expect(listResponse.body.available).toBe(true);
     expect(setResponse.status).toBe(200);
     expect(values['fieldtheory.contentToolbar.pinnedActions.v2']).toBe('["fieldtheory"]');
