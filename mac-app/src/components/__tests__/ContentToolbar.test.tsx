@@ -490,6 +490,9 @@ describe('ContentToolbar', () => {
   });
 
   it('keeps text style controls inside a bounded menu grid', () => {
+    const onBlinkTextCursorChange = vi.fn();
+    const onRenderedTextCursorStyleChange = vi.fn();
+
     render(
       <ContentToolbar
         showCopy={false}
@@ -514,6 +517,10 @@ describe('ContentToolbar', () => {
         onUnorderedListMarkerChange={vi.fn()}
         todoMarker="square"
         onTodoMarkerChange={vi.fn()}
+        blinkTextCursor
+        onBlinkTextCursorChange={onBlinkTextCursorChange}
+        renderedTextCursorStyle="block"
+        onRenderedTextCursorStyleChange={onRenderedTextCursorStyleChange}
       />
     );
 
@@ -535,5 +542,10 @@ describe('ContentToolbar', () => {
     expect(control.style.gridAutoColumns).toBe('minmax(0, 1fr)');
     expect(control.closest('div[style*="grid-template-columns"]')?.getAttribute('style')).toContain('grid-template-columns: 52px minmax(0, 1fr)');
     expect((screen.getByTitle('Draft font') as HTMLButtonElement).style.minWidth).toBe('0');
+
+    fireEvent.click(screen.getByTitle('Bar cursor'));
+    expect(onRenderedTextCursorStyleChange).toHaveBeenCalledWith('bar');
+    fireEvent.click(screen.getByTitle('Blinking cursor off'));
+    expect(onBlinkTextCursorChange).toHaveBeenCalledWith(false);
   });
 });

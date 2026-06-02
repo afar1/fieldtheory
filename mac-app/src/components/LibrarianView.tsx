@@ -56,6 +56,8 @@ import {
   restoreSharedFileToggleHotkey,
   restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
+  persistRenderedTextCursorStyle,
+  persistTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
   RENDERED_EDITOR_DEBUG_ENTRY_LIMIT,
@@ -735,6 +737,13 @@ export function isBookmarksCanvasChromeActive(input: {
     && input.selectedItemType === 'bookmarks'
     && input.isFullScreen
     && input.bookmarksCanvasActive;
+}
+
+export function isLibrarianSidebarHidden(input: {
+  isFullScreen: boolean;
+  selectedItemType: LibrarianSelectedItemType;
+}): boolean {
+  return input.isFullScreen && input.selectedItemType !== 'bookmarks';
 }
 
 export function isTextEntryInputType(type: string | null | undefined): boolean {
@@ -3967,6 +3976,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, []);
 
+  const handleTextCursorBlinkChange = useCallback((enabled: boolean) => {
+    setBlinkTextCursor(enabled);
+    persistTextCursorBlink(localStorage, enabled);
+    window.dispatchEvent(new Event(TEXT_CURSOR_BLINK_CHANGED_EVENT));
+  }, []);
+
+  const handleRenderedTextCursorStyleChange = useCallback((nextStyle: RenderedTextCursorStyle) => {
+    setRenderedTextCursorStyle(nextStyle);
+    persistRenderedTextCursorStyle(localStorage, nextStyle);
+    window.dispatchEvent(new Event(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT));
+  }, []);
+
   useEffect(() => {
     localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
   }, [lineNumbersMode]);
@@ -4325,7 +4346,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     ? htmlLayoutByPath[activeReadingPath] ?? 'full'
     : 'contained';
   const activeHtmlUsesFullCanvas = activeIsHtmlDocument && contentMode !== 'markdown' && activeHtmlLayout === 'full';
-  const sidebarHidden = isFullScreen;
+  const sidebarHidden = isLibrarianSidebarHidden({ isFullScreen, selectedItemType });
   const latestRenderedContent = latestRenderedContentRef.current;
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
@@ -6219,8 +6240,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
+    if (
+      snapshot.docChanged
+      && (snapshot.inputType === 'insertParagraph' || snapshot.inputType === 'insertLineBreak')
+    ) {
+      pendingRenderedEditorSelectionRef.current = {
+        start: snapshot.selectionStart,
+        end: snapshot.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+    }
     updateRenderedEditorWikiLinkCompletion(snapshot);
-  }, [updateRenderedEditorWikiLinkCompletion]);
+  }, [focusRenderedEditor, updateRenderedEditorWikiLinkCompletion]);
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
     if (!isRenderedMarkdownLinkEventTarget(event.target)) return false;
@@ -8983,6 +9014,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }}
     >
       <ScrollDiagnosticsHUD />
+      {readerStatusFeedback}
       {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
         <div
           aria-hidden="true"
@@ -9374,6 +9406,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onUnorderedListMarkerChange={setUnorderedListMarker}
                   todoMarker={todoMarker}
                   onTodoMarkerChange={setTodoMarker}
+                  blinkTextCursor={blinkTextCursor}
+                  onBlinkTextCursorChange={handleTextCursorBlinkChange}
+                  renderedTextCursorStyle={renderedTextCursorStyle}
+                  onRenderedTextCursorStyleChange={handleRenderedTextCursorStyleChange}
                   onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                   onDelete={handleDelete}
                   showDelete
@@ -10146,7 +10182,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             </svg>
           </button>
         )}
-        {readerStatusFeedback}
         </div>
         )}
         {!browserLibrarySurface && (
