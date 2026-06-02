@@ -53,6 +53,7 @@ import {
   isCodexTerminalEventTarget,
   isPasteSelectionToTerminalShortcut,
   getTerminalPastePopoverPosition,
+  getNativeTerminalPastePopoverPosition,
   getTerminalImagePastePath,
   getTerminalPasteTextFromSelection,
   isBookmarksCanvasChromeActive,
@@ -1736,7 +1737,7 @@ describe('rendered markdown edit helpers', () => {
 
   it('positions the terminal paste button to the right of the selected text', () => {
     expect(getTerminalPastePopoverPosition(
-      { top: 100, right: 240, height: 24 },
+      { top: 100, left: 180, right: 240, height: 24 },
       { width: 800, height: 600 },
     )).toEqual({
       top: 97,
@@ -1746,11 +1747,33 @@ describe('rendered markdown edit helpers', () => {
 
   it('keeps the terminal paste button inside the viewport', () => {
     expect(getTerminalPastePopoverPosition(
-      { top: 590, right: 790, height: 24 },
+      { top: 590, left: 720, right: 790, height: 24 },
       { width: 800, height: 600 },
     )).toEqual({
       top: 562,
       left: 758,
+    });
+  });
+
+  it('anchors the native terminal paste button outside the document body', () => {
+    const viewport = { width: 1200, height: 800 };
+    const contentRect = { right: 820 };
+
+    expect(getNativeTerminalPastePopoverPosition(
+      { top: 100, left: 180, right: 240, height: 24 },
+      viewport,
+      contentRect,
+    )).toEqual({
+      top: 97,
+      left: 834,
+    });
+    expect(getNativeTerminalPastePopoverPosition(
+      { top: 100, left: 180, right: 760, height: 24 },
+      viewport,
+      contentRect,
+    )).toEqual({
+      top: 97,
+      left: 834,
     });
   });
 
