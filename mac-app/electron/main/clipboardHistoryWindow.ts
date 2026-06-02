@@ -175,6 +175,7 @@ export class ClipboardHistoryWindow {
   // Callback for when window bounds change (for persistence).
   private onBoundsChanged: ((bounds: { x: number; y: number; width: number; height: number }) => void) | null = null;
   private onHidden: ((info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void) | null = null;
+  private onDidFinishLoad: (() => void) | null = null;
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
@@ -1056,6 +1057,7 @@ export class ClipboardHistoryWindow {
     // Show window only after content loads to avoid blank screen.
     // If preloadOnly, keep window hidden for instant later use.
     this.window.webContents.once('did-finish-load', () => {
+      this.onDidFinishLoad?.();
       if (preloadOnly) {
         // Preload complete - window stays hidden but ready for instant show()
         return;
@@ -1441,6 +1443,10 @@ export class ClipboardHistoryWindow {
 
   setOnHidden(callback: (info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void): void {
     this.onHidden = callback;
+  }
+
+  setOnDidFinishLoad(callback: () => void): void {
+    this.onDidFinishLoad = callback;
   }
 
   /**

@@ -113,6 +113,133 @@ describe('BrowserHelperServer', () => {
     expect(response.body).toBeNull();
   });
 
+  it('bridges native theme state and change events', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    let isDark = false;
+    let server: BrowserHelperServer;
+    server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getTheme: () => isDark,
+        setTheme: (nextIsDark) => {
+          isDark = nextIsDark;
+          server.emitNativeEvent({ type: 'theme:changed', isDark });
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const eventPromise = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'theme:changed');
+
+    const initial = await request(`http://${address.host}:${address.port}/native/theme?token=test-token`);
+    const updated = await request(`http://${address.host}:${address.port}/native/theme`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { isDark: true },
+    });
+
+    expect(initial.body.isDark).toBe(false);
+    expect(updated.body.isDark).toBe(true);
+    await expect(eventPromise).resolves.toContain('"isDark":true');
+  });
+
+  it('serves the native auth session for browser-hosted shared Library surfaces', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const session = {
+      user: {
+        id: 'user-1',
+        email: 'river@example.com',
+      },
+      access_token: 'token-1',
+    };
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getAuthSession: () => session,
+        getAuthCallsign: () => 'river',
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/auth/session?token=test-token`);
+    const callsignResponse = await request(`http://${address.host}:${address.port}/native/auth/callsign?token=test-token`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.session).toEqual(session);
+    expect(callsignResponse.status).toBe(200);
+    expect(callsignResponse.body.callsign).toBe('river');
+  });
+
+  it('bridges native metrics and quota state', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getMetrics: () => ({ words_transcribed: 1234, words_improved: 56 }),
+        fetchMetricsFromSupabase: async () => true,
+        getQuotas: () => ({ tier: 'pro', priorityMic: { allowed: true } }),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const metrics = await request(`http://${address.host}:${address.port}/native/metrics?token=test-token`);
+    const refreshed = await request(`http://${address.host}:${address.port}/native/metrics/fetch-from-supabase?token=test-token`, {
+      method: 'POST',
+    });
+    const quotas = await request(`http://${address.host}:${address.port}/native/quota/quotas?token=test-token`);
+
+    expect(metrics.body).toEqual({ ok: true, metrics: { words_transcribed: 1234, words_improved: 56 } });
+    expect(refreshed.body).toEqual({ ok: true, success: true });
+    expect(quotas.body).toEqual({ ok: true, quotas: { tier: 'pro', priorityMic: { allowed: true } } });
+  });
+
+  it('bridges native updater state, actions, and events', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    let checks = 0;
+    let server: BrowserHelperServer;
+    server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getAppVersion: () => '25.6.1',
+        isUpdaterEnabled: () => true,
+        getUpdaterStatus: () => ({ status: 'available', version: '25.6.2' }),
+        checkForUpdates: () => {
+          checks += 1;
+          server.emitNativeEvent({ type: 'updater:updateAvailable', info: { version: '25.6.2' } });
+          return { ok: true };
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const eventPromise = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'updater:updateAvailable');
+
+    const version = await request(`http://${address.host}:${address.port}/native/app/version?token=test-token`);
+    const enabled = await request(`http://${address.host}:${address.port}/native/updater/enabled?token=test-token`);
+    const status = await request(`http://${address.host}:${address.port}/native/updater/status?token=test-token`);
+    const check = await request(`http://${address.host}:${address.port}/native/updater/check`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+
+    expect(version.body.version).toBe('25.6.1');
+    expect(enabled.body.enabled).toBe(true);
+    expect(status.body.status).toEqual({ status: 'available', version: '25.6.2' });
+    expect(check.body.result).toEqual({ ok: true });
+    expect(checks).toBe(1);
+    await expect(eventPromise).resolves.toContain('"version":"25.6.2"');
+  });
+
   it('does not expose terminal, share, or sync endpoints', async () => {
     const { address } = await startServer();
 
@@ -252,6 +379,99 @@ describe('BrowserHelperServer', () => {
     ]);
   });
 
+  it('preserves root-relative identity for browser-hosted external Library files', async () => {
+    const root = makeTempDir();
+    const extraRoot = makeTempDir();
+    fs.mkdirSync(path.join(extraRoot, 'Nested'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    fs.writeFileSync(path.join(extraRoot, 'Nested', 'External.md'), '# External\n');
+    const currentReports: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root, extraRoot]),
+      token: 'test-token',
+      reportCurrentDocument: (context) => currentReports.push(context),
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/current`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: {
+        type: 'external',
+        rootPath: extraRoot,
+        relPath: 'Nested/External',
+        filePath: path.join(extraRoot, 'Nested', 'External.md'),
+        title: 'External',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(currentReports).toEqual([
+      expect.objectContaining({
+        type: 'external',
+        rootPath: extraRoot,
+        relPath: 'Nested/External',
+        filePath: path.join(extraRoot, 'Nested', 'External.md'),
+        title: 'External',
+      }),
+    ]);
+  });
+
+  it('reports active context for browser-hosted artifact readings through the native Librarian bridge', async () => {
+    const root = makeTempDir();
+    const artifactDir = makeTempDir();
+    const artifactPath = path.join(artifactDir, 'Artifact.md');
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    fs.writeFileSync(artifactPath, '# Artifact\n');
+    const currentReports: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getReading: (filePath) => filePath === artifactPath
+          ? {
+            path: artifactPath,
+            title: 'Artifact',
+            content: '# Artifact\n',
+            context: null,
+            readingTime: null,
+            modelSignature: null,
+            createdAt: 1,
+            mtime: 2,
+            documentVersion: { mtimeMs: 2, size: 11, sha256: 'artifact-version' },
+          }
+          : null,
+      },
+      reportCurrentDocument: (context) => currentReports.push(context),
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/current`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: {
+        type: 'external',
+        rootPath: '',
+        relPath: artifactPath,
+        filePath: artifactPath,
+        title: 'Artifact',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(currentReports).toEqual([
+      expect.objectContaining({
+        type: 'external',
+        rootPath: artifactDir,
+        relPath: 'Artifact.md',
+        filePath: artifactPath,
+        title: 'Artifact',
+      }),
+    ]);
+  });
+
   it('clears native current document context for the requesting browser client', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
@@ -274,6 +494,61 @@ describe('BrowserHelperServer', () => {
 
     expect(response.status).toBe(200);
     expect(clearedClientIds).toEqual(['client-one']);
+  });
+
+  it('serves native current document context from the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const context = {
+      type: 'wiki',
+      rootPath: root,
+      relPath: 'Plan',
+      filePath: path.join(root, 'Plan.md'),
+      title: 'Plan',
+    };
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getActiveLibraryFileContext: () => context,
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/current?token=test-token`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.context).toEqual(context);
+  });
+
+  it('serves active native current document selection from the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const context = {
+      type: 'wiki',
+      rootPath: root,
+      relPath: 'Plan',
+      filePath: path.join(root, 'Plan.md'),
+      title: 'Plan',
+      selectionStart: 2,
+      selectionEnd: 6,
+      selectionText: 'Plan',
+    };
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getActiveLibraryFileContext: () => context,
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/current?token=test-token`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.context).toEqual(context);
   });
 
 
@@ -313,10 +588,10 @@ describe('BrowserHelperServer', () => {
     }));
   });
 
-  it('serves hidden folders from the native bridge and persists updates through it', async () => {
+  it('serves bookmark hidden folders from the native bridge and persists updates through it', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
-    let hiddenFolders = ['scratchpad'];
+    let hiddenFolders = ['bookmarks-shortcut'];
     const server = new BrowserHelperServer({
       service: new BrowserHelperDocumentService([root]),
       token: 'test-token',
@@ -337,11 +612,11 @@ describe('BrowserHelperServer', () => {
     const updateResponse = await request(`http://${address.host}:${address.port}/native/library/hidden-folders`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { folderId: 'entries', hidden: true },
+      body: { folderId: 'bookmarks-from-x', hidden: true },
     });
 
-    expect(listResponse.body.hiddenFolders).toEqual(['scratchpad']);
-    expect(updateResponse.body.hiddenFolders).toEqual(['scratchpad', 'entries']);
+    expect(listResponse.body.hiddenFolders).toEqual(['bookmarks-shortcut']);
+    expect(updateResponse.body.hiddenFolders).toEqual(['bookmarks-shortcut', 'bookmarks-from-x']);
   });
 
   it('serves native recent entries and records visits using native shape', async () => {
@@ -511,6 +786,7 @@ describe('BrowserHelperServer', () => {
       'fieldtheory-rendered-text-cursor-style': 'bar',
       'fieldtheory-rendered-block-cursor-opacity': '0.8',
       'fieldtheory-shared-file-toggle-hotkey': 'Command+Shift+R',
+      'librarian-last-selection': '{"type":"wiki","relPath":"scratchpad/Native"}',
     };
     const server = new BrowserHelperServer({
       service: new BrowserHelperDocumentService([root]),
@@ -539,6 +815,7 @@ describe('BrowserHelperServer', () => {
     expect(listResponse.body.values['fieldtheory-rendered-text-cursor-style']).toBe('bar');
     expect(listResponse.body.values['fieldtheory-rendered-block-cursor-opacity']).toBe('0.8');
     expect(listResponse.body.values['fieldtheory-shared-file-toggle-hotkey']).toBe('Command+Shift+R');
+    expect(listResponse.body.values['librarian-last-selection']).toBe('{"type":"wiki","relPath":"scratchpad/Native"}');
     expect(listResponse.body.available).toBe(true);
     expect(setResponse.status).toBe(200);
     expect(values['fieldtheory.contentToolbar.pinnedActions.v2']).toBe('["fieldtheory"]');
@@ -559,6 +836,25 @@ describe('BrowserHelperServer', () => {
     expect(response.status).toBe(200);
     expect(response.body.available).toBe(false);
     expect(response.body.values).toEqual({});
+  });
+
+  it('bridges configurable hotkeys through the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getHotkey: (id) => id === 'scratchpad' ? 'Control+Option+Command+Space' : null,
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/hotkey?token=test-token&id=scratchpad`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.hotkey).toBe('Control+Option+Command+Space');
   });
 
   it('bridges librarian footer actions through the native bridge', async () => {
@@ -583,6 +879,12 @@ describe('BrowserHelperServer', () => {
           calls.push(['update', filePath, content, title]);
           return true;
         },
+        pollLibrarianStatus: () => ({
+          pendingPath: '/tmp/Auto.md',
+          edits: 3,
+          threshold: 5,
+          didReset: false,
+        }),
         isMutedForToday: () => muted,
         muteForToday: () => {
           muted = true;
@@ -609,6 +911,7 @@ describe('BrowserHelperServer', () => {
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { filePath: '/tmp/Plan.md', content: '# Updated\n', title: 'Plan' },
     });
+    const status = await request(`http://${address.host}:${address.port}/native/librarian/status?token=test-token`);
     const mutedBefore = await request(`http://${address.host}:${address.port}/native/librarian/muted-for-today?token=test-token`);
     const mute = await request(`http://${address.host}:${address.port}/native/librarian/mute-for-today`, {
       method: 'POST',
@@ -627,6 +930,12 @@ describe('BrowserHelperServer', () => {
     expect(shareStatus.body.status).toEqual({ shared: true, slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/Plan.md' });
     expect(share.body.result).toEqual({ slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/plan-123' });
     expect(update.body.success).toBe(true);
+    expect(status.body.status).toEqual({
+      pendingPath: '/tmp/Auto.md',
+      edits: 3,
+      threshold: 5,
+      didReset: false,
+    });
     expect(mutedBefore.body.muted).toBe(false);
     expect(mute.body.muted).toBe(true);
     expect(unmute.body.muted).toBe(false);
@@ -663,6 +972,47 @@ describe('BrowserHelperServer', () => {
 
     expect(response.body.success).toBe(true);
     expect(shown).toEqual(['/tmp/Plan.md']);
+  });
+
+  it('bridges represented filename changes through the native bridge with the browser client id', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const represented: Array<[string, string | null | undefined]> = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        setRepresentedFilename: (filePath, clientId) => {
+          represented.push([filePath, clientId]);
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/shell/represented-filename`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { filePath: '/tmp/Plan.md' },
+    });
+    const clear = await request(`http://${address.host}:${address.port}/native/shell/represented-filename`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { filePath: '' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(clear.status).toBe(200);
+    expect(represented).toEqual([
+      ['/tmp/Plan.md', 'client-one'],
+      ['', 'client-one'],
+    ]);
   });
 
   it('bridges tagged-doc actions through the native bridge', async () => {
@@ -743,12 +1093,19 @@ describe('BrowserHelperServer', () => {
           calls.push(['presence', sharedId]);
           return [{ userId: 'user-1', initials: 'FT' }];
         },
+        getPinnedItemIds: () => ['wiki:River (shared)/Team Plan'],
+        setPinned: (filePath, pinned) => {
+          calls.push(['pin', filePath, pinned]);
+          return { success: true, filePath, pinned };
+        },
       },
     });
     servers.push(server);
     const address = await server.start();
+    const pinsEvent = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'sharedFiles:pinsChanged');
 
     const availability = await request(`http://${address.host}:${address.port}/native/shared-files/availability?token=test-token`);
+    const pinnedIds = await request(`http://${address.host}:${address.port}/native/shared-files/pinned-item-ids?token=test-token`);
     const status = await request(`http://${address.host}:${address.port}/native/shared-files/status?token=test-token&path=${encodeURIComponent('/tmp/Plan.md')}`);
     const share = await request(`http://${address.host}:${address.port}/native/shared-files/share`, {
       method: 'POST',
@@ -765,6 +1122,11 @@ describe('BrowserHelperServer', () => {
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { sharedId: 'shared-1' },
     });
+    const pin = await request(`http://${address.host}:${address.port}/native/shared-files/pinned`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { filePath: '/tmp/River.md', pinned: true },
+    });
     const sync = await request(`http://${address.host}:${address.port}/native/shared-files/sync`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
@@ -776,19 +1138,24 @@ describe('BrowserHelperServer', () => {
     });
 
     expect(availability.body.availability).toEqual({ available: true, canWrite: true, hasTeamMembers: true });
+    expect(pinnedIds.body.ids).toEqual(['wiki:River (shared)/Team Plan']);
     expect(status.body.status).toEqual({ shared: true, sharedId: 'shared:Plan.md', revision: 2 });
     expect(share.body.status).toEqual({ shared: true, sharedId: 'shared-1', revision: 1 });
     expect(update.body.result).toEqual({ ok: true, revision: 2 });
     expect(presence.body.users).toEqual([{ userId: 'user-1', initials: 'FT' }]);
+    expect(pin.body.result).toEqual({ success: true, filePath: '/tmp/River.md', pinned: true });
     expect(sync.body.result).toEqual({ written: 1, removed: 0, created: 0, errors: [] });
     expect(unshare.body.success).toBe(true);
     expect(calls).toEqual([
       ['share', { filePath: '/tmp/Plan.md', title: 'Plan' }],
       ['update', 'shared-1', '# Plan\n', 1, '/tmp/Plan.md'],
       ['presence', 'shared-1'],
+      ['pin', '/tmp/River.md', true],
       ['sync'],
       ['unshare', '/tmp/Plan.md'],
     ]);
+    server.emitNativeEvent({ type: 'sharedFiles:pinsChanged' });
+    await expect(pinsEvent).resolves.toContain('sharedFiles:pinsChanged');
   });
 
   it('saves native wiki writes with expected-version protection', async () => {
@@ -857,6 +1224,60 @@ describe('BrowserHelperServer', () => {
     expect(fs.existsSync(path.join(root, 'Notes', 'Browser Plan.md'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'Notes', 'Renamed Plan.md'))).toBe(true);
     expect(fs.statSync(path.join(root, 'Projects')).isDirectory()).toBe(true);
+  });
+
+  it('records Browser-created wiki and library files in native recents', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const recentCalls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        recordRecentWikiPage: (page) => {
+          recentCalls.push(['wiki', page]);
+        },
+        recordRecentCreatedLibraryPage: (page, rootPath) => {
+          recentCalls.push(['library', rootPath, page]);
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const wikiCreate = await request(`http://${address.host}:${address.port}/native/wiki/file`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: {
+        folderRelPath: 'Notes',
+        fileName: 'Browser Plan',
+      },
+    });
+    const wikiDefault = await request(`http://${address.host}:${address.port}/native/wiki/default-file`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: {
+        folderRelPath: 'Notes',
+      },
+    });
+    const libraryCreate = await request(`http://${address.host}:${address.port}/native/library/file`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: {
+        rootPath: root,
+        folderRelPath: 'Library',
+        fileName: 'Library Plan',
+      },
+    });
+
+    expect(wikiCreate.status).toBe(200);
+    expect(wikiDefault.status).toBe(200);
+    expect(libraryCreate.status).toBe(200);
+    expect(recentCalls).toEqual([
+      ['wiki', expect.objectContaining({ relPath: 'Notes/Browser Plan', title: 'Browser Plan' })],
+      ['wiki', expect.objectContaining({ relPath: expect.stringMatching(/^Notes\//) })],
+      ['library', root, expect.objectContaining({ relPath: 'Library/Library Plan', title: 'Library Plan' })],
+    ]);
   });
 
   it('supports native left-nav root, delete, and move operations', async () => {
@@ -956,6 +1377,18 @@ describe('BrowserHelperServer', () => {
     expect(fs.existsSync(path.join(root, 'Plan.md'))).toBe(true);
   });
 
+  it('returns native-shaped nulls for missing wiki and external documents', async () => {
+    const { address } = await startServer();
+
+    const missingWiki = await request(`http://${address.host}:${address.port}/native/wiki/page?token=test-token&relPath=Missing`);
+    const missingExternal = await request(`http://${address.host}:${address.port}/native/external/open?token=test-token&path=${encodeURIComponent('/tmp/not-in-library.md')}`);
+
+    expect(missingWiki.status).toBe(200);
+    expect(missingWiki.body.page).toBeNull();
+    expect(missingExternal.status).toBe(200);
+    expect(missingExternal.body.file).toBeNull();
+  });
+
   it('bridges markdown image operations through the native bridge', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
@@ -1015,6 +1448,81 @@ describe('BrowserHelperServer', () => {
       ['copy-data-url', '/tmp/Plan.md', 'data:image/png;base64,abc', 'Alt'],
       ['portable', '/tmp/Plan.md', '# Plan\n'],
       ['delete-unused', '/tmp/Plan.md', '![Old](old.png)', '# Plan\n'],
+    ]);
+  });
+
+  it('bridges editor clipboard image helpers through the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const calls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getClipboardImagePath: () => '/tmp/current-clipboard.png',
+        savePastedImageFile: (file) => {
+          calls.push(file);
+          return '/tmp/pasted-image.png';
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const imagePath = await request(`http://${address.host}:${address.port}/native/clipboard/image-path?token=test-token`);
+    const pasted = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { name: 'paste.png', type: 'image/png', data: [137, 80, 78, 71] },
+    });
+
+    expect(imagePath.body.path).toBe('/tmp/current-clipboard.png');
+    expect(pasted.body.path).toBe('/tmp/pasted-image.png');
+    expect(calls).toEqual([
+      {
+        name: 'paste.png',
+        type: 'image/png',
+        data: Uint8Array.from([137, 80, 78, 71]),
+      },
+    ]);
+  });
+
+  it('bridges rendered editor diagnostics through the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const calls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        appendRenderedEditorDebug: (entry) => {
+          calls.push(['append', entry]);
+          return { ok: true, path: '/tmp/rendered-debug.jsonl' };
+        },
+        clearRenderedEditorDebugLog: () => {
+          calls.push(['clear']);
+          return { ok: true, path: '/tmp/rendered-debug.jsonl' };
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const append = await request(`http://${address.host}:${address.port}/native/diagnostics/rendered-editor-debug`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { entry: { stage: 'debug-mark', path: '/tmp/Plan.md' } },
+    });
+    const clear = await request(`http://${address.host}:${address.port}/native/diagnostics/rendered-editor-debug`, {
+      method: 'DELETE',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+
+    expect(append.body.result).toEqual({ ok: true, path: '/tmp/rendered-debug.jsonl' });
+    expect(clear.body.result).toEqual({ ok: true, path: '/tmp/rendered-debug.jsonl' });
+    expect(calls).toEqual([
+      ['append', { stage: 'debug-mark', path: '/tmp/Plan.md' }],
+      ['clear'],
     ]);
   });
 
@@ -1081,6 +1589,157 @@ describe('BrowserHelperServer', () => {
     expect(remove.status).toBe(200);
   });
 
+  it('bridges Librarian setup, watched directories, hooks, and personalization through native logic', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    let enabled = false;
+    let setupComplete = false;
+    let discoveryFrequency = 'sometimes';
+    let expertiseContext: string | undefined;
+    let stateHookInstalled = false;
+    let cursorHookInstalled = false;
+    let codexHookInstalled = false;
+    const watchedDirs: Array<{ path: string; enabled: boolean }> = [];
+    const calls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        isLibrarianEnabled: () => enabled,
+        setLibrarianEnabled: (nextEnabled) => {
+          enabled = nextEnabled;
+          return enabled;
+        },
+        isLibrarianSetupComplete: () => setupComplete,
+        setLibrarianSetupComplete: (complete) => {
+          setupComplete = complete;
+        },
+        createWelcomeArtifact: (dirPath) => {
+          calls.push(['welcome', dirPath]);
+          return true;
+        },
+        getLibrarianWatchedDirs: () => watchedDirs,
+        addLibrarianWatchedDir: (dirPath) => {
+          const dir = { path: dirPath, enabled: true };
+          watchedDirs.push(dir);
+          return dir;
+        },
+        removeLibrarianWatchedDir: (dirPath) => {
+          const index = watchedDirs.findIndex((dir) => dir.path === dirPath);
+          if (index < 0) return false;
+          watchedDirs.splice(index, 1);
+          return true;
+        },
+        browseLibrarianDirectory: () => '/tmp/readings',
+        getDiscoveryFrequency: () => discoveryFrequency,
+        setDiscoveryFrequency: (frequency) => {
+          discoveryFrequency = frequency;
+          return true;
+        },
+        getUserExpertiseContext: () => expertiseContext,
+        setUserExpertiseContext: (context) => {
+          expertiseContext = context;
+          return true;
+        },
+        getClaudeCodeStatus: () => 'directory-only',
+        isStateEnforcedHookInstalled: () => stateHookInstalled,
+        installStateEnforcedHook: () => {
+          stateHookInstalled = true;
+          return true;
+        },
+        uninstallStateEnforcedHook: () => {
+          stateHookInstalled = false;
+          return true;
+        },
+        isCursorHookInstalled: () => cursorHookInstalled,
+        installCursorHook: () => {
+          cursorHookInstalled = true;
+          return true;
+        },
+        uninstallCursorHook: () => {
+          cursorHookInstalled = false;
+          return true;
+        },
+        isCodexHookInstalled: () => codexHookInstalled,
+        installCodexHook: () => {
+          codexHookInstalled = true;
+          return true;
+        },
+        uninstallCodexHook: () => {
+          codexHookInstalled = false;
+          return true;
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const authHeaders = { 'X-FieldTheory-Browser-Token': 'test-token' };
+
+    const initialSetup = await request(`http://${address.host}:${address.port}/native/librarian/setup-complete?token=test-token`);
+    const enable = await request(`http://${address.host}:${address.port}/native/librarian/enabled`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { enabled: true },
+    });
+    const complete = await request(`http://${address.host}:${address.port}/native/librarian/setup-complete`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { complete: true },
+    });
+    const addDir = await request(`http://${address.host}:${address.port}/native/librarian/watched-dirs`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { dirPath: '~/.librarian' },
+    });
+    const dirs = await request(`http://${address.host}:${address.port}/native/librarian/watched-dirs?token=test-token`);
+    const browse = await request(`http://${address.host}:${address.port}/native/librarian/browse-directory?token=test-token`);
+    const welcome = await request(`http://${address.host}:${address.port}/native/librarian/welcome-artifact`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { dirPath: '~/.librarian' },
+    });
+    const frequency = await request(`http://${address.host}:${address.port}/native/librarian/discovery-frequency`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { frequency: 'often' },
+    });
+    const expertise = await request(`http://${address.host}:${address.port}/native/librarian/user-expertise-context`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: { context: 'Writes fast, reviews carefully.' },
+    });
+    const claudeStatus = await request(`http://${address.host}:${address.port}/native/librarian/claude-code-status?token=test-token`);
+    const installStateHook = await request(`http://${address.host}:${address.port}/native/librarian/state-enforced-hook`, {
+      method: 'POST',
+      headers: authHeaders,
+    });
+    const stateHook = await request(`http://${address.host}:${address.port}/native/librarian/state-enforced-hook?token=test-token`);
+    const installCursorHook = await request(`http://${address.host}:${address.port}/native/librarian/cursor-hook`, {
+      method: 'POST',
+      headers: authHeaders,
+    });
+    const uninstallCodexHook = await request(`http://${address.host}:${address.port}/native/librarian/codex-hook`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    });
+
+    expect(initialSetup.body.complete).toBe(false);
+    expect(enable.body.enabled).toBe(true);
+    expect(complete.status).toBe(200);
+    expect(addDir.body.dir).toEqual({ path: '~/.librarian', enabled: true });
+    expect(dirs.body.dirs).toEqual([{ path: '~/.librarian', enabled: true }]);
+    expect(browse.body.dirPath).toBe('/tmp/readings');
+    expect(welcome.body.created).toBe(true);
+    expect(calls).toEqual([['welcome', '~/.librarian']]);
+    expect(frequency.body.success).toBe(true);
+    expect(expertise.body.success).toBe(true);
+    expect(claudeStatus.body.status).toBe('directory-only');
+    expect(installStateHook.body.success).toBe(true);
+    expect(stateHook.body.installed).toBe(true);
+    expect(installCursorHook.body.success).toBe(true);
+    expect(uninstallCodexHook.body.success).toBe(true);
+  });
+
   it('streams librarian reading lifecycle events to browser clients', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
@@ -1142,6 +1801,77 @@ describe('BrowserHelperServer', () => {
     await expect(eventPromise).resolves.toContain('meetings:status');
   });
 
+  it('bridges legacy Commands preload APIs through the native bridge', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const calls: unknown[] = [];
+    const command = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/commands/review.md',
+      lastModified: 10,
+    };
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getCommandDirectory: () => '/commands',
+        setCommandDirectory: (directoryPath) => {
+          calls.push(['set-directory', directoryPath]);
+          return { success: true };
+        },
+        getCommandDirectories: () => [{ path: '/commands', commandCount: 1 }],
+        refreshCommands: () => [command],
+        getCommandContent: (commandName) => (
+          commandName === 'review' ? { content: '# Review\n', filePath: '/commands/review.md' } : null
+        ),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const directory = await request(`http://${address.host}:${address.port}/native/commands/directory?token=test-token`);
+    const updateDirectory = await request(`http://${address.host}:${address.port}/native/commands/directory`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { directoryPath: '/next-commands' },
+    });
+    const directories = await request(`http://${address.host}:${address.port}/native/commands/directories?token=test-token`);
+    const refreshed = await request(`http://${address.host}:${address.port}/native/commands/refresh`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+    const content = await request(`http://${address.host}:${address.port}/native/commands/content?name=review&token=test-token`);
+
+    expect(directory.body.directory).toBe('/commands');
+    expect(updateDirectory.body.result).toEqual({ success: true });
+    expect(directories.body.directories).toEqual([{ path: '/commands', commandCount: 1 }]);
+    expect(refreshed.body.commands).toEqual([command]);
+    expect(content.body.content).toEqual({ content: '# Review\n', filePath: '/commands/review.md' });
+    expect(calls).toEqual([['set-directory', '/next-commands']]);
+  });
+
+  it('streams command directory change events to browser clients', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+    });
+    servers.push(server);
+    const address = await server.start();
+    const eventPromise = readFirstEvent(
+      `http://${address.host}:${address.port}/native/events?token=test-token`,
+      'commands:directoryChanged',
+    );
+
+    setTimeout(() => {
+      server.emitNativeEvent({ type: 'commands:directoryChanged', directoryPath: '/commands' });
+    }, 10);
+
+    await expect(eventPromise).resolves.toContain('"directoryPath":"/commands"');
+  });
+
   it('bridges editor focus, replace results, insertion events, and external links', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
@@ -1156,9 +1886,23 @@ describe('BrowserHelperServer', () => {
         replaceSelectedMarkdownTextResult: (result) => {
           calls.push(['replace-result', result]);
         },
+        setBrowserLibraryImmersiveDismissable: (dismissable, clientId) => {
+          calls.push(['immersive-dismissable', dismissable, clientId]);
+        },
+        setBrowserLibrarySizeKey: (key, clientId) => {
+          calls.push(['size-key', key, clientId]);
+        },
         openExternal: (href) => {
           calls.push(['open-external', href]);
           return true;
+        },
+        pasteIntoCodexInput: (text) => {
+          calls.push(['paste-codex', text]);
+          return { success: true, delivery: 'native-helper' };
+        },
+        openFieldTheoryMarkdownInNativeApp: (target) => {
+          calls.push(['open-field-theory-native', target]);
+          return { success: true };
         },
       },
     });
@@ -1176,20 +1920,54 @@ describe('BrowserHelperServer', () => {
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { requestId: 'request-1', success: true },
     });
+    const immersiveDismissable = await request(`http://${address.host}:${address.port}/native/librarian/immersive-dismissable`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { dismissable: true },
+    });
+    const sizeKey = await request(`http://${address.host}:${address.port}/native/librarian/size-key`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { key: 'canvas' },
+    });
     const open = await request(`http://${address.host}:${address.port}/native/shell/open-external`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { href: 'fieldtheory://wiki/open?path=Plan' },
     });
+    const pasteCodex = await request(`http://${address.host}:${address.port}/native/shell/paste-into-codex-input`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { text: 'selected prose' },
+    });
+    const openNative = await request(`http://${address.host}:${address.port}/native/shell/open-field-theory-markdown`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { target: { kind: 'wiki', path: 'Plan.md', contentMode: 'rendered' } },
+    });
     setTimeout(() => server.emitNativeEvent({ type: 'librarian:insertMarkdownText', text: 'hello' }), 10);
 
     expect(focus.status).toBe(200);
     expect(replace.status).toBe(200);
+    expect(immersiveDismissable.status).toBe(200);
+    expect(sizeKey.status).toBe(200);
     expect(open.body.success).toBe(true);
+    expect(pasteCodex.body.result).toEqual({ success: true, delivery: 'native-helper' });
+    expect(openNative.body.result).toEqual({ success: true });
     expect(calls).toEqual([
       ['focused', true],
       ['replace-result', { requestId: 'request-1', success: true }],
+      ['immersive-dismissable', true, 'client-one'],
+      ['size-key', 'canvas', 'client-one'],
       ['open-external', 'fieldtheory://wiki/open?path=Plan'],
+      ['paste-codex', 'selected prose'],
+      ['open-field-theory-native', { kind: 'wiki', path: 'Plan.md', contentMode: 'rendered' }],
     ]);
     await expect(eventPromise).resolves.toContain('librarian:insertMarkdownText');
   });
@@ -1217,11 +1995,13 @@ describe('BrowserHelperServer', () => {
   it('reports the active browser client for launcher navigation targeting', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
-    const activeClients: Array<string | null | undefined> = [];
+    const activeClients: Array<[string | null | undefined, string | null | undefined]> = [];
+    const clearedClients: Array<string | null | undefined> = [];
     const server = new BrowserHelperServer({
       service: new BrowserHelperDocumentService([root]),
       token: 'test-token',
-      setActiveClient: (clientId) => activeClients.push(clientId),
+      setActiveClient: (clientId, surface) => activeClients.push([clientId, surface]),
+      clearActiveClient: (clientId) => clearedClients.push(clientId),
     });
     servers.push(server);
     const address = await server.start();
@@ -1232,10 +2012,52 @@ describe('BrowserHelperServer', () => {
         'X-FieldTheory-Browser-Token': 'test-token',
         'X-FieldTheory-Browser-Client': 'client-one',
       },
+      body: { surface: 'library' },
+    });
+    const commandsResponse = await request(`http://${address.host}:${address.port}/native/client-active`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { surface: 'commands' },
+    });
+    const bookmarksResponse = await request(`http://${address.host}:${address.port}/native/client-active`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { surface: 'bookmarks' },
+    });
+    const emberResponse = await request(`http://${address.host}:${address.port}/native/client-active`, {
+      method: 'POST',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
+      body: { surface: 'ember' },
+    });
+    const clearResponse = await request(`http://${address.host}:${address.port}/native/client-active`, {
+      method: 'DELETE',
+      headers: {
+        'X-FieldTheory-Browser-Token': 'test-token',
+        'X-FieldTheory-Browser-Client': 'client-one',
+      },
     });
 
     expect(response.status).toBe(200);
-    expect(activeClients).toEqual(['client-one']);
+    expect(commandsResponse.status).toBe(200);
+    expect(bookmarksResponse.status).toBe(200);
+    expect(emberResponse.status).toBe(200);
+    expect(clearResponse.status).toBe(200);
+    expect(activeClients).toEqual([
+      ['client-one', 'library'],
+      ['client-one', 'commands'],
+      ['client-one', 'bookmarks'],
+      ['client-one', 'ember'],
+    ]);
+    expect(clearedClients).toEqual(['client-one']);
   });
 
   it('reports browser client disconnects so native state can be released', async () => {
@@ -1255,9 +2077,14 @@ describe('BrowserHelperServer', () => {
     expect(disconnected).toEqual(['client-one']);
   });
 
-  it('bridges bookmark snapshot, sync, copy, and change events', async () => {
+  it('bridges bookmark snapshot, actions, collections, and change events', async () => {
     const root = makeTempDir();
+    const mediaDir = makeTempDir();
+    const outsideDir = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    fs.writeFileSync(path.join(mediaDir, 'bookmark-image.jpg'), 'image-bytes');
+    fs.writeFileSync(path.join(outsideDir, 'escaped.jpg'), 'escaped-bytes');
+    fs.symlinkSync(path.join(outsideDir, 'escaped.jpg'), path.join(mediaDir, 'escaped-link.jpg'));
     const snapshot = {
       bookmarks: [{ id: 'bookmark-1', text: 'Saved thought', folders: [] }],
       folders: [],
@@ -1269,14 +2096,63 @@ describe('BrowserHelperServer', () => {
       token: 'test-token',
       nativeBridge: {
         getBookmarks: () => snapshot,
+        getBookmarkDataSource: () => ({
+          dataDir: '/Users/ada/.fieldtheory/bookmarks',
+          bookmarksCachePath: '/Users/ada/.fieldtheory/bookmarks/bookmarks.jsonl',
+          mediaDir: '/Users/ada/.fieldtheory/bookmarks/media',
+          mediaManifestPath: '/Users/ada/.fieldtheory/bookmarks/media-manifest.json',
+          usingLegacyDataDir: false,
+        }),
         syncBookmarksIfStale: () => {
           calls.push('sync');
           return { status: 'fresh' };
+        },
+        getBookmarkAuthors: () => {
+          calls.push('authors');
+          return [{ handle: 'ada', name: 'Ada' }];
+        },
+        getAuthorBookmarks: (handle) => {
+          calls.push(['author-bookmarks', handle]);
+          return [{ id: 'bookmark-2', authorHandle: handle }];
+        },
+        getTaxonomyBookmarks: (filePaths) => {
+          calls.push(['taxonomy', filePaths]);
+          return [{ id: 'bookmark-3', filePaths }];
+        },
+        searchBookmarks: (query) => {
+          calls.push(['search', query]);
+          return [{ id: 'bookmark-4', query }];
+        },
+        saveWebBookmarkUrl: (url) => {
+          calls.push(['save-url', url]);
+          return { success: true, markdownPath: '/tmp/bookmark.md', created: true };
+        },
+        getActiveWebPageForBookmark: () => {
+          calls.push('active-page');
+          return { success: true, page: { url: 'https://example.com' } };
+        },
+        saveActiveWebPageBookmark: () => {
+          calls.push('save-active-page');
+          return { success: true, page: { url: 'https://example.com' }, created: false };
+        },
+        invokeBookmark: (id) => {
+          calls.push(['invoke', id]);
+          return { success: true };
+        },
+        sendBookmarkToCodex: (id) => {
+          calls.push(['send-to-codex', id]);
+          return { success: true, delivery: 'native-helper' };
         },
         copyBookmarkForAgent: (id) => {
           calls.push(['copy', id]);
           return { success: true };
         },
+        invokeBookmarkAuthorTimeline: (handle) => {
+          calls.push(['invoke-author', handle]);
+          return { success: true };
+        },
+        getBookmarkMediaDirectory: () => mediaDir,
+        getBookmarkMediaFilePath: (filename) => path.join(mediaDir, path.basename(filename)),
       },
     });
     servers.push(server);
@@ -1284,22 +2160,118 @@ describe('BrowserHelperServer', () => {
     const eventPromise = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'bookmarks:changed');
 
     const all = await request(`http://${address.host}:${address.port}/native/bookmarks/all?token=test-token`);
+    const source = await request(`http://${address.host}:${address.port}/native/bookmarks/source?token=test-token`);
     const sync = await request(`http://${address.host}:${address.port}/native/bookmarks/sync-if-stale`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+    const authors = await request(`http://${address.host}:${address.port}/native/bookmarks/authors?token=test-token`);
+    const authorBookmarks = await request(`http://${address.host}:${address.port}/native/bookmarks/author?token=test-token&handle=ada`);
+    const taxonomy = await request(`http://${address.host}:${address.port}/native/bookmarks/taxonomy`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { filePaths: ['/tmp/taxonomy.md', 12] },
+    });
+    const search = await request(`http://${address.host}:${address.port}/native/bookmarks/search?token=test-token&query=systems`);
+    const saveUrl = await request(`http://${address.host}:${address.port}/native/bookmarks/save-web-url`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { url: 'https://example.com/post' },
+    });
+    const activePage = await request(`http://${address.host}:${address.port}/native/bookmarks/active-web-page?token=test-token`);
+    const saveActivePage = await request(`http://${address.host}:${address.port}/native/bookmarks/save-active-web-page`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+    const invoke = await request(`http://${address.host}:${address.port}/native/bookmarks/invoke`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { id: 'bookmark-1' },
+    });
+    const sendToCodex = await request(`http://${address.host}:${address.port}/native/bookmarks/send-to-codex`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { id: 'bookmark-1' },
     });
     const copy = await request(`http://${address.host}:${address.port}/native/bookmarks/copy-for-agent`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { id: 'bookmark-1' },
     });
+    const invokeAuthor = await request(`http://${address.host}:${address.port}/native/bookmarks/invoke-author-timeline`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { handle: 'ada' },
+    });
+    const media = await request(`http://${address.host}:${address.port}/native/bookmarks/media/bookmark-image.jpg?token=test-token`);
+    const traversal = await request(`http://${address.host}:${address.port}/native/bookmarks/media/..%2Fbookmark-image.jpg?token=test-token`);
+    const malformedMedia = await request(`http://${address.host}:${address.port}/native/bookmarks/media/%E0%A4%A?token=test-token`);
+    const symlinkEscape = await request(`http://${address.host}:${address.port}/native/bookmarks/media/escaped-link.jpg?token=test-token`);
     setTimeout(() => server.emitNativeEvent({ type: 'bookmarks:changed' }), 10);
 
     expect(all.body.snapshot).toEqual(snapshot);
+    expect(source.body.source).toEqual({
+      dataDir: '/Users/ada/.fieldtheory/bookmarks',
+      bookmarksCachePath: '/Users/ada/.fieldtheory/bookmarks/bookmarks.jsonl',
+      mediaDir: '/Users/ada/.fieldtheory/bookmarks/media',
+      mediaManifestPath: '/Users/ada/.fieldtheory/bookmarks/media-manifest.json',
+      usingLegacyDataDir: false,
+    });
     expect(sync.body.result).toEqual({ status: 'fresh' });
+    expect(authors.body.authors).toEqual([{ handle: 'ada', name: 'Ada' }]);
+    expect(authorBookmarks.body.bookmarks).toEqual([{ id: 'bookmark-2', authorHandle: 'ada' }]);
+    expect(taxonomy.body.bookmarks).toEqual([{ id: 'bookmark-3', filePaths: ['/tmp/taxonomy.md'] }]);
+    expect(search.body.bookmarks).toEqual([{ id: 'bookmark-4', query: 'systems' }]);
+    expect(saveUrl.body.result).toEqual({ success: true, markdownPath: '/tmp/bookmark.md', created: true });
+    expect(activePage.body.result).toEqual({ success: true, page: { url: 'https://example.com' } });
+    expect(saveActivePage.body.result).toEqual({ success: true, page: { url: 'https://example.com' }, created: false });
+    expect(invoke.body.result).toEqual({ success: true });
+    expect(sendToCodex.body.result).toEqual({ success: true, delivery: 'native-helper' });
     expect(copy.body.result).toEqual({ success: true });
-    expect(calls).toEqual(['sync', ['copy', 'bookmark-1']]);
+    expect(invokeAuthor.body.result).toEqual({ success: true });
+    expect(media.status).toBe(200);
+    expect(media.rawBody).toBe('image-bytes');
+    expect(media.headers['content-type']).toBe('image/jpeg');
+    expect(traversal.status).toBe(404);
+    expect(malformedMedia.status).toBe(404);
+    expect(symlinkEscape.status).toBe(404);
+    expect(calls).toEqual([
+      'sync',
+      'authors',
+      ['author-bookmarks', 'ada'],
+      ['taxonomy', ['/tmp/taxonomy.md']],
+      ['search', 'systems'],
+      ['save-url', 'https://example.com/post'],
+      'active-page',
+      'save-active-page',
+      ['invoke', 'bookmark-1'],
+      ['send-to-codex', 'bookmark-1'],
+      ['copy', 'bookmark-1'],
+      ['invoke-author', 'ada'],
+    ]);
     await expect(eventPromise).resolves.toContain('bookmarks:changed');
+  });
+
+  it('serves bookmark media from the native media directory without a file resolver', async () => {
+    const mediaDir = makeTempDir();
+    fs.writeFileSync(path.join(mediaDir, 'avatar.jpg'), 'avatar-bytes');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([makeTempDir()]),
+      token: 'test-token',
+      nativeBridge: {
+        getBookmarkMediaDirectory: () => mediaDir,
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const media = await request(`http://${address.host}:${address.port}/native/bookmarks/media/avatar.jpg?token=test-token`);
+    const traversal = await request(`http://${address.host}:${address.port}/native/bookmarks/media/..%2Favatar.jpg?token=test-token`);
+
+    expect(media.status).toBe(200);
+    expect(media.rawBody).toBe('avatar-bytes');
+    expect(media.headers['content-type']).toBe('image/jpeg');
+    expect(traversal.status).toBe(404);
   });
 
   it('bridges Maxwell history, memory, undo/redo, and local command status', async () => {
@@ -1378,6 +2350,42 @@ describe('BrowserHelperServer', () => {
       ['redo', 'run-1'],
     ]);
     await expect(eventPromise).resolves.toContain('commands:localCommandStatus');
+  });
+
+  it('bridges active Library launcher actions through the native manager', async () => {
+    const root = makeTempDir();
+    const calls: string[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        archiveActiveLibraryFile: () => {
+          calls.push('archive');
+          return { success: true };
+        },
+        toggleActiveLibraryLineNumbers: () => {
+          calls.push('toggle-line-numbers');
+          return { success: true };
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const archive = await request(`http://${address.host}:${address.port}/native/commands/archive-active-library-file`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+    const toggle = await request(`http://${address.host}:${address.port}/native/commands/toggle-active-line-numbers`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+
+    expect(archive.status).toBe(200);
+    expect(archive.body.result).toEqual({ success: true });
+    expect(toggle.status).toBe(200);
+    expect(toggle.body.result).toEqual({ success: true });
+    expect(calls).toEqual(['archive', 'toggle-line-numbers']);
   });
 
   it('bridges command editor directory and CRUD routes to the native manager', async () => {
@@ -1533,6 +2541,59 @@ describe('BrowserHelperServer', () => {
       enabled: true,
       reason: 'enabled',
     });
+  });
+
+  it('bridges agent kickoff start, cancel, progress, and status events', async () => {
+    const root = makeTempDir();
+    const calls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        startAgentKickoff: (args) => {
+          calls.push(['start', args]);
+          return { ok: true, runId: 'run-1', absPath: '/tmp/Plan.md', model: 'codex' };
+        },
+        cancelAgentKickoff: (runId) => {
+          calls.push(['cancel', runId]);
+          return true;
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const progressEvent = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'agent:kickoffProgress');
+    const statusEvent = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'agent:kickoffStatus');
+
+    const start = await request(`http://${address.host}:${address.port}/native/agent-kickoff/start`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { absPath: '/tmp/Plan.md', instruction: 'tighten this', model: 'codex' },
+    });
+    const cancel = await request(`http://${address.host}:${address.port}/native/agent-kickoff/cancel`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { runId: 'run-1' },
+    });
+    setTimeout(() => {
+      server.emitNativeEvent({
+        type: 'agent:kickoffProgress',
+        event: { runId: 'run-1', absPath: '/tmp/Plan.md', model: 'codex', kind: 'stdout', chunk: 'working' },
+      });
+      server.emitNativeEvent({
+        type: 'agent:kickoffStatus',
+        event: { runId: 'run-1', absPath: '/tmp/Plan.md', model: 'codex', status: 'started', message: 'Codex started' },
+      });
+    }, 10);
+
+    expect(start.body.result).toEqual({ ok: true, runId: 'run-1', absPath: '/tmp/Plan.md', model: 'codex' });
+    expect(cancel.body.success).toBe(true);
+    expect(calls).toEqual([
+      ['start', { absPath: '/tmp/Plan.md', instruction: 'tighten this', model: 'codex' }],
+      ['cancel', 'run-1'],
+    ]);
+    await expect(progressEvent).resolves.toContain('working');
+    await expect(statusEvent).resolves.toContain('Codex started');
   });
 
   it('saves valid writes and rejects stale writes with conflicts', async () => {

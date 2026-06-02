@@ -79,10 +79,21 @@ const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
 const LIBRARY_ICON_COLOR_STORAGE_KEY = 'library-sidebar-icon-color-indices';
 const LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY = 'library-sidebar-icon-color-order';
 const LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY = 'library-new-doc-location';
+const WIKI_SIDEBAR_RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
+const WIKI_SIDEBAR_STORAGE_KEYS = [
+  'library-sort-mode',
+  'wiki-expanded-folders',
+  'wiki-recent-collapsed',
+  LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY,
+  LIBRARY_ICON_COLOR_STORAGE_KEY,
+  LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY,
+  LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY,
+] as const;
 export const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
 export const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
 export const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
+const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
 const LIBRARY_SIDEBAR_ICON_COLOR_PALETTE = [
   '#8a8a8a',
   '#b45309',
@@ -130,6 +141,105 @@ export function normalizeLibrarySidebarIconColorOrder(value: unknown): number[] 
   return next;
 }
 
+type WikiSidebarStorage = Pick<Storage, 'getItem'>;
+
+type WikiSidebarStoredPreferences = {
+  sortMode: SortMode;
+  expandedFolders: Set<string>;
+  recentCollapsed: boolean;
+  pinnedItemIds: Set<string>;
+  iconColorIndices: Record<string, number>;
+  iconColorOrder: number[];
+  newDocLocationKey: string;
+};
+
+export function isWikiSidebarStorageKey(key: string | null | undefined): boolean {
+  return !!key && WIKI_SIDEBAR_STORAGE_KEYS.includes(key as typeof WIKI_SIDEBAR_STORAGE_KEYS[number]);
+}
+
+function getStorageItem(storage: WikiSidebarStorage, key: string): string | null {
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function readJsonStorageValue(storage: WikiSidebarStorage, key: string): unknown {
+  const saved = getStorageItem(storage, key);
+  if (!saved) return null;
+  return JSON.parse(saved);
+}
+
+function readStoredStringArray(storage: WikiSidebarStorage, key: string): string[] {
+  try {
+    const parsed = readJsonStorageValue(storage, key);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readStoredIconColorIndices(storage: WikiSidebarStorage): Record<string, number> {
+  try {
+    const parsed = readJsonStorageValue(storage, LIBRARY_ICON_COLOR_STORAGE_KEY);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, number] => (
+        typeof entry[0] === 'string' &&
+        typeof entry[1] === 'number' &&
+        Number.isInteger(entry[1]) &&
+        entry[1] >= 0
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function readWikiSidebarStoredPreferences(
+  storage: WikiSidebarStorage = localStorage,
+): WikiSidebarStoredPreferences {
+  let iconColorOrder = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER;
+  try {
+    iconColorOrder = normalizeLibrarySidebarIconColorOrder(
+      readJsonStorageValue(storage, LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY),
+    );
+  } catch {
+    iconColorOrder = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER;
+  }
+
+  return {
+    sortMode: getStorageItem(storage, 'library-sort-mode') === 'time' ? 'time' : 'alpha',
+    expandedFolders: new Set(readStoredStringArray(storage, 'wiki-expanded-folders')),
+    recentCollapsed: getStorageItem(storage, 'wiki-recent-collapsed') === '1',
+    pinnedItemIds: new Set(readStoredStringArray(storage, LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY)),
+    iconColorIndices: readStoredIconColorIndices(storage),
+    iconColorOrder,
+    newDocLocationKey: getStorageItem(storage, LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY) ?? '',
+  };
+}
+
+function setsEqual<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
+  if (left.size !== right.size) return false;
+  for (const item of left) {
+    if (!right.has(item)) return false;
+  }
+  return true;
+}
+
+function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function recordsEqual(left: Record<string, number>, right: Record<string, number>): boolean {
+  const leftEntries = Object.entries(left);
+  if (leftEntries.length !== Object.keys(right).length) return false;
+  return leftEntries.every(([key, value]) => right[key] === value);
+}
+
 export function reorderLibrarySidebarIconColorOrder(
   order: readonly number[],
   fromIndex: number,
@@ -157,7 +267,7 @@ export function getSidebarIconColorDragTargetIndex(
   return Math.max(0, Math.min(itemCount - 1, startIndex + rowDelta));
 }
 
-function collectSidebarIconTargetIds(nodes: readonly SidebarNode[]): string[] {
+export function collectSidebarIconTargetIds(nodes: readonly SidebarNode[]): string[] {
   const ids: string[] = [];
   const visit = (node: SidebarNode) => {
     ids.push(node.id);
@@ -394,6 +504,7 @@ export interface WikiArchiveController {
 
 interface WikiSidebarProps {
   active?: boolean;
+  canHideSidebarDefaultFolders?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
   onOpenItemInNewWindow?: (item: UnifiedItem, options?: { sidebarCollapsed?: boolean }) => void;
   selectedId: string | null;
@@ -425,6 +536,19 @@ type SidebarArchiveUndo = {
 
 function canOpenSidebarItemInNewWindow(item: UnifiedItem | null | undefined): item is UnifiedItem & { type: 'wiki' | 'artifact' | 'external' } {
   return item?.type === 'wiki' || item?.type === 'artifact' || item?.type === 'external';
+}
+
+export function getSidebarContextHideDirLabel(input: {
+  canHideSidebarDefaultFolders: boolean;
+  contextHideBookmarks: boolean;
+  contextDefaultFolderId: string | null;
+  contextUserFolderId: string | null;
+}): string | null {
+  if (!input.canHideSidebarDefaultFolders) return null;
+  if (input.contextHideBookmarks) return 'Hide Bookmarks';
+  if (input.contextDefaultFolderId) return 'Hide folder';
+  if (input.contextUserFolderId) return 'Remove from FT';
+  return null;
 }
 
 function isArchivableSidebarItem(item: UnifiedItem | null | undefined): item is ArchivableSidebarItem {
@@ -1507,6 +1631,7 @@ function rootToSidebarNode(
 
 function WikiSidebar({
   active = true,
+  canHideSidebarDefaultFolders = true,
   onSelectItem,
   onOpenItemInNewWindow,
   selectedId,
@@ -1532,17 +1657,19 @@ function WikiSidebar({
   const [hiddenDefaultFolders, setHiddenDefaultFolders] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
   const [taggedDocs, setTaggedDocs] = useState<TaggedDocListItem[]>([]);
+  const initialSidebarPreferencesRef = useRef<WikiSidebarStoredPreferences | null>(null);
+  const getInitialSidebarPreferences = () => {
+    if (!initialSidebarPreferencesRef.current) {
+      initialSidebarPreferencesRef.current = readWikiSidebarStoredPreferences();
+    }
+    return initialSidebarPreferencesRef.current;
+  };
   const [sortMode, setSortMode] = useState<SortMode>(() => {
-    const saved = localStorage.getItem('library-sort-mode');
-    return saved === 'time' ? 'time' : 'alpha';
+    return getInitialSidebarPreferences().sortMode;
   });
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem('wiki-expanded-folders');
-      return saved ? new Set(JSON.parse(saved)) : new Set(['artifacts']);
-    } catch {
-      return new Set(['artifacts']);
-    }
+    const saved = getInitialSidebarPreferences().expandedFolders;
+    return saved.size > 0 ? saved : new Set(['artifacts']);
   });
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
@@ -1551,48 +1678,17 @@ function WikiSidebar({
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('wiki-recent-collapsed') === '1';
-    } catch {
-      return false;
-    }
+    return getInitialSidebarPreferences().recentCollapsed;
   });
   const [pinnedItemIds, setPinnedItemIds] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY);
-      const parsed = saved ? JSON.parse(saved) : null;
-      return Array.isArray(parsed)
-        ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
-        : new Set();
-    } catch {
-      return new Set();
-    }
+    return getInitialSidebarPreferences().pinnedItemIds;
   });
   const [sharedPinnedItemIds, setSharedPinnedItemIds] = useState<Set<string>>(() => new Set());
   const [iconColorIndices, setIconColorIndices] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem(LIBRARY_ICON_COLOR_STORAGE_KEY);
-      const parsed = saved ? JSON.parse(saved) : null;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      return Object.fromEntries(
-        Object.entries(parsed).filter((entry): entry is [string, number] => (
-          typeof entry[0] === 'string' &&
-          typeof entry[1] === 'number' &&
-          Number.isInteger(entry[1]) &&
-          entry[1] >= 0
-        )),
-      );
-    } catch {
-      return {};
-    }
+    return getInitialSidebarPreferences().iconColorIndices;
   });
   const [iconColorOrder, setIconColorOrder] = useState<number[]>(() => {
-    try {
-      const saved = localStorage.getItem(LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY);
-      return normalizeLibrarySidebarIconColorOrder(saved ? JSON.parse(saved) : null);
-    } catch {
-      return DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER;
-    }
+    return getInitialSidebarPreferences().iconColorOrder;
   });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
   const archiveUndoRef = useRef<SidebarArchiveUndo | null>(null);
@@ -1620,11 +1716,7 @@ function WikiSidebar({
     y: number;
   } | null>(null);
   const [newDocLocationKey, setNewDocLocationKey] = useState<string>(() => {
-    try {
-      return localStorage.getItem(LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY) ?? '';
-    } catch {
-      return '';
-    }
+    return getInitialSidebarPreferences().newDocLocationKey;
   });
   const [newDocLocationPicker, setNewDocLocationPicker] = useState<{ x: number; y: number } | null>(null);
   const updateSelectedFileIds = useCallback((nextOrUpdater: Set<string> | ((prev: Set<string>) => Set<string>)) => {
@@ -1822,6 +1914,9 @@ function WikiSidebar({
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     const unsubSharedPins = window.sharedFilesAPI?.onPinsChanged?.(() => loadSharedPins());
+    const unsubBookmarks = window.bookmarksAPI?.onChanged?.(() => {
+      loadTree('bookmarks:changed');
+    });
     const onLocalRiverChanged = () => {
       loadTree('river:changed-local');
       loadSharedPins();
@@ -1835,7 +1930,13 @@ function WikiSidebar({
       loadTaggedDocs();
       loadSharedPins();
     };
+    const onBrowserHelperReconnect = () => {
+      loadArtifacts();
+      loadTaggedDocs();
+      loadSharedPins();
+    };
     window.addEventListener('focus', onFocus);
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, onBrowserHelperReconnect);
     return () => {
       unsubWiki?.();
       unsubDeletedWiki?.();
@@ -1852,8 +1953,10 @@ function WikiSidebar({
       unsubRecent?.();
       unsubTaggedDocs?.();
       unsubSharedPins?.();
+      unsubBookmarks?.();
       window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, onBrowserHelperReconnect);
     };
   }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, pruneDeletedWikiPage]);
 
@@ -1884,6 +1987,51 @@ function WikiSidebar({
   useEffect(() => {
     if (newDocLocationKey) localStorage.setItem(LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY, newDocLocationKey);
   }, [newDocLocationKey]);
+
+  useEffect(() => {
+    const applyStoredSidebarPreferences = () => {
+      const preferences = readWikiSidebarStoredPreferences();
+      setSortMode((current) => (current === preferences.sortMode ? current : preferences.sortMode));
+      setExpandedFolders((current) => (
+        setsEqual(current, preferences.expandedFolders) ? current : preferences.expandedFolders
+      ));
+      setRecentCollapsed((current) => (
+        current === preferences.recentCollapsed ? current : preferences.recentCollapsed
+      ));
+      setPinnedItemIds((current) => (
+        setsEqual(current, preferences.pinnedItemIds) ? current : preferences.pinnedItemIds
+      ));
+      setIconColorIndices((current) => (
+        recordsEqual(current, preferences.iconColorIndices) ? current : preferences.iconColorIndices
+      ));
+      setIconColorOrder((current) => (
+        arraysEqual(current, preferences.iconColorOrder) ? current : preferences.iconColorOrder
+      ));
+      setNewDocLocationKey((current) => (
+        current === preferences.newDocLocationKey ? current : preferences.newDocLocationKey
+      ));
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      if (!isWikiSidebarStorageKey(key)) return;
+      applyStoredSidebarPreferences();
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isWikiSidebarStorageKey(key)) {
+        applyStoredSidebarPreferences();
+        if (key === undefined || key === null) {
+          void loadTree('storage:bookmarks-shortcut');
+        }
+      }
+    };
+    window.addEventListener(WIKI_SIDEBAR_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(WIKI_SIDEBAR_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [loadTree]);
 
   const openSidebarIconColorPicker = useCallback((id: string, event: React.MouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -2200,19 +2348,12 @@ function WikiSidebar({
     () => sidebarRootsWithoutPinnedRiver.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [sidebarRootsWithoutPinnedRiver]
   );
-  const bookmarksActionNode = useMemo(() => {
+  const bookmarksActionNodeFromTree = useMemo(() => {
     const node = filteredSidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
     return node?.kind === 'file' ? node : null;
   }, [filteredSidebarRoots]);
-  const bookmarksActionItem = bookmarksActionNode?.item ?? null;
-  const sidebarShortcutVisibility = getSidebarShortcutVisibility({
-    isSearching,
-    hasBookmarksActionItem: Boolean(bookmarksActionItem),
-    hasRiverShortcutNode: Boolean(riverShortcutNode),
-  });
   const [bookmarkCount, setBookmarkCount] = useState<number | null>(() => peekBookmarks()?.bookmarks.length ?? null);
   useEffect(() => {
-    if (!bookmarksActionItem) return;
     let cancelled = false;
     const applySnapshot = (snapshot: BookmarksSnapshot) => {
       if (!cancelled) setBookmarkCount(snapshot.bookmarks.length);
@@ -2226,7 +2367,19 @@ function WikiSidebar({
       cancelled = true;
       unsubscribe();
     };
-  }, [bookmarksActionItem]);
+  }, []);
+  const bookmarksActionNode = useMemo((): SidebarNode | null => {
+    if (hiddenDefaultFolders.includes(BOOKMARKS_SHORTCUT_FOLDER_ID)) return null;
+    if (bookmarksActionNodeFromTree) return bookmarksActionNodeFromTree;
+    if (bookmarkCount === null || bookmarkCount <= 0) return null;
+    return { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() };
+  }, [bookmarksActionNodeFromTree, bookmarkCount, hiddenDefaultFolders]);
+  const bookmarksActionItem = bookmarksActionNode?.item ?? null;
+  const sidebarShortcutVisibility = getSidebarShortcutVisibility({
+    isSearching,
+    hasBookmarksActionItem: Boolean(bookmarksActionItem),
+    hasRiverShortcutNode: Boolean(riverShortcutNode),
+  });
   const newDocLocationOptions = useMemo(
     () => collectNewDocLocationOptions(visibleSidebarRoots),
     [visibleSidebarRoots]
@@ -2238,6 +2391,9 @@ function WikiSidebar({
   }, [newDocLocationKey, newDocLocationOptions]);
   const sidebarIconTargetIds = useMemo(() => {
     const ids = collectSidebarIconTargetIds(visibleSidebarRoots);
+    if (!isSearching && sidebarShortcutVisibility.showRiver && riverShortcutNode) {
+      ids.push(...collectSidebarIconTargetIds([riverShortcutNode]));
+    }
     if (!isSearching && selectedNewDocLocation) ids.push('new-doc:root');
     if (!isSearching && filteredRecentEntries.length > 0) {
       ids.push('recent:root');
@@ -2245,7 +2401,7 @@ function WikiSidebar({
     }
     if (!isSearching && bookmarksActionItem) ids.push(BOOKMARKS_ITEM_ID);
     return ids;
-  }, [bookmarksActionItem, filteredRecentEntries, isSearching, selectedNewDocLocation, visibleSidebarRoots]);
+  }, [bookmarksActionItem, filteredRecentEntries, isSearching, riverShortcutNode, selectedNewDocLocation, sidebarShortcutVisibility.showRiver, visibleSidebarRoots]);
 
   const sidebarRowTopsRef = useRef<Map<string, number>>(new Map());
   useLayoutEffect(() => {
@@ -2507,7 +2663,12 @@ function WikiSidebar({
   const contextUserFolderId = contextDir ? getUserFolderVisibilityId(contextDir) : null;
   const contextHideBookmarks = contextFile?.type === 'bookmarks';
   const contextHideFolderId = contextHideBookmarks ? BOOKMARKS_SHORTCUT_FOLDER_ID : contextDefaultFolderId ?? contextUserFolderId;
-  const contextHideDirLabel = contextHideBookmarks ? 'Hide Bookmarks' : contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
+  const contextHideDirLabel = getSidebarContextHideDirLabel({
+    canHideSidebarDefaultFolders,
+    contextHideBookmarks,
+    contextDefaultFolderId,
+    contextUserFolderId,
+  });
   const canDeleteContextDir = !!contextDir?.canDeleteDir;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact' || contextFile?.type === 'external';
   const canOpenContextFileInNewWindow = !!onOpenItemInNewWindow && canOpenSidebarItemInNewWindow(contextFile);

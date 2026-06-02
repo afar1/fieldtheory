@@ -106,6 +106,7 @@ export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
+export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
 
 export type MarkdownCodeEditorPresentation = 'source' | 'rendered';
@@ -165,6 +166,10 @@ export interface MarkdownCodeEditorSelectionSnapshot {
   selectionHeadSource: MarkdownCodeEditorSourcePosition;
   caretPosition: { top: number; left: number } | null;
   caretRect: {
+    viewport: { left: number; top: number; width: number; height: number };
+    editor: { left: number; top: number; width: number; height: number };
+  } | null;
+  selectionRect: {
     viewport: { left: number; top: number; width: number; height: number };
     editor: { left: number; top: number; width: number; height: number };
   } | null;
@@ -2308,6 +2313,36 @@ function getCodeEditorCaretRect(
   };
 }
 
+function getCodeEditorSelectionRect(
+  view: EditorView,
+  from: number,
+  to: number,
+): MarkdownCodeEditorSelectionSnapshot['selectionRect'] {
+  if (from === to) return null;
+  const start = view.coordsAtPos(from);
+  const end = view.coordsAtPos(to);
+  if (!start || !end) return null;
+  const container = view.dom.getBoundingClientRect();
+  const left = Math.min(start.left, end.left);
+  const right = Math.max(start.right, end.right);
+  const top = Math.min(start.top, end.top);
+  const bottom = Math.max(start.bottom, end.bottom);
+  return {
+    viewport: {
+      left: Math.round(left),
+      top: Math.round(top),
+      width: Math.round(right - left),
+      height: Math.round(bottom - top),
+    },
+    editor: {
+      left: Math.round(left - container.left),
+      top: Math.round(top - container.top),
+      width: Math.round(right - left),
+      height: Math.round(bottom - top),
+    },
+  };
+}
+
 export function getMarkdownCodeEditorSourcePosition(
   value: string,
   offset: number,
@@ -2353,6 +2388,7 @@ export function getMarkdownCodeEditorSelectionSnapshot(
     selectionHeadSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.head),
     caretPosition: getCodeEditorCaretPosition(view, selection.head),
     caretRect: getCodeEditorCaretRect(view, selection.head),
+    selectionRect: getCodeEditorSelectionRect(view, selection.from, selection.to),
     scroll: {
       top: view.scrollDOM.scrollTop,
       height: view.scrollDOM.scrollHeight,
@@ -2649,10 +2685,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-line': {
             padding: '0',
             cursor: 'text',
-            ...(isRenderedPresentation ? {
-              lineHeight: lineHeightCss,
-              minHeight: 'var(--ft-line-number-row-height)',
-            } : {}),
+            lineHeight: lineHeightCss,
+            minHeight: 'var(--ft-line-number-row-height)',
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
             opacity: 0.78,
@@ -2740,15 +2774,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-1`]: {
             fontSize: h1Size ?? '1.55em',
-            lineHeight: 1.2,
+            lineHeight: RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-2`]: {
             fontSize: h2Size ?? '1.18em',
-            lineHeight: 1.28,
+            lineHeight: RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-3`]: {
             fontSize: h3Size ?? '1em',
-            lineHeight: 1.35,
+            lineHeight: RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS}, .${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS}`]: {
             display: 'inline-block',
@@ -2788,7 +2822,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             paddingBottom: '0',
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
             fontSize: '0.9em',
-            lineHeight: lineHeightCss,
+            lineHeight: 'var(--ft-line-number-row-height)',
+            minHeight: 'var(--ft-line-number-row-height)',
             whiteSpace: 'pre-wrap',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS}`]: {
@@ -2806,6 +2841,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS}`]: {
             height: '0',
             lineHeight: '0',
+            minHeight: '0',
             overflow: 'hidden',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`]: {
