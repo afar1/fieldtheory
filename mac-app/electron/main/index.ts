@@ -35,7 +35,7 @@ import {
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
-import { BrowserHelperServer } from './browserHelperServer';
+import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
 import {
   LibraryDocumentWindowManager,
   persistableLibraryDocumentWindowBounds,
@@ -3379,15 +3379,19 @@ let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
 let globalImproveInFlight = false;
 
-function emitBrowserLibraryLauncherTarget(target: unknown): void {
+function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent): void {
   if (
     activeBrowserLibrarySurfaceClientId &&
     browserHelperServer?.hasNativeEventClient(activeBrowserLibrarySurfaceClientId)
   ) {
-    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, { type: 'commands:openMarkdownFromLauncher', target });
+    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, event);
     return;
   }
-  browserHelperServer?.emitNativeEvent({ type: 'commands:openMarkdownFromLauncher', target });
+  browserHelperServer?.emitNativeEvent(event);
+}
+
+function emitBrowserLibraryLauncherTarget(target: unknown): void {
+  emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target });
 }
 
 function ensureBookmarksManager(): BookmarksManager {
@@ -6207,10 +6211,10 @@ function routeOpenMarkdown(inputPath: string): void {
   const webContents = clipboardHistoryWindow.getWindow()?.webContents;
   if (!webContents) return;
   if (resolved.kind === 'wiki') {
-    browserHelperServer?.emitNativeEvent({ type: 'wiki:openPage', relPath: resolved.relPath });
+    emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath: resolved.relPath });
     webContents.send('wiki:openPage', resolved.relPath);
   } else {
-    browserHelperServer?.emitNativeEvent({ type: 'external:openPage', absPath: resolved.absPath });
+    emitBrowserLibraryNavigationEvent({ type: 'external:openPage', absPath: resolved.absPath });
     webContents.send('external:openPage', resolved.absPath);
   }
 }
@@ -13840,10 +13844,10 @@ async function handleProtocolUrl(url: string): Promise<void> {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.showLibrary(boundsToUse);
-        browserHelperServer?.emitNativeEvent({ type: 'wiki:openPage', relPath });
+        emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath });
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
         if (immersive) {
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:setFullscreen', fullscreen: true });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -13866,7 +13870,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
         const reading = librarianManager.getReading(decodedPath);
         if (reading) {
           // Send the reading path to the renderer to display it
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:showReading', readingPath: reading.path });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path });
           clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
         }
       }
@@ -13878,7 +13882,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
         clipboardHistoryWindow.showLibrary(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:setFullscreen', fullscreen: true });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
