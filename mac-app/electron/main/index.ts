@@ -36,6 +36,7 @@ import {
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
+import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelperState';
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
 import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
@@ -3751,6 +3752,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   const address = await browserHelperServer.start();
   const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
   const browserUrl = buildBrowserLibraryUrl({ address, devServer });
+  writeBrowserHelperState({ address, browserUrl });
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }
 let librarySyncService: LibrarySyncService | null = null;
@@ -10333,6 +10335,8 @@ function setupClipboardIPCHandlers(): void {
 
   // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
+    clearBrowserHelperState();
+
     // Unregister all hotkeys via HotkeyManager
     const hotkeyManager = getHotkeyManager();
     hotkeyManager.unregisterAll();
