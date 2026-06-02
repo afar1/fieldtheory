@@ -1026,6 +1026,21 @@ export function getBrowserSelectionPastePopoverPosition(
   };
 }
 
+export function getNativeTerminalPastePopoverPosition(
+  selectionRect: Pick<DOMRect, 'height' | 'left' | 'right' | 'top'>,
+  viewport: { width: number; height: number },
+  contentRect: Pick<DOMRect, 'right'> | null,
+): { top: number; left: number } {
+  if (!contentRect) {
+    return getTerminalPastePopoverPosition(selectionRect, viewport, 'right');
+  }
+  return getTerminalPastePopoverPosition(
+    { ...selectionRect, right: contentRect.right },
+    viewport,
+    'right',
+  );
+}
+
 export function shouldPreserveEditorSelectionPastePopover(input: {
   activeElement: Element | null;
   latestEditorSnapshot: MarkdownCodeEditorSelectionSnapshot | null;
@@ -5950,6 +5965,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } catch {}
   }, [browserLibrarySurface, flashCopyFeedback, onActionFeedback]);
 
+  const getNativeTerminalPasteContentRect = useCallback((): Pick<DOMRect, 'right'> | null => (
+    renderedContentRef.current?.getBoundingClientRect()
+    ?? (contentScrollRef.current?.firstElementChild instanceof HTMLElement
+      ? contentScrollRef.current.firstElementChild.getBoundingClientRect()
+      : null)
+  ), []);
+
   const showSelectionPastePopoverFromEditorSnapshot = useCallback((
     snapshot: MarkdownCodeEditorSelectionSnapshot,
   ) => {
@@ -5982,12 +6004,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           width: window.innerWidth,
           height: window.innerHeight,
         }, lineNumberRect)
-        : getTerminalPastePopoverPosition(rect, {
+        : getNativeTerminalPastePopoverPosition(rect, {
           width: window.innerWidth,
           height: window.innerHeight,
-        })),
+        }, getNativeTerminalPasteContentRect())),
     });
-  }, [browserLibrarySurface]);
+  }, [browserLibrarySurface, getNativeTerminalPasteContentRect]);
 
   useEffect(() => {
     const updateSelectionPopover = () => {
@@ -6036,10 +6058,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             width: window.innerWidth,
             height: window.innerHeight,
           }, lineNumberRect)
-          : getTerminalPastePopoverPosition(rect, {
+          : getNativeTerminalPastePopoverPosition(rect, {
             width: window.innerWidth,
             height: window.innerHeight,
-          })),
+          }, getNativeTerminalPasteContentRect())),
       });
     };
 
@@ -6055,7 +6077,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener('scroll', updateSelectionPopover, true);
       window.removeEventListener('resize', updateSelectionPopover);
     };
-  }, [browserLibrarySurface, showSelectionPastePopoverFromEditorSnapshot]);
+  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, showSelectionPastePopoverFromEditorSnapshot]);
 
   useEffect(() => {
     const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
