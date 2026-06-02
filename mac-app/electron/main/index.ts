@@ -117,6 +117,7 @@ import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { parseSharedFileFrontmatter } from './sharedFiles';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
@@ -141,7 +142,15 @@ import {
   type MaxwellUndoFailureReason,
   type MaxwellUndoResult,
 } from './types/commands';
-import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import {
+  type DocumentSaveResult,
+  type DocumentVersion,
+  documentSaveConflictIfVersionChanged,
+  documentSaveResultForSharedConflict,
+  documentSaveResultForUpdatedFile,
+  readDocumentVersion,
+  writeTextFileWithConflictGuard,
+} from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
 import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, resolveCommandLauncherInvocationTarget } from './commandLauncherTarget';
@@ -7296,11 +7305,44 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.findWikiPageByDocumentVersion(version, previousRelPath);
   });
 
-  ipcMain.handle('wiki:save', (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  async function saveSharedCacheFileIfNeeded(
+    filePath: string,
+    content: string,
+    expectedVersion?: DocumentVersion | null,
+  ): Promise<DocumentSaveResult | null> {
+    const currentContent = fs.readFileSync(filePath, 'utf-8');
+    const sharedMeta = parseSharedFileFrontmatter(currentContent);
+    if (!sharedMeta) return null;
+    const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
+    if (localConflict) return localConflict;
+
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'error' };
+
+    const result = await sharedSyncService.updateSharedContent(
+      sharedMeta.sharedId,
+      content,
+      sharedMeta.revision ?? 0,
+      filePath,
+    );
+    if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+    if (result.ok && result.cachePath) return documentSaveResultForUpdatedFile(result.cachePath);
+    if (result.error === 'Remote revision changed before this edit synced') {
+      return documentSaveResultForSharedConflict(result.remoteContent ?? currentContent, result.cachePath);
+    }
+    return { ok: false, reason: 'error' };
+  }
+
+  ipcMain.handle('wiki:save', async (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!librarianManager) return { ok: false, reason: 'error' };
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
+    }
+    const page = librarianManager.getWikiPage(relPath);
+    if (page) {
+      const sharedSave = await saveSharedCacheFileIfNeeded(page.absPath, content, expectedVersion);
+      if (sharedSave) return sharedSave;
     }
     return librarianManager.saveWikiPage(relPath, content, expectedVersion);
   });
@@ -7412,7 +7454,7 @@ function setupLibrarianIPCHandlers(): void {
     },
   );
 
-  ipcMain.handle('external:save', (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  ipcMain.handle('external:save', async (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
@@ -7420,6 +7462,8 @@ function setupLibrarianIPCHandlers(): void {
     try {
       const canonical = fs.realpathSync(absPath);
       if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
+      const sharedSave = await saveSharedCacheFileIfNeeded(canonical, content, expectedVersion);
+      if (sharedSave) return sharedSave;
       const previousContent = fs.readFileSync(canonical, 'utf-8');
       const nextContent = isAllowedMarkdownExt(canonical)
         ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
