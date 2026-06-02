@@ -178,6 +178,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       'wiki:deleted',
       'wiki:renamed',
       'wiki:openPage',
+      'wiki:openScratchpad',
       'library:changed',
       'library:renamed',
       'external:openPage',
@@ -471,6 +472,7 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     onPageDeleted: (callback: (relPath: string) => void) => events.on('wiki:deleted', (detail) => callback(detail.relPath)),
     onPageRenamed: (callback: (event: unknown) => void) => events.on('wiki:renamed', (detail) => callback(detail.event)),
     onOpenWikiPage: (callback: (relPath: string) => void) => events.on('wiki:openPage', (detail) => callback(detail.relPath)),
+    onOpenScratchpad: (callback: (relPath: string) => void) => events.on('wiki:openScratchpad', (detail) => callback(detail.relPath)),
   } as any;
 
   window.externalAPI = {
