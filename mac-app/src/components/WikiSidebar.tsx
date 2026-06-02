@@ -2374,7 +2374,7 @@ function WikiSidebar({
     if (bookmarkCount === null || bookmarkCount <= 0) return null;
     return { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() };
   }, [bookmarksActionNodeFromTree, bookmarkCount, hiddenDefaultFolders]);
-  const bookmarksActionItem = bookmarksActionNode?.item ?? null;
+  const bookmarksActionItem = bookmarksActionNode?.kind === 'file' ? bookmarksActionNode.item : null;
   const sidebarShortcutVisibility = getSidebarShortcutVisibility({
     isSearching,
     hasBookmarksActionItem: Boolean(bookmarksActionItem),
