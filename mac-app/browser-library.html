@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Field Theory Browser Library</title>
+    <script>
+      window.__fieldTheoryBrowserLibraryErrors = [];
+      window.addEventListener('error', function (event) {
+        window.__fieldTheoryBrowserLibraryErrors.push({
+          type: 'error',
+          message: event.message,
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          stack: event.error && event.error.stack,
+        });
+      });
+      window.addEventListener('unhandledrejection', function (event) {
+        window.__fieldTheoryBrowserLibraryErrors.push({
+          type: 'unhandledrejection',
+          message: String(event.reason && event.reason.message || event.reason),
+          stack: event.reason && event.reason.stack,
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/browser-library.tsx"></script>
+  </body>
+</html>
