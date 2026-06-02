@@ -865,7 +865,7 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
   } as any;
 }
 
-function BrowserLibraryApp(props: {
+export function BrowserLibraryApp(props: {
   LibrarianView: React.ComponentType<any>;
   CommandsView: React.ComponentType<any>;
   ThemeProvider: React.ComponentType<{ children: React.ReactNode }>;
@@ -1376,11 +1376,13 @@ async function main() {
   document.body.dataset.fieldTheoryBrowserLibraryReact = 'render-called';
 }
 
-void main().catch((error) => {
-  window.__fieldTheoryBrowserLibraryErrors?.push({
-    type: 'startup',
-    message: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
+if (import.meta.env.MODE !== 'test') {
+  void main().catch((error) => {
+    window.__fieldTheoryBrowserLibraryErrors?.push({
+      type: 'startup',
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    document.body.dataset.fieldTheoryBrowserLibraryNative = 'error';
   });
-  document.body.dataset.fieldTheoryBrowserLibraryNative = 'error';
-});
+}
