@@ -33,6 +33,8 @@ export type BrowserHelperDocumentServiceLike = {
   saveWikiPage: BrowserHelperDocumentService['saveWikiPage'];
   createWikiFile: (folderRelPath: string, fileName: string) => unknown | null;
   createWikiFileWithDefaultTitle: (folderRelPath: string) => unknown | null;
+  createScratchpadDefault?: () => unknown | null;
+  openScratchpadDefault?: () => unknown | null;
   createWikiDir: BrowserHelperDocumentService['createWikiDir'];
   deleteWikiPage: (relPath: string) => boolean | Promise<boolean>;
   renameWikiPage: BrowserHelperDocumentService['renameWikiPage'];
@@ -133,6 +135,7 @@ export type BrowserHelperNativeBridge = {
   createDefaultCommandDirectory?: () => string | null | Promise<string | null>;
   getCommands?: () => unknown[] | Promise<unknown[]>;
   getCommandByPath?: (filePath: string) => unknown | Promise<unknown>;
+  getMarkdownPreview?: (filePath: string) => unknown | Promise<unknown>;
   saveCommand?: (filePath: string, content: string, expectedVersion?: unknown) => unknown | Promise<unknown>;
   createCommand?: (directoryPath: string, name: string, content?: string) => unknown | Promise<unknown>;
   deleteCommand?: (filePath: string) => boolean | Promise<boolean>;
@@ -424,6 +427,18 @@ export class BrowserHelperServer {
         const body = await readJsonBody(req);
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const page = this.service.createWikiFileWithDefaultTitle(folderRelPath);
+        writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/wiki/scratchpad-default') {
+        const page = this.service.createScratchpadDefault?.() ?? this.service.createWikiFileWithDefaultTitle('scratchpad');
+        writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/wiki/open-scratchpad-default') {
+        const page = this.service.openScratchpadDefault?.() ?? this.service.createScratchpadDefault?.() ?? this.service.createWikiFileWithDefaultTitle('scratchpad');
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -875,6 +890,13 @@ export class BrowserHelperServer {
         const filePath = String(parsed.searchParams.get('path') ?? '');
         const command = filePath ? await this.nativeBridge.getCommandByPath?.(filePath) ?? null : null;
         writeJson(res, 200, { ok: true, command }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/commands/markdown-preview') {
+        const filePath = String(parsed.searchParams.get('path') ?? '');
+        const preview = filePath ? await this.nativeBridge.getMarkdownPreview?.(filePath) ?? null : null;
+        writeJson(res, 200, { ok: true, preview }, req.headers.origin);
         return;
       }
 
