@@ -2098,7 +2098,10 @@ async function pasteTextIntoCodexInputFromBrowserLibrary(text: string): Promise<
     clipboard.writeText(text);
     clipboardManager?.syncClipboardHash();
     const launcherClipboardPayload = captureCommandClipboardPayload();
-    await activateTargetAppWithSystemEvents(targetApp);
+    const pasted = await activateAndPaste(targetApp, {
+      clipboardTrace: readCommandPasteClipboardTrace,
+      traceDetails,
+    });
     scheduleBrowserLibraryClipboardRestore({
       tracePrefix: 'browser-library-codex-input-fallback',
       tracePayload: traceDetails,
@@ -2108,8 +2111,12 @@ async function pasteTextIntoCodexInputFromBrowserLibrary(text: string): Promise<
     });
     appendCommandLauncherTrace('browser-library-codex-input-clipboard-fallback', {
       ...traceDetails,
+      pasted,
       clipboard: readCommandPasteClipboardTrace(),
     });
+    if (pasted) {
+      return { success: true, delivery: 'clipboard-paste' };
+    }
     return {
       success: true,
       delivery: 'clipboard-focus',
@@ -9631,6 +9638,7 @@ function setupClipboardIPCHandlers(): void {
               : `\`${shortPath}\``;
             const figureRefWithSpace = `${figureRef} `;
             clipboard.writeText(figureRefWithSpace);
+            commandLauncherTextContent = figureRefWithSpace;
             // Set hash from exact clipboard payload to avoid self-capture churn.
             clipboardManager.setClipboardHashFromText(figureRefWithSpace);
           } else {
