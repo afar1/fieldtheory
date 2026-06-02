@@ -40,7 +40,11 @@ import {
 } from './utils/hotkeys';
 import { commandPathToLauncherLibraryOpenTarget, type LauncherLibraryRootPath } from './commandLauncherUtils';
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../electron/shared/browserLibraryRendererStorage';
-import { normalizeFieldTheoryMarkdownTarget, type FieldTheoryMarkdownTarget } from '../electron/shared/fieldTheoryMarkdownTarget';
+import {
+  browserLibraryTargetFromSearchParams,
+  normalizeBrowserLibraryOpenTarget,
+  type FieldTheoryMarkdownTarget,
+} from '../electron/shared/fieldTheoryMarkdownTarget';
 import {
   getAppBracketNavigationDirection,
   popAppBackHistory,
@@ -113,17 +117,6 @@ type BrowserCreatedCommand = { path: string; name: string };
 
 export const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
 
-const BROWSER_LIBRARY_INCLUDED_TARGET_KINDS = new Set([
-  'wiki',
-  'artifact',
-  'command',
-  'external',
-  'bookmarks',
-  'ember',
-  'library',
-  'commands',
-]);
-
 type BrowserLibrarySurfaceName = 'library' | 'commands';
 type BrowserHelperClientSurfaceName = BrowserLibrarySurfaceName | 'bookmarks' | 'ember';
 const BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES = [
@@ -133,58 +126,8 @@ const BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES = [
   'bookmarks:changed',
 ];
 
-function parseBrowserLibraryNumberParam(value: string | null): number | undefined {
-  if (value === null || value.trim() === '') return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseBrowserLibraryBooleanParam(value: string | null): boolean | undefined {
-  if (value === null) return undefined;
-  if (value === '1' || value === 'true') return true;
-  if (value === '0' || value === 'false') return false;
-  return undefined;
-}
-
-function parseBrowserLibraryContentModeParam(value: string | null): string | undefined {
-  return value === 'rendered' || value === 'markdown' || value === 'typedown'
-    ? value
-    : undefined;
-}
-
 export function getBrowserLibraryInitialOpenTarget(location: Pick<Location, 'search'>): any | null {
-  const params = new URLSearchParams(location.search);
-  const rawTarget = params.get('target');
-  if (rawTarget) {
-    try {
-      const parsedTarget = JSON.parse(rawTarget);
-      return isBrowserLibraryIncludedOpenTarget(parsedTarget)
-        ? normalizeFieldTheoryMarkdownTarget(parsedTarget)
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  const kind = params.get('kind');
-  if (!kind) return null;
-  const queryTarget: Record<string, unknown> = {
-    kind,
-  };
-  const path = params.get('path');
-  const contentMode = parseBrowserLibraryContentModeParam(params.get('contentMode'));
-  const sidebarCollapsed = parseBrowserLibraryBooleanParam(params.get('sidebarCollapsed'));
-  const focusChrome = parseBrowserLibraryBooleanParam(params.get('focusChrome'));
-  const selectionStart = parseBrowserLibraryNumberParam(params.get('selectionStart'));
-  const selectionEnd = parseBrowserLibraryNumberParam(params.get('selectionEnd'));
-  if (path !== null) queryTarget.path = path;
-  if (contentMode !== undefined) queryTarget.contentMode = contentMode;
-  if (sidebarCollapsed !== undefined) queryTarget.sidebarCollapsed = sidebarCollapsed;
-  if (focusChrome !== undefined) queryTarget.focusChrome = focusChrome;
-  if (selectionStart !== undefined) queryTarget.selectionStart = selectionStart;
-  if (selectionEnd !== undefined) queryTarget.selectionEnd = selectionEnd;
-  const target = normalizeFieldTheoryMarkdownTarget(queryTarget);
-  return target && BROWSER_LIBRARY_INCLUDED_TARGET_KINDS.has(target.kind) ? target : null;
+  return browserLibraryTargetFromSearchParams(new URLSearchParams(location.search));
 }
 
 function browserLibrarySurfaceToAppNavigationSurface(surface: BrowserLibrarySurfaceName): AppNavigationSurface {
@@ -205,8 +148,7 @@ function initialBrowserClientSurfaceFromTarget(target: FieldTheoryMarkdownTarget
 }
 
 export function isBrowserLibraryIncludedOpenTarget(target: unknown): boolean {
-  const normalized = normalizeFieldTheoryMarkdownTarget(target);
-  return Boolean(normalized && BROWSER_LIBRARY_INCLUDED_TARGET_KINDS.has(normalized.kind));
+  return Boolean(normalizeBrowserLibraryOpenTarget(target));
 }
 
 class BrowserLibraryErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {
@@ -1484,7 +1426,7 @@ function BrowserLibrarySurface(props: {
   const { theme, toggleDarkMode } = useTheme();
   const normalizedInitialOpenTarget = React.useMemo(() => (
     isBrowserLibraryIncludedOpenTarget(initialOpenTarget)
-      ? normalizeFieldTheoryMarkdownTarget(initialOpenTarget)
+      ? normalizeBrowserLibraryOpenTarget(initialOpenTarget)
       : null
   ), [initialOpenTarget]);
   const [surface, setSurface] = React.useState<BrowserLibrarySurfaceName>(() => (
@@ -2042,8 +1984,8 @@ function BrowserLibrarySurface(props: {
   }, []);
 
   const openMarkdownTarget = React.useCallback((target: any): boolean => {
-    const normalizedTarget = normalizeFieldTheoryMarkdownTarget(target);
-    if (!normalizedTarget || !BROWSER_LIBRARY_INCLUDED_TARGET_KINDS.has(normalizedTarget.kind)) return false;
+    const normalizedTarget = normalizeBrowserLibraryOpenTarget(target);
+    if (!normalizedTarget) return false;
     target = normalizedTarget;
     setPendingReadingPath(null);
     if (target.sidebarCollapsed === true) {
