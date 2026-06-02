@@ -11281,15 +11281,6 @@ function setupClipboardIPCHandlers(): void {
       });
       return { success: false, error: 'Invalid markdown target' };
     }
-    if (!clipboardHistoryWindow) {
-      appendCommandLauncherTrace('open-field-theory-markdown-error', {
-        reason: 'missing-field-theory-window',
-        kind: target.kind,
-        path: target.path,
-      });
-      return { success: false, error: 'Field Theory window not available' };
-    }
-
     if (
       target.kind !== 'clipboard' &&
       emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target }, { broadcastFallback: false })
@@ -11302,6 +11293,14 @@ function setupClipboardIPCHandlers(): void {
         target: 'browser-library',
       });
       return { success: true };
+    }
+    if (!clipboardHistoryWindow) {
+      appendCommandLauncherTrace('open-field-theory-markdown-error', {
+        reason: 'missing-field-theory-window',
+        kind: target.kind,
+        path: target.path,
+      });
+      return { success: false, error: 'Field Theory window not available' };
     }
 
     const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
