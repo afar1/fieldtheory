@@ -2919,7 +2919,6 @@ async function updateSharedLibrarianReading(filePath: string, content: string, t
 }
 
 async function startBrowserHelperIfEnabled(): Promise<void> {
-  if (process.env.FIELD_THEORY_BROWSER_HELPER !== '1') return;
   if (!librarianManager || browserHelperServer) return;
 
   const manager = librarianManager;
