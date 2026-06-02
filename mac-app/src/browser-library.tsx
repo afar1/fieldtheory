@@ -443,6 +443,12 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
         json: { folderRelPath },
       })
     ).page,
+    createScratchpadDefault: async () => (
+      await request<{ page: unknown }>('/native/wiki/scratchpad-default', { method: 'POST' })
+    ).page,
+    openScratchpadDefault: async () => (
+      await request<{ page: unknown }>('/native/wiki/open-scratchpad-default', { method: 'POST' })
+    ).page,
     createDir: async (dirRelPath: string) => (
       await request<{ ok: boolean }>('/native/wiki/dir', {
         method: 'POST',
@@ -701,6 +707,9 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     getCommandByPath: async (filePath: string) => (
       await request<{ command: unknown }>(`/native/commands/by-path?path=${encodeURIComponent(filePath)}`)
     ).command,
+    getMarkdownPreview: async (filePath: string) => (
+      await request<{ preview: unknown }>(`/native/commands/markdown-preview?path=${encodeURIComponent(filePath)}`)
+    ).preview,
     saveCommand: async (filePath: string, content: string, expectedVersion?: unknown) => (
       await request<{ result: unknown }>('/native/commands/by-path', {
         method: 'PUT',

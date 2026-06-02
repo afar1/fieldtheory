@@ -443,6 +443,47 @@ describe('BrowserHelperServer', () => {
     expect(fs.readFileSync(path.join(root, 'Plan.md'), 'utf-8')).toBe('# Native app write\n');
   });
 
+  it('creates default scratchpad pages through the browser wiki bridge', async () => {
+    const { address, root } = await startServer();
+
+    const response = await request(`http://${address.host}:${address.port}/native/wiki/scratchpad-default`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.page.relPath).toMatch(/^scratchpad\//);
+    expect(fs.existsSync(path.join(root, `${response.body.page.relPath}.md`))).toBe(true);
+  });
+
+  it('bridges markdown previews through the native bridge', async () => {
+    const root = makeTempDir();
+    const previewPath = path.join(root, 'Preview.md');
+    fs.writeFileSync(previewPath, '# Preview\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getMarkdownPreview: (filePath) => ({
+          title: path.basename(filePath),
+          filePath,
+          content: fs.readFileSync(filePath, 'utf-8'),
+        }),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/commands/markdown-preview?token=test-token&path=${encodeURIComponent(previewPath)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.preview).toEqual({
+      title: 'Preview.md',
+      filePath: previewPath,
+      content: '# Preview\n',
+    });
+  });
+
   it('bridges renderer storage through the native bridge', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
