@@ -8,6 +8,7 @@ import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/boo
 type BookmarksViewMode = 'list' | 'canvas';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
+const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 const FIELD_THEORY_CLI_INSTALL_COMMAND = 'npm install -g fieldtheory';
 const FIELD_THEORY_CLI_URL = 'https://fieldtheory.dev/cli/';
 
@@ -21,17 +22,22 @@ function loadShowText(): boolean {
   return saved === null ? true : saved === '1';
 }
 
+function isBookmarksStorageKey(key: string | null | undefined): boolean {
+  return key === STORAGE_KEY || key === SHOW_TEXT_KEY;
+}
+
 interface BookmarksPaneProps {
   active?: boolean;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
   onCanvasModeActiveChange?: (active: boolean) => void;
   onCanvasToolbarTopChange?: (top: number | null) => void;
+  onActionFeedback?: (message: string) => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange, onCanvasToolbarTopChange }: BookmarksPaneProps) {
+function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange, onCanvasToolbarTopChange, onActionFeedback }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -89,6 +95,33 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
   }, [showText]);
+
+  useEffect(() => {
+    const applyStoredBookmarkPreferences = () => {
+      const nextMode = loadMode();
+      setMode((current) => (current === nextMode ? current : nextMode));
+      setListEverShown((current) => current || nextMode === 'list');
+      setCanvasEverShown((current) => current || nextMode === 'canvas');
+      setShowText((current) => {
+        const nextShowText = loadShowText();
+        return current === nextShowText ? current : nextShowText;
+      });
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      if (isBookmarksStorageKey(key)) applyStoredBookmarkPreferences();
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isBookmarksStorageKey(key)) applyStoredBookmarkPreferences();
+    };
+    window.addEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -383,12 +416,12 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
           <>
             {listEverShown && (
               <div style={{ position: 'absolute', inset: 0, display: mode === 'list' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
-                <BookmarksList bookmarks={filtered} />
+                <BookmarksList bookmarks={filtered} onActionFeedback={onActionFeedback} />
               </div>
             )}
             {canvasEverShown && (
               <div style={{ position: 'absolute', inset: 0, display: mode === 'canvas' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
-                <BookmarksCanvas bookmarks={filtered} />
+                <BookmarksCanvas bookmarks={filtered} onActionFeedback={onActionFeedback} />
               </div>
             )}
           </>

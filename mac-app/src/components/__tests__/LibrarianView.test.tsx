@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 import LibrarianView, {
   getMaxwellToolbarRunMode,
   getLibraryDocumentDefaultContentMode,
@@ -11,9 +12,16 @@ import LibrarianView, {
   restoreLibrarianHtmlLayoutByPath,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
+  getBrowserSelectionPastePopoverPosition,
+  getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
   shouldAnimateResponsiveSidebar,
+  isLiveLibrarianRendererStoragePreferenceKey,
+  restoreLibrarianLineNumbersMode,
+  restoreLibrarianSidebarWidth,
+  restoreLibrarianTextSize,
+  shouldPreserveEditorSelectionPastePopover,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -45,12 +53,81 @@ vi.mock('../AgentKickoffModal', () => ({
 }));
 
 describe('LibrarianView render', () => {
+  type EditorSelectionSnapshot = Parameters<typeof shouldPreserveEditorSelectionPastePopover>[0]['latestEditorSnapshot'];
   type TestMeetingSession = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveMeeting']>>>>;
   const testLibraryRootPath = '/Users/afar/.fieldtheory/library';
   const expandedScratchpadFolders = JSON.stringify([
     `root:${testLibraryRootPath}`,
     `${testLibraryRootPath}::scratchpad`,
   ]);
+  let toggleLineNumbersFromLauncher: (() => void) | null = null;
+
+  it('places the Browser selection paste button to the left of line numbers', () => {
+    expect(getBrowserSelectionPastePopoverPosition(
+      { top: 100, height: 24, left: 280, right: 520 },
+      { width: 900, height: 700 },
+      { left: 220, right: 240 },
+    )).toEqual({ top: 97, left: 130 });
+  });
+
+  it('keeps the Browser paste button alive for CodeMirror editor selections', () => {
+    const editor = document.createElement('div');
+    editor.className = 'cm-editor';
+    const content = document.createElement('div');
+    editor.appendChild(content);
+    document.body.appendChild(editor);
+
+    expect(shouldPreserveEditorSelectionPastePopover({
+      activeElement: content,
+      latestEditorSnapshot: {
+        value: 'Send this to Codex',
+        selectionStart: 0,
+        selectionEnd: 4,
+        isCollapsed: false,
+      } as EditorSelectionSnapshot,
+    })).toBe(true);
+    expect(shouldPreserveEditorSelectionPastePopover({
+      activeElement: content,
+      latestEditorSnapshot: {
+        value: '    ',
+        selectionStart: 0,
+        selectionEnd: 4,
+        isCollapsed: false,
+      } as EditorSelectionSnapshot,
+    })).toBe(false);
+  });
+
+  it('uses the drawn CodeMirror selection bands when browser selection geometry is empty', () => {
+    const root = document.createElement('div');
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    first.className = 'cm-selectionBackground';
+    second.className = 'cm-selectionBackground';
+    first.getBoundingClientRect = vi.fn(() => ({
+      width: 120,
+      height: 24,
+      left: 300,
+      right: 420,
+      top: 100,
+      bottom: 124,
+    } as DOMRect));
+    second.getBoundingClientRect = vi.fn(() => ({
+      width: 80,
+      height: 24,
+      left: 260,
+      right: 340,
+      top: 128,
+      bottom: 152,
+    } as DOMRect));
+    root.append(first, second);
+
+    expect(getEditorSelectionBackgroundRect(root)).toEqual({
+      height: 52,
+      left: 260,
+      right: 420,
+      top: 100,
+    });
+  });
 
   it('deletes rendered ft-html blocks as whole containers', () => {
     const value = 'Before\n\n```ft-html\n<section>Widget</section>\n```\n\nAfter';
@@ -124,6 +201,27 @@ describe('LibrarianView render', () => {
       LIBRARIAN_HTML_LAYOUT_STORAGE_KEY,
       JSON.stringify({ '/tmp/report.html': 'contained' }),
     );
+  });
+
+  it('recognizes live native renderer-storage preferences for mounted Library views', () => {
+    const storage = {
+      getItem: vi.fn((key: string) => {
+        if (key === 'librarian-text-size') return 'large';
+        if (key === 'fieldtheory-line-numbers') return 'faded';
+        return null;
+      }),
+    };
+
+    expect(restoreLibrarianTextSize(storage)).toBe('large');
+    expect(restoreLibrarianLineNumbersMode(storage)).toBe('faded');
+    expect(restoreLibrarianSidebarWidth({
+      getItem: (key: string) => key === 'librarian-sidebar-width' ? '260' : null,
+    })).toBe(260);
+    expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-text-size')).toBe(true);
+    expect(isLiveLibrarianRendererStoragePreferenceKey('fieldtheory-line-numbers')).toBe(true);
+    expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-sidebar-width')).toBe(true);
+    expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-last-selection')).toBe(false);
+    expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-editor-session')).toBe(false);
   });
 
   it('resolves new wiki pages to the current folder or scratchpad', () => {
@@ -761,6 +859,7 @@ describe('LibrarianView render', () => {
   }
 
   beforeEach(() => {
+    toggleLineNumbersFromLauncher = null;
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
@@ -826,6 +925,12 @@ describe('LibrarianView render', () => {
         stopMeeting: vi.fn(async () => ({ success: true, session: null })),
         getActiveMeeting: vi.fn(async () => null),
         onMeetingStatus: vi.fn(() => () => {}),
+        onToggleLineNumbersFromLauncher: vi.fn((callback: () => void) => {
+          toggleLineNumbersFromLauncher = callback;
+          return () => {
+            toggleLineNumbersFromLauncher = null;
+          };
+        }),
       },
     });
     Object.defineProperty(window, 'libraryAPI', {
@@ -842,6 +947,7 @@ describe('LibrarianView render', () => {
       configurable: true,
       value: {
         setRepresentedFilename: vi.fn(),
+        pasteIntoCodexInput: vi.fn(async () => ({ success: true })),
       },
     });
     Object.defineProperty(window, 'clipboardAPI', {
@@ -851,6 +957,8 @@ describe('LibrarianView render', () => {
   });
 
   afterEach(() => {
+    toggleLineNumbersFromLauncher = null;
+    resetBookmarksCacheForTests();
     vi.useRealTimers();
     cleanup();
     vi.restoreAllMocks();
@@ -862,6 +970,319 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+  });
+
+  it('handles launcher line-number toggles while mounted inactive behind Commands', async () => {
+    render(<LibrarianView active={false} sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => expect(toggleLineNumbersFromLauncher).toBeTruthy());
+    vi.mocked(window.localStorage.setItem).mockClear();
+
+    act(() => {
+      toggleLineNumbersFromLauncher?.();
+    });
+
+    await waitFor(() => {
+      expect(window.localStorage.setItem).toHaveBeenCalledWith('fieldtheory-line-numbers', 'visible');
+    });
+  });
+
+  it('re-reports the active markdown context when the Browser helper reconnects', async () => {
+    const relPath = 'scratchpad/reconnect-note';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'reconnect-note',
+          title: 'Reconnect Note',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getTree).mockResolvedValue([{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `${testLibraryRootPath}/${relPath}.md`,
+        name: 'reconnect-note',
+        title: 'Reconnect Note',
+        lastUpdated: 1,
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'reconnect-note',
+      title: 'Reconnect Note',
+      lastUpdated: 1,
+      content: 'Reconnect body',
+      documentVersion: { mtimeMs: 1, size: 14, sha256: 'reconnect' },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />,
+    );
+
+    await screen.findByText('Reconnect body');
+    const expectedContext = {
+      type: 'wiki',
+      rootPath: testLibraryRootPath,
+      relPath,
+      filePath: `${testLibraryRootPath}/${relPath}.md`,
+      title: 'Reconnect Note',
+    };
+    await waitFor(() => {
+      expect(window.commandsAPI!.setActiveLibraryFileContext).toHaveBeenCalledWith(expectedContext);
+    });
+    await waitFor(() => {
+      expect(window.librarianAPI!.setSizeKey).toHaveBeenCalledWith('library');
+    });
+    await waitFor(() => {
+      expect(window.shellAPI!.setRepresentedFilename).toHaveBeenCalledWith('');
+    });
+    const editorContent = document.querySelector('.cm-content') as HTMLElement | null;
+    expect(editorContent).toBeTruthy();
+    fireEvent.focus(editorContent!);
+    await waitFor(() => {
+      expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+    });
+
+    vi.mocked(window.commandsAPI!.setActiveLibraryFileContext).mockClear();
+    vi.mocked(window.librarianAPI!.setSizeKey).mockClear();
+    vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
+    vi.mocked(window.shellAPI!.setRepresentedFilename).mockClear();
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    expect(window.commandsAPI!.setActiveLibraryFileContext).toHaveBeenCalledWith(expectedContext);
+    expect(window.librarianAPI!.setSizeKey).toHaveBeenCalledWith('library');
+    expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+    expect(window.shellAPI!.setRepresentedFilename).toHaveBeenCalledWith('');
+  });
+
+  it('reloads sidebar artifacts, tagged docs, and shared pins when the Browser helper reconnects', async () => {
+    const firstArtifact = {
+      path: '/tmp/library/reconnect-one.md',
+      title: 'Reconnect Artifact One',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 1,
+      mtime: 1,
+    };
+    const secondArtifact = {
+      path: '/tmp/library/reconnect-two.md',
+      title: 'Reconnect Artifact Two',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 2,
+      mtime: 2,
+    };
+    let includeSecondArtifact = false;
+    window.librarianAPI!.getReadings = vi.fn(async () => (
+      includeSecondArtifact ? [firstArtifact, secondArtifact] : [firstArtifact]
+    ));
+    window.librarianAPI!.getReading = vi.fn(async () => null);
+    const listTaggedDocs = vi.fn(async () => []);
+    const getPinnedItemIds = vi.fn(async () => []);
+    Object.defineProperty(window, 'taggedDocsAPI', {
+      configurable: true,
+      value: {
+        list: listTaggedDocs,
+        onUpdated: vi.fn(() => () => {}),
+      },
+    });
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: false, hasTeamMembers: false })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getPinnedItemIds,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+        onPinsChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(listTaggedDocs).toHaveBeenCalledTimes(1);
+      expect(getPinnedItemIds).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByText('Reconnect Artifact One')).toBeTruthy();
+    expect(screen.queryByText('Reconnect Artifact Two')).toBeNull();
+
+    listTaggedDocs.mockClear();
+    getPinnedItemIds.mockClear();
+    vi.mocked(window.librarianAPI!.getReadings).mockClear();
+    includeSecondArtifact = true;
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(listTaggedDocs).toHaveBeenCalledTimes(1);
+      expect(getPinnedItemIds).toHaveBeenCalledTimes(1);
+      expect(window.librarianAPI!.getReadings).toHaveBeenCalled();
+    });
+    expect(await screen.findByText('Reconnect Artifact Two')).toBeTruthy();
+  });
+
+  it('uses the bookmarks canvas size key and replays it when the helper reconnects', async () => {
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'bookmarks' }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(window.bookmarksAPI!.getAll).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(window.librarianAPI!.setSizeKey).toHaveBeenCalledWith('canvas');
+    });
+
+    vi.mocked(window.librarianAPI!.setSizeKey).mockClear();
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    expect(window.librarianAPI!.setSizeKey).toHaveBeenCalledWith('canvas');
+  });
+
+  it('does not override the window size key for bookmarks list mode', async () => {
+    vi.mocked(window.localStorage.getItem).mockImplementation((key: string) => (
+      key === 'bookmarks-view-mode' ? 'list' : null
+    ));
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'bookmarks' }}
+      />,
+    );
+
+    expect(await screen.findByText('Saved bookmark')).toBeTruthy();
+    expect(window.librarianAPI!.setSizeKey).not.toHaveBeenCalledWith('canvas');
+  });
+
+  it('releases Browser Library editor focus when the Library surface becomes inactive', async () => {
+    const { rerender } = render(
+      <LibrarianView active sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
+    });
+    vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
+
+    rerender(
+      <LibrarianView active={false} sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it('opens the real Ember pane from an initial Browser Library target', async () => {
+    const emberPage: WikiPage = {
+      relPath: 'Ember/Ada Lovelace',
+      absPath: `${testLibraryRootPath}/Ember/Ada Lovelace.md`,
+      name: 'Ada Lovelace',
+      title: 'Ada Lovelace',
+      content: [
+        '---',
+        'ember_frequency: weekly',
+        'ember_last_contacted_at: 2026-05-20',
+        '---',
+        '',
+        '# Ada Lovelace',
+      ].join('\n'),
+      documentVersion: { mtimeMs: 1, size: 100, sha256: 'ember-ada' },
+    };
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      name: 'Wiki',
+      tree: [{
+        kind: 'dir',
+        name: 'Ember',
+        relPath: 'Ember',
+        children: [{
+          kind: 'file',
+          relPath: emberPage.relPath,
+          absPath: emberPage.absPath,
+          name: emberPage.name,
+          title: emberPage.title,
+          lastUpdated: 1,
+        }],
+      }],
+      builtin: true,
+      writable: true,
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (relPath) => (
+      relPath === emberPage.relPath ? emberPage : null
+    ));
+
+    render(
+      <LibrarianView
+        browserLibrarySurface
+        initialOpenTarget={{ kind: 'ember' }}
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByPlaceholderText('Person name')).toBeTruthy();
+    expect(await screen.findByText('Ada Lovelace')).toBeTruthy();
+    expect(window.libraryAPI?.getRoots).toHaveBeenCalled();
+    expect(window.wikiAPI?.getPage).toHaveBeenCalledWith(emberPage.relPath);
   });
 
   it('keeps the library shell visible when artifact readings are empty', async () => {
@@ -948,6 +1369,189 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('Pinned Note')).toBeTruthy();
     expect(screen.getAllByText('Pinned Note')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /pin recent/i })).toBeNull();
+  });
+
+  it('shows Bookmarks when native bookmark data exists even if roots do not include bookmark folders', async () => {
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'entries',
+        relPath: 'entries',
+        children: [],
+      }],
+    }]);
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => expect(window.libraryAPI!.getRoots).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Bookmarks')).toBeTruthy();
+  });
+
+  it('opens the real Bookmarks pane from the Library sidebar when native bookmarks exist', async () => {
+    vi.mocked(window.localStorage.getItem).mockImplementation((key: string) => {
+      if (key === 'bookmarks-view-mode') return 'list';
+      if (key === 'bookmarks-show-text') return '1';
+      return null;
+    });
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [],
+    }]);
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark from native data', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(<LibrarianView browserLibrarySurface sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText('Bookmarks'));
+
+    expect(await screen.findByText('Saved bookmark from native data')).toBeTruthy();
+    expect(window.bookmarksAPI!.syncIfStale).toHaveBeenCalled();
+  });
+
+  it('applies native Bookmarks sidebar visibility changes after native library events', async () => {
+    let hiddenFolders: string[] = [];
+    let rootsChanged: (() => void) | null = null;
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [],
+    }]);
+    window.libraryAPI!.getHiddenFolders = vi.fn(async () => hiddenFolders);
+    window.libraryAPI!.onRootsChanged = vi.fn((callback: () => void) => {
+      rootsChanged = callback;
+      return () => {
+        rootsChanged = null;
+      };
+    });
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(<LibrarianView browserLibrarySurface sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('Bookmarks')).toBeTruthy();
+
+    hiddenFolders = ['bookmarks-shortcut'];
+    act(() => {
+      rootsChanged?.();
+    });
+
+    await waitFor(() => {
+      expect(window.libraryAPI!.getHiddenFolders).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('Bookmarks')).toBeNull();
+    });
+  });
+
+  it('shows Bookmarks after the native bookmark snapshot appears later', async () => {
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'entries',
+        relPath: 'entries',
+        children: [],
+      }],
+    }]);
+    let includeBookmarks = false;
+    let bookmarksChanged: (() => void) | null = null;
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: includeBookmarks ? [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }] : [],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn((callback: () => void) => {
+          bookmarksChanged = callback;
+          return () => {};
+        }),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => expect(window.bookmarksAPI!.getAll).toHaveBeenCalled());
+    expect(screen.queryByText('Bookmarks')).toBeNull();
+
+    includeBookmarks = true;
+    act(() => {
+      bookmarksChanged?.();
+    });
+
+    expect(await screen.findByText('Bookmarks')).toBeTruthy();
+  });
+
+  it('keeps Bookmarks hidden when native bookmark data exists but the user hid the shortcut', async () => {
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'entries',
+        relPath: 'entries',
+        children: [],
+      }],
+    }]);
+    window.libraryAPI!.getHiddenFolders = vi.fn(async () => ['bookmarks-shortcut']);
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => expect(window.bookmarksAPI!.getAll).toHaveBeenCalled());
+    expect(screen.queryByText('Bookmarks')).toBeNull();
   });
 
   it('animates recent rows when a selection changes their order', async () => {
@@ -1330,6 +1934,11 @@ describe('LibrarianView render', () => {
     };
 
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'fieldtheory.codexTerminal.visible') return 'true';
+      if (key === 'fieldtheory.codexTerminal.dockSide') return 'right';
+      return null;
+    });
 
     const { container } = render(
       <LibrarianView
@@ -1346,6 +1955,76 @@ describe('LibrarianView render', () => {
     expect(screen.getByRole('button', { name: 'Enter immersive view' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open Terminal' })).toBeNull();
     expect(container.querySelector('[data-ft-codex-terminal-panel="true"]')).toBeNull();
+    const readerPane = container.querySelector('[data-fieldtheory-reader-pane="true"]') as HTMLElement | null;
+    expect(readerPane?.style.flexDirection).toBe('column');
+    expect(readerPane?.style.overflow).toBe('hidden');
+  });
+
+  it('pastes selected rendered text to the Codex host input in Browser mode', async () => {
+    const relPath = 'scratchpad/browser-library-codex-selection-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'browser-library-codex-selection-test',
+      title: 'browser-library-codex-selection-test',
+      lastUpdated: 1,
+      content: 'Selected body for Codex',
+      documentVersion: { mtimeMs: 1, size: 23, sha256: 'browser-codex-selection' },
+    };
+    const onActionFeedback = vi.fn();
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.shellAPI!.pasteIntoCodexInput!).mockResolvedValue({ success: true });
+
+    render(
+      <LibrarianView
+        browserLibrarySurface
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        onActionFeedback={onActionFeedback}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    const selectedText = await screen.findByText('Selected body for Codex');
+    const selectedTextNode = selectedText.firstChild;
+    expect(selectedTextNode).toBeTruthy();
+
+    const range = document.createRange();
+    range.selectNodeContents(selectedTextNode!);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      configurable: true,
+      value: vi.fn(() => ({
+        top: 100,
+        left: 280,
+        right: 520,
+        bottom: 124,
+        width: 240,
+        height: 24,
+        x: 280,
+        y: 100,
+        toJSON: () => ({}),
+      })),
+    });
+
+    const selection = window.getSelection();
+    expect(selection).toBeTruthy();
+    await act(async () => {
+      selection!.removeAllRanges();
+      selection!.addRange(range);
+      fireEvent(document, new Event('selectionchange'));
+      fireEvent.mouseUp(window);
+    });
+
+    const pasteButton = await screen.findByRole('button', { name: 'Paste selection to Codex input' });
+    await act(async () => {
+      fireEvent.click(pasteButton);
+    });
+
+    await waitFor(() => {
+      expect(window.shellAPI!.pasteIntoCodexInput).toHaveBeenCalledWith('Selected body for Codex');
+    });
+    expect(onActionFeedback).toHaveBeenCalledWith('Selection sent to Codex');
   });
 
   it('centers copy feedback in the Library root instead of the editor pane', async () => {
@@ -2028,6 +2707,88 @@ describe('LibrarianView render', () => {
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
       expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
+  });
+
+  it('honors markdown mode for initial external Library targets', async () => {
+    const externalPath = '/Users/afar/.fieldtheory/library/reports/notes.md';
+    const content = 'First paragraph.\n\nSecond paragraph.';
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn(async () => ({
+          path: externalPath,
+          name: 'notes.md',
+          content,
+          mtime: 1,
+          documentVersion: { mtimeMs: 1, size: content.length, sha256: 'external-target' },
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+
+    const selectionStart = content.indexOf('Second');
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{
+          kind: 'external',
+          path: externalPath,
+          contentMode: 'markdown',
+          selectionStart,
+          selectionEnd: selectionStart + 'Second'.length,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('.cm-editor')?.textContent).toContain('Second paragraph.');
+      expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
+    });
+    expect(window.externalAPI!.open).toHaveBeenCalledWith(externalPath);
+  });
+
+  it('honors markdown mode for initial artifact targets', async () => {
+    const artifactPath = '/tmp/library/brief.md';
+    const content = 'Artifact intro.\n\nArtifact next.';
+    const reading = {
+      path: artifactPath,
+      title: 'brief.md',
+      content,
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 1,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'artifact-target' },
+    };
+    window.librarianAPI!.getReadings = vi.fn(async () => [reading]);
+    window.librarianAPI!.getReading = vi.fn(async () => reading);
+
+    const selectionStart = content.indexOf('next');
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{
+          kind: 'artifact',
+          path: artifactPath,
+          contentMode: 'markdown',
+          selectionStart,
+          selectionEnd: selectionStart + 'next'.length,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('.cm-editor')?.textContent).toContain('Artifact next.');
+      expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
+    });
+    expect(window.librarianAPI!.getReading).toHaveBeenCalledWith(artifactPath);
   });
 
   it('renders task list markers as native checkbox controls in rendered editing', async () => {
@@ -3403,6 +4164,68 @@ describe('LibrarianView render', () => {
     const bottomScrollSpace = container.querySelector('[data-ft-rendered-bottom-scroll-space="library"]');
     if (!bottomScrollSpace) throw new Error('Rendered bottom scroll space missing');
     expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it('refreshes command link discovery when the Browser helper event stream reconnects', async () => {
+    const relPath = 'scratchpad/rendered-command-link-source';
+    const content = 'See [[Review]].';
+    const activePage: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-command-link-source',
+      title: 'Rendered Command Link Source',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-command-link-source-version' },
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'Review',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
+      lastModified: 2,
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    const getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: activePage.absPath,
+        name: activePage.name,
+        title: activePage.title,
+        lastUpdated: activePage.lastUpdated,
+      }],
+    }] as any);
+    vi.mocked(window.wikiAPI!.getTree).mockImplementation(getTree);
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (pageRelPath) => (
+      pageRelPath === relPath ? activePage : null
+    ));
+    const getCommands = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([reviewCommand]);
+    vi.mocked(window.commandsAPI!.getCommands).mockImplementation(getCommands);
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(renderedRoot?.textContent).toContain('See');
+    });
+    expect(getCommands).toHaveBeenCalledTimes(1);
+    getTree.mockClear();
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(getCommands).toHaveBeenCalledTimes(2);
+      expect(getTree).toHaveBeenCalled();
+    });
   });
 
   it('keeps leading spaces in the rendered editor', async () => {

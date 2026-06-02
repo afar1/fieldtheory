@@ -26,6 +26,19 @@ vi.mock('../../contexts/ThemeContext', () => ({
 
 describe('ContentToolbar', () => {
   beforeEach(() => {
+    const storage = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn((key: string) => storage.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage.set(key, value);
+        }),
+        removeItem: vi.fn((key: string) => {
+          storage.delete(key);
+        }),
+      },
+    });
     themeMock.value = {
       accent: '#0f766e',
       border: '#d1d5db',
@@ -130,6 +143,36 @@ describe('ContentToolbar', () => {
     fireEvent.mouseDown(fieldTheoryButton);
     fireEvent.click(fieldTheoryButton);
     expect(screen.queryByText('Local commands')).toBeNull();
+  });
+
+  it('updates pinned toolbar actions from native renderer-storage events while mounted', async () => {
+    window.localStorage.setItem('fieldtheory.contentToolbar.pinnedActions.v2', JSON.stringify(['copypath']));
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        showTextSize
+        textSize="normal"
+        onTextSizeChange={vi.fn()}
+        onCopyPath={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Copy file path (⌘C)')).toBeTruthy();
+    expect(screen.queryByLabelText('Text style')).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: {
+          key: 'fieldtheory.contentToolbar.pinnedActions.v2',
+          oldValue: JSON.stringify(['copypath']),
+          newValue: JSON.stringify(['textstyle']),
+        },
+      }));
+    });
+
+    expect(screen.getByLabelText('Text style')).toBeTruthy();
+    expect(screen.queryByLabelText('Copy file path (⌘C)')).toBeNull();
   });
 
   it('shows todo marker choices in the text style menu', () => {

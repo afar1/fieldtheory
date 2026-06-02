@@ -87,8 +87,17 @@ if (expected) {
 const files = buildConfig.files;
 if (!Array.isArray(files)) {
   failures.push('missing build.files package allowlist');
-} else if (!files.includes('!node_modules/electron{,/**/*}')) {
-  failures.push('build.files must exclude node_modules/electron so the raw Electron app is never bundled');
+} else {
+  if (!files.includes('dist/**/*')) {
+    failures.push('build.files must include dist/**/* so Browser Library and other renderer entries are packaged');
+  }
+  if (!files.includes('!node_modules/electron{,/**/*}')) {
+    failures.push('build.files must exclude node_modules/electron so the raw Electron app is never bundled');
+  }
+}
+
+if (!fs.existsSync(path.join(rootDir, 'browser-library.html'))) {
+  failures.push('missing browser-library.html renderer entrypoint');
 }
 
 const requiredFileAssociations = [

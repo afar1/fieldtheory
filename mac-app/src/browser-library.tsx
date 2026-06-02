@@ -1,11 +1,28 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { useTheme } from './contexts/ThemeContext';
-import MaxwellHistoryPopover from './components/MaxwellHistoryPopover';
+import {
+  LibraryFooterLocalCommandStatusControls,
+  LibraryFooterLogo,
+  LibraryFooterMaxwellHistoryButton,
+  LibraryFooterMaxwellHistoryPopover,
+  LibraryFooterSidebarToggle,
+  LibraryFooterStatusOverlay,
+  LibraryFooterThemeToggleButton,
+  LibraryFooterUpdaterStatus,
+  useLibraryFooterLocalCommandStatus,
+  useLibraryFooterUpdaterStatus,
+} from './components/LibraryFooterControls';
+import {
+  FOCUS_CHROME_ICON_OPACITY,
+  FOCUS_CHROME_ICON_TOP_PX,
+  LibraryFocusChromeIcon,
+  LibrarySurfaceTopTabs,
+  LibraryTopChromeActionFeedback,
+} from './components/LibrarySurfaceTopTabs';
 import './styles.css';
 import {
   isSidebarToggleShortcut,
-  LINE_NUMBERS_STORAGE_KEY,
   RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
   RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
   RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT,
@@ -16,6 +33,33 @@ import {
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_STORAGE_KEY,
 } from './utils/editorShortcuts';
+import {
+  buildHotkeyString,
+  hasNonShiftModifierHotkey,
+  normalizeHotkeyForComparison,
+} from './utils/hotkeys';
+import { commandPathToLauncherLibraryOpenTarget, type LauncherLibraryRootPath } from './commandLauncherUtils';
+import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../electron/shared/browserLibraryRendererStorage';
+import {
+  browserLibraryTargetFromSearchParams,
+  normalizeBrowserLibraryOpenTarget,
+  type FieldTheoryMarkdownTarget,
+} from '../electron/shared/fieldTheoryMarkdownTarget';
+import {
+  getAppBracketNavigationDirection,
+  popAppBackHistory,
+  popAppForwardHistory,
+  pushAppNavigationHistory,
+  type AppNavigationSurface,
+} from './utils/clipboardHistoryRestore';
+import {
+  FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+  FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+  FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
+  getFocusChromeSurfaceOpacity,
+  getGroupedFocusChromeProximityOpacity,
+  isClientPointOutsideBounds,
+} from './utils/focusChrome';
 
 type BrowserHelperConfig = {
   api: string;
@@ -25,6 +69,7 @@ type BrowserHelperConfig = {
 
 type RequestOptions = RequestInit & {
   json?: unknown;
+  allowErrorResult?: boolean;
 };
 
 declare global {
@@ -37,49 +82,19 @@ declare global {
       colno?: number;
       stack?: string;
     }>;
-    __fieldTheoryBrowserOpenMarkdownTarget?: (target: any) => void;
+    __fieldTheoryBrowserOpenMarkdownTarget?: (target: any) => boolean;
+    __fieldTheoryBrowserActiveSurface?: BrowserHelperClientSurfaceName;
+    __fieldTheoryBrowserReportActiveSurface?: (surface: BrowserHelperClientSurfaceName) => void;
+    fieldTheoryBookmarkMediaAPI?: {
+      mediaUrl: (filename: string) => string;
+    };
   }
 }
 
 const noopUnsubscribe = () => {};
 const LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY = 'librarian-sidebar-collapsed';
-const RENDERER_STORAGE_SYNC_KEYS = [
-  'library-sort-mode',
-  'wiki-expanded-folders',
-  'wiki-recent-collapsed',
-  'library-pinned-item-ids',
-  'library-sidebar-icon-color-indices',
-  'library-sidebar-icon-color-order',
-  'library-new-doc-location',
-  'fieldtheory.libraryRenameTrace',
-  'fieldtheory.contentToolbar.pinnedActions.v2',
-  'librarian-text-size',
-  'librarian-typography-preset',
-  'librarian-line-height',
-  'librarian-unordered-list-marker',
-  'librarian-todo-marker',
-  'librarian-maxwell-items',
-  'librarian-html-layout-by-path',
-  'librarian-last-selection',
-  'librarian-editor-session',
-  LINE_NUMBERS_STORAGE_KEY,
-  RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
-  TEXT_CURSOR_BLINK_STORAGE_KEY,
-  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
-  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
-  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
-  'librarian-sidebar-width',
-  LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY,
-  'bookmarks-view-mode',
-  'bookmarks-show-text',
-  'commands-text-size',
-  'commands-sidebar-width',
-  'fieldtheory-rendered-editor-debug',
-  'darkMode',
-  'glassEffect',
-  'accentPreset',
-  'darkModeIntensity',
-] as const;
+const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
+const RENDERER_STORAGE_SYNC_KEYS = BROWSER_LIBRARY_RENDERER_STORAGE_KEYS;
 const RENDERER_STORAGE_SYNC_KEY_SET = new Set<string>(RENDERER_STORAGE_SYNC_KEYS);
 const RENDERER_STORAGE_CHANGED_EVENT_BY_KEY = new Map<string, string>([
   [RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT],
@@ -98,36 +113,42 @@ type RendererStorageResponse = {
   available: boolean;
   values: Record<string, string | null>;
 };
+type BrowserCreatedCommand = { path: string; name: string };
 
-type FooterLocalCommandStatus = {
-  status: 'running' | 'success' | 'error' | 'notice';
-  message: string;
-  detail?: string;
-  commandName?: string;
-  filePath?: string;
-  mode?: 'document' | 'selection';
-  runId?: string;
-  phase?: string;
-  error?: string;
-  updatedAt?: number;
-};
+export const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
 
-const LOCAL_COMMAND_ACTIVITY_FRAMES = ['|', '/', '-', '\\'] as const;
+type BrowserLibrarySurfaceName = 'library' | 'commands';
+type BrowserHelperClientSurfaceName = BrowserLibrarySurfaceName | 'bookmarks' | 'ember';
+const BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES = [
+  'wiki:changed',
+  'library:changed',
+  'recent:changed',
+  'bookmarks:changed',
+];
 
-function compactFooterStatusDetail(value: string | undefined, maxLength = 96): string | undefined {
-  const compacted = value?.replace(/\s+/g, ' ').trim();
-  if (!compacted) return undefined;
-  return compacted.length > maxLength
-    ? `${compacted.slice(0, maxLength - 3)}...`
-    : compacted;
+export function getBrowserLibraryInitialOpenTarget(location: Pick<Location, 'search'>): any | null {
+  return browserLibraryTargetFromSearchParams(new URLSearchParams(location.search));
 }
 
-function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus, activityFrame?: string): string {
-  const detail = compactFooterStatusDetail(status.detail);
-  const message = status.status === 'running' && activityFrame
-    ? `[${activityFrame}] ${status.message}`
-    : status.message;
-  return detail ? `${message} - ${detail}` : message;
+function browserLibrarySurfaceToAppNavigationSurface(surface: BrowserLibrarySurfaceName): AppNavigationSurface {
+  return surface === 'commands' ? 'commands' : 'librarian';
+}
+
+function appNavigationSurfaceToBrowserLibrarySurface(surface: AppNavigationSurface): BrowserLibrarySurfaceName | null {
+  if (surface === 'commands') return 'commands';
+  if (surface === 'librarian') return 'library';
+  return null;
+}
+
+function initialBrowserClientSurfaceFromTarget(target: FieldTheoryMarkdownTarget | null): BrowserHelperClientSurfaceName {
+  if (target?.kind === 'commands') return 'commands';
+  if (target?.kind === 'bookmarks') return 'bookmarks';
+  if (target?.kind === 'ember') return 'ember';
+  return 'library';
+}
+
+export function isBrowserLibraryIncludedOpenTarget(target: unknown): boolean {
+  return Boolean(normalizeBrowserLibraryOpenTarget(target));
 }
 
 class BrowserLibraryErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {
@@ -170,7 +191,7 @@ function readBrowserClientId(): string {
   return clientId;
 }
 
-function createBrowserHelperClient(config: BrowserHelperConfig) {
+export function createBrowserHelperClient(config: BrowserHelperConfig) {
   return async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const response = await fetch(`${config.api}${path}`, {
       ...options,
@@ -183,10 +204,21 @@ function createBrowserHelperClient(config: BrowserHelperConfig) {
       },
     });
     const body = await response.json().catch(() => ({}));
+    if (options.allowErrorResult && body && typeof body === 'object' && 'result' in body) {
+      return body as T;
+    }
     if (!response.ok || body.ok === false) {
       throw new Error(body.error ?? body.result?.reason ?? `Request failed: ${response.status}`);
     }
     return body as T;
+  };
+}
+
+function installBookmarkMediaResolver(config: BrowserHelperConfig): void {
+  window.fieldTheoryBookmarkMediaAPI = {
+    mediaUrl: (filename: string) => (
+      `${config.api}/native/bookmarks/media/${encodeURIComponent(filename)}?token=${encodeURIComponent(config.token)}`
+    ),
   };
 }
 
@@ -197,6 +229,12 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
   const ensureEventSource = () => {
     if (eventSource) return;
     eventSource = new EventSource(`${config.api}/native/events?token=${encodeURIComponent(config.token)}&clientId=${encodeURIComponent(config.clientId)}`);
+    eventSource.onopen = () => {
+      window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
+      for (const type of BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES) {
+        listeners.get(type)?.forEach((listener) => listener({ reconnect: true }));
+      }
+    };
     for (const type of [
       'wiki:changed',
       'wiki:deleted',
@@ -210,6 +248,8 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       'librarian:readingUpdated',
       'librarian:readingRemoved',
       'librarian:readingRenamed',
+      'librarian:newReadingAvailable',
+      'librarian:showNewReading',
       'librarian:showReading',
       'librarian:setFullscreen',
       'librarian:insertMarkdownText',
@@ -221,14 +261,27 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       'sharedFiles:presenceChanged',
       'sharedFiles:pinsChanged',
       'commands:changed',
+      'commands:directoryChanged',
       'commands:localCommandStatus',
       'commands:openMarkdownFromLauncher',
       'commands:toggleLineNumbersFromLauncher',
       'meetings:status',
       'auth:sessionChanged',
+      'quota:tierChanged',
+      'quota:changed',
       'team:changed',
       'bookmarks:changed',
+      'updater:checkingForUpdate',
+      'updater:updateAvailable',
+      'updater:updateNotAvailable',
+      'updater:downloadProgress',
+      'updater:updateDownloaded',
+      'updater:installing',
+      'updater:error',
+      'agent:kickoffProgress',
       'agent:kickoffStatus',
+      'theme:changed',
+      'renderer-storage:changed',
     ]) {
       eventSource.addEventListener(type, (event) => {
         const detail = parseBrowserEventDetail(event);
@@ -263,6 +316,25 @@ function parseBrowserEventDetail(event: Event): any {
   } catch {
     return {};
   }
+}
+
+export function applyRendererStorageChangeFromNative(
+  detail: { key?: unknown; value?: unknown },
+  options: RendererStorageApplyOptions,
+): void {
+  const key = typeof detail.key === 'string' ? detail.key : '';
+  if (!RENDERER_STORAGE_SYNC_KEY_SET.has(key)) return;
+  const value = typeof detail.value === 'string' ? detail.value : null;
+  const currentValue = window.localStorage.getItem(key);
+  if (currentValue === value) return;
+  if (value === null) {
+    const removeItem = options.removeItem ?? window.localStorage.removeItem.bind(window.localStorage);
+    removeItem(key);
+  } else {
+    const setItem = options.setItem ?? window.localStorage.setItem.bind(window.localStorage);
+    setItem(key, value);
+  }
+  dispatchRendererStorageChange(key, currentValue, value);
 }
 
 function dispatchRendererStorageChange(key: string, oldValue: string | null, newValue: string | null): void {
@@ -330,36 +402,156 @@ function installRendererStorageWriteThrough(request: ReturnType<typeof createBro
   return { setItem: originalSetItem, removeItem: originalRemoveItem };
 }
 
-function startRendererStorageRefresh(
+export function startRendererStorageForegroundRefresh(
   request: ReturnType<typeof createBrowserHelperClient>,
   storageApplyOptions: RendererStorageApplyOptions,
-): void {
+): () => void {
   let inFlight = false;
   const refresh = () => {
+    if (document.visibilityState === 'hidden') return;
     if (inFlight) return;
     inFlight = true;
     void syncRendererStorage(request, storageApplyOptions).finally(() => {
       inFlight = false;
     });
   };
-  const interval = window.setInterval(refresh, 3000);
-  window.addEventListener('focus', refresh);
-  window.addEventListener('beforeunload', () => {
-    window.clearInterval(interval);
+  const refreshWhenVisible = () => {
+    if (document.visibilityState !== 'hidden') refresh();
+  };
+  const cleanup = () => {
     window.removeEventListener('focus', refresh);
-  }, { once: true });
+    document.removeEventListener('visibilitychange', refreshWhenVisible);
+    window.removeEventListener('beforeunload', cleanup);
+  };
+  window.addEventListener('focus', refresh);
+  document.addEventListener('visibilitychange', refreshWhenVisible);
+  window.addEventListener('beforeunload', cleanup, { once: true });
+  return cleanup;
+}
+
+function startRendererStorageEventSync(
+  events: ReturnType<typeof createBrowserEventHub>,
+  storageApplyOptions: RendererStorageApplyOptions,
+): () => void {
+  return events.on('renderer-storage:changed', (detail) => {
+    applyRendererStorageChangeFromNative(detail, storageApplyOptions);
+  });
+}
+
+export async function setBrowserActiveLibraryFileContext(
+  request: ReturnType<typeof createBrowserHelperClient>,
+  context: unknown,
+): Promise<boolean> {
+  const result = await request<{ ok: boolean }>(
+    '/native/current',
+    context ? { method: 'POST', json: context } : { method: 'DELETE' },
+  ).catch(() => ({ ok: false }));
+  return result.ok === true;
+}
+
+export function normalizeBrowserCreatedCommand(command: unknown): BrowserCreatedCommand | null {
+  if (!command || typeof command !== 'object') return null;
+  const record = command as Record<string, unknown>;
+  const commandPath = typeof record.path === 'string'
+    ? record.path
+    : typeof record.filePath === 'string'
+      ? record.filePath
+      : '';
+  const commandName = typeof record.name === 'string'
+    ? record.name
+    : typeof record.displayName === 'string'
+      ? record.displayName
+      : '';
+  if (!commandPath || !commandName) return null;
+  return { path: commandPath, name: commandName };
+}
+
+export async function browserCreateCommand(
+  request: ReturnType<typeof createBrowserHelperClient>,
+  directoryPath: string,
+  name: string,
+  content?: string,
+): Promise<BrowserCreatedCommand | null> {
+  const response = await request<{ command: unknown }>('/native/commands/by-path', {
+    method: 'POST',
+    json: { directoryPath, name, content },
+  });
+  return normalizeBrowserCreatedCommand(response.command);
+}
+
+export async function browserArchiveActiveLibraryFile(
+  request: ReturnType<typeof createBrowserHelperClient>,
+): Promise<{ success: boolean; error?: string }> {
+  const response = await request<{ result: { success: boolean; error?: string } }>('/native/commands/archive-active-library-file', {
+    method: 'POST',
+  });
+  return response.result;
+}
+
+export async function browserToggleActiveLibraryLineNumbers(
+  request: ReturnType<typeof createBrowserHelperClient>,
+): Promise<{ success: boolean; error?: string }> {
+  const response = await request<{ result: { success: boolean; error?: string } }>('/native/commands/toggle-active-line-numbers', {
+    method: 'POST',
+  });
+  return response.result;
+}
+
+export async function browserShellOpenExternal(
+  request: ReturnType<typeof createBrowserHelperClient>,
+  href: string,
+): Promise<void> {
+  await request('/native/shell/open-external', {
+    method: 'POST',
+    json: { href },
+  }).catch(() => {
+    if (/^https?:\/\//i.test(href)) window.open(href, '_blank', 'noopener,noreferrer');
+  });
+}
+
+export async function browserShellShowItemInFolder(
+  request: ReturnType<typeof createBrowserHelperClient>,
+  filePath: string,
+): Promise<void> {
+  await request('/native/shell/show-item-in-folder', {
+    method: 'POST',
+    json: { filePath },
+  }).catch(() => {});
+}
+
+export async function browserShellSetRepresentedFilename(
+  request: ReturnType<typeof createBrowserHelperClient>,
+  filePath: string,
+  clientId: string,
+): Promise<void> {
+  await request('/native/shell/represented-filename', {
+    method: 'POST',
+    json: { filePath, clientId },
+  });
 }
 
 function startBrowserSurfaceActivityReporting(request: ReturnType<typeof createBrowserHelperClient>): void {
   let lastReportedAt = 0;
+  const clearActiveBrowserOwnership = () => {
+    void request('/native/client-active', { method: 'DELETE' }).catch(() => {});
+    void request('/native/current', { method: 'DELETE' }).catch(() => {});
+    void request('/native/librarian/editor-focused', {
+      method: 'POST',
+      json: { focused: false },
+    }).catch(() => {});
+  };
   const reportActive = () => {
     const now = Date.now();
     if (now - lastReportedAt < 500) return;
     lastReportedAt = now;
-    void request('/native/client-active', { method: 'POST' }).catch(() => {});
+    const surface = window.__fieldTheoryBrowserActiveSurface ?? 'library';
+    void request('/native/client-active', { method: 'POST', json: { surface } }).catch(() => {});
   };
   const reportVisibleActive = () => {
-    if (document.visibilityState === 'hidden') return;
+    if (document.visibilityState === 'hidden') {
+      clearActiveBrowserOwnership();
+      return;
+    }
     reportActive();
   };
   reportVisibleActive();
@@ -368,6 +560,7 @@ function startBrowserSurfaceActivityReporting(request: ReturnType<typeof createB
   window.addEventListener('keydown', reportVisibleActive, true);
   document.addEventListener('visibilitychange', reportVisibleActive);
   window.addEventListener('beforeunload', () => {
+    clearActiveBrowserOwnership();
     window.removeEventListener('focus', reportVisibleActive);
     window.removeEventListener('pointerdown', reportVisibleActive, true);
     window.removeEventListener('keydown', reportVisibleActive, true);
@@ -375,13 +568,39 @@ function startBrowserSurfaceActivityReporting(request: ReturnType<typeof createB
   }, { once: true });
 }
 
-async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<void> {
+export async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<void> {
   const request = createBrowserHelperClient(config);
   const events = createBrowserEventHub(config);
-  await syncRendererStorage(request, { fillMissingOnly: true });
+  installBookmarkMediaResolver(config);
+  window.__fieldTheoryBrowserActiveSurface = 'library';
+  window.__fieldTheoryBrowserReportActiveSurface = (surface) => {
+    window.__fieldTheoryBrowserActiveSurface = surface;
+    void request('/native/client-active', { method: 'POST', json: { surface } }).catch(() => {});
+  };
+  await syncRendererStorage(request);
   const storageApplyOptions = installRendererStorageWriteThrough(request);
-  startRendererStorageRefresh(request, storageApplyOptions);
+  startRendererStorageEventSync(events, storageApplyOptions);
+  startRendererStorageForegroundRefresh(request, storageApplyOptions);
   startBrowserSurfaceActivityReporting(request);
+
+  window.themeAPI = {
+    initialTheme: false,
+    getTheme: async () => (
+      await request<{ isDark: boolean }>('/native/theme')
+    ).isDark,
+    setTheme: async (isDark: boolean) => {
+      await request('/native/theme', { method: 'POST', json: { isDark } });
+    },
+    onThemeChanged: (callback: (isDark: boolean) => void) => (
+      events.on('theme:changed', (detail) => callback(detail.isDark === true))
+    ),
+  } as any;
+
+  window.hotkeyAPI = {
+    getHotkey: async (id: string) => (
+      await request<{ hotkey: string | null }>(`/native/hotkey?id=${encodeURIComponent(id)}`)
+    ).hotkey,
+  } as any;
 
   window.libraryAPI = {
     getRoots: async () => (await request<{ roots: unknown[] }>('/native/library/roots')).roots,
@@ -456,6 +675,7 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       await request<{ result: unknown }>('/native/wiki/page', {
         method: 'PUT',
         json: { relPath, content, expectedVersion },
+        allowErrorResult: true,
       })
     ).result,
     createFile: async (folderRelPath: string, fileName: string) => (
@@ -509,6 +729,7 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       await request<{ result: unknown }>('/native/external/save', {
         method: 'PUT',
         json: { path: filePath, content, expectedVersion },
+        allowErrorResult: true,
       })
     ).result,
     findLibraryFileByDocumentVersion: async (version: unknown, previousAbsPath?: string) => (
@@ -533,7 +754,97 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
   } as any;
 
   window.librarianAPI = {
-    isSetupComplete: async () => true,
+    isEnabled: async () => (
+      await request<{ enabled: boolean }>('/native/librarian/enabled')
+    ).enabled,
+    setEnabled: async (enabled: boolean) => (
+      await request<{ enabled: boolean }>('/native/librarian/enabled', {
+        method: 'POST',
+        json: { enabled },
+      })
+    ).enabled,
+    isSetupComplete: async () => (
+      await request<{ complete: boolean }>('/native/librarian/setup-complete')
+    ).complete,
+    setSetupComplete: async (complete: boolean) => {
+      await request('/native/librarian/setup-complete', {
+        method: 'POST',
+        json: { complete },
+      });
+    },
+    createWelcomeArtifact: async (dirPath: string) => (
+      await request<{ created: boolean }>('/native/librarian/welcome-artifact', {
+        method: 'POST',
+        json: { dirPath },
+      })
+    ).created,
+    getWatchedDirs: async () => (
+      await request<{ dirs: unknown[] }>('/native/librarian/watched-dirs')
+    ).dirs,
+    addWatchedDir: async (dirPath: string) => (
+      await request<{ dir: unknown }>('/native/librarian/watched-dirs', {
+        method: 'POST',
+        json: { dirPath },
+      })
+    ).dir,
+    removeWatchedDir: async (dirPath: string) => (
+      await request<{ success: boolean }>('/native/librarian/watched-dirs', {
+        method: 'DELETE',
+        json: { dirPath },
+      })
+    ).success,
+    browseDirectory: async () => (
+      await request<{ dirPath: string | null }>('/native/librarian/browse-directory')
+    ).dirPath,
+    getDiscoveryFrequency: async () => (
+      await request<{ frequency: string }>('/native/librarian/discovery-frequency')
+    ).frequency,
+    setDiscoveryFrequency: async (frequency: string) => (
+      await request<{ success: boolean }>('/native/librarian/discovery-frequency', {
+        method: 'POST',
+        json: { frequency },
+      })
+    ).success,
+    getUserExpertiseContext: async () => {
+      const response = await request<{ context: string | null }>('/native/librarian/user-expertise-context');
+      return response.context ?? undefined;
+    },
+    setUserExpertiseContext: async (context: string | undefined) => (
+      await request<{ success: boolean }>('/native/librarian/user-expertise-context', {
+        method: 'POST',
+        json: { context },
+      })
+    ).success,
+    getClaudeCodeStatus: async () => (
+      await request<{ status: string }>('/native/librarian/claude-code-status')
+    ).status,
+    isStateEnforcedHookInstalled: async () => (
+      await request<{ installed: boolean }>('/native/librarian/state-enforced-hook')
+    ).installed,
+    installStateEnforcedHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/state-enforced-hook', { method: 'POST' })
+    ).success,
+    uninstallStateEnforcedHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/state-enforced-hook', { method: 'DELETE' })
+    ).success,
+    isCursorHookInstalled: async () => (
+      await request<{ installed: boolean }>('/native/librarian/cursor-hook')
+    ).installed,
+    installCursorHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/cursor-hook', { method: 'POST' })
+    ).success,
+    uninstallCursorHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/cursor-hook', { method: 'DELETE' })
+    ).success,
+    isCodexHookInstalled: async () => (
+      await request<{ installed: boolean }>('/native/librarian/codex-hook')
+    ).installed,
+    installCodexHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/codex-hook', { method: 'POST' })
+    ).success,
+    uninstallCodexHook: async () => (
+      await request<{ success: boolean }>('/native/librarian/codex-hook', { method: 'DELETE' })
+    ).success,
     getReadings: async () => (await request<{ readings: unknown[] }>('/native/librarian/readings')).readings,
     getReading: async (filePath: string) => (
       await request<{ reading: unknown }>(`/native/librarian/reading?path=${encodeURIComponent(filePath)}`)
@@ -542,6 +853,7 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       await request<{ result: unknown }>('/native/librarian/reading', {
         method: 'PUT',
         json: { filePath, content, expectedVersion },
+        allowErrorResult: true,
       })
     ).result,
     deleteReading: async (filePath: string) => (
@@ -571,6 +883,9 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
         json: { filePath, content, title },
       })
     ).success,
+    pollStatus: async () => (
+      await request<{ status: unknown }>('/native/librarian/status')
+    ).status,
     isMutedForToday: async () => (
       await request<{ muted: boolean }>('/native/librarian/muted-for-today')
     ).muted,
@@ -580,8 +895,18 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     unmute: async () => (
       await request<{ muted: boolean }>('/native/librarian/unmute', { method: 'POST' })
     ).muted === false,
-    setImmersiveDismissable: async () => {},
-    setSizeKey: async () => {},
+    setImmersiveDismissable: async (dismissable: boolean) => {
+      await request('/native/librarian/immersive-dismissable', {
+        method: 'POST',
+        json: { dismissable, clientId: config.clientId },
+      }).catch(() => {});
+    },
+    setSizeKey: async (key: 'fields' | 'library' | 'canvas' | 'draw') => {
+      await request('/native/librarian/size-key', {
+        method: 'POST',
+        json: { key, clientId: config.clientId },
+      }).catch(() => {});
+    },
     setMarkdownEditorFocused: async (focused: boolean) => {
       await request('/native/librarian/editor-focused', { method: 'POST', json: { focused, clientId: config.clientId } }).catch(() => {});
     },
@@ -589,6 +914,8 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     onReadingUpdated: (callback: (reading: unknown) => void) => events.on('librarian:readingUpdated', (detail) => callback(detail.reading)),
     onReadingRemoved: (callback: (filePath: string) => void) => events.on('librarian:readingRemoved', (detail) => callback(detail.filePath)),
     onReadingRenamed: (callback: (event: unknown) => void) => events.on('librarian:readingRenamed', (detail) => callback(detail.event)),
+    onNewReadingAvailable: (callback: (readingPath: string) => void) => events.on('librarian:newReadingAvailable', (detail) => callback(detail.readingPath)),
+    onShowNewReading: (callback: (readingPath: string) => void) => events.on('librarian:showNewReading', (detail) => callback(detail.readingPath)),
     onShowReading: (callback: (readingPath: string) => void) => events.on('librarian:showReading', (detail) => callback(detail.readingPath)),
     onSetFullscreen: (callback: (fullscreen: boolean) => void) => events.on('librarian:setFullscreen', (detail) => callback(detail.fullscreen === true)),
     onInsertMarkdownText: (callback: (text: string) => void) => events.on('librarian:insertMarkdownText', (detail) => callback(String(detail.text ?? ''))),
@@ -703,7 +1030,33 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     ).result,
   } as any;
 
+  window.clipboardAPI = {
+    getClipboardImagePath: async () => (
+      await request<{ path: string | null }>('/native/clipboard/image-path')
+    ).path,
+    savePastedImageFile: async (file: { name?: string | null; type?: string | null; data: Uint8Array }) => (
+      await request<{ path: string | null }>('/native/clipboard/pasted-image-file', {
+        method: 'POST',
+        json: {
+          name: file.name ?? null,
+          type: file.type ?? null,
+          data: Array.from(file.data),
+        },
+      })
+    ).path,
+    closeWindow: async () => {},
+  } as any;
+
   window.commandsAPI = {
+    getDirectory: async () => (
+      await request<{ directory: string | null }>('/native/commands/directory')
+    ).directory,
+    setDirectory: async (directoryPath: string | null) => (
+      await request<{ result: { success: boolean; error?: string } }>('/native/commands/directory', {
+        method: 'POST',
+        json: { directoryPath },
+      })
+    ).result,
     initialize: async () => {
       await request('/native/commands/initialize', { method: 'POST' });
     },
@@ -732,6 +1085,15 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       await request<{ dirPath: string | null }>('/native/commands/pick-directory', { method: 'POST' })
     ).dirPath,
     getCommands: async () => (await request<{ commands: unknown[] }>('/native/commands/list')).commands,
+    getCommandDirectories: async () => (
+      await request<{ directories: unknown[] }>('/native/commands/directories')
+    ).directories,
+    refreshCommands: async () => (
+      await request<{ commands: unknown[] }>('/native/commands/refresh', { method: 'POST' })
+    ).commands,
+    getCommandContent: async (commandName: string) => (
+      await request<{ content: unknown }>(`/native/commands/content?name=${encodeURIComponent(commandName)}`)
+    ).content,
     getCommandByPath: async (filePath: string) => (
       await request<{ command: unknown }>(`/native/commands/by-path?path=${encodeURIComponent(filePath)}`)
     ).command,
@@ -745,11 +1107,8 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       })
     ).result,
     createCommand: async (directoryPath: string, name: string, content?: string) => (
-      await request<{ command: unknown }>('/native/commands/by-path', {
-        method: 'POST',
-        json: { directoryPath, name, content },
-      })
-    ).command,
+      browserCreateCommand(request, directoryPath, name, content)
+    ),
     deleteCommand: async (filePath: string) => (
       await request<{ success: boolean }>('/native/commands/by-path', {
         method: 'DELETE',
@@ -765,9 +1124,12 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     getActiveMeeting: async () => (
       await request<{ session: unknown }>('/native/meetings/active')
     ).session,
-    setActiveLibraryFileContext: async (context: any) => {
-      await request('/native/current', context ? { method: 'POST', json: context } : { method: 'DELETE' }).catch(() => {});
-    },
+    getActiveLibraryFileContext: async () => (
+      await request<{ context: unknown }>('/native/current')
+    ).context,
+    setActiveLibraryFileContext: async (context: any) => setBrowserActiveLibraryFileContext(request, context),
+    archiveActiveLibraryFile: async () => browserArchiveActiveLibraryFile(request),
+    toggleActiveLibraryLineNumbers: async () => browserToggleActiveLibraryLineNumbers(request),
     runLocalCommand: async (runRequest: unknown) => (
       await request<{ result: unknown }>('/native/commands/run-local', {
         method: 'POST',
@@ -823,37 +1185,71 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
       await request<{ result: unknown }>('/native/meetings/stop', { method: 'POST' })
     ).result,
     onCommandsChanged: (callback: (commands: unknown[]) => void) => events.on('commands:changed', (detail) => callback(Array.isArray(detail.commands) ? detail.commands : [])),
+    onDirectoryChanged: (callback: (directoryPath: string | null) => void) => events.on('commands:directoryChanged', (detail) => (
+      callback(typeof detail.directoryPath === 'string' ? detail.directoryPath : null)
+    )),
     onLocalCommandStatus: (callback: (status: unknown) => void) => events.on('commands:localCommandStatus', (detail) => callback(detail.status)),
     onMeetingStatus: (callback: (session: unknown) => void) => events.on('meetings:status', (detail) => callback(detail.session)),
     onOpenMarkdownFromLauncher: (callback: (target: unknown) => void) => events.on('commands:openMarkdownFromLauncher', (detail) => callback(detail.target)),
     onToggleLineNumbersFromLauncher: (callback: () => void) => events.on('commands:toggleLineNumbersFromLauncher', callback),
     openFieldTheoryMarkdown: async (target: any) => {
-      window.__fieldTheoryBrowserOpenMarkdownTarget?.(target);
-      return { success: true };
+      const success = window.__fieldTheoryBrowserOpenMarkdownTarget?.(target) === true;
+      return success ? { success: true } : { success: false, error: 'Target is not available in Browser Library' };
     },
   } as any;
 
   window.shellAPI = {
-    openExternal: (href: string) => {
-      void request('/native/shell/open-external', {
+    openExternal: (href: string) => browserShellOpenExternal(request, href),
+    showItemInFolder: (filePath: string) => browserShellShowItemInFolder(request, filePath),
+    pasteIntoCodexInput: async (text: string) => (
+      await request<{ result: { success: boolean; error?: string; delivery?: string } }>('/native/shell/paste-into-codex-input', {
         method: 'POST',
-        json: { href },
-      }).catch(() => {
-        if (/^https?:\/\//i.test(href)) window.open(href, '_blank', 'noopener,noreferrer');
-      });
-    },
-    showItemInFolder: (filePath: string) => {
-      void request('/native/shell/show-item-in-folder', {
+        json: { text },
+      })
+    ).result,
+    openFieldTheoryMarkdown: async (target: unknown) => (
+      await request<{ result: { success: boolean; error?: string } }>('/native/shell/open-field-theory-markdown', {
         method: 'POST',
-        json: { filePath },
-      }).catch(() => {});
-    },
-    setRepresentedFilename: () => {},
+        json: { target },
+      })
+    ).result,
+    setRepresentedFilename: (filePath: string) => browserShellSetRepresentedFilename(request, filePath, config.clientId),
   } as any;
 
   window.authAPI = {
+    getSession: async () => (
+      await request<{ session: unknown | null }>('/native/auth/session')
+    ).session,
+    getCallsign: async () => (
+      await request<{ callsign: string | null }>('/native/auth/callsign')
+    ).callsign,
     onSessionChanged: (callback: (session: unknown | null) => void) => events.on('auth:sessionChanged', (detail) => callback(detail.session ?? null)),
   } as any;
+
+  Object.defineProperty(window, 'metricsAPI', {
+    configurable: true,
+    value: {
+      getMetrics: async () => (
+        await request<{ metrics: unknown | null }>('/native/metrics')
+      ).metrics,
+      fetchFromSupabase: async () => (
+        await request<{ success: boolean }>('/native/metrics/fetch-from-supabase', { method: 'POST' })
+      ).success,
+    },
+  });
+
+  Object.defineProperty(window, 'quotaAPI', {
+    configurable: true,
+    value: {
+      getQuotas: async () => (
+        await request<{ quotas: unknown | null }>('/native/quota/quotas')
+      ).quotas,
+      onTierChanged: (callback: (tier: 'free' | 'pro') => void) => events.on('quota:tierChanged', (detail) => {
+        if (detail.tier === 'free' || detail.tier === 'pro') callback(detail.tier);
+      }),
+      onQuotaChanged: (callback: (data: unknown) => void) => events.on('quota:changed', (detail) => callback(detail.data ?? detail)),
+    },
+  });
 
   window.teamAPI = {
     onTeamChanged: (callback: () => void) => events.on('team:changed', callback),
@@ -866,6 +1262,19 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
   } as any;
 
   window.agentKickoffAPI = {
+    kickoff: async (args: unknown) => (
+      await request<{ result: unknown }>('/native/agent-kickoff/start', {
+        method: 'POST',
+        json: args,
+      })
+    ).result,
+    cancel: async (runId: string) => (
+      await request<{ success: boolean }>('/native/agent-kickoff/cancel', {
+        method: 'POST',
+        json: { runId },
+      })
+    ).success,
+    onProgress: (callback: (event: unknown) => void) => events.on('agent:kickoffProgress', (detail) => callback(detail.event)),
     onStatus: (callback: (event: unknown) => void) => events.on('agent:kickoffStatus', (detail) => callback(detail.event)),
   } as any;
 
@@ -873,8 +1282,50 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
     getAll: async () => (
       await request<{ snapshot: unknown }>('/native/bookmarks/all')
     ).snapshot,
+    getDataSource: async () => (
+      await request<{ source: unknown }>('/native/bookmarks/source')
+    ).source,
     syncIfStale: async () => (
       await request<{ result: unknown }>('/native/bookmarks/sync-if-stale', { method: 'POST' })
+    ).result,
+    getAuthors: async () => (
+      await request<{ authors: unknown[] }>('/native/bookmarks/authors')
+    ).authors,
+    getAuthorBookmarks: async (handle: string) => (
+      await request<{ bookmarks: unknown[] }>(`/native/bookmarks/author?handle=${encodeURIComponent(handle)}`)
+    ).bookmarks,
+    getTaxonomyBookmarks: async (filePaths: string[]) => (
+      await request<{ bookmarks: unknown[] }>('/native/bookmarks/taxonomy', {
+        method: 'POST',
+        json: { filePaths },
+      })
+    ).bookmarks,
+    search: async (query: string) => (
+      await request<{ bookmarks: unknown[] }>(`/native/bookmarks/search?query=${encodeURIComponent(query)}`)
+    ).bookmarks,
+    saveWebUrl: async (url: string) => (
+      await request<{ result: unknown }>('/native/bookmarks/save-web-url', {
+        method: 'POST',
+        json: { url },
+      })
+    ).result,
+    getActiveWebPage: async () => (
+      await request<{ result: unknown }>('/native/bookmarks/active-web-page')
+    ).result,
+    saveActiveWebPage: async () => (
+      await request<{ result: unknown }>('/native/bookmarks/save-active-web-page', { method: 'POST' })
+    ).result,
+    invokeBookmark: async (id: string) => (
+      await request<{ result: unknown }>('/native/bookmarks/invoke', {
+        method: 'POST',
+        json: { id },
+      })
+    ).result,
+    sendToCodex: async (id: string) => (
+      await request<{ result: unknown }>('/native/bookmarks/send-to-codex', {
+        method: 'POST',
+        json: { id },
+      })
     ).result,
     copyForAgent: async (id: string) => (
       await request<{ result: unknown }>('/native/bookmarks/copy-for-agent', {
@@ -882,12 +1333,70 @@ async function installBrowserLibraryHost(config: BrowserHelperConfig): Promise<v
         json: { id },
       })
     ).result,
+    invokeAuthorTimeline: async (handle: string) => (
+      await request<{ result: unknown }>('/native/bookmarks/invoke-author-timeline', {
+        method: 'POST',
+        json: { handle },
+      })
+    ).result,
     onChanged: (callback: () => void) => events.on('bookmarks:changed', callback),
   } as any;
 
+  let browserAppVersion = '0.0.0';
+  let browserUpdaterEnabled = false;
+  try {
+    const [{ version }, { enabled }] = await Promise.all([
+      request<{ version: string }>('/native/app/version'),
+      request<{ enabled: boolean }>('/native/updater/enabled'),
+    ]);
+    browserAppVersion = version || browserAppVersion;
+    browserUpdaterEnabled = enabled;
+  } catch (error) {
+    window.__fieldTheoryBrowserLibraryErrors?.push({
+      type: 'updater-bootstrap',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  window.updaterAPI = {
+    getVersion: () => browserAppVersion,
+    isEnabled: () => browserUpdaterEnabled,
+    getStatus: async () => (
+      await request<{ status: any }>('/native/updater/status')
+    ).status,
+    checkForUpdates: async () => {
+      await request<{ result: unknown }>('/native/updater/check', { method: 'POST' });
+    },
+    downloadUpdate: async () => {
+      await request<{ result: unknown }>('/native/updater/download', { method: 'POST' });
+    },
+    installUpdate: async () => {
+      await request<{ result: unknown }>('/native/updater/install', { method: 'POST' });
+    },
+    dismissUpdate: async () => {
+      await request<{ result: unknown }>('/native/updater/dismiss', { method: 'POST' });
+    },
+    onCheckingForUpdate: (callback: () => void) => events.on('updater:checkingForUpdate', callback),
+    onUpdateAvailable: (callback: (info: any) => void) => events.on('updater:updateAvailable', (detail) => callback(detail.info)),
+    onUpdateNotAvailable: (callback: () => void) => events.on('updater:updateNotAvailable', callback),
+    onDownloadProgress: (callback: (percent: number) => void) => events.on('updater:downloadProgress', (detail) => callback(detail.percent)),
+    onUpdateDownloaded: (callback: (info: any) => void) => events.on('updater:updateDownloaded', (detail) => callback(detail.info)),
+    onInstalling: (callback: () => void) => events.on('updater:installing', callback),
+    onError: (callback: (message: string) => void) => events.on('updater:error', (detail) => callback(detail.error)),
+  };
+
   window.diagnosticsAPI = {
-    appendRenderedEditorDebug: async () => {},
-    clearRenderedEditorDebugLog: async () => {},
+    appendRenderedEditorDebug: async (entry: unknown) => (
+      await request<{ result: { ok: boolean; path: string; error?: string } }>('/native/diagnostics/rendered-editor-debug', {
+        method: 'POST',
+        json: { entry },
+      })
+    ).result,
+    clearRenderedEditorDebugLog: async () => (
+      await request<{ result: { ok: boolean; path: string; error?: string } }>('/native/diagnostics/rendered-editor-debug', {
+        method: 'DELETE',
+      })
+    ).result,
   } as any;
 }
 
@@ -895,13 +1404,14 @@ export function BrowserLibraryApp(props: {
   LibrarianView: React.ComponentType<any>;
   CommandsView: React.ComponentType<any>;
   ThemeProvider: React.ComponentType<{ children: React.ReactNode }>;
+  initialOpenTarget?: any | null;
 }) {
-  const { LibrarianView, CommandsView, ThemeProvider } = props;
+  const { LibrarianView, CommandsView, ThemeProvider, initialOpenTarget = null } = props;
 
   return (
     <BrowserLibraryErrorBoundary>
       <ThemeProvider>
-        <BrowserLibrarySurface LibrarianView={LibrarianView} CommandsView={CommandsView} />
+        <BrowserLibrarySurface LibrarianView={LibrarianView} CommandsView={CommandsView} initialOpenTarget={initialOpenTarget} />
       </ThemeProvider>
     </BrowserLibraryErrorBoundary>
   );
@@ -910,26 +1420,225 @@ export function BrowserLibraryApp(props: {
 function BrowserLibrarySurface(props: {
   LibrarianView: React.ComponentType<any>;
   CommandsView: React.ComponentType<any>;
+  initialOpenTarget?: any | null;
 }) {
-  const { LibrarianView, CommandsView } = props;
-  const { theme } = useTheme();
-  const [surface, setSurface] = React.useState<'library' | 'commands'>('library');
-  const [launcherOpenTarget, setLauncherOpenTarget] = React.useState<any>(null);
-  const [initialCommandPath, setInitialCommandPath] = React.useState<string | null>(null);
+  const { LibrarianView, CommandsView, initialOpenTarget = null } = props;
+  const { theme, toggleDarkMode } = useTheme();
+  const normalizedInitialOpenTarget = React.useMemo(() => (
+    isBrowserLibraryIncludedOpenTarget(initialOpenTarget)
+      ? normalizeBrowserLibraryOpenTarget(initialOpenTarget)
+      : null
+  ), [initialOpenTarget]);
+  const [surface, setSurface] = React.useState<BrowserLibrarySurfaceName>(() => (
+    normalizedInitialOpenTarget?.kind === 'commands'
+      ? 'commands'
+      : 'library'
+  ));
+  const [librarianEverRendered, setLibrarianEverRendered] = React.useState(() => (
+    normalizedInitialOpenTarget?.kind !== 'commands'
+  ));
+  const initialClientSurface = initialBrowserClientSurfaceFromTarget(normalizedInitialOpenTarget);
+  const [activeClientSurface, setActiveClientSurface] = React.useState<BrowserHelperClientSurfaceName>(initialClientSurface);
+  const activeClientSurfaceRef = React.useRef<BrowserHelperClientSurfaceName>(initialClientSurface);
+  const [hasNewReading, setHasNewReading] = React.useState(false);
+  const [pendingReadingPath, setPendingReadingPath] = React.useState<string | null>(null);
+  const [launcherOpenTarget, setLauncherOpenTarget] = React.useState<any>(() => (
+    normalizedInitialOpenTarget
+    && normalizedInitialOpenTarget.kind !== 'command'
+    && normalizedInitialOpenTarget.kind !== 'commands'
+    && normalizedInitialOpenTarget.kind !== 'library'
+      ? normalizedInitialOpenTarget
+      : null
+  ));
+  const [initialCommandPath, setInitialCommandPath] = React.useState<string | null>(() => (
+    null
+  ));
+  const initialCommandOpenPathRef = React.useRef<string | null>(
+    normalizedInitialOpenTarget?.kind === 'command' ? normalizedInitialOpenTarget.path : null,
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => (
-    window.localStorage.getItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
+    normalizedInitialOpenTarget?.focusChrome === true
+    || normalizedInitialOpenTarget?.sidebarCollapsed === true
+    || window.localStorage.getItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
   ));
   const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = React.useState(0);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = React.useState(false);
+  const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = React.useState<number | null>(null);
+  const [librarianImmersive, setLibrarianImmersive] = React.useState(() => (
+    normalizedInitialOpenTarget?.kind === 'bookmarks' && normalizedInitialOpenTarget.focusChrome === true
+    || window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+  ));
   const [focusChromeChildActive, setFocusChromeChildActive] = React.useState(false);
-  const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = React.useState(false);
+  const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = React.useState(
+    normalizedInitialOpenTarget?.focusChrome === true
+  );
   const [focusChromeGroupOpacity, setFocusChromeGroupOpacity] = React.useState(0);
-  const focusChromeGlobalEnabledRef = React.useRef(false);
-  const focusChromePreviousSidebarCollapsedRef = React.useRef<boolean | null>(null);
+  const [focusChromeContentCenterX, setFocusChromeContentCenterX] = React.useState<number | null>(null);
+  const [activeLibraryFile, setActiveLibraryFile] = React.useState<{ path: string; title: string; mtime: number } | null>(null);
+  const [fieldTheoryButtonProximity, setFieldTheoryButtonProximity] = React.useState(0);
+  const [actionFeedback, setActionFeedback] = React.useState<string | null>(null);
+  const focusChromeGlobalEnabledRef = React.useRef(normalizedInitialOpenTarget?.focusChrome === true);
+  const focusChromePreviousSidebarCollapsedRef = React.useRef<boolean | null>(
+    normalizedInitialOpenTarget?.focusChrome === true
+      ? window.localStorage.getItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
+      : null
+  );
+  const actionFeedbackTimerRef = React.useRef<number | null>(null);
+  const appBackHistoryRef = React.useRef<AppNavigationSurface[]>([]);
+  const appForwardHistoryRef = React.useRef<AppNavigationSurface[]>([]);
+  const appHistoryNavigationRef = React.useRef(false);
+  const appNavigationSurfaceRef = React.useRef<AppNavigationSurface>('librarian');
+  const [navigationAvailability, setNavigationAvailability] = React.useState({ back: false, forward: false });
+  const shellRef = React.useRef<HTMLDivElement | null>(null);
   const footerRef = React.useRef<HTMLDivElement | null>(null);
+  const [shellWidth, setShellWidth] = React.useState(() => Math.round(window.innerWidth));
   const focusChromeSurfaceEnabled = focusChromeChildActive || focusChromeGlobalEnabled;
-  const footerChromeOpacity = focusChromeSurfaceEnabled ? 0 : 1;
+  const librarianSurfaceVisible = surface === 'library';
+  const keepLibrarianMounted = librarianEverRendered || librarianSurfaceVisible;
+  const libraryImmersiveChromeActive = librarianSurfaceVisible && librarianImmersive;
+  const focusChromeOverlayActive = librarianSurfaceVisible && focusChromeSurfaceEnabled;
+  const browserChromeHidden = bookmarksCanvasChromeActive || libraryImmersiveChromeActive;
+  const focusChromeSurfaceOpacity = getFocusChromeSurfaceOpacity({
+    isFocusChromeSurface: librarianSurfaceVisible,
+    focusChromeActive: focusChromeSurfaceEnabled,
+  });
+  const topChromeOpacity = browserChromeHidden ? 0 : focusChromeSurfaceOpacity;
+  const footerChromeOpacity = browserChromeHidden || focusChromeOverlayActive ? 0 : 1;
+  const topChromeInteractive = topChromeOpacity > 0.05;
   const footerChromeInteractive = footerChromeOpacity > 0.05;
+  const focusChromeIconSize = Math.max(20, Math.min(28, Math.round(shellWidth * 0.024)));
+  const focusChromeIconTop = bookmarksCanvasToolbarTop === null
+    ? FOCUS_CHROME_ICON_TOP_PX
+    : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - focusChromeIconSize / 2));
+  const reportActiveSurface = React.useCallback((nextSurface: BrowserHelperClientSurfaceName) => {
+    activeClientSurfaceRef.current = nextSurface;
+    setActiveClientSurface(nextSurface);
+    window.__fieldTheoryBrowserReportActiveSurface?.(nextSurface);
+  }, []);
+  React.useEffect(() => {
+    const element = shellRef.current;
+    if (!element) return undefined;
+    const updateShellWidth = () => {
+      const nextWidth = Math.round(element.getBoundingClientRect().width);
+      setShellWidth((current) => (current === nextWidth ? current : nextWidth));
+    };
+    updateShellWidth();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateShellWidth);
+      return () => window.removeEventListener('resize', updateShellWidth);
+    }
+    const observer = new ResizeObserver(updateShellWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  React.useEffect(() => {
+    const element = shellRef.current;
+    if (!element) return undefined;
+    const updateProximity = (event: MouseEvent) => {
+      const rect = element.getBoundingClientRect();
+      const dx = Math.max(0, rect.right - event.clientX);
+      const dy = Math.max(0, rect.bottom - event.clientY);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      setFieldTheoryButtonProximity(Math.max(0, Math.min(1, 1 - distance / 220)));
+    };
+    const clearProximity = () => setFieldTheoryButtonProximity(0);
+    element.addEventListener('mousemove', updateProximity);
+    element.addEventListener('mouseleave', clearProximity);
+    return () => {
+      element.removeEventListener('mousemove', updateProximity);
+      element.removeEventListener('mouseleave', clearProximity);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    reportActiveSurface(initialClientSurface);
+  }, [initialClientSurface, reportActiveSurface]);
+  React.useEffect(() => {
+    const reportCurrentSurface = () => {
+      reportActiveSurface(activeClientSurfaceRef.current);
+    };
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentSurface);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentSurface);
+    };
+  }, [reportActiveSurface]);
+  React.useEffect(() => {
+    if (!focusChromeSurfaceEnabled) {
+      setFocusChromeGroupOpacity(0);
+      return undefined;
+    }
+
+    const updateProximity = (event: MouseEvent) => {
+      const opacity = getGroupedFocusChromeProximityOpacity({
+        cursorClientY: event.clientY,
+        paneClientTop: 0,
+        viewportHeight: window.innerHeight,
+        revealDistancePx: FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+        fullOpacityDistancePx: FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+        topFullOpacityDistancePx: FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
+      });
+      setFocusChromeGroupOpacity(opacity);
+    };
+    const hideProximityChrome = (event: MouseEvent) => {
+      if (!isClientPointOutsideBounds(event.clientX, event.clientY, {
+        left: 0,
+        top: 0,
+        right: window.innerWidth,
+        bottom: window.innerHeight,
+      })) return;
+      setFocusChromeGroupOpacity(0);
+    };
+
+    window.addEventListener('mousemove', updateProximity);
+    window.addEventListener('mouseleave', hideProximityChrome);
+    return () => {
+      window.removeEventListener('mousemove', updateProximity);
+      window.removeEventListener('mouseleave', hideProximityChrome);
+    };
+  }, [focusChromeSurfaceEnabled]);
+  const showActionFeedback = React.useCallback((message: string) => {
+    if (actionFeedbackTimerRef.current !== null) {
+      window.clearTimeout(actionFeedbackTimerRef.current);
+    }
+    setActionFeedback(message);
+    actionFeedbackTimerRef.current = window.setTimeout(() => {
+      setActionFeedback(null);
+      actionFeedbackTimerRef.current = null;
+    }, 3000);
+  }, []);
+  const openScratchpadPage = React.useCallback((relPath: string | null | undefined) => {
+    if (!relPath) return;
+    setPendingReadingPath(null);
+    setInitialCommandPath(null);
+    setLauncherOpenTarget({
+      kind: 'wiki',
+      path: relPath,
+      contentMode: 'rendered',
+    });
+    setSurface('library');
+  }, []);
+  const openWikiPage = React.useCallback((relPath: string | null | undefined) => {
+    if (!relPath) return;
+    setPendingReadingPath(null);
+    setInitialCommandPath(null);
+    setLauncherOpenTarget({
+      kind: 'wiki',
+      path: relPath,
+      contentMode: 'rendered',
+    });
+    setSurface('library');
+  }, []);
+  const openExternalPage = React.useCallback((absPath: string | null | undefined) => {
+    if (!absPath) return;
+    setPendingReadingPath(null);
+    setInitialCommandPath(null);
+    setLauncherOpenTarget({
+      kind: 'external',
+      path: absPath,
+      contentMode: 'rendered',
+    });
+    setSurface('library');
+  }, []);
   const setFocusChromeGlobalEnabled = React.useCallback((enabled: boolean) => {
     focusChromeGlobalEnabledRef.current = enabled;
     setFocusChromeGlobalEnabledState(enabled);
@@ -942,6 +1651,15 @@ function BrowserLibrarySurface(props: {
     setSidebarCollapsed(true);
     window.localStorage.setItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY, '1');
   }, [setFocusChromeGlobalEnabled, sidebarCollapsed]);
+  React.useEffect(() => {
+    if (!normalizedInitialOpenTarget) return;
+    if (normalizedInitialOpenTarget.sidebarCollapsed === true) {
+      setSidebarCollapsed(true);
+    }
+    if (normalizedInitialOpenTarget.focusChrome === true && !focusChromeGlobalEnabledRef.current) {
+      enableGlobalFocusChrome();
+    }
+  }, [enableGlobalFocusChrome, normalizedInitialOpenTarget]);
   const disableGlobalFocusChrome = React.useCallback(() => {
     setFocusChromeGlobalEnabled(false);
     setFocusChromeGroupOpacity(0);
@@ -968,6 +1686,243 @@ function BrowserLibrarySurface(props: {
     setSidebarCollapsed(previous);
     window.localStorage.setItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY, previous ? '1' : '0');
   }, []);
+  const updateNavigationAvailability = React.useCallback(() => {
+    setNavigationAvailability({
+      back: appBackHistoryRef.current.some((entry) => appNavigationSurfaceToBrowserLibrarySurface(entry) !== null),
+      forward: appForwardHistoryRef.current.some((entry) => appNavigationSurfaceToBrowserLibrarySurface(entry) !== null),
+    });
+  }, []);
+  const hasBrowserSurfaceHistoryTarget = React.useCallback((direction: -1 | 1): boolean => {
+    const history = direction < 0 ? appBackHistoryRef.current : appForwardHistoryRef.current;
+    return history.some((entry) => appNavigationSurfaceToBrowserLibrarySurface(entry) !== null);
+  }, []);
+  React.useEffect(() => {
+    const nextSurface = browserLibrarySurfaceToAppNavigationSurface(surface);
+    const previousSurface = appNavigationSurfaceRef.current;
+    if (appHistoryNavigationRef.current) {
+      appHistoryNavigationRef.current = false;
+      appNavigationSurfaceRef.current = nextSurface;
+      updateNavigationAvailability();
+      return;
+    }
+
+    appBackHistoryRef.current = pushAppNavigationHistory(
+      appBackHistoryRef.current,
+      previousSurface,
+      nextSurface,
+    );
+    if (previousSurface !== nextSurface) {
+      appForwardHistoryRef.current = [];
+    }
+    appNavigationSurfaceRef.current = nextSurface;
+    updateNavigationAvailability();
+  }, [surface, updateNavigationAvailability]);
+  React.useEffect(() => {
+    if (surface === 'commands') reportActiveSurface('commands');
+  }, [reportActiveSurface, surface]);
+  React.useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onNewReadingAvailable?.(() => {
+      if (activeClientSurfaceRef.current !== 'library') setHasNewReading(true);
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => () => {
+    if (actionFeedbackTimerRef.current !== null) {
+      window.clearTimeout(actionFeedbackTimerRef.current);
+    }
+  }, []);
+  React.useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onShowNewReading?.((readingPath: string) => {
+      setPendingReadingPath(readingPath);
+      setLauncherOpenTarget(null);
+      setInitialCommandPath(null);
+      setHasNewReading(false);
+      setSurface('library');
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onShowReading?.((readingPath: string) => {
+      setPendingReadingPath(readingPath);
+      setLauncherOpenTarget(null);
+      setInitialCommandPath(null);
+      setHasNewReading(false);
+      setSurface('library');
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onSetFullscreen?.((fullscreen: boolean) => {
+      setLibrarianImmersive(fullscreen);
+      if (fullscreen) {
+        setInitialCommandPath(null);
+        setSurface('library');
+      }
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => {
+    if (surface === 'library') setHasNewReading(false);
+  }, [surface]);
+  React.useEffect(() => {
+    const nextValue = librarianImmersive ? 'true' : 'false';
+    if (window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) !== nextValue) {
+      window.localStorage.setItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY, nextValue);
+    }
+  }, [librarianImmersive]);
+  React.useEffect(() => {
+    const syncLibrarianImmersive = () => {
+      setLibrarianImmersive(window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true');
+    };
+    window.addEventListener('storage', syncLibrarianImmersive);
+    window.addEventListener('fieldtheory:renderer-storage-changed', syncLibrarianImmersive);
+    return () => {
+      window.removeEventListener('storage', syncLibrarianImmersive);
+      window.removeEventListener('fieldtheory:renderer-storage-changed', syncLibrarianImmersive);
+    };
+  }, []);
+  React.useEffect(() => {
+    if (librarianSurfaceVisible) setLibrarianEverRendered(true);
+  }, [librarianSurfaceVisible]);
+  React.useEffect(() => {
+    let cancelled = false;
+    const scratchpadHotkeyRef = { current: '' };
+    const setScratchpadHotkey = (hotkey: string | null | undefined) => {
+      scratchpadHotkeyRef.current = normalizeHotkeyForComparison(hotkey);
+    };
+    void window.hotkeyAPI?.getHotkey?.('scratchpad').then((hotkey) => {
+      if (!cancelled) setScratchpadHotkey(hotkey);
+    });
+
+    const hotkeyChangedHandler = (event: Event) => {
+      setScratchpadHotkey((event as CustomEvent<string>).detail);
+    };
+    const handler = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const configuredHotkey = scratchpadHotkeyRef.current;
+      if (!configuredHotkey) return;
+      if (!hasNonShiftModifierHotkey(configuredHotkey)) return;
+      if (normalizeHotkeyForComparison(buildHotkeyString(event)) !== configuredHotkey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void (async () => {
+        const page = await window.wikiAPI?.openScratchpadDefault?.();
+        const relPath = page && typeof (page as { relPath?: unknown }).relPath === 'string'
+          ? (page as { relPath: string }).relPath
+          : null;
+        openScratchpadPage(relPath);
+      })();
+    };
+
+    window.addEventListener('fieldtheory:scratchpad-hotkey-changed', hotkeyChangedHandler);
+    document.addEventListener('keydown', handler, true);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('fieldtheory:scratchpad-hotkey-changed', hotkeyChangedHandler);
+      document.removeEventListener('keydown', handler, true);
+    };
+  }, [openScratchpadPage]);
+  React.useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad?.((relPath) => {
+      openScratchpadPage(relPath);
+    });
+    return () => unsubscribe?.();
+  }, [openScratchpadPage]);
+  React.useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onOpenWikiPage?.((relPath) => {
+      if (keepLibrarianMounted) {
+        setPendingReadingPath(null);
+        setInitialCommandPath(null);
+        setLauncherOpenTarget({
+          kind: 'wiki',
+          path: relPath,
+          contentMode: 'rendered',
+        });
+        setSurface('library');
+      } else {
+        openWikiPage(relPath);
+      }
+    });
+    return () => unsubscribe?.();
+  }, [keepLibrarianMounted, openWikiPage]);
+  React.useEffect(() => {
+    const unsubscribe = window.externalAPI?.onOpenExternal?.((absPath) => {
+      openExternalPage(absPath);
+    });
+    return () => unsubscribe?.();
+  }, [openExternalPage]);
+  React.useEffect(() => {
+    const unsubscribe = window.commandsAPI?.onToggleLineNumbersFromLauncher?.(() => {
+      setPendingReadingPath(null);
+      setLauncherOpenTarget(null);
+      setInitialCommandPath(null);
+      setSurface('library');
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const refreshPendingReadingStatus = async () => {
+      if (document.visibilityState === 'hidden') return;
+      if (inFlight) return;
+      inFlight = true;
+      const statusPromise = window.librarianAPI?.pollStatus?.();
+      const status = statusPromise ? await statusPromise.catch(() => null) : null;
+      inFlight = false;
+      if (cancelled || !status || typeof status !== 'object') return;
+      const pendingPath = (status as { pendingPath?: unknown }).pendingPath;
+      if (typeof pendingPath !== 'string' || pendingPath.length === 0) return;
+      setPendingReadingPath(pendingPath);
+      setLauncherOpenTarget(null);
+      setHasNewReading(false);
+      setSurface('library');
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshPendingReadingStatus();
+    };
+
+    void refreshPendingReadingStatus();
+    window.addEventListener('focus', refreshPendingReadingStatus);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refreshPendingReadingStatus);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, []);
+  const applyAppNavigationSurface = React.useCallback((nextSurface: AppNavigationSurface) => {
+    const browserSurface = appNavigationSurfaceToBrowserLibrarySurface(nextSurface);
+    if (!browserSurface) return;
+    appHistoryNavigationRef.current = true;
+    if (browserSurface === 'library') {
+      setLauncherOpenTarget(null);
+    } else {
+      setInitialCommandPath(null);
+    }
+    setSurface(browserSurface);
+  }, []);
+  const navigateAppHistory = React.useCallback((direction: -1 | 1): boolean => {
+    const current = appNavigationSurfaceRef.current;
+    const result = direction < 0
+      ? popAppBackHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      })
+      : popAppForwardHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      });
+
+    if (!result.target) return false;
+    appBackHistoryRef.current = result.backHistory;
+    appForwardHistoryRef.current = result.forwardHistory;
+    updateNavigationAvailability();
+    applyAppNavigationSurface(result.target);
+    return true;
+  }, [applyAppNavigationSurface, updateNavigationAvailability]);
   const toggleSidebarCollapsed = React.useCallback(() => {
     setSidebarCollapsed((collapsed) => {
       if (focusChromeSurfaceEnabled && collapsed) {
@@ -981,6 +1936,40 @@ function BrowserLibrarySurface(props: {
       return next;
     });
   }, [focusChromeSurfaceEnabled, setFocusChromeGlobalEnabled]);
+  const selectSurface = React.useCallback((nextSurface: string) => {
+    if (nextSurface !== 'library' && nextSurface !== 'commands') return;
+    if (nextSurface === 'library') {
+      if (surface === 'library') {
+        toggleSidebarCollapsed();
+        return;
+      }
+      setLauncherOpenTarget(null);
+      setSurface('library');
+      return;
+    }
+    setInitialCommandPath(null);
+    setSurface('commands');
+  }, [surface, toggleSidebarCollapsed]);
+  const handleSelectedCommandPathChange = React.useCallback((path: string | null) => {
+    if (path) {
+      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+    }
+  }, []);
+  const openCommandPathInLibrary = React.useCallback((path: string) => {
+    setPendingReadingPath(null);
+    setInitialCommandPath(null);
+    setSurface('library');
+    void (async () => {
+      const roots = await window.libraryAPI?.getRoots?.().catch(() => undefined);
+      setLauncherOpenTarget(commandPathToLauncherLibraryOpenTarget(path, roots as LauncherLibraryRootPath[] | undefined));
+    })();
+  }, []);
+  React.useEffect(() => {
+    const initialCommandPath = initialCommandOpenPathRef.current;
+    if (!initialCommandPath) return;
+    initialCommandOpenPathRef.current = null;
+    openCommandPathInLibrary(initialCommandPath);
+  }, [openCommandPathInLibrary]);
 
   React.useEffect(() => {
     const syncSidebarCollapsed = () => {
@@ -994,8 +1983,11 @@ function BrowserLibrarySurface(props: {
     };
   }, []);
 
-  const openMarkdownTarget = React.useCallback((target: any) => {
-    if (!target || target.kind === 'clipboard' || target.kind === 'settings') return;
+  const openMarkdownTarget = React.useCallback((target: any): boolean => {
+    const normalizedTarget = normalizeBrowserLibraryOpenTarget(target);
+    if (!normalizedTarget) return false;
+    target = normalizedTarget;
+    setPendingReadingPath(null);
     if (target.sidebarCollapsed === true) {
       setSidebarCollapsed(true);
       window.localStorage.setItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY, '1');
@@ -1004,23 +1996,26 @@ function BrowserLibrarySurface(props: {
       enableGlobalFocusChrome();
     }
     if (target.kind === 'command') {
-      setInitialCommandPath(typeof target.path === 'string' ? target.path : null);
-      setSurface('commands');
-      return;
+      openCommandPathInLibrary(target.path);
+      return true;
     }
     if (target.kind === 'commands') {
+      setLauncherOpenTarget(null);
       setInitialCommandPath(null);
       setSurface('commands');
-      return;
+      return true;
     }
     if (target.kind === 'library') {
+      setInitialCommandPath(null);
       setLauncherOpenTarget(null);
       setSurface('library');
-      return;
+      return true;
     }
+    setInitialCommandPath(null);
     setLauncherOpenTarget(target);
     setSurface('library');
-  }, [enableGlobalFocusChrome]);
+    return true;
+  }, [enableGlobalFocusChrome, openCommandPathInLibrary]);
 
   React.useEffect(() => {
     window.__fieldTheoryBrowserOpenMarkdownTarget = openMarkdownTarget;
@@ -1035,16 +2030,51 @@ function BrowserLibrarySurface(props: {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const historyDirection = getAppBracketNavigationDirection(event);
+      const shouldHandleAppHistory = historyDirection
+        && (surface !== 'library' || hasBrowserSurfaceHistoryTarget(historyDirection));
+      if (shouldHandleAppHistory && navigateAppHistory(historyDirection)) {
+        event.preventDefault();
+        return;
+      }
       if (!isSidebarToggleShortcut(event)) return;
       event.preventDefault();
       toggleSidebarCollapsed();
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [toggleSidebarCollapsed]);
+  }, [hasBrowserSurfaceHistoryTarget, navigateAppHistory, surface, toggleSidebarCollapsed]);
+
+  const resolveFieldTheoryNativeOpenTarget = React.useCallback(async (): Promise<FieldTheoryMarkdownTarget> => {
+    if (surface === 'commands') return { kind: 'commands', path: 'commands' };
+    if (activeClientSurface === 'bookmarks') return { kind: 'bookmarks', path: 'bookmarks' };
+    if (activeClientSurface === 'ember') return { kind: 'ember', path: 'ember' };
+    const context = await window.commandsAPI?.getActiveLibraryFileContext?.().catch(() => null);
+    if (context?.type === 'wiki' && context.relPath) {
+      return { kind: 'wiki', path: context.relPath, contentMode: 'rendered' };
+    }
+    if (context?.filePath) {
+      return { kind: 'external', path: context.filePath, contentMode: 'rendered' };
+    }
+    return { kind: 'library', path: 'library' };
+  }, [activeClientSurface, surface]);
+  const openCurrentTargetInFieldTheory = React.useCallback(() => {
+    void (async () => {
+      const target = await resolveFieldTheoryNativeOpenTarget();
+      const result = await window.shellAPI?.openFieldTheoryMarkdown?.(target);
+      showActionFeedback(result?.success ? 'Opened in Field Theory' : result?.error ?? 'Could not open Field Theory');
+    })();
+  }, [resolveFieldTheoryNativeOpenTarget, showActionFeedback]);
+  const fieldTheoryButtonVisible = !browserChromeHidden && !focusChromeOverlayActive && (
+    surface === 'commands'
+    || activeClientSurface === 'bookmarks'
+    || activeClientSurface === 'ember'
+    || Boolean(activeLibraryFile)
+  );
 
   return (
     <div
+      ref={shellRef}
       data-fieldtheory-browser-library-shell="true"
       style={{
         display: 'flex',
@@ -1055,6 +2085,28 @@ function BrowserLibrarySurface(props: {
         backgroundColor: theme.bg,
       }}
     >
+      {focusChromeSurfaceEnabled ? (
+        <LibraryFocusChromeIcon
+          isDark={theme.isDark}
+          top={focusChromeIconTop}
+          contentCenterX={focusChromeContentCenterX}
+          opacity={FOCUS_CHROME_ICON_OPACITY}
+          size={focusChromeIconSize}
+        />
+      ) : null}
+      <LibrarySurfaceTopTabs
+        theme={theme}
+        tabs={[
+          { id: 'library', label: 'Library', title: 'Personal wiki', indicator: hasNewReading && activeClientSurface !== 'library' },
+          { id: 'commands', label: 'Commands' },
+        ]}
+        selectedId={surface}
+        onSelect={selectSurface}
+        topPaddingPx={14}
+        opacity={topChromeOpacity}
+        interactive={topChromeInteractive}
+        rightSlot={<LibraryTopChromeActionFeedback message={actionFeedback} theme={theme} />}
+      />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {surface === 'commands' ? (
             <CommandsView
@@ -1066,31 +2118,100 @@ function BrowserLibrarySurface(props: {
               onFocusChromeEnabledChange={handleGlobalFocusChromeChange}
               onFocusChromeShortcut={enableGlobalFocusChrome}
               onFocusChromeActiveChange={handleFocusChromeActiveChange}
+              canNavigateBack={navigationAvailability.back}
+              canNavigateForward={navigationAvailability.forward}
+              onNavigateBack={() => navigateAppHistory(-1)}
+              onNavigateForward={() => navigateAppHistory(1)}
+              onSelectedCommandPathChange={handleSelectedCommandPathChange}
             />
-          ) : (
+          ) : null}
+          {keepLibrarianMounted ? (
+            <div
+              data-fieldtheory-browser-library-keepalive="library"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: librarianSurfaceVisible ? 'flex' : 'none',
+                flexDirection: 'column',
+              }}
+            >
             <LibrarianView
-              active
+              active={librarianSurfaceVisible}
               browserLibrarySurface
+              onFullScreenChange={setLibrarianImmersive}
+              initialReadingPath={pendingReadingPath}
+              onInitialReadingConsumed={() => setPendingReadingPath(null)}
               initialOpenTarget={launcherOpenTarget}
+              initialFullScreen={librarianImmersive}
               onInitialOpenTargetConsumed={() => setLauncherOpenTarget(null)}
               sidebarCollapsed={sidebarCollapsed}
               sidebarToggleRequestKey={librarySidebarToggleRequestKey}
               onSwitchToClipboard={() => {}}
               onFocusChromeActiveChange={handleFocusChromeActiveChange}
               onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
+              onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
+              onSelectedItemTypeChange={(type) => {
+                if (surface !== 'library') return;
+                if (type === 'bookmarks' || type === 'ember') {
+                  reportActiveSurface(type);
+                } else {
+                  reportActiveSurface('library');
+                }
+              }}
               focusChromeGroupOpacity={focusChromeGroupOpacity}
               focusChromeEnabled={focusChromeGlobalEnabled}
               onFocusChromeEnabledChange={handleGlobalFocusChromeChange}
               onFocusChromeShortcut={enableGlobalFocusChrome}
-              onOpenCommandPath={(path: string) => openMarkdownTarget({ kind: 'command', path })}
+              onActionFeedback={showActionFeedback}
+              onFocusChromeContentCenterChange={setFocusChromeContentCenterX}
+              onActiveFileUpdatedChange={setActiveLibraryFile}
+              onOpenCommandPath={openCommandPathInLibrary}
             />
-          )}
+            </div>
+          ) : null}
       </div>
+      {fieldTheoryButtonVisible ? (
+        <button
+          type="button"
+          data-fieldtheory-browser-open-native-button="true"
+          aria-label="Open in Field Theory"
+          title="Open in Field Theory"
+          onClick={openCurrentTargetInFieldTheory}
+          style={{
+            position: 'absolute',
+            right: '18px',
+            bottom: footerChromeInteractive ? '54px' : '18px',
+            zIndex: 30,
+            width: '38px',
+            height: '38px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '10px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.isDark ? 'rgba(20,20,22,0.78)' : 'rgba(255,255,255,0.86)',
+            color: theme.text,
+            boxShadow: theme.isDark ? '0 10px 28px rgba(0,0,0,0.32)' : '0 10px 28px rgba(0,0,0,0.14)',
+            backdropFilter: 'blur(10px)',
+            WebkitBackdropFilter: 'blur(10px)',
+            cursor: 'pointer',
+            opacity: 0.18 + fieldTheoryButtonProximity * 0.82,
+            transform: `translateY(${Math.round((1 - fieldTheoryButtonProximity) * 2)}px)`,
+            transition: 'opacity 120ms ease, transform 120ms ease, background-color 120ms ease',
+          }}
+        >
+          <svg width="19" height="19" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+            <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" opacity="0.82" />
+            <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" opacity="0.38" />
+          </svg>
+        </button>
+      ) : null}
       <BrowserLibraryFooter
         footerRef={footerRef}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleSidebarCollapsed}
-        hidden={bookmarksCanvasChromeActive}
+        hidden={browserChromeHidden}
         opacity={footerChromeOpacity}
         interactive={footerChromeInteractive}
       />
@@ -1107,75 +2228,146 @@ function BrowserLibraryFooter(props: {
   interactive: boolean;
 }) {
   const { footerRef, sidebarCollapsed, onToggleSidebar, hidden, opacity, interactive } = props;
-  const { theme } = useTheme();
-  const [localCommandStatus, setLocalCommandStatus] = React.useState<FooterLocalCommandStatus | null>(null);
-  const [localCommandActivityFrameIndex, setLocalCommandActivityFrameIndex] = React.useState(0);
+  const { theme, toggleDarkMode } = useTheme();
   const [maxwellHistoryOpen, setMaxwellHistoryOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    return window.commandsAPI?.onLocalCommandStatus?.((status: FooterLocalCommandStatus) => {
-      setLocalCommandStatus(status);
-    });
-  }, []);
-
-  React.useEffect(() => {
-    if (localCommandStatus?.status !== 'running') {
-      setLocalCommandActivityFrameIndex(0);
-      return undefined;
-    }
-    const interval = window.setInterval(() => {
-      setLocalCommandActivityFrameIndex((index) => (index + 1) % LOCAL_COMMAND_ACTIVITY_FRAMES.length);
-    }, 180);
-    return () => window.clearInterval(interval);
-  }, [localCommandStatus?.status]);
-
-  React.useEffect(() => {
-    if (!localCommandStatus) return undefined;
-    const timeoutMs = localCommandStatus.status === 'running'
-      ? 300000
-      : localCommandStatus.status === 'error'
-        ? 9000
-        : 3500;
-    const timeout = window.setTimeout(() => setLocalCommandStatus(null), timeoutMs);
-    return () => window.clearTimeout(timeout);
-  }, [localCommandStatus]);
-
-  const cancelLocalCommandRun = React.useCallback(async () => {
-    const runId = localCommandStatus?.runId;
-    if (!runId || !window.commandsAPI?.cancelMaxwellRun) return;
-    const showCancelError = (message: string) => {
-      setLocalCommandStatus({
-        status: 'error',
-        message,
-        commandName: localCommandStatus.commandName,
-        filePath: localCommandStatus.filePath,
-        mode: localCommandStatus.mode,
-        runId,
-        error: message,
-        updatedAt: Date.now(),
-      });
-    };
-    try {
-      const result = await window.commandsAPI.cancelMaxwellRun(runId);
-      if (!result?.success) {
-        showCancelError(result?.error ?? 'Could not cancel Maxwell run');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not cancel Maxwell run';
-      showCancelError(message);
-    }
-  }, [localCommandStatus]);
-
-  const localCommandActivityFrame = LOCAL_COMMAND_ACTIVITY_FRAMES[localCommandActivityFrameIndex] ?? LOCAL_COMMAND_ACTIVITY_FRAMES[0];
-  const footerStatusLabel = localCommandStatus
-    ? formatFooterLocalCommandStatus(
-      localCommandStatus,
-      localCommandStatus.status === 'running' ? localCommandActivityFrame : undefined,
-    )
-    : null;
+  const { localCommandStatus, footerStatusLabel, cancelLocalCommandRun } = useLibraryFooterLocalCommandStatus();
+  const updaterStatus = useLibraryFooterUpdaterStatus();
+  const [callsign, setCallsign] = React.useState<string | null>(null);
+  const [isOnline, setIsOnline] = React.useState(() => navigator.onLine);
+  const [isWindowVisible, setIsWindowVisible] = React.useState(() => document.visibilityState === 'visible');
+  const [authSession, setAuthSession] = React.useState<{ user?: { id?: string } } | null>(null);
+  const [cachedTier, setCachedTier] = React.useState<'free' | 'pro'>('free');
+  const [allTimeStats, setAllTimeStats] = React.useState({
+    stacks: 0,
+    transcriptions: 0,
+    screenshots: 0,
+    improved: 0,
+    words: 0,
+    voiceCommands: 0,
+    commandsUsed: 0,
+    autoStacks: 0,
+  });
+  const [currentStatIndex, setCurrentStatIndex] = React.useState(0);
+  const [statFading, setStatFading] = React.useState(false);
   const showFocusStatusOverlay = !hidden && !interactive && !!footerStatusLabel;
-  const focusStatusOverlayColor = localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary;
-
+  const formatNumber = React.useCallback((value: number) => {
+    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return value.toLocaleString();
+    return String(value);
+  }, []);
+  const statItems = React.useMemo(() => [
+    { value: allTimeStats.words, singular: 'word transcribed', plural: 'words transcribed' },
+    { value: allTimeStats.improved, singular: 'word auto-improved', plural: 'words auto-improved' },
+    { value: allTimeStats.voiceCommands, singular: 'voice command', plural: 'voice commands' },
+    { value: allTimeStats.commandsUsed, singular: 'command launched', plural: 'commands launched' },
+    { value: allTimeStats.autoStacks, singular: 'autostack created', plural: 'autostacks created' },
+  ], [allTimeStats]);
+  const nextStat = React.useCallback(() => {
+    setStatFading(true);
+    window.setTimeout(() => {
+      setCurrentStatIndex((index) => (index + 1) % statItems.length);
+      setStatFading(false);
+    }, 150);
+  }, [statItems.length]);
+  React.useEffect(() => {
+    const refreshCallsign = () => {
+      const request = window.authAPI?.getCallsign?.();
+      if (!request) {
+        setCallsign(null);
+        return;
+      }
+      void request
+        .then((value) => setCallsign(value || null))
+        .catch(() => setCallsign(null));
+    };
+    refreshCallsign();
+    const unsubscribe = window.authAPI?.onSessionChanged?.((session) => {
+      if (!session) {
+        setCallsign(null);
+        return;
+      }
+      refreshCallsign();
+    });
+    return () => unsubscribe?.();
+  }, []);
+  React.useEffect(() => {
+    let active = true;
+    const loadSession = async () => {
+      try {
+        const session = await window.authAPI?.getSession?.();
+        if (active) setAuthSession(session && typeof session === 'object' ? session as { user?: { id?: string } } : null);
+      } catch {
+        if (active) setAuthSession(null);
+      }
+    };
+    void loadSession();
+    const unsubscribe = window.authAPI?.onSessionChanged?.((session) => {
+      setAuthSession(session && typeof session === 'object' ? session as { user?: { id?: string } } : null);
+    });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+  React.useEffect(() => {
+    if (!isWindowVisible || !window.metricsAPI) return;
+    let cancelled = false;
+    const loadMetrics = () => {
+      void window.metricsAPI?.getMetrics?.()
+        .then((metrics: any) => {
+          if (cancelled || !metrics) return;
+          setAllTimeStats({
+            stacks: metrics.stacks_created || 0,
+            transcriptions: metrics.transcriptions || 0,
+            screenshots: metrics.screenshots_taken || 0,
+            improved: metrics.words_improved || 0,
+            words: metrics.words_transcribed || 0,
+            voiceCommands: metrics.verbal_commands || 0,
+            commandsUsed: metrics.command_launcher_uses || 0,
+            autoStacks: metrics.autostacks_created || 0,
+          });
+        })
+        .catch(() => {});
+    };
+    void window.metricsAPI.fetchFromSupabase?.().finally(loadMetrics);
+    return () => {
+      cancelled = true;
+    };
+  }, [isWindowVisible, authSession?.user?.id]);
+  React.useEffect(() => {
+    if (!isWindowVisible || !window.quotaAPI) return;
+    let cancelled = false;
+    const fetchQuotas = async () => {
+      try {
+        const quotas = await window.quotaAPI?.getQuotas?.();
+        if (!cancelled && quotas?.tier) setCachedTier(quotas.tier === 'pro' ? 'pro' : 'free');
+      } catch {}
+    };
+    void fetchQuotas();
+    const unsubscribeTier = window.quotaAPI.onTierChanged?.(() => {
+      void fetchQuotas();
+    });
+    const unsubscribeQuota = window.quotaAPI.onQuotaChanged?.(() => {
+      void fetchQuotas();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribeTier?.();
+      unsubscribeQuota?.();
+    };
+  }, [isWindowVisible]);
+  React.useEffect(() => {
+    const updateOnline = () => setIsOnline(navigator.onLine);
+    const updateVisibility = () => setIsWindowVisible(document.visibilityState === 'visible');
+    window.addEventListener('online', updateOnline);
+    window.addEventListener('offline', updateOnline);
+    document.addEventListener('visibilitychange', updateVisibility);
+    return () => {
+      window.removeEventListener('online', updateOnline);
+      window.removeEventListener('offline', updateOnline);
+      document.removeEventListener('visibilitychange', updateVisibility);
+    };
+  }, []);
   return (
     <>
       <style>{`
@@ -1195,8 +2387,11 @@ function BrowserLibraryFooter(props: {
         zIndex: interactive ? undefined : 20,
         boxSizing: 'border-box',
         padding: '8px 16px',
+        height: 'auto',
+        overflow: 'hidden',
         borderTop: `1px solid ${theme.border}`,
         backgroundColor: theme.bgSecondary,
+        backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
         display: hidden ? 'none' : 'flex',
         opacity,
         pointerEvents: interactive ? 'auto' : 'none',
@@ -1209,171 +2404,80 @@ function BrowserLibraryFooter(props: {
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       }}
       >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0 }}>
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          title={`${sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘,)`}
-          aria-label="Toggle sidebar"
-          style={{
-            width: '20px',
-            height: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            background: 'transparent',
-            color: theme.textSecondary,
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            transition: 'background 0.15s ease, opacity 0.15s ease',
-          }}
-          onMouseEnter={(event) => {
-            event.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-          }}
-          onMouseLeave={(event) => {
-            event.currentTarget.style.backgroundColor = 'transparent';
-          }}
-        >
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{
-              transform: sidebarCollapsed ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s ease',
-            }}
-          >
-            <path d="M10 4L6 8l4 4" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={() => setMaxwellHistoryOpen((open) => !open)}
-          title="Maxwell history"
-          aria-label="Maxwell history"
-          style={{
-            width: '18px',
-            height: '18px',
-            padding: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: maxwellHistoryOpen ? theme.accent : 'transparent',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            transition: 'background-color 0.15s ease',
-            flexShrink: 0,
-          }}
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={maxwellHistoryOpen ? '#fff' : theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 12a9 9 0 1 0 3-6.7" />
-            <path d="M3 3v6h6" />
-            <path d="M12 7v5l3 2" />
-          </svg>
-        </button>
-        {footerStatusLabel ? (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', flex: 1, minWidth: 0 }}>
+        <LibraryFooterSidebarToggle
+          theme={theme}
+          collapsed={sidebarCollapsed}
+          enabled
+          onToggle={onToggleSidebar}
+          shortcutLabel="⌘."
+        />
+        <LibraryFooterMaxwellHistoryButton
+          theme={theme}
+          open={maxwellHistoryOpen}
+          onToggle={() => setMaxwellHistoryOpen((open) => !open)}
+        />
+        {localCommandStatus ? (
+          <LibraryFooterLocalCommandStatusControls
+            theme={theme}
+            status={localCommandStatus}
+            label={footerStatusLabel}
+            onCancel={() => void cancelLocalCommandRun()}
+          />
+        ) : authSession && cachedTier === 'pro' ? (
           <>
-            <span style={{ fontWeight: 500 }}>Local model:</span>
+            <span style={{ fontWeight: 500 }}>Pro:</span>
             <span
               style={{
-                color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
-                opacity: 0.85,
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                opacity: statFading ? 0 : 1,
+                transition: 'opacity 0.15s ease',
+                cursor: 'pointer',
               }}
+              onClick={nextStat}
             >
-              {footerStatusLabel}
+              {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1
+                ? statItems[currentStatIndex]?.singular
+                : statItems[currentStatIndex]?.plural}
             </span>
-            {localCommandStatus?.status === 'running' && localCommandStatus.runId ? (
-              <button
-                type="button"
-                onClick={() => void cancelLocalCommandRun()}
-                title="Cancel Maxwell run"
-                aria-label="Cancel Maxwell run"
-                style={{
-                  width: '18px',
-                  height: '18px',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  color: theme.textSecondary,
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                }}
-              >
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            ) : null}
+          </>
+        ) : authSession ? (
+          <>
+            <span style={{ fontWeight: 500 }}>Basic:</span>
+            <span>{formatNumber(allTimeStats.words)} words transcribed</span>
           </>
         ) : null}
       </div>
       {!footerStatusLabel ? (
         <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
-        <img
-          src={theme.isDark ? 'fieldtheory-logo-white.png' : 'fieldtheory-logo-black.png'}
-          alt="Field Theory"
-          style={{
-            height: '14px',
-            width: 'auto',
-            maxWidth: '112px',
-            objectFit: 'contain',
-            opacity: 0.72,
-            display: 'block',
-          }}
-        />
+        <LibraryFooterLogo theme={theme} />
       </div>
       ) : <div style={{ flex: 1 }} />}
-      <div style={{ flex: 1 }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1, minHeight: '18px' }}>
+        <LibraryFooterUpdaterStatus
+          theme={theme}
+          appVersion={updaterStatus.appVersion}
+          updaterEnabled={updaterStatus.updaterEnabled}
+          updateStatus={updaterStatus.updateStatus}
+          updateError={updaterStatus.updateError}
+          isOnline={isOnline}
+          fpsActive={isWindowVisible && !hidden}
+          callsign={callsign}
+          onCheckForUpdates={() => void updaterStatus.checkForUpdates()}
+          onDismissUpdate={updaterStatus.dismissUpdate}
+          onDownloadUpdate={updaterStatus.downloadUpdate}
+          onInstallUpdate={updaterStatus.installUpdate}
+        />
+        <LibraryFooterThemeToggleButton theme={theme} onToggle={toggleDarkMode} />
+      </div>
       </div>
       {showFocusStatusOverlay ? (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: '14px',
-            transform: 'translateX(-50%)',
-            zIndex: 24,
-            maxWidth: 'min(620px, calc(100% - 48px))',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            backgroundColor: theme.isDark ? 'rgba(20, 23, 29, 0.76)' : 'rgba(255, 255, 255, 0.86)',
-            border: `1px solid ${theme.border}`,
-            color: focusStatusOverlayColor,
-            fontSize: '10px',
-            lineHeight: 1.35,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            pointerEvents: 'none',
-            opacity: 0.9,
-            transition: 'opacity 160ms ease',
-            animation: localCommandStatus && localCommandStatus.status !== 'running'
-              ? `localStatusFadeOut ${localCommandStatus.status === 'error' ? 9 : 3.5}s ease forwards`
-              : undefined,
-          }}
-        >
-          {footerStatusLabel}
-        </div>
+        <LibraryFooterStatusOverlay
+          theme={theme}
+          label={footerStatusLabel}
+          status={localCommandStatus}
+        />
       ) : null}
-      <MaxwellHistoryPopover
+      <LibraryFooterMaxwellHistoryPopover
         open={maxwellHistoryOpen && !hidden}
         onClose={() => setMaxwellHistoryOpen(false)}
         footerRef={footerRef}
@@ -1396,7 +2500,12 @@ async function main() {
   document.body.dataset.fieldTheoryBrowserLibraryNative = 'loaded';
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
-      <BrowserLibraryApp LibrarianView={LibrarianView} CommandsView={CommandsView} ThemeProvider={ThemeProvider} />
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+        initialOpenTarget={getBrowserLibraryInitialOpenTarget(window.location)}
+      />
     </React.StrictMode>,
   );
   document.body.dataset.fieldTheoryBrowserLibraryReact = 'render-called';

@@ -815,6 +815,7 @@ interface AuthAPI {
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
+  getCallsign?: () => Promise<string | null>;
   onSessionChanged?: (callback: (session: any | null) => void) => () => void;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -1152,6 +1153,8 @@ interface ShellAPI {
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fullPath: string) => Promise<void>;
   setRepresentedFilename: (fullPath: string) => Promise<void>;
+  pasteIntoCodexInput?: (text: string) => Promise<{ success: boolean; error?: string; delivery?: string }>;
+  openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
 }
 
 type AgentImproveTool = 'codex' | 'claude';
@@ -1403,7 +1406,7 @@ interface HandoffInfo {
 }
 
 interface FieldTheoryMarkdownTarget {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown' | 'typedown';
   selectionStart?: number;
@@ -1419,6 +1422,9 @@ interface ActiveLibraryFileContext {
   relPath: string;
   filePath: string;
   title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
 }
 
 type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
@@ -2398,6 +2404,7 @@ declare global {
   }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
+    getDataSource?: () => Promise<unknown>;
     syncIfStale: () => Promise<{ status: string; error?: string }>;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
@@ -2407,9 +2414,13 @@ declare global {
     getActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
     saveActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
     invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    sendToCodex?: (id: string) => Promise<{ success: boolean; error?: string; delivery?: string }>;
     copyForAgent: (id: string) => Promise<{ success: boolean; error?: string }>;
     invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
+  }
+  interface FieldTheoryBookmarkMediaAPI {
+    mediaUrl: (filename: string) => string;
   }
 
   /**
@@ -2786,6 +2797,7 @@ declare global {
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;
+    fieldTheoryBookmarkMediaAPI?: FieldTheoryBookmarkMediaAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;

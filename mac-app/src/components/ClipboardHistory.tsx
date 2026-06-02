@@ -14,7 +14,27 @@ import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOp
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
-import MaxwellHistoryPopover from './MaxwellHistoryPopover';
+import {
+  LibraryFooterLocalCommandStatusControls,
+  LibraryFooterLogo,
+  LibraryFooterMaxwellHistoryButton,
+  LibraryFooterMaxwellHistoryPopover,
+  LibraryFooterSidebarToggle,
+  LibraryFooterStatusOverlay,
+  LibraryFooterThemeToggleButton,
+  useLibraryFooterLocalCommandStatus,
+} from './LibraryFooterControls';
+import {
+  FOCUS_CHROME_ICON_OPACITY,
+  FOCUS_CHROME_ICON_SIZE_PX,
+  FOCUS_CHROME_ICON_TOP_PX,
+  FIELD_THEORY_CHROME_TABS_BOTTOM_PX,
+  FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
+  FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+  LibraryFocusChromeIcon,
+  LibrarySurfaceTopTabs,
+  LibraryTopChromeActionFeedback,
+} from './LibrarySurfaceTopTabs';
 import { ImagePreviewFrame } from './ImagePreviewOverlay';
 import {
   dispatchCodexTerminalDarkModeSync,
@@ -29,6 +49,12 @@ import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, norma
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getAgentKickoffFooterStatus } from '../utils/agentKickoffStatus';
 import { commandPathToLauncherLibraryOpenTarget } from '../commandLauncherUtils';
+import {
+  FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+  FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+  FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
+  isClientPointOutsideBounds,
+} from '../utils/focusChrome';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -99,7 +125,7 @@ import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown' | 'typedown';
   sidebarCollapsed?: boolean;
@@ -131,24 +157,6 @@ function getDocumentWindowInitialTarget(location: Pick<Location, 'search'>): Fie
 }
 
 type TopNavMode = 'clipboard' | 'librarian' | 'possible';
-
-type FooterLocalCommandStatus = {
-  status: 'running' | 'success' | 'error' | 'notice';
-  message: string;
-  detail?: string;
-  eventKind?: 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
-  commandName?: string;
-  filePath?: string;
-  mode?: 'document' | 'selection';
-  runId?: string;
-  phase?: string;
-  changedLines?: number;
-  changedBytes?: number;
-  error?: string;
-  updatedAt: number;
-};
-
-const LOCAL_COMMAND_ACTIVITY_FRAMES = ['|', '/', '-', '\\'] as const;
 
 function FooterFpsCounter({ active, color }: { active: boolean; color: string }) {
   const [fps, setFps] = useState<number | null>(null);
@@ -188,22 +196,6 @@ function FooterFpsCounter({ active, color }: { active: boolean; color: string })
       {fps}fps
     </span>
   );
-}
-
-function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus, activityFrame?: string): string {
-  const detail = compactFooterStatusDetail(status.detail);
-  const message = status.status === 'running' && activityFrame
-    ? `[${activityFrame}] ${status.message}`
-    : status.message;
-  return detail ? `${message} - ${detail}` : message;
-}
-
-function compactFooterStatusDetail(value: string | undefined, maxLength = 96): string | undefined {
-  const compacted = value?.replace(/\s+/g, ' ').trim();
-  if (!compacted) return undefined;
-  return compacted.length > maxLength
-    ? `${compacted.slice(0, maxLength - 3)}...`
-    : compacted;
 }
 
 type TopNavPaintTrace = {
@@ -250,29 +242,9 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
   }, 0);
 }
 
-const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_TOP_PX = 32;
-const FOCUS_CHROME_ICON_OPACITY = 0.62;
-const FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX = 220;
-const FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX = 160;
-const FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX = 128;
 const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
 const FIELD_THEORY_CHROME_TABS_TOP_PX = 44;
-const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 8;
 const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
-const FIELD_THEORY_TOP_CHROME_DRAG_STYLE = {
-  WebkitAppRegion: 'drag',
-} as React.CSSProperties;
-const FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE = {
-  WebkitAppRegion: 'no-drag',
-} as React.CSSProperties;
-type ClientBounds = Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'>;
-const isClientPointOutsideBounds = (clientX: number, clientY: number, bounds: ClientBounds) => (
-  clientX < bounds.left
-  || clientX > bounds.right
-  || clientY < bounds.top
-  || clientY > bounds.bottom
-);
 
 /**
  * Check if any items in a stack have improved content.
@@ -1523,8 +1495,12 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   const [agentImproveTool, setAgentImproveTool] = useState<'codex' | 'claude'>('codex');
   const [agentImproveLaunching, setAgentImproveLaunching] = useState(false);
   const [agentImproveStatus, setAgentImproveStatus] = useState<string | null>(null);
-  const [localCommandStatus, setLocalCommandStatus] = useState<FooterLocalCommandStatus | null>(null);
-  const [localCommandActivityFrameIndex, setLocalCommandActivityFrameIndex] = useState(0);
+  const {
+    localCommandStatus,
+    setLocalCommandStatus,
+    footerStatusLabel: localCommandFooterStatusLabel,
+    cancelLocalCommandRun,
+  } = useLibraryFooterLocalCommandStatus();
   const [maxwellHistoryOpen, setMaxwellHistoryOpen] = useState(false);
   const footerRef = useRef<HTMLDivElement | null>(null);
 
@@ -2671,38 +2647,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   }, [agentImproveStatus]);
 
   useEffect(() => {
-    return window.commandsAPI?.onLocalCommandStatus?.((status) => {
-      setLocalCommandStatus(status);
-    });
-  }, []);
-
-  useEffect(() => {
     return window.agentKickoffAPI?.onStatus?.((event) => {
       setLocalCommandStatus(getAgentKickoffFooterStatus(event));
     });
-  }, []);
-
-  useEffect(() => {
-    if (localCommandStatus?.status !== 'running') {
-      setLocalCommandActivityFrameIndex(0);
-      return undefined;
-    }
-    const interval = window.setInterval(() => {
-      setLocalCommandActivityFrameIndex((index) => (index + 1) % LOCAL_COMMAND_ACTIVITY_FRAMES.length);
-    }, 180);
-    return () => window.clearInterval(interval);
-  }, [localCommandStatus?.status]);
-
-  useEffect(() => {
-    if (!localCommandStatus) return;
-    const timeoutMs = localCommandStatus.status === 'running'
-      ? 300000
-      : localCommandStatus.status === 'error'
-        ? 9000
-        : 3500;
-    const timeout = window.setTimeout(() => setLocalCommandStatus(null), timeoutMs);
-    return () => window.clearTimeout(timeout);
-  }, [localCommandStatus]);
+  }, [setLocalCommandStatus]);
 
   const runLocalImproveSelection = useCallback(async () => {
     if (viewMode !== 'librarian' || showSettings) {
@@ -3877,33 +3825,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     setThemeToggleProximityVisible(false);
   }, []);
 
-  const cancelLocalCommandRun = useCallback(async () => {
-    const status = localCommandStatus;
-    const runId = status?.runId;
-    if (!runId || !window.commandsAPI?.cancelMaxwellRun) return;
-    const showCancelError = (message: string) => {
-      setLocalCommandStatus({
-        status: 'error',
-        message,
-        commandName: status.commandName,
-        filePath: status.filePath,
-        mode: status.mode,
-        runId,
-        error: message,
-        updatedAt: Date.now(),
-      });
-    };
-    try {
-      const result = await window.commandsAPI.cancelMaxwellRun(runId);
-      if (!result.success) {
-        showCancelError(result.error ?? 'Could not cancel Maxwell run');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not cancel Maxwell run';
-      showCancelError(message);
-    }
-  }, [localCommandStatus]);
-
   if (!isVisible) {
     return null;
   }
@@ -3958,98 +3879,16 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   };
 
   const renderThemeToggleButton = () => (
-    <button
-      onClick={toggleDarkMode}
-      title={`${theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'} (⇧⌘L)`}
-      aria-label={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-      style={{
-        width: '18px',
-        height: '18px',
-        padding: 0,
-        backgroundColor: 'transparent',
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'all 0.15s ease',
-      }}
-    >
-      {theme.isDark ? (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
-          <circle cx="12" cy="12" r="4" />
-          <rect x="11" y="1" width="2" height="4" rx="1" />
-          <rect x="11" y="19" width="2" height="4" rx="1" />
-          <rect x="19" y="11" width="4" height="2" rx="1" />
-          <rect x="1" y="11" width="4" height="2" rx="1" />
-          <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
-          <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
-          <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
-          <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
-        </svg>
-      ) : (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-        </svg>
-      )}
-    </button>
+    <LibraryFooterThemeToggleButton theme={theme} onToggle={toggleDarkMode} />
   );
 
   const renderMaxwellHistoryButton = (extraStyle: React.CSSProperties = {}) => (
-    <button
-      onClick={() => setMaxwellHistoryOpen((open) => !open)}
-      title="Maxwell history"
-      aria-label="Maxwell history"
-      style={{
-        width: '18px',
-        height: '18px',
-        padding: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: maxwellHistoryOpen ? theme.accent : 'transparent',
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        cursor: 'pointer',
-        transition: 'background-color 0.15s ease',
-        flexShrink: 0,
-        ...extraStyle,
-      }}
-    >
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={maxwellHistoryOpen ? '#fff' : theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 12a9 9 0 1 0 3-6.7" />
-        <path d="M3 3v6h6" />
-        <path d="M12 7v5l3 2" />
-      </svg>
-    </button>
-  );
-
-  const renderMaxwellCancelButton = () => (
-    <button
-      onClick={() => void cancelLocalCommandRun()}
-      title="Cancel Maxwell run"
-      aria-label="Cancel Maxwell run"
-      style={{
-        width: '18px',
-        height: '18px',
-        padding: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'transparent',
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        color: theme.textSecondary,
-        cursor: 'pointer',
-        flexShrink: 0,
-      }}
-    >
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-        <path d="M18 6 6 18" />
-        <path d="m6 6 12 12" />
-      </svg>
-    </button>
+    <LibraryFooterMaxwellHistoryButton
+      theme={theme}
+      open={maxwellHistoryOpen}
+      onToggle={() => setMaxwellHistoryOpen((open) => !open)}
+      style={extraStyle}
+    />
   );
 
   const renderPriorityMicControl = () => {
@@ -4226,15 +4065,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     );
   };
 
-  const localCommandActivityFrame = LOCAL_COMMAND_ACTIVITY_FRAMES[localCommandActivityFrameIndex] ?? LOCAL_COMMAND_ACTIVITY_FRAMES[0];
   const footerStatusLabel = localCommandStatus
-    ? formatFooterLocalCommandStatus(
-      localCommandStatus,
-      localCommandStatus.status === 'running' ? localCommandActivityFrame : undefined,
-    )
+    ? localCommandFooterStatusLabel
     : agentImproveStatus;
   const showFocusStatusOverlay = focusChromeOverlayActive && !footerChromeInteractive && !!footerStatusLabel;
-  const focusStatusOverlayColor = localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary;
 
   // Window fills the entire BrowserWindow now (no overlay).
   // Native macOS vibrancy handles the blur effect at the window level.
@@ -4363,127 +4197,36 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       </div>
 
       {showFocusChromeIcon && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: focusChromeIconTop,
-            left: focusChromeContentCenterX === null ? '50%' : `${focusChromeContentCenterX}px`,
-            transform: 'translateX(-50%)',
-            zIndex: 20,
-            height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-            opacity: focusChromeIconOpacity,
-          }}
-        >
-          <img
-            src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
-            alt=""
-            style={{
-              height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
-              width: 'auto',
-              display: 'block',
-            }}
-          />
-        </div>
+        <LibraryFocusChromeIcon
+          isDark={theme.isDark}
+          top={focusChromeIconTop}
+          contentCenterX={focusChromeContentCenterX}
+          opacity={focusChromeIconOpacity}
+        />
       )}
 
       {/* View mode tabs - collapses in Librarian immersive mode */}
       {viewMode !== 'sketch' && (
-        <div
-          ref={tabsRef}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: `${chromeTabsTopPx}px 28px 0 20px`,
-            marginTop: 0,
-            marginBottom: `${FIELD_THEORY_CHROME_TABS_BOTTOM_PX}px`,
-            height: 'auto',
-            minHeight: '32px',
-            overflow: 'visible',
-            opacity: appChromeOpacity,
-            pointerEvents: appChromeInteractive ? 'auto' : 'none',
-            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 90ms linear',
-            cursor: 'grab',
-            ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
-          }}>
-          {([
-            ['librarian', 'Library', 'Personal wiki'],
-            ['clipboard', TAB_LABELS.clipboard, undefined],
-          ] as const).map(([mode, label, title]) => {
-            const isSelected = viewMode === mode && !showSettings;
-            const bgColor = isSelected ? theme.accent : 'transparent';
-
-            return (
-              <button
-                key={mode}
-                onClick={() => {
-                  selectTopNavView(mode as TopNavMode);
-                }}
-                data-top-nav-mode={mode}
-                tabIndex={0}
-                style={{
-                  position: 'relative',
-                  padding: '6px 8px',
-                  fontSize: '11px',
-                  fontWeight: 400,
-                  backgroundColor: bgColor,
-                  color: isSelected ? '#fff' : theme.textSecondary,
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  transition: 'none',
-                  outline: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }
-                }}
-                title={title}
-              >
-                {label}
-                {/* New reading indicator for Librarian tab */}
-                {mode === 'librarian' && hasNewReading && viewMode !== 'librarian' && (
-                  <span style={{
-                    position: 'absolute',
-                    top: '-2px',
-                    right: '-2px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: theme.info,
-                  }} />
-                )}
-              </button>
-            );
-          })}
-
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {actionFeedback && (
-              <span 
-                style={{ 
-                  fontSize: '9px', 
-                  fontWeight: 500,
-                  color: theme.textSecondary,
-                }}
-              >
-                {actionFeedback}
-              </span>
-            )}
+        <div ref={tabsRef}>
+          <LibrarySurfaceTopTabs
+            theme={theme}
+            tabs={[
+              {
+                id: 'librarian',
+                label: 'Library',
+                title: 'Personal wiki',
+                indicator: hasNewReading && viewMode !== 'librarian',
+              },
+              { id: 'clipboard', label: TAB_LABELS.clipboard },
+            ]}
+            selectedId={!showSettings ? viewMode : ''}
+            onSelect={(mode) => selectTopNavView(mode as TopNavMode)}
+            topPaddingPx={chromeTabsTopPx}
+            opacity={appChromeOpacity}
+            interactive={appChromeInteractive}
+            rightSlot={(
+              <>
+            <LibraryTopChromeActionFeedback message={actionFeedback} theme={theme} />
             
             {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
               <div 
@@ -4693,8 +4436,9 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
           </button>
-
-          </div>
+              </>
+            )}
+          />
         </div>
       )}
 
@@ -6992,42 +6736,18 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
         </div>
       )}
 
-      <MaxwellHistoryPopover
+      <LibraryFooterMaxwellHistoryPopover
         open={maxwellHistoryOpen && !bookmarksCanvasChromeActive}
         onClose={() => setMaxwellHistoryOpen(false)}
         footerRef={footerRef}
       />
 
       {showFocusStatusOverlay && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: '14px',
-            transform: 'translateX(-50%)',
-            zIndex: 24,
-            maxWidth: 'min(620px, calc(100% - 48px))',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            backgroundColor: theme.isDark ? 'rgba(20, 23, 29, 0.76)' : 'rgba(255, 255, 255, 0.86)',
-            border: `1px solid ${theme.border}`,
-            color: focusStatusOverlayColor,
-            fontSize: '10px',
-            lineHeight: 1.35,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            pointerEvents: 'none',
-            opacity: 0.9,
-            transition: 'opacity 160ms ease',
-            animation: localCommandStatus && localCommandStatus.status !== 'running'
-              ? `localStatusFadeOut ${localCommandStatus.status === 'error' ? 9 : 3.5}s ease forwards`
-              : undefined,
-          }}
-        >
-          {footerStatusLabel}
-        </div>
+        <LibraryFooterStatusOverlay
+          theme={theme}
+          label={footerStatusLabel}
+          status={localCommandStatus}
+        />
       )}
 
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
@@ -7075,76 +6795,22 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           {/* Sidebar collapse toggle — actionable in Library (non-immersive)
               and Commands views. In other views it stays visible but disabled
               so the footer layout doesn't jump. */}
-          {(() => {
-            const collapseEnabled = navSidebarToggleEnabled;
-            const collapseTitle = collapseEnabled
-              ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)`
-              : 'Sidebar toggle';
-            return (
-              <button
-                onClick={toggleNavSidebarCollapsed}
-                disabled={!collapseEnabled}
-                title={collapseTitle}
-                aria-label="Toggle sidebar"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  background: 'transparent',
-                  color: theme.textSecondary,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  cursor: collapseEnabled ? 'pointer' : 'default',
-                  opacity: collapseEnabled ? 1 : 0.5,
-                  transition: 'background 0.15s ease, opacity 0.15s ease',
-                }}
-                onMouseEnter={(e) => {
-                  if (!collapseEnabled) return;
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                }}
-                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-              >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{
-                    transform: collapseEnabled && navSidebarCollapsed ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.15s ease',
-                  }}
-                >
-                  <path d="M10 4L6 8l4 4" />
-                </svg>
-              </button>
-            );
-          })()}
+          <LibraryFooterSidebarToggle
+            theme={theme}
+            collapsed={navSidebarCollapsed}
+            enabled={navSidebarToggleEnabled}
+            onToggle={toggleNavSidebarCollapsed}
+            shortcutLabel="⌘."
+          />
           {renderMaxwellHistoryButton()}
           {/* Plan info - always show for logged in users */}
           {localCommandStatus ? (
-                <>
-                  <span style={{ fontWeight: 500 }}>Local model:</span>
-                  <span
-                    style={{
-                      color: localCommandStatus.status === 'error' ? theme.error : theme.textSecondary,
-                      opacity: 0.85,
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {footerStatusLabel}
-                  </span>
-                  {localCommandStatus.status === 'running' && localCommandStatus.runId ? renderMaxwellCancelButton() : null}
-                </>
+                <LibraryFooterLocalCommandStatusControls
+                  theme={theme}
+                  status={localCommandStatus}
+                  label={footerStatusLabel}
+                  onCancel={() => void cancelLocalCommandRun()}
+                />
               ) : authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click
                 <>
@@ -7200,18 +6866,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}
             >
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                <img
-                  src={theme.isDark ? 'fieldtheory-logo-white.png' : 'fieldtheory-logo-black.png'}
-                  alt="Field Theory"
-                  style={{
-                    height: '14px',
-                    width: 'auto',
-                    maxWidth: '112px',
-                    objectFit: 'contain',
-                    opacity: 0.72,
-                    display: 'block',
-                  }}
-                />
+                <LibraryFooterLogo theme={theme} />
               </div>
             </div>
           ) : null;

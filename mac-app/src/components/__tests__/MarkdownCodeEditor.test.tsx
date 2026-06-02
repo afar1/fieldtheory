@@ -37,6 +37,7 @@ import {
   RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS,
+  RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT,
   RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR,
   RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
@@ -130,6 +131,10 @@ describe('MarkdownCodeEditor cursor blink', () => {
     expect(getMarkdownCodeEditorSelectionBackground(true, 'rendered')).toBe('rgba(120,170,255,0.16)');
     expect(getMarkdownCodeEditorSelectionBackground(true, 'source')).toBe('rgba(120,170,255,0.25)');
     expect(getMarkdownCodeEditorSelectionBackground(false, 'rendered', 'custom')).toBe('custom');
+  });
+
+  it('uses one physical row height for styled rendered text', () => {
+    expect(RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT).toBe('var(--ft-line-number-row-height)');
   });
 
   it('detects range selections so the drawn cursor can hide while text is selected', () => {

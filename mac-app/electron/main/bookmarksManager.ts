@@ -164,6 +164,24 @@ export function mediaDir(): string {
   return path.join(bookmarksDir(), 'media');
 }
 
+export function resolveBookmarkMediaFile(filename: string): string | null {
+  const cleanFilename = path.basename(filename);
+  if (!cleanFilename || cleanFilename !== filename) return null;
+
+  const dir = mediaDir();
+  const candidate = path.join(dir, cleanFilename);
+  try {
+    const realDir = fs.realpathSync(dir);
+    const realFile = fs.realpathSync(candidate);
+    const relativePath = path.relative(realDir, realFile);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return null;
+    if (!fs.statSync(realFile).isFile()) return null;
+    return realFile;
+  } catch {
+    return null;
+  }
+}
+
 function webDir(): string {
   return path.join(bookmarksDir(), 'web');
 }
@@ -249,6 +267,16 @@ function computeSnapshotGate(): SnapshotGate {
     mediaDir: mediaDirGate(),
     webIndex: fileGate(webIndexPath()),
   };
+}
+
+function shouldWatchBookmarkInput(
+  inputPath: string,
+  input: { directories: Set<string>; files: Set<string>; mediaDirectory: string }
+): boolean {
+  const candidate = path.resolve(inputPath);
+  if (input.directories.has(candidate)) return true;
+  if (input.files.has(candidate)) return true;
+  return path.dirname(candidate) === input.mediaDirectory;
 }
 
 interface RawMediaManifestEntry {
@@ -736,9 +764,17 @@ export class BookmarksManager extends EventEmitter {
       return;
     }
 
+    const watchedInputs = {
+      directories: new Set([dir, mediaDir(), webDir()].map((dirPath) => path.resolve(dirPath))),
+      files: new Set([jsonlPath(), foldersPath(), mediaManifestPath(), webIndexPath()].map((filePath) => path.resolve(filePath))),
+      mediaDirectory: path.resolve(mediaDir()),
+    };
+
     this.watcher = chokidar.watch(
-      [jsonlPath(), foldersPath(), webIndexPath()],
+      dir,
       {
+        depth: 2,
+        ignored: (inputPath) => !shouldWatchBookmarkInput(inputPath, watchedInputs),
         ignoreInitial: true,
         awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
         ignorePermissionErrors: true,

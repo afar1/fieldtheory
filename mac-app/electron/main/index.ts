@@ -36,6 +36,15 @@ import {
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
+import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
+import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
+import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
+import {
+  getBrowserLibraryNativeFocusHandoff,
+  shouldPromoteBrowserLibraryClientContext,
+  shouldTargetBrowserLibraryNavigation,
+} from './browserLibraryActiveContext';
+import { buildBrowserLibraryUrl } from './browserLibraryUrl';
 import {
   LibraryDocumentWindowManager,
   persistableLibraryDocumentWindowBounds,
@@ -108,6 +117,7 @@ import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { parseSharedFileFrontmatter } from './sharedFiles';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
@@ -132,7 +142,15 @@ import {
   type MaxwellUndoFailureReason,
   type MaxwellUndoResult,
 } from './types/commands';
-import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import {
+  type DocumentSaveResult,
+  type DocumentVersion,
+  documentSaveConflictIfVersionChanged,
+  documentSaveResultForSharedConflict,
+  documentSaveResultForUpdatedFile,
+  readDocumentVersion,
+  writeTextFileWithConflictGuard,
+} from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
 import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, resolveCommandLauncherInvocationTarget } from './commandLauncherTarget';
@@ -162,6 +180,7 @@ import {
   fieldTheoryProtocolClientArgs,
   shouldRegisterFieldTheoryProtocol,
 } from './urlProtocolRegistration';
+import { browserLibraryTargetFromProtocolUrl } from './fieldTheoryProtocolTarget';
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
@@ -1792,6 +1811,71 @@ function scheduleCommandClipboardRestore(input: {
   });
 }
 
+function scheduleBrowserLibraryClipboardRestore(input: {
+  tracePrefix: string;
+  tracePayload: Record<string, unknown>;
+  restoreGeneration: number;
+  restoreSnapshot: ClipboardSnapshot;
+  launcherClipboardPayload: CommandClipboardPayloadSnapshot | null;
+}): void {
+  const {
+    tracePrefix,
+    tracePayload,
+    restoreGeneration,
+    restoreSnapshot,
+    launcherClipboardPayload,
+  } = input;
+
+  void (async () => {
+    appendCommandLauncherTrace(`${tracePrefix}-wait-before-clipboard-restore`, {
+      ...tracePayload,
+      delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+      generation: restoreGeneration,
+    });
+
+    await waitForCommandClipboardPasteRead();
+
+    if (commandClipboardRestoreCoordinator.canRestore(restoreGeneration)) {
+      try {
+        const clipboardStillHasLauncherPayload = launcherClipboardPayload
+          ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+          : false;
+        if (clipboardStillHasLauncherPayload) {
+          restoreClipboardSnapshot(restoreSnapshot);
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace(`${tracePrefix}-clipboard-restored`, {
+            ...tracePayload,
+            generation: restoreGeneration,
+            reason: 'clipboard-still-browser-library-payload',
+          });
+        } else {
+          appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-skipped`, {
+            ...tracePayload,
+            generation: restoreGeneration,
+            reason: launcherClipboardPayload ? 'clipboard-changed-after-browser-library-paste' : 'missing-browser-library-payload-snapshot',
+          });
+        }
+      } finally {
+        commandClipboardRestoreCoordinator.finish(restoreGeneration);
+      }
+    } else {
+      appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-skipped`, {
+        ...tracePayload,
+        generation: restoreGeneration,
+        reason: 'newer-command-invocation',
+      });
+      commandClipboardRestoreCoordinator.finish(restoreGeneration);
+    }
+  })().catch((error) => {
+    appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-error`, {
+      ...tracePayload,
+      generation: restoreGeneration,
+      error,
+    });
+    commandClipboardRestoreCoordinator.finish(restoreGeneration);
+  });
+}
+
 async function activateCommandLauncherTargetApp(
   targetApp: { bundleId: string; name: string },
   tracePrefix: string,
@@ -1960,6 +2044,87 @@ async function typeTextFromCommandLauncher(
   }
 }
 
+async function pasteTextIntoCodexInputFromBrowserLibrary(text: string): Promise<{ success: boolean; error?: string; delivery?: string }> {
+  const trimmed = text.trim();
+  if (!trimmed) return { success: false, error: 'No selected text' };
+  const targetApp = { bundleId: 'com.openai.codex', name: 'Codex' };
+  const traceDetails = {
+    source: 'browser-library-selection',
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    textLength: text.length,
+  };
+  appendCommandLauncherTrace('browser-library-codex-input-paste-start', traceDetails);
+
+  if (nativeHelper) {
+    const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+    let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
+    try {
+      const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+      if (result.pasteboardWritten) {
+        launcherClipboardPayload = captureCommandClipboardPayload();
+        scheduleBrowserLibraryClipboardRestore({
+          tracePrefix: 'browser-library-codex-input-native',
+          tracePayload: traceDetails,
+          restoreGeneration: clipboardRestore.generation,
+          restoreSnapshot: clipboardRestore.snapshot,
+          launcherClipboardPayload,
+        });
+      } else {
+        commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+      }
+      appendCommandLauncherTrace('browser-library-codex-input-native-result', {
+        ...traceDetails,
+        success: result.success,
+        error: result.error ?? null,
+        targetFrontmost: result.targetFrontmost ?? null,
+        focusedTextInput: result.focusedTextInput ?? null,
+        pasteboardWritten: result.pasteboardWritten ?? null,
+      });
+      if (result.success && result.focusedTextInput !== false) {
+        return { success: true, delivery: 'native-helper' };
+      }
+    } catch (error) {
+      commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+      appendCommandLauncherTrace('browser-library-codex-input-native-error', {
+        ...traceDetails,
+        error,
+      });
+    }
+  }
+
+  const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+  try {
+    clipboard.writeText(text);
+    clipboardManager?.syncClipboardHash();
+    const launcherClipboardPayload = captureCommandClipboardPayload();
+    await activateTargetAppWithSystemEvents(targetApp);
+    scheduleBrowserLibraryClipboardRestore({
+      tracePrefix: 'browser-library-codex-input-fallback',
+      tracePayload: traceDetails,
+      restoreGeneration: clipboardRestore.generation,
+      restoreSnapshot: clipboardRestore.snapshot,
+      launcherClipboardPayload,
+    });
+    appendCommandLauncherTrace('browser-library-codex-input-clipboard-fallback', {
+      ...traceDetails,
+      clipboard: readCommandPasteClipboardTrace(),
+    });
+    return {
+      success: true,
+      delivery: 'clipboard-focus',
+      error: 'Codex input was not focused; copied selection and activated Codex.',
+    };
+  } catch (error) {
+    commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+    appendCommandLauncherTrace('browser-library-codex-input-failed', {
+      ...traceDetails,
+      error,
+    });
+    return { success: false, error: error instanceof Error ? error.message : 'Could not paste into Codex input' };
+  }
+}
+
 async function runWithCommandLauncherExternalInvocation<T>(operation: () => Promise<T>): Promise<T> {
   const token = commandLauncherWindow?.beginExternalInvocationSuppression() ?? null;
   try {
@@ -2050,11 +2215,13 @@ function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
 
 function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
   return Boolean(
     activeLibraryFileContext &&
     ((clipboardWindow &&
       !clipboardWindow.isDestroyed() &&
       clipboardWindow.isVisible()) ||
+      (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) ||
       browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
   );
 }
@@ -2073,6 +2240,10 @@ function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
 function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
     return false;
+  }
+  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
+  if (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) {
+    return browserHelperServer.emitNativeEventToClient(activeBrowserClientId, { type: 'librarian:insertMarkdownText', text });
   }
   if (
     (browserLibraryMarkdownEditorFocused ||
@@ -2109,11 +2280,16 @@ async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
 }): Promise<boolean> {
+  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
+  const targetBrowserClientId = activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)
+    ? activeBrowserClientId
+    : browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
+      ? activeBrowserLibraryClientId
+      : null;
   if (
     input.expectedText &&
     input.replacementText &&
-    browserLibraryMarkdownEditorFocused &&
-    browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
+    targetBrowserClientId
   ) {
     const requestId = crypto.randomUUID();
     return new Promise((resolve) => {
@@ -2122,7 +2298,7 @@ async function replaceSelectedTextInFieldTheoryMarkdown(input: {
         resolve(false);
       }, 600);
       pendingBrowserLibraryReplaceSelectedText.set(requestId, { resolve, timeout });
-      const sent = browserHelperServer?.emitNativeEventToClient(activeBrowserLibraryClientId, {
+      const sent = browserHelperServer?.emitNativeEventToClient(targetBrowserClientId, {
         type: 'librarian:replaceSelectedMarkdownText',
         request: {
           requestId,
@@ -2676,6 +2852,26 @@ async function getLibrarianShareStatus(filePath: string): Promise<{ shared: bool
   };
 }
 
+async function getCurrentUserCallsign(): Promise<string | null> {
+  if (!authManager?.isAuthenticated()) return null;
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return null;
+
+  try {
+    const { data } = await supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', session.user.id)
+      .single();
+    return typeof data?.callsign === 'string' && data.callsign.trim()
+      ? data.callsign.trim()
+      : authManager.getCallsign();
+  } catch {
+    return authManager.getCallsign();
+  }
+}
+
 async function updateSharedLibrarianReading(filePath: string, content: string, title: string): Promise<boolean> {
   if (!authManager?.isAuthenticated()) return false;
 
@@ -2908,8 +3104,37 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     staticDir: path.join(app.getAppPath(), 'dist'),
     nativeBridge: {
+      getAuthSession: () => authManager?.getSession() ?? null,
+      getAuthCallsign: () => getCurrentUserCallsign(),
+      getMetrics: () => metricsManager?.getMetrics() ?? null,
+      fetchMetricsFromSupabase: () => metricsManager?.fetchFromSupabase() ?? false,
+      getQuotas: () => quotaManager?.getQuotas() ?? null,
+      getTheme: () => preferencesManager?.getPreference('darkMode') ?? false,
+      setTheme: (isDark) => setThemePreferenceAndBroadcast(isDark),
+      getHotkey: async (id) => {
+        const preferenceKeys: Record<string, string> = {
+          superPaste: 'superPasteHotkey',
+          commandLauncher: 'commandLauncherHotkey',
+          scratchpad: 'scratchpadHotkey',
+        };
+        const defaults: Record<string, string> = {
+          superPaste: 'Command+Shift+V',
+          commandLauncher: 'Command+Shift+K',
+          scratchpad: 'Control+Option+Command+Space',
+        };
+        const prefKey = preferenceKeys[id];
+        if (!prefKey) return null;
+        const prefs = await preferencesManager?.load();
+        return ((prefs as Record<string, unknown> | undefined)?.[prefKey] as string | undefined) || defaults[id] || null;
+      },
       getHiddenFolders: () => librarianManager?.getHiddenDefaultFolders() ?? [],
       setFolderHidden: (folderId, hidden) => librarianManager?.setDefaultFolderHidden(folderId, hidden) ?? [],
+      recordRecentWikiPage: (page) => {
+        recordRecentWikiPage(page as ReturnType<LibrarianManager['getWikiPage']>);
+      },
+      recordRecentCreatedLibraryPage: (page, rootPath) => {
+        recordRecentCreatedLibraryPage(page as ReturnType<LibrarianManager['getWikiPage']>, rootPath);
+      },
       getReadings: () => librarianManager?.getReadings() ?? [],
       getReading: (filePath) => librarianManager?.getReading(filePath) ?? null,
       saveReading: (filePath, content, expectedVersion) => {
@@ -2930,9 +3155,87 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       shareReading: (filePath) => shareLibrarianReading(filePath),
       unshareReading: (filePath) => unshareLibrarianReading(filePath),
       updateSharedReading: (filePath, content, title) => updateSharedLibrarianReading(filePath, content, title),
+      isLibrarianEnabled: () => librarianManager?.isEnabled() ?? false,
+      setLibrarianEnabled: (enabled) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.setEnabled(enabled) ?? false;
+      },
+      isLibrarianSetupComplete: () => librarianManager?.isSetupComplete() ?? inferCurrentLibrarianSetupComplete(),
+      setLibrarianSetupComplete: (complete) => {
+        librarianManager?.setSetupComplete(complete);
+      },
+      createWelcomeArtifact: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.createWelcomeArtifact(dirPath) ?? false;
+      },
+      getLibrarianWatchedDirs: () => librarianManager?.getWatchedDirs() ?? [],
+      addLibrarianWatchedDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return librarianManager?.addWatchedDir(dirPath) ?? null;
+      },
+      removeLibrarianWatchedDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.removeWatchedDir(dirPath) ?? false;
+      },
+      browseLibrarianDirectory: async () => {
+        const result = await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+          title: 'Select a directory to watch for readings',
+        });
+        return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+      },
+      getDiscoveryFrequency: () => librarianManager?.getDiscoveryFrequency() ?? 'sometimes',
+      setDiscoveryFrequency: (frequency) => (
+        librarianManager && (frequency === 'often' || frequency === 'sometimes' || frequency === 'rarely')
+          ? librarianManager.setDiscoveryFrequency(frequency)
+          : false
+      ),
+      getUserExpertiseContext: () => librarianManager?.getUserExpertiseContext(),
+      setUserExpertiseContext: (context) => librarianManager?.setUserExpertiseContext(context) ?? false,
+      getClaudeCodeStatus: () => librarianManager?.getClaudeCodeStatus() ?? 'not-installed',
+      isStateEnforcedHookInstalled: () => librarianManager?.isStateEnforcedHookInstalled() ?? false,
+      installStateEnforcedHook: () => librarianManager?.installStateEnforcedHook() ?? false,
+      uninstallStateEnforcedHook: () => librarianManager?.uninstallStateEnforcedHook() ?? false,
+      isCursorHookInstalled: () => librarianManager?.isCursorHookInstalled() ?? false,
+      installCursorHook: () => librarianManager?.installCursorHook() ?? false,
+      uninstallCursorHook: () => librarianManager?.uninstallCursorHook() ?? false,
+      isCodexHookInstalled: () => librarianManager?.isCodexHookInstalled() ?? false,
+      installCodexHook: () => librarianManager?.installCodexHook() ?? false,
+      uninstallCodexHook: () => librarianManager?.uninstallCodexHook() ?? false,
+      pollLibrarianStatus: () => {
+        const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
+        const pendingPath = pendingAutoOpenReading;
+        pendingAutoOpenReading = null;
+        return {
+          pendingPath,
+          edits: status.edits,
+          threshold: status.threshold,
+          didReset: status.didReset,
+        };
+      },
       muteForToday: () => librarianManager?.muteForToday() ?? false,
       isMutedForToday: () => librarianManager?.isMutedForToday() ?? false,
       unmute: () => librarianManager?.unmute() ?? false,
+      setBrowserLibraryImmersiveDismissable: (dismissable, clientId) => {
+        if (clientId) browserLibraryImmersiveDismissableByClientId.set(clientId, dismissable);
+        else browserLibraryImmersiveDismissable = dismissable;
+      },
+      setBrowserLibrarySizeKey: (key, clientId) => {
+        if (clientId) browserLibrarySizeKeyByClientId.set(clientId, key);
+        else browserLibrarySizeKey = key;
+      },
       setMarkdownEditorFocused: (focused, clientId) => {
         browserLibraryMarkdownEditorFocused = Boolean(focused);
         if (browserLibraryMarkdownEditorFocused) {
@@ -3050,6 +3353,38 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         filePath: cmd.filePath,
         lastModified: cmd.lastModified,
       })) ?? [],
+      getCommandDirectory: () => commandsManager?.getDirectory() ?? null,
+      setCommandDirectory: async (directoryPath) => {
+        if (!commandsManager || !preferencesManager) {
+          return { success: false, error: 'Not initialized' };
+        }
+        try {
+          await commandsManager.setDirectory(typeof directoryPath === 'string' ? directoryPath : null);
+          await preferencesManager.save({ commandsDirectory: directoryPath || undefined });
+          return { success: true };
+        } catch (error) {
+          log.error('Failed to set Browser Library commands directory:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      getCommandDirectories: () => commandsManager?.getCommandDirectories() ?? [],
+      refreshCommands: async () => {
+        if (!commandsManager) return [];
+        await commandsManager.refresh();
+        return commandsManager.getCommands().map(cmd => ({
+          name: cmd.name,
+          displayName: cmd.displayName,
+          filePath: cmd.filePath,
+          lastModified: cmd.lastModified,
+        }));
+      },
+      getCommandContent: async (commandName) => {
+        if (!commandsManager || typeof commandName !== 'string') return null;
+        const command = commandsManager.getCommand(commandName);
+        if (!command) return null;
+        const loaded = await commandsManager.loadCommandContent(command);
+        return loaded ? { content: loaded.content, filePath: loaded.filePath } : null;
+      },
       getCommandByPath: (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
       getMarkdownPreview: (filePath) => loadMarkdownPreview(filePath),
       saveCommand: (filePath, content, expectedVersion) => {
@@ -3126,6 +3461,8 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       cancelMaxwellRun: (runId) => cancelNativeMaxwellRun(runId),
       undoMaxwellRun: (runId) => undoNativeMaxwellRun(runId),
       redoMaxwellRun: (runId) => redoNativeMaxwellRun(runId),
+      archiveActiveLibraryFile: () => archiveActiveLibraryFileForLauncher(),
+      toggleActiveLibraryLineNumbers: () => toggleActiveLibraryLineNumbersForLauncher(),
       getActiveMeeting: () => {
         try {
           return getMeetingManager().getActiveSession();
@@ -3148,7 +3485,94 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         }
       },
       getBookmarks: () => ensureBookmarksManager().getSnapshot(),
+      getBookmarkDataSource: () => {
+        const { bookmarkDataDir, canonicalBookmarkDataDir, legacyBookmarkDataDir } = require('./fieldTheoryPaths') as typeof import('./fieldTheoryPaths');
+        const dataDir = bookmarkDataDir();
+        return {
+          dataDir,
+          canonicalDataDir: canonicalBookmarkDataDir(),
+          legacyDataDir: legacyBookmarkDataDir(),
+          usingLegacyDataDir: dataDir === legacyBookmarkDataDir(),
+          bookmarksCachePath: path.join(dataDir, 'bookmarks.jsonl'),
+          mediaDir: path.join(dataDir, 'media'),
+          mediaManifestPath: path.join(dataDir, 'media-manifest.json'),
+        };
+      },
       syncBookmarksIfStale: () => syncBookmarksFromCliIfStale(),
+      getBookmarkAuthors: () => {
+        const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        return buildBookmarkAuthorSummaries(ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      getAuthorBookmarks: (handle) => {
+        const { bookmarksForAuthor } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        return bookmarksForAuthor(handle, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      getTaxonomyBookmarks: (filePaths) => {
+        const { bookmarksForTaxonomyFiles } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+        return bookmarksForTaxonomyFiles(filePaths, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      searchBookmarks: (query) => {
+        const { searchBookmarks } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+        return searchBookmarks(query, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      saveWebBookmarkUrl: async (url) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { success: false, error: 'Field Theory is read-only' };
+        }
+        if (!url.trim()) return { success: false, error: 'URL is required' };
+        try {
+          const result = await ensureBookmarksManager().saveWebBookmarkFromUrl(url);
+          return { success: true, ...result };
+        } catch (error) {
+          log.error('Error saving web bookmark from Browser Library:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      getActiveWebPageForBookmark: () => getActiveWebPageForBrowserLibraryBookmark('browser-library-get-active-web-page'),
+      saveActiveWebPageBookmark: async () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { success: false, error: 'Field Theory is read-only' };
+        }
+        const activePage = await getActiveWebPageForBrowserLibraryBookmark('browser-library-save-active-web-page');
+        if (!activePage.success || !activePage.page) return activePage;
+        try {
+          const result = await ensureBookmarksManager().saveWebBookmarkFromUrl(activePage.page.url);
+          appendCommandLauncherTrace('browser-library-save-active-web-page-success', {
+            targetBundleId: activePage.page.bundleId,
+            targetName: activePage.page.appName,
+            url: activePage.page.url,
+            created: result.created,
+            markdownPath: result.markdownPath,
+          });
+          return { success: true, page: activePage.page, ...result };
+        } catch (error) {
+          log.error('Error saving active browser page from Browser Library:', error);
+          appendCommandLauncherTrace('browser-library-save-active-web-page-error', {
+            targetBundleId: activePage.page.bundleId,
+            targetName: activePage.page.appName,
+            error,
+          });
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      invokeBookmark: (id) => {
+        const { bookmarkById, formatBookmarkPost } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) return { success: false, error: 'Bookmark not found' };
+        return pasteBookmarkTextFromBrowserLibrary('browser-library-invoke-bookmark-post', { id }, formatBookmarkPost(bookmark));
+      },
+      sendBookmarkToCodex: (id) => {
+        const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+        const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) {
+          return { success: false, error: 'Bookmark not found' };
+        }
+        return pasteTextIntoCodexInputFromBrowserLibrary(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+      },
       copyBookmarkForAgent: (id) => {
         const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
         const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
@@ -3166,6 +3590,27 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
           return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
         }
       },
+      invokeBookmarkAuthorTimeline: (handle) => {
+        const { formatBookmarkAuthorTimeline } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const timeline = formatBookmarkAuthorTimeline(handle, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!timeline) return { success: false, error: 'No bookmarks found for author' };
+        return pasteBookmarkTextFromBrowserLibrary('browser-library-invoke-bookmark-author', { handle }, timeline);
+      },
+      getBookmarkMediaDirectory: () => {
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        return bookmarkMediaDir();
+      },
+      getBookmarkMediaFilePath: (filename) => {
+        const { resolveBookmarkMediaFile } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        return resolveBookmarkMediaFile(path.basename(filename));
+      },
+      getAppVersion: () => app.getVersion(),
+      isUpdaterEnabled: () => isAutoUpdaterEnabled,
+      getUpdaterStatus: () => pendingUpdateInfo,
+      checkForUpdates: () => checkForAppUpdates(),
+      downloadUpdate: () => downloadAppUpdate(),
+      installUpdate: () => installAppUpdate(),
+      dismissUpdate: () => dismissAppUpdate(),
       openExternal: (href) => {
         shell.openExternal(href);
         return true;
@@ -3174,6 +3619,17 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         shell.showItemInFolder(filePath);
         return true;
       },
+      setRepresentedFilename: (filePath, clientId) => {
+        if (clientId) {
+          browserLibraryRepresentedFilenameByClientId.set(clientId, filePath || '');
+        } else {
+          browserLibraryRepresentedFilename = filePath || '';
+        }
+      },
+      pasteIntoCodexInput: (text) => pasteTextIntoCodexInputFromBrowserLibrary(text),
+      openFieldTheoryMarkdownInNativeApp: (target) => openFieldTheoryMarkdownInNativeApp(target),
+      getClipboardImagePath: () => clipboardManager?.exportCurrentClipboardImageToCache() ?? null,
+      savePastedImageFile: (file) => clipboardManager?.savePastedImageFileToCache(file as { name?: string | null; type?: string | null; data: Uint8Array }) ?? null,
       pickFolder: async () => {
         const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
         if (result.canceled) return null;
@@ -3215,8 +3671,22 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
       },
       getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
+      startAgentKickoff: (args) => {
+        if (!agentKickoffManager) {
+          return {
+            ok: false,
+            runId: '',
+            error: 'Agent kickoff manager unavailable',
+          };
+        }
+        return agentKickoffManager.start(args as AgentKickoffArgs);
+      },
+      cancelAgentKickoff: (runId) => agentKickoffManager?.cancel(runId) ?? false,
       getRendererStorage: () => getBrowserLibraryRendererStorage(),
       setRendererStorage: (key, value) => setBrowserLibraryRendererStorage(key, value),
+      appendRenderedEditorDebug: (entry) => writeRenderedEditorDebugLog(entry),
+      clearRenderedEditorDebugLog: () => clearRenderedEditorDebugLog(),
+      getActiveLibraryFileContext: () => activeLibraryFileContext,
     },
     reportCurrentDocument: (context, clientId) => {
       const windowId = browserLibraryWindowId(clientId);
@@ -3242,16 +3712,27 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       }
       getDocumentPresenceManager().clearWindow(windowId);
     },
-    setActiveClient: (clientId) => {
+    setActiveClient: (clientId, surface) => {
       if (!clientId) return;
       activeBrowserLibrarySurfaceClientId = clientId;
+      if (surface) {
+        activeBrowserLibrarySurfaceKind = surface;
+      }
       promoteBrowserLibraryClientContext(clientId);
+    },
+    clearActiveClient: (clientId) => {
+      if (!clientId || activeBrowserLibrarySurfaceClientId !== clientId) return;
+      activeBrowserLibrarySurfaceClientId = null;
+      activeBrowserLibrarySurfaceKind = null;
     },
     onClientDisconnected: (clientId) => {
       const windowId = browserLibraryWindowId(clientId);
       getDocumentPresenceManager().closeWindow(windowId);
       if (clientId) {
         browserLibraryContextByClientId.delete(clientId);
+        browserLibraryImmersiveDismissableByClientId.delete(clientId);
+        browserLibrarySizeKeyByClientId.delete(clientId);
+        browserLibraryRepresentedFilenameByClientId.delete(clientId);
       }
       if (activeLibraryFileContextSourceId === windowId) {
         activeLibraryFileContext = null;
@@ -3259,6 +3740,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       }
       if (!clientId || activeBrowserLibrarySurfaceClientId === clientId) {
         activeBrowserLibrarySurfaceClientId = null;
+        activeBrowserLibrarySurfaceKind = null;
       }
       if (!clientId || activeBrowserLibraryClientId === clientId) {
         browserLibraryMarkdownEditorFocused = false;
@@ -3268,9 +3750,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   });
   const address = await browserHelperServer.start();
   const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
-  const browserUrl = devServer
-    ? `${devServer}/browser-library.html?api=${encodeURIComponent(`http://${address.host}:${address.port}`)}&token=${encodeURIComponent(address.token)}`
-    : `${address.url}&api=${encodeURIComponent(`http://${address.host}:${address.port}`)}`;
+  const browserUrl = buildBrowserLibraryUrl({ address, devServer });
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }
 let librarySyncService: LibrarySyncService | null = null;
@@ -3284,6 +3764,9 @@ type ActiveLibraryFileContext = {
   relPath: string;
   filePath: string;
   title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
 };
 let activeLibraryFileContext: ActiveLibraryFileContext | null = null;
 let activeLibraryFileContextSourceId: string | null = null;
@@ -3294,94 +3777,143 @@ function browserLibraryWindowId(clientId: string | null | undefined): string {
   return clientId ? `browser-helper:${clientId}` : 'browser-helper';
 }
 
+function browserLibraryClientIdFromWindowId(windowId: string | null | undefined): string | null {
+  const prefix = 'browser-helper:';
+  return windowId?.startsWith(prefix) ? windowId.slice(prefix.length) : null;
+}
+
 function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
-  return {
+  const next: ActiveLibraryFileContext = {
     type: context.type,
     rootPath: context.rootPath,
     relPath: context.relPath,
     filePath: context.filePath,
     title: context.title,
   };
+  if (typeof context.selectionStart === 'number' && typeof context.selectionEnd === 'number') {
+    next.selectionStart = context.selectionStart;
+    next.selectionEnd = context.selectionEnd;
+    if (typeof context.selectionText === 'string') {
+      next.selectionText = context.selectionText;
+    }
+  }
+  return next;
+}
+
+function archiveActiveLibraryFileForLauncher(): { success: boolean; error?: string } {
+  if (!librarianManager) return { success: false, error: 'Library is not ready' };
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return { success: false, error: 'Field Theory is read-only' };
+  }
+  if (!activeLibraryFileContext) return { success: false, error: 'No current Library file to archive' };
+  if (!fs.existsSync(activeLibraryFileContext.filePath)) {
+    return { success: false, error: 'Current Library file no longer exists' };
+  }
+
+  try {
+    const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
+    const content = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+    const nextContent = setMarkdownArchivedState(content, true);
+    const result = activeLibraryFileContext.type === 'wiki'
+      ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, nextContent, expectedVersion)
+      : writeTextFileWithConflictGuard(activeLibraryFileContext.filePath, nextContent, expectedVersion);
+    if (!result.ok) return { success: false, error: `Archive failed: ${result.reason}` };
+    if (activeLibraryFileContext.type === 'external') {
+      librarianManager.emit('library:changed', activeLibraryFileContext.rootPath);
+    }
+    appendCommandLauncherTrace('archive-active-library-file-success', {
+      type: activeLibraryFileContext.type,
+      relPath: activeLibraryFileContext.relPath,
+      filePath: activeLibraryFileContext.filePath,
+    });
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Archive failed';
+    appendCommandLauncherTrace('archive-active-library-file-error', { error: message });
+    return { success: false, error: message };
+  }
 }
 
 function promoteBrowserLibraryClientContext(clientId: string | null | undefined): void {
   if (!clientId) return;
+  if (!shouldPromoteBrowserLibraryClientContext({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused })) return;
   const context = browserLibraryContextByClientId.get(clientId);
   if (!context) return;
   activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
   activeLibraryFileContextSourceId = browserLibraryWindowId(clientId);
 }
-const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
-  'library-sort-mode',
-  'wiki-expanded-folders',
-  'wiki-recent-collapsed',
-  'library-pinned-item-ids',
-  'library-sidebar-icon-color-indices',
-  'library-sidebar-icon-color-order',
-  'library-new-doc-location',
-  'fieldtheory.libraryRenameTrace',
-  'fieldtheory.contentToolbar.pinnedActions.v2',
-  'librarian-text-size',
-  'librarian-typography-preset',
-  'librarian-line-height',
-  'librarian-unordered-list-marker',
-  'librarian-todo-marker',
-  'librarian-maxwell-items',
-  'librarian-html-layout-by-path',
-  'librarian-last-selection',
-  'librarian-editor-session',
-  'fieldtheory-line-numbers',
-  'fieldtheory-rendered-edit-click-mode',
-  'fieldtheory-text-cursor-blink',
-  'fieldtheory-rendered-text-cursor-style',
-  'fieldtheory-rendered-block-cursor-opacity',
-  'fieldtheory-shared-file-toggle-hotkey',
-  'librarian-sidebar-width',
-  'librarian-sidebar-collapsed',
-  'bookmarks-view-mode',
-  'bookmarks-show-text',
-  'commands-text-size',
-  'commands-sidebar-width',
-  'darkMode',
-  'glassEffect',
-  'accentPreset',
-  'darkModeIntensity',
-  'fieldtheory-rendered-editor-debug',
-] as const;
 const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
+let browserLibraryRendererStorageStore: BrowserLibraryRendererStorageStore | null = null;
+
+function getBrowserLibraryRendererStorageStore(): BrowserLibraryRendererStorageStore {
+  if (!browserLibraryRendererStorageStore) {
+    browserLibraryRendererStorageStore = new BrowserLibraryRendererStorageStore(
+      BrowserLibraryRendererStorageStore.defaultPath(app.getPath('userData')),
+    );
+  }
+  return browserLibraryRendererStorageStore;
+}
 
 async function getBrowserLibraryRendererStorage(): Promise<{ available: boolean; values: Record<string, string | null> }> {
+  const store = getBrowserLibraryRendererStorageStore();
   const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
-  if (!webContents || webContents.isDestroyed()) return { available: false, values: {} };
-  const values = await webContents.executeJavaScript(`
-    (() => {
-      const keys = ${JSON.stringify(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS)};
-      const values = {};
-      for (const key of keys) values[key] = window.localStorage.getItem(key);
-      return values;
-    })()
-  `, true).catch(() => null);
-  return values && typeof values === 'object'
-    ? { available: true, values: values as Record<string, string | null> }
-    : { available: false, values: {} };
+  if (webContents && !webContents.isDestroyed()) {
+    const values = await webContents.executeJavaScript(`
+      (() => {
+        const keys = ${JSON.stringify(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS)};
+        const values = {};
+        for (const key of keys) values[key] = window.localStorage.getItem(key);
+        return values;
+      })()
+    `, true).catch(() => null);
+    if (values && typeof values === 'object') {
+      await store.merge(values as Record<string, string | null>);
+    }
+  }
+  return store.snapshot();
 }
 
 async function setBrowserLibraryRendererStorage(key: string, value: string | null): Promise<void> {
   if (!BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) return;
+  const changed = await getBrowserLibraryRendererStorageStore().set(key, value);
+  if (!changed) return;
+  if (changed) broadcastBrowserLibraryRendererStorageChanged(key, value);
   const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
   if (!webContents || webContents.isDestroyed()) return;
+  await applyBrowserLibraryRendererStorageToWebContents(webContents, { [key]: value });
+}
+
+async function applyBrowserLibraryRendererStorageToWebContents(
+  webContents: Electron.WebContents,
+  values: Record<string, string | null>,
+): Promise<void> {
+  if (webContents.isDestroyed()) return;
   await webContents.executeJavaScript(`
     (() => {
-      const key = ${JSON.stringify(key)};
-      const value = ${JSON.stringify(value)};
-      if (value === null) {
-        window.localStorage.removeItem(key);
-      } else {
-        window.localStorage.setItem(key, value);
+      const values = ${JSON.stringify(values)};
+      for (const [key, value] of Object.entries(values)) {
+        if (value === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, value);
+        }
+        window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
       }
-      window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
     })()
   `, true).catch(() => {});
+}
+
+async function hydrateNativeRendererStorageFromBrowserLibraryStore(): Promise<void> {
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  const snapshot = await getBrowserLibraryRendererStorageStore().snapshot();
+  await applyBrowserLibraryRendererStorageToWebContents(webContents, snapshot.values);
+}
+
+function broadcastBrowserLibraryRendererStorageChanged(key: string, value: string | null): void {
+  if (!BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) return;
+  browserHelperServer?.emitNativeEvent({ type: 'renderer-storage:changed', key, value });
 }
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
@@ -3390,6 +3922,13 @@ let librarianMarkdownEditorFocused = false;
 let browserLibraryMarkdownEditorFocused = false;
 let activeBrowserLibraryClientId: string | null = null;
 let activeBrowserLibrarySurfaceClientId: string | null = null;
+let activeBrowserLibrarySurfaceKind: 'library' | 'commands' | 'bookmarks' | 'ember' | null = null;
+let browserLibraryImmersiveDismissable = false;
+let browserLibrarySizeKey: ClipboardHistorySizeKey = 'library';
+let browserLibraryRepresentedFilename = '';
+const browserLibraryImmersiveDismissableByClientId = new Map<string, boolean>();
+const browserLibrarySizeKeyByClientId = new Map<string, ClipboardHistorySizeKey>();
+const browserLibraryRepresentedFilenameByClientId = new Map<string, string>();
 const pendingBrowserLibraryReplaceSelectedText = new Map<string, {
   resolve: (success: boolean) => void;
   timeout: NodeJS.Timeout;
@@ -3408,6 +3947,7 @@ let globalImproveInFlight = false;
 
 function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, options: { broadcastFallback?: boolean } = {}): boolean {
   if (
+    shouldTargetBrowserLibraryNavigation({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused }) &&
     activeBrowserLibrarySurfaceClientId &&
     browserHelperServer?.hasNativeEventClient(activeBrowserLibrarySurfaceClientId)
   ) {
@@ -3422,6 +3962,67 @@ function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, opti
 
 function emitBrowserLibraryLauncherTarget(target: unknown): boolean {
   return emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target });
+}
+
+function toggleActiveLibraryLineNumbersForLauncher(): { success: boolean; error?: string } {
+  if (
+    activeLibraryFileContextSourceId?.startsWith('browser-helper:')
+    && emitBrowserLibraryNavigationEvent({ type: 'commands:toggleLineNumbersFromLauncher' }, { broadcastFallback: false })
+  ) {
+    commandLauncherWindow?.hide(true);
+    return { success: true };
+  }
+
+  const window = clipboardHistoryWindow?.getWindow();
+  if (!window || window.isDestroyed()) return { success: false, error: 'Field Theory window is not available' };
+  if (!clipboardHistoryWindow?.isVisible()) {
+    clipboardHistoryWindow?.showLibrary(restoreClipboardHistoryBounds('library'));
+  } else {
+    clipboardHistoryWindow.focusExistingWindow();
+  }
+  commandLauncherWindow?.hide(true);
+  browserHelperServer?.emitNativeEvent({ type: 'commands:toggleLineNumbersFromLauncher' });
+  window.webContents.send('commands:toggleLineNumbersFromLauncher');
+  return { success: true };
+}
+
+function openFieldTheoryMarkdownInNativeApp(rawTarget: unknown): { success: boolean; error?: string } {
+  const target = normalizeFieldTheoryMarkdownTarget(rawTarget);
+  appendCommandLauncherTrace('browser-library-open-field-theory-native-start', {
+    kind: target?.kind ?? null,
+    path: target?.path ?? null,
+    contentMode: target?.contentMode ?? null,
+  });
+  if (!target) return { success: false, error: 'Invalid markdown target' };
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
+
+  const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
+    ? clipboardHistoryWindow.getCurrentSizeKey()
+    : target.kind === 'clipboard'
+      ? 'fields'
+      : 'library';
+  if (clipboardHistoryWindow.isVisible()) {
+    suspendDynamicIslandFocusForClipboardHistory('browser-library-open-field-theory-native');
+    clipboardHistoryWindow.focusExistingWindow();
+  } else {
+    const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+    suspendDynamicIslandFocusForClipboardHistory('browser-library-open-field-theory-native');
+    if (target.kind === 'clipboard') {
+      clipboardHistoryWindow.show(boundsToUse);
+    } else {
+      clipboardHistoryWindow.showLibrary(boundsToUse);
+    }
+  }
+
+  clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+  appendCommandLauncherTrace('browser-library-open-field-theory-native-success', {
+    kind: target.kind,
+    path: target.path,
+    contentMode: target.contentMode ?? null,
+  });
+  return { success: true };
 }
 
 function ensureBookmarksManager(): BookmarksManager {
@@ -3443,6 +4044,87 @@ function ensureBookmarksWatcher(): void {
     });
   });
   bookmarksWatcherStarted = true;
+}
+
+async function pasteBookmarkTextFromBrowserLibrary(
+  tracePrefix: string,
+  tracePayload: Record<string, unknown>,
+  text: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const targetApp = getCommandLauncherTargetApp();
+    appendCommandLauncherTrace(`${tracePrefix}-start`, {
+      ...tracePayload,
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
+      source: 'browser-library',
+    });
+
+    if (!targetApp) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-target`, { ...tracePayload, source: 'browser-library' });
+      return { success: false, error: 'No external target app available' };
+    }
+
+    await runWithCommandLauncherExternalInvocation(async () => {
+      clipboard.writeText(text);
+      clipboardManager?.syncClipboardHash();
+      await activateAndPasteFromCommandLauncher(targetApp);
+    });
+
+    appendCommandLauncherTrace(`${tracePrefix}-success`, {
+      ...tracePayload,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      source: 'browser-library',
+    });
+    return { success: true };
+  } catch (error) {
+    log.error(`Error invoking ${tracePrefix} from Browser Library:`, error);
+    appendCommandLauncherTrace(`${tracePrefix}-error`, { ...tracePayload, source: 'browser-library', error });
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+async function getActiveWebPageForBrowserLibraryBookmark(tracePrefix: string) {
+  const targetApp = getCommandLauncherTargetApp();
+  appendCommandLauncherTrace(`${tracePrefix}-start`, {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+    source: 'browser-library',
+  });
+
+  if (!targetApp) {
+    appendCommandLauncherTrace(`${tracePrefix}-no-target`, { source: 'browser-library' });
+    return { success: false, error: 'No browser app was active before Field Theory opened' };
+  }
+
+  try {
+    const page = await getActiveBrowserPage(targetApp);
+    if (!page) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-page`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        source: 'browser-library',
+      });
+      return { success: false, error: `No active browser page found in ${targetApp.name}` };
+    }
+    appendCommandLauncherTrace(`${tracePrefix}-success`, {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      url: page.url,
+      source: 'browser-library',
+    });
+    return { success: true, page };
+  } catch (error) {
+    log.error(`Error resolving active browser page for ${tracePrefix}:`, error);
+    appendCommandLauncherTrace(`${tracePrefix}-error`, {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      source: 'browser-library',
+      error,
+    });
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
 }
 
 function cleanupFileWatchersBeforeQuit(): Promise<void> {
@@ -4985,6 +5667,7 @@ function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string): 
 
 function sendUpdateNotAvailable(): void {
   if (!shouldApplyUpdaterStatus('uptodate')) return;
+  browserHelperServer?.emitNativeEvent({ type: 'updater:updateNotAvailable' });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:updateNotAvailable');
@@ -4994,6 +5677,7 @@ function sendUpdateNotAvailable(): void {
 
 function sendUpdaterErrorMessage(message: string): void {
   if (!shouldApplyUpdaterStatus('error')) return;
+  browserHelperServer?.emitNativeEvent({ type: 'updater:error', error: message });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:error', message);
@@ -5005,6 +5689,44 @@ function reportAutoUpdaterError(context: string, err: unknown): void {
   const message = formatAutoUpdaterErrorMessage(err);
   log.error('%s: %s', context, message);
   sendUpdaterErrorMessage(message);
+}
+
+function checkForAppUpdates(): unknown {
+  if (!isAutoUpdaterEnabled) return undefined;
+  if (app.isPackaged) {
+    return getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
+  }
+  sendUpdateNotAvailable();
+  return undefined;
+}
+
+function downloadAppUpdate(): unknown {
+  if (!isAutoUpdaterEnabled) return undefined;
+  return getAutoUpdater().downloadUpdate().catch((err) => reportAutoUpdaterError('Update download failed', err));
+}
+
+function installAppUpdate(): void {
+  if (!isAutoUpdaterEnabled) return;
+  if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
+  browserHelperServer?.emitNativeEvent({ type: 'updater:installing' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:installing');
+    }
+  });
+  setTimeout(() => {
+    try {
+      appQuitConfirmedWithLocalWork = true;
+      getAutoUpdater().quitAndInstall(false, true);
+    } catch (err) {
+      appQuitConfirmedWithLocalWork = false;
+      reportAutoUpdaterError('Update install failed', err);
+    }
+  }, 250);
+}
+
+function dismissAppUpdate(): void {
+  pendingUpdateInfo = null;
 }
 
 // Consolidated user state logging - single line showing auth/tier state
@@ -6003,6 +6725,9 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
     }, 150);
     dynamicIslandManager?.refreshWindowProperties(`clipboard-history:hidden:${reason}`);
   });
+  window.setOnDidFinishLoad(() => {
+    void hydrateNativeRendererStorageFromBrowserLibraryStore();
+  });
 
   return window;
 }
@@ -6365,16 +7090,20 @@ function setupThemeIPCHandlers(): void {
 
   // Set theme preference and broadcast to all windows
   ipcMain.handle('theme:set', async (_event, isDark: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ darkMode: isDark });
-    }
-
-    // Broadcast to all windows
-    const allWindows = BrowserWindow.getAllWindows();
-    for (const win of allWindows) {
-      win.webContents.send('theme:changed', isDark);
-    }
+    await setThemePreferenceAndBroadcast(isDark);
   });
+}
+
+async function setThemePreferenceAndBroadcast(isDark: boolean): Promise<void> {
+  if (preferencesManager) {
+    await preferencesManager.save({ darkMode: isDark });
+  }
+
+  const allWindows = BrowserWindow.getAllWindows();
+  for (const win of allWindows) {
+    win.webContents.send('theme:changed', isDark);
+  }
+  browserHelperServer?.emitNativeEvent({ type: 'theme:changed', isDark });
 }
 
 /**
@@ -6576,11 +7305,44 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.findWikiPageByDocumentVersion(version, previousRelPath);
   });
 
-  ipcMain.handle('wiki:save', (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  async function saveSharedCacheFileIfNeeded(
+    filePath: string,
+    content: string,
+    expectedVersion?: DocumentVersion | null,
+  ): Promise<DocumentSaveResult | null> {
+    const currentContent = fs.readFileSync(filePath, 'utf-8');
+    const sharedMeta = parseSharedFileFrontmatter(currentContent);
+    if (!sharedMeta) return null;
+    const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
+    if (localConflict) return localConflict;
+
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'error' };
+
+    const result = await sharedSyncService.updateSharedContent(
+      sharedMeta.sharedId,
+      content,
+      sharedMeta.revision ?? 0,
+      filePath,
+    );
+    if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+    if (result.ok && result.cachePath) return documentSaveResultForUpdatedFile(result.cachePath);
+    if (result.error === 'Remote revision changed before this edit synced') {
+      return documentSaveResultForSharedConflict(result.remoteContent ?? currentContent, result.cachePath);
+    }
+    return { ok: false, reason: 'error' };
+  }
+
+  ipcMain.handle('wiki:save', async (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!librarianManager) return { ok: false, reason: 'error' };
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
+    }
+    const page = librarianManager.getWikiPage(relPath);
+    if (page) {
+      const sharedSave = await saveSharedCacheFileIfNeeded(page.absPath, content, expectedVersion);
+      if (sharedSave) return sharedSave;
     }
     return librarianManager.saveWikiPage(relPath, content, expectedVersion);
   });
@@ -6692,7 +7454,7 @@ function setupLibrarianIPCHandlers(): void {
     },
   );
 
-  ipcMain.handle('external:save', (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  ipcMain.handle('external:save', async (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
@@ -6700,6 +7462,8 @@ function setupLibrarianIPCHandlers(): void {
     try {
       const canonical = fs.realpathSync(absPath);
       if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
+      const sharedSave = await saveSharedCacheFileIfNeeded(canonical, content, expectedVersion);
+      if (sharedSave) return sharedSave;
       const previousContent = fs.readFileSync(canonical, 'utf-8');
       const nextContent = isAllowedMarkdownExt(canonical)
         ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
@@ -7207,10 +7971,27 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.on('librarian:setMarkdownEditorFocused', (_event, focused: boolean) => {
     librarianMarkdownEditorFocused = Boolean(focused);
-    if (librarianMarkdownEditorFocused) {
+    const handoff = getBrowserLibraryNativeFocusHandoff(librarianMarkdownEditorFocused);
+    if (handoff.clearBrowserMarkdownEditorOwner) {
       browserLibraryMarkdownEditorFocused = false;
       activeBrowserLibraryClientId = null;
     }
+    if (handoff.clearBrowserNavigationOwner) {
+      activeBrowserLibrarySurfaceClientId = null;
+      activeBrowserLibrarySurfaceKind = null;
+    } else if (handoff.promoteBrowserNavigationOwner && activeBrowserLibrarySurfaceClientId) {
+      promoteBrowserLibraryClientContext(activeBrowserLibrarySurfaceClientId);
+    }
+  });
+
+  ipcMain.on('browser-library:get-renderer-storage-sync', (event) => {
+    event.returnValue = getBrowserLibraryRendererStorageStore().snapshotSync();
+  });
+
+  ipcMain.on('browser-library:renderer-storage-changed', (_event, payload: { key?: unknown; value?: unknown }) => {
+    const key = typeof payload?.key === 'string' ? payload.key : '';
+    const value = typeof payload?.value === 'string' ? payload.value : null;
+    void setBrowserLibraryRendererStorage(key, value);
   });
 
   // ===========================================================================
@@ -10845,6 +11626,13 @@ function setupClipboardIPCHandlers(): void {
       relPath: context.relPath,
       filePath: context.filePath,
       title: context.title,
+      ...(typeof context.selectionStart === 'number' && typeof context.selectionEnd === 'number'
+        ? {
+            selectionStart: context.selectionStart,
+            selectionEnd: context.selectionEnd,
+            ...(typeof context.selectionText === 'string' ? { selectionText: context.selectionText } : {}),
+          }
+        : {}),
     };
     activeLibraryFileContextSourceId = windowId;
     if (windowId) {
@@ -10853,53 +11641,12 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  ipcMain.handle('commands:archiveActiveLibraryFile', (): { success: boolean; error?: string } => {
-    if (!librarianManager) return { success: false, error: 'Library is not ready' };
-    if (!canWriteFieldTheoryContent()) {
-      blockWrite();
-      return { success: false, error: 'Field Theory is read-only' };
-    }
-    if (!activeLibraryFileContext) return { success: false, error: 'No current Library file to archive' };
-    if (!fs.existsSync(activeLibraryFileContext.filePath)) {
-      return { success: false, error: 'Current Library file no longer exists' };
-    }
-
-    try {
-      const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
-      const content = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
-      const nextContent = setMarkdownArchivedState(content, true);
-      const result = activeLibraryFileContext.type === 'wiki'
-        ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, nextContent, expectedVersion)
-        : writeTextFileWithConflictGuard(activeLibraryFileContext.filePath, nextContent, expectedVersion);
-      if (!result.ok) return { success: false, error: `Archive failed: ${result.reason}` };
-      if (activeLibraryFileContext.type === 'external') {
-        librarianManager.emit('library:changed', activeLibraryFileContext.rootPath);
-      }
-      appendCommandLauncherTrace('archive-active-library-file-success', {
-        type: activeLibraryFileContext.type,
-        relPath: activeLibraryFileContext.relPath,
-        filePath: activeLibraryFileContext.filePath,
-      });
-      return { success: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Archive failed';
-      appendCommandLauncherTrace('archive-active-library-file-error', { error: message });
-      return { success: false, error: message };
-    }
-  });
+  ipcMain.handle('commands:archiveActiveLibraryFile', (): { success: boolean; error?: string } => (
+    archiveActiveLibraryFileForLauncher()
+  ));
 
   ipcMain.handle('commands:toggleActiveLibraryLineNumbers', (): { success: boolean; error?: string } => {
-    const window = clipboardHistoryWindow?.getWindow();
-    if (!window || window.isDestroyed()) return { success: false, error: 'Field Theory window is not available' };
-    if (!clipboardHistoryWindow?.isVisible()) {
-      clipboardHistoryWindow?.showLibrary(restoreClipboardHistoryBounds('library'));
-    } else {
-      clipboardHistoryWindow.focusExistingWindow();
-    }
-    commandLauncherWindow?.hide(true);
-    browserHelperServer?.emitNativeEvent({ type: 'commands:toggleLineNumbersFromLauncher' });
-    window.webContents.send('commands:toggleLineNumbersFromLauncher');
-    return { success: true };
+    return toggleActiveLibraryLineNumbersForLauncher();
   });
 
   runNativeLocalCommand = async (rawRequest: unknown): Promise<LocalCommandRunResult> => {
@@ -11304,17 +12051,18 @@ function setupClipboardIPCHandlers(): void {
     return redoNativeMaxwellRun(rawRunId);
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' | 'typedown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, rawTarget: { kind?: unknown; path?: unknown; contentMode?: 'rendered' | 'markdown' | 'typedown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
+    const target = normalizeFieldTheoryMarkdownTarget(rawTarget);
     appendCommandLauncherTrace('open-field-theory-markdown-start', {
-      kind: target?.kind ?? null,
-      path: target?.path ?? null,
-      contentMode: target?.contentMode ?? null,
+      kind: rawTarget?.kind ?? null,
+      path: rawTarget?.path ?? null,
+      contentMode: rawTarget?.contentMode ?? null,
     });
-    if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
+    if (!target) {
       appendCommandLauncherTrace('open-field-theory-markdown-error', {
         reason: 'invalid-target',
-        kind: target?.kind ?? null,
-        path: target?.path ?? null,
+        kind: rawTarget?.kind ?? null,
+        path: rawTarget?.path ?? null,
       });
       return { success: false, error: 'Invalid markdown target' };
     }
@@ -11374,20 +12122,13 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'No markdown editor target' };
     }
     commandLauncherWindow?.hide(true);
-    if (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)) {
-      const sent = browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
-      return sent ? { success: true } : { success: false, error: 'No markdown editor target' };
-    }
-    const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
-    if (!clipboardWindow || clipboardWindow.isDestroyed()) {
-      return { success: false, error: 'No markdown editor target' };
-    }
-    clipboardWindow.webContents.send('librarian:insertMarkdownText', text);
-    return { success: true };
+    return insertTextIntoActiveFieldTheoryMarkdown(text)
+      ? { success: true }
+      : { success: false, error: 'No markdown editor target' };
   });
 
   ipcMain.handle('commands:insertClipboardItemsAsMarkdown', async (_event, ids: number[]) => {
-    if (!clipboardHistoryWindow || !clipboardManager) {
+    if (!clipboardManager) {
       return { success: false, error: 'No markdown editor target' };
     }
     const manager = clipboardManager;
@@ -11405,8 +12146,9 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Clipboard item has no insertable content' };
     }
     commandLauncherWindow?.hide(true);
-    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', payload);
-    return { success: true };
+    return insertTextIntoActiveFieldTheoryMarkdown(payload)
+      ? { success: true }
+      : { success: false, error: 'No markdown editor target' };
   });
 
   // Handle handoff invocation from command launcher (same behavior as commands).
@@ -12848,12 +13590,27 @@ async function initTranscriberSystem(): Promise<void> {
       return;
     }
 
+    const browserReadingEvent: BrowserHelperNativeEvent = activeBrowserLibrarySurfaceKind === 'library'
+      ? { type: 'librarian:showNewReading', readingPath: reading.path }
+      : { type: 'librarian:newReadingAvailable', readingPath: reading.path };
+    const sentToActiveBrowserLibrary = Boolean(
+      activeBrowserLibrarySurfaceClientId &&
+      browserHelperServer?.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, browserReadingEvent)
+    );
+
     // If the Field Theory window is already open, the user may be typing,
     // reading, searching, or managing another surface. Save and index the
     // artifact, but do not take over the current view.
     if (clipboardHistoryWindow?.isVisible()) {
       clipboardHistoryWindow.getWindow()?.webContents.send('librarian:newReadingAvailable', reading.path);
+      if (!sentToActiveBrowserLibrary) {
+        browserHelperServer?.emitNativeEvent({ type: 'librarian:newReadingAvailable', readingPath: reading.path });
+      }
       clipboardHistoryWindow.playArtifactDiscoverySound();
+      return;
+    }
+
+    if (sentToActiveBrowserLibrary) {
       return;
     }
 
@@ -12941,6 +13698,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('tier:changed', tier);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'quota:tierChanged', tier: tier as 'free' | 'pro' });
   });
 
   // Broadcast trial-state changes (pro / trial / expired) to all windows.
@@ -12965,6 +13723,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('quota:changed', formatted);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'quota:changed', data: formatted });
   });
 
   // Initialize cursor status indicator BEFORE transcriberManager so it can be passed in.
@@ -13019,6 +13778,7 @@ async function initTranscriberSystem(): Promise<void> {
   // footer to the file. Progress events stream to whichever window invoked it.
   agentKickoffManager = new AgentKickoffManager();
   agentKickoffManager.on('progress', (event: AgentKickoffProgressEvent) => {
+    browserHelperServer?.emitNativeEvent({ type: 'agent:kickoffProgress', event });
     BrowserWindow.getAllWindows().forEach((w) => {
       if (!w.isDestroyed()) w.webContents.send('agent:kickoffProgress', event);
     });
@@ -13392,6 +14152,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
   
   commandsManager.on('directoryChanged', (directoryPath) => {
+    browserHelperServer?.emitNativeEvent({ type: 'commands:directoryChanged', directoryPath });
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(CommandsIPCChannels.DIRECTORY_CHANGED, directoryPath);
@@ -13871,6 +14632,23 @@ if (shouldRegisterFieldTheoryProtocol({
 async function handleProtocolUrl(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
+    const browserLibraryTarget = browserLibraryTargetFromProtocolUrl(parsed);
+    if (browserLibraryTarget) {
+      if (emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target: browserLibraryTarget }, { broadcastFallback: false })) {
+        return;
+      }
+      if (clipboardHistoryWindow) {
+        const sizeKey: ClipboardHistorySizeKey = browserLibraryTarget.kind === 'bookmarks'
+          ? clipboardHistoryWindow.getCurrentSizeKey()
+          : 'library';
+        const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+        suspendDynamicIslandFocusForClipboardHistory('protocol-open-browser-library-target');
+        clipboardHistoryWindow.showLibrary(boundsToUse);
+        emitBrowserLibraryLauncherTarget(browserLibraryTarget);
+        clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', browserLibraryTarget);
+        return;
+      }
+    }
 
     // Hot Mic URL handlers
     if (parsed.host === 'hotmic') {
@@ -14030,11 +14808,11 @@ if (!gotTheLock) {
     log.info('App ready');
 
     // ftmedia://media/<filename> → the bookmark media folder.
-    // basename() strips any path traversal attempts from the URL.
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
-      const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
-      return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
+      const { resolveBookmarkMediaFile } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+      const filePath = resolveBookmarkMediaFile(filename);
+      return filePath ? net.fetch(pathToFileURL(filePath).toString()) : new Response('', { status: 404 });
     });
 
     protocol.handle('ftlocalfile', async (req) => {
@@ -14833,6 +15611,7 @@ if (!gotTheLock) {
       // Auto-updater event handlers - send to renderer for in-app notification UI.
       autoUpdater.on('checking-for-update', () => {
         if (!shouldApplyUpdaterStatus('checking')) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:checkingForUpdate' });
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:checkingForUpdate');
@@ -14842,6 +15621,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('update-available', (info) => {
         if (!setPendingUpdateStatus('available', info.version)) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:updateAvailable', info: { version: info.version } });
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:updateAvailable', { version: info.version });
@@ -14861,6 +15641,7 @@ if (!gotTheLock) {
       autoUpdater.on('download-progress', (progress) => {
         const percent = Math.round(progress.percent);
         if (pendingUpdateInfo && !setPendingUpdateStatus('downloading')) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:downloadProgress', percent });
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:downloadProgress', percent);
@@ -14870,6 +15651,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('update-downloaded', (info) => {
         if (!setPendingUpdateStatus('ready', info.version)) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version: info.version } });
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:updateDownloaded', { version: info.version });
@@ -14882,42 +15664,19 @@ if (!gotTheLock) {
 
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
-      if (!isAutoUpdaterEnabled) return;
-      if (app.isPackaged) {
-        return getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
-      } else {
-        // In dev mode, simulate "up to date" response.
-        sendUpdateNotAvailable();
-      }
+      return checkForAppUpdates();
     });
 
     ipcMain.handle('updater:downloadUpdate', () => {
-      if (!isAutoUpdaterEnabled) return;
-      return getAutoUpdater().downloadUpdate().catch((err) => reportAutoUpdaterError('Update download failed', err));
+      return downloadAppUpdate();
     });
 
     ipcMain.handle('updater:installUpdate', () => {
-      if (!isAutoUpdaterEnabled) return;
-      if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:installing');
-        }
-      });
-      setTimeout(() => {
-        try {
-          appQuitConfirmedWithLocalWork = true;
-          getAutoUpdater().quitAndInstall(false, true);
-        } catch (err) {
-          appQuitConfirmedWithLocalWork = false;
-          reportAutoUpdaterError('Update install failed', err);
-        }
-      }, 250);
+      return installAppUpdate();
     });
 
     ipcMain.handle('updater:dismissUpdate', () => {
-      // Clear pending update state so notification doesn't reappear.
-      pendingUpdateInfo = null;
+      return dismissAppUpdate();
     });
 
     // Check permissions on startup and notify main window
