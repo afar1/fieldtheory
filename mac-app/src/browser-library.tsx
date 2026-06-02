@@ -17,8 +17,6 @@ import {
   FOCUS_CHROME_ICON_OPACITY,
   FOCUS_CHROME_ICON_TOP_PX,
   LibraryFocusChromeIcon,
-  LibrarySurfaceTopTabs,
-  LibraryTopChromeActionFeedback,
 } from './components/LibrarySurfaceTopTabs';
 import './styles.css';
 import {
@@ -1440,7 +1438,6 @@ function BrowserLibrarySurface(props: {
   const initialClientSurface = initialBrowserClientSurfaceFromTarget(normalizedInitialOpenTarget);
   const [activeClientSurface, setActiveClientSurface] = React.useState<BrowserHelperClientSurfaceName>(initialClientSurface);
   const activeClientSurfaceRef = React.useRef<BrowserHelperClientSurfaceName>(initialClientSurface);
-  const [hasNewReading, setHasNewReading] = React.useState(false);
   const [pendingReadingPath, setPendingReadingPath] = React.useState<string | null>(null);
   const [launcherOpenTarget, setLauncherOpenTarget] = React.useState<any>(() => (
     normalizedInitialOpenTarget
@@ -1502,9 +1499,7 @@ function BrowserLibrarySurface(props: {
     isFocusChromeSurface: librarianSurfaceVisible,
     focusChromeActive: focusChromeSurfaceEnabled,
   });
-  const topChromeOpacity = browserChromeHidden ? 0 : focusChromeSurfaceOpacity;
   const footerChromeOpacity = browserChromeHidden || focusChromeOverlayActive ? 0 : 1;
-  const topChromeInteractive = topChromeOpacity > 0.05;
   const footerChromeInteractive = footerChromeOpacity > 0.05;
   const focusChromeIconSize = Math.max(20, Math.min(28, Math.round(shellWidth * 0.024)));
   const focusChromeIconTop = bookmarksCanvasToolbarTop === null
@@ -1720,12 +1715,6 @@ function BrowserLibrarySurface(props: {
   React.useEffect(() => {
     if (surface === 'commands') reportActiveSurface('commands');
   }, [reportActiveSurface, surface]);
-  React.useEffect(() => {
-    const unsubscribe = window.librarianAPI?.onNewReadingAvailable?.(() => {
-      if (activeClientSurfaceRef.current !== 'library') setHasNewReading(true);
-    });
-    return () => unsubscribe?.();
-  }, []);
   React.useEffect(() => () => {
     if (actionFeedbackTimerRef.current !== null) {
       window.clearTimeout(actionFeedbackTimerRef.current);
@@ -1736,7 +1725,6 @@ function BrowserLibrarySurface(props: {
       setPendingReadingPath(readingPath);
       setLauncherOpenTarget(null);
       setInitialCommandPath(null);
-      setHasNewReading(false);
       setSurface('library');
     });
     return () => unsubscribe?.();
@@ -1746,7 +1734,6 @@ function BrowserLibrarySurface(props: {
       setPendingReadingPath(readingPath);
       setLauncherOpenTarget(null);
       setInitialCommandPath(null);
-      setHasNewReading(false);
       setSurface('library');
     });
     return () => unsubscribe?.();
@@ -1761,9 +1748,6 @@ function BrowserLibrarySurface(props: {
     });
     return () => unsubscribe?.();
   }, []);
-  React.useEffect(() => {
-    if (surface === 'library') setHasNewReading(false);
-  }, [surface]);
   React.useEffect(() => {
     const nextValue = librarianImmersive ? 'true' : 'false';
     if (window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) !== nextValue) {
@@ -1875,7 +1859,6 @@ function BrowserLibrarySurface(props: {
       if (typeof pendingPath !== 'string' || pendingPath.length === 0) return;
       setPendingReadingPath(pendingPath);
       setLauncherOpenTarget(null);
-      setHasNewReading(false);
       setSurface('library');
     };
     const refreshWhenVisible = () => {
@@ -1936,20 +1919,6 @@ function BrowserLibrarySurface(props: {
       return next;
     });
   }, [focusChromeSurfaceEnabled, setFocusChromeGlobalEnabled]);
-  const selectSurface = React.useCallback((nextSurface: string) => {
-    if (nextSurface !== 'library' && nextSurface !== 'commands') return;
-    if (nextSurface === 'library') {
-      if (surface === 'library') {
-        toggleSidebarCollapsed();
-        return;
-      }
-      setLauncherOpenTarget(null);
-      setSurface('library');
-      return;
-    }
-    setInitialCommandPath(null);
-    setSurface('commands');
-  }, [surface, toggleSidebarCollapsed]);
   const handleSelectedCommandPathChange = React.useCallback((path: string | null) => {
     if (path) {
       void window.commandsAPI?.setActiveLibraryFileContext?.(null);
@@ -2094,19 +2063,23 @@ function BrowserLibrarySurface(props: {
           size={focusChromeIconSize}
         />
       ) : null}
-      <LibrarySurfaceTopTabs
-        theme={theme}
-        tabs={[
-          { id: 'library', label: 'Library', title: 'Personal wiki', indicator: hasNewReading && activeClientSurface !== 'library' },
-          { id: 'commands', label: 'Commands' },
-        ]}
-        selectedId={surface}
-        onSelect={selectSurface}
-        topPaddingPx={14}
-        opacity={topChromeOpacity}
-        interactive={topChromeInteractive}
-        rightSlot={<LibraryTopChromeActionFeedback message={actionFeedback} theme={theme} />}
-      />
+      {actionFeedback ? (
+        <span
+          data-fieldtheory-top-chrome-action-feedback="true"
+          style={{
+            position: 'absolute',
+            top: '12px',
+            right: '16px',
+            zIndex: 24,
+            fontSize: '9px',
+            fontWeight: 500,
+            color: theme.textSecondary,
+            pointerEvents: 'none',
+          }}
+        >
+          {actionFeedback}
+        </span>
+      ) : null}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {surface === 'commands' ? (
             <CommandsView
