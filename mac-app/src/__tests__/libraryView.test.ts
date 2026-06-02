@@ -1736,7 +1736,7 @@ describe('rendered markdown edit helpers', () => {
 
   it('positions the terminal paste button to the right of the selected text', () => {
     expect(getTerminalPastePopoverPosition(
-      { top: 100, right: 240, height: 24 },
+      { top: 100, left: 180, right: 240, height: 24 },
       { width: 800, height: 600 },
     )).toEqual({
       top: 97,
@@ -1746,7 +1746,7 @@ describe('rendered markdown edit helpers', () => {
 
   it('keeps the terminal paste button inside the viewport', () => {
     expect(getTerminalPastePopoverPosition(
-      { top: 590, right: 790, height: 24 },
+      { top: 590, left: 720, right: 790, height: 24 },
       { width: 800, height: 600 },
     )).toEqual({
       top: 562,
