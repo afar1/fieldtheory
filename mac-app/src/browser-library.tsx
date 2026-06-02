@@ -3,7 +3,19 @@ import ReactDOM from 'react-dom/client';
 import { useTheme } from './contexts/ThemeContext';
 import MaxwellHistoryPopover from './components/MaxwellHistoryPopover';
 import './styles.css';
-import { isSidebarToggleShortcut, SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY } from './utils/editorShortcuts';
+import {
+  isSidebarToggleShortcut,
+  LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
+  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
+  RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT,
+  RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
+  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
+  TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  TEXT_CURSOR_BLINK_STORAGE_KEY,
+} from './utils/editorShortcuts';
 
 type BrowserHelperConfig = {
   api: string;
@@ -50,7 +62,11 @@ const RENDERER_STORAGE_SYNC_KEYS = [
   'librarian-html-layout-by-path',
   'librarian-last-selection',
   'librarian-editor-session',
-  'fieldtheory.lineNumbers',
+  LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  TEXT_CURSOR_BLINK_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
+  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
   SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
   'librarian-sidebar-width',
   LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY,
@@ -65,6 +81,13 @@ const RENDERER_STORAGE_SYNC_KEYS = [
   'darkModeIntensity',
 ] as const;
 const RENDERER_STORAGE_SYNC_KEY_SET = new Set<string>(RENDERER_STORAGE_SYNC_KEYS);
+const RENDERER_STORAGE_CHANGED_EVENT_BY_KEY = new Map<string, string>([
+  [RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT],
+  [TEXT_CURSOR_BLINK_STORAGE_KEY, TEXT_CURSOR_BLINK_CHANGED_EVENT],
+  [RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY, RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT],
+  [RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY, RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT],
+  [SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY, 'fieldtheory:shared-file-toggle-hotkey-changed'],
+]);
 type RendererStorageApplyOptions = {
   fillMissingOnly?: boolean;
   setItem?: (key: string, value: string) => void;
@@ -257,9 +280,8 @@ function dispatchRendererStorageChange(key: string, oldValue: string | null, new
   window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
     detail: { key, oldValue, newValue },
   }));
-  if (key === SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY) {
-    window.dispatchEvent(new Event('fieldtheory:shared-file-toggle-hotkey-changed'));
-  }
+  const changedEvent = RENDERER_STORAGE_CHANGED_EVENT_BY_KEY.get(key);
+  if (changedEvent) window.dispatchEvent(new Event(changedEvent));
 }
 
 export async function syncRendererStorage(

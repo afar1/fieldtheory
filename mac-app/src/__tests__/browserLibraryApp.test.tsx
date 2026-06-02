@@ -2,7 +2,16 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserLibraryApp, syncRendererStorage } from '../browser-library';
-import { SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY } from '../utils/editorShortcuts';
+import {
+  LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
+  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
+  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
+  TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  TEXT_CURSOR_BLINK_STORAGE_KEY,
+} from '../utils/editorShortcuts';
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -117,14 +126,24 @@ describe('BrowserLibraryApp', () => {
     await waitFor(() => expect(screen.getByTestId('library-view')).toBeTruthy());
   });
 
-  it('syncs shared-file hotkey preference changes into the Browser Library view', async () => {
-    const changed = vi.fn();
-    window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', changed);
+  it('syncs Library editor preference changes into the Browser Library view', async () => {
+    const sharedHotkeyChanged = vi.fn();
+    const cursorBlinkChanged = vi.fn();
+    const cursorStyleChanged = vi.fn();
+    const cursorOpacityChanged = vi.fn();
+    window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', sharedHotkeyChanged);
+    window.addEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, cursorBlinkChanged);
+    window.addEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, cursorStyleChanged);
+    window.addEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, cursorOpacityChanged);
 
     await syncRendererStorage(async () => ({
       available: true,
       values: {
         [SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY]: 'Command+Shift+R',
+        [LINE_NUMBERS_STORAGE_KEY]: 'faded',
+        [TEXT_CURSOR_BLINK_STORAGE_KEY]: 'false',
+        [RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY]: 'bar',
+        [RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY]: '0.8',
       },
     }) as any);
 
@@ -132,8 +151,18 @@ describe('BrowserLibraryApp', () => {
       SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
       'Command+Shift+R',
     );
-    expect(changed).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(LINE_NUMBERS_STORAGE_KEY, 'faded');
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(TEXT_CURSOR_BLINK_STORAGE_KEY, 'false');
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY, 'bar');
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY, '0.8');
+    expect(sharedHotkeyChanged).toHaveBeenCalledTimes(1);
+    expect(cursorBlinkChanged).toHaveBeenCalledTimes(1);
+    expect(cursorStyleChanged).toHaveBeenCalledTimes(1);
+    expect(cursorOpacityChanged).toHaveBeenCalledTimes(1);
 
-    window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', changed);
+    window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', sharedHotkeyChanged);
+    window.removeEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, cursorBlinkChanged);
+    window.removeEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, cursorStyleChanged);
+    window.removeEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, cursorOpacityChanged);
   });
 });
