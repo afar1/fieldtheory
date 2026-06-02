@@ -2747,6 +2747,7 @@ interface LibrarianViewProps {
   active?: boolean;
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
+  browserLibrarySurface?: boolean;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   onFocusChromeActiveChange?: (active: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
@@ -2855,7 +2856,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -8366,14 +8367,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (isTerminalPanelVisibilityToggleShortcut(e)) {
+      if (!browserLibrarySurface && isTerminalPanelVisibilityToggleShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
         toggleCodexTerminalPanel({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
         return;
       }
 
-      if (isTerminalEditorFocusToggleShortcut(e)) {
+      if (!browserLibrarySurface && isTerminalEditorFocusToggleShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
         toggleTerminalEditorFocus({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
@@ -8496,6 +8497,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // first so an in-flight debounce doesn't lose the last keystrokes.
       if (e.key === 'w' && e.metaKey) {
         e.preventDefault();
+        if (browserLibrarySurface) return;
         const pending = flushCurrentEdit();
         void pending.then(() => window.clipboardAPI?.closeWindow());
         return;
@@ -8529,10 +8531,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         } else if (focusImmersive) {
           setFocusImmersive(false);
         } else if (isFullScreen && isOnAutoPopArtifact) {
-          window.clipboardAPI?.closeWindow();
+          if (browserLibrarySurface) {
+            setIsFullScreen(false);
+          } else {
+            window.clipboardAPI?.closeWindow();
+          }
         } else if (isFullScreen) {
           setIsFullScreen(false);
-        } else {
+        } else if (!browserLibrarySurface) {
           window.clipboardAPI?.closeWindow();
         }
         return;
@@ -8668,7 +8674,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -9405,7 +9411,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onToggleHtmlLayout={activeIsHtmlDocument ? toggleActiveHtmlLayout : undefined}
                   htmlLayoutTitle={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
                   htmlLayoutActive={activeHtmlLayout === 'full'}
-                  onToggleTerminal={() => toggleCodexTerminalPanel()}
+                  onToggleTerminal={browserLibrarySurface ? undefined : () => toggleCodexTerminalPanel()}
                   terminalVisible={codexTerminalVisible}
                   meetingTitle={meetingToolbarTitle}
                   meetingRecording={meetingToolbarRecording}
@@ -10103,7 +10109,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         />
         </div>
         {inlineDrawDialog}
-        {terminalPastePopover && (
+        {!browserLibrarySurface && terminalPastePopover && (
           <button
             type="button"
             aria-label="Paste selection to terminal"
@@ -10143,22 +10149,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {readerStatusFeedback}
         </div>
         )}
-        <CodexTerminalPanel
-          visible={effectiveCodexTerminalVisible}
-          visibleIntent={codexTerminalVisible}
-          pageContext={codexTerminalPageContext}
-          dockSideOverride={effectiveCodexTerminalDockSide !== codexTerminalDockSide ? effectiveCodexTerminalDockSide : undefined}
-          extendToViewportTop={focusChromeActive && effectiveCodexTerminalDockSide === 'right'}
-          focusRequestKey={codexTerminalFocusRequestKey}
-          layoutRefreshKey={focusChromeActive}
-          onDockSideChange={setCodexTerminalDockSide}
-          onFocusToggleShortcut={toggleTerminalEditorFocus}
-          onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
-          onTerminalFocusChange={setCodexTerminalFocused}
-          onResizeActiveChange={setCodexTerminalResizing}
-          onVisibilityToggleShortcut={toggleCodexTerminalPanel}
-          onVisibleChange={handleCodexTerminalVisibleChange}
-        />
+        {!browserLibrarySurface && (
+          <CodexTerminalPanel
+            visible={effectiveCodexTerminalVisible}
+            visibleIntent={codexTerminalVisible}
+            pageContext={codexTerminalPageContext}
+            dockSideOverride={effectiveCodexTerminalDockSide !== codexTerminalDockSide ? effectiveCodexTerminalDockSide : undefined}
+            extendToViewportTop={focusChromeActive && effectiveCodexTerminalDockSide === 'right'}
+            focusRequestKey={codexTerminalFocusRequestKey}
+            layoutRefreshKey={focusChromeActive}
+            onDockSideChange={setCodexTerminalDockSide}
+            onFocusToggleShortcut={toggleTerminalEditorFocus}
+            onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
+            onTerminalFocusChange={setCodexTerminalFocused}
+            onResizeActiveChange={setCodexTerminalResizing}
+            onVisibilityToggleShortcut={toggleCodexTerminalPanel}
+            onVisibleChange={handleCodexTerminalVisibleChange}
+          />
+        )}
       </div>
 
       {shortcutsHelpOpen && (

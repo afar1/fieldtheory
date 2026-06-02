@@ -10,6 +10,9 @@ export interface DocumentPresenceContext {
   relPath: string;
   filePath: string;
   title: string;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  selectionText?: string | null;
 }
 
 export interface DocumentPresenceRecord {
@@ -25,6 +28,9 @@ export interface DocumentPresenceRecord {
   openedAt: string;
   focusedAt: string | null;
   closedAt: string | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  selectionText?: string | null;
 }
 
 export interface DocumentPresenceState {
@@ -97,6 +103,7 @@ export class DocumentPresenceManager {
     record.title = context.title;
     record.rootPath = context.rootPath;
     record.relPath = context.relPath;
+    applyPresenceSelection(record, context);
     if (!record.windowIds.includes(windowId)) record.windowIds.push(windowId);
     if (!record.isOpen) record.openedAt = timestamp;
     record.isOpen = true;
@@ -225,6 +232,17 @@ export class DocumentPresenceManager {
   private nowIso(): string {
     return this.now().toISOString();
   }
+}
+
+function applyPresenceSelection(record: DocumentPresenceRecord, context: DocumentPresenceContext): void {
+  const hasSelection = typeof context.selectionStart === 'number'
+    && typeof context.selectionEnd === 'number'
+    && context.selectionEnd > context.selectionStart;
+  record.selectionStart = hasSelection ? context.selectionStart! : null;
+  record.selectionEnd = hasSelection ? context.selectionEnd! : null;
+  record.selectionText = hasSelection && typeof context.selectionText === 'string'
+    ? context.selectionText
+    : null;
 }
 
 function comparePresenceRecords(a: DocumentPresenceRecord, b: DocumentPresenceRecord): number {
