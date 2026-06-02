@@ -1302,7 +1302,9 @@ describe('LibrarianView render', () => {
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
     const terminalButton = screen.getByRole('button', { name: 'Open Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
-    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    const riverDivider = riverButton.nextElementSibling;
+    expect(riverDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
+    expect(riverDivider?.nextElementSibling).toBe(popOutButton);
     expect(popOutButton.nextElementSibling).toBe(markdownButton);
     expect(popOutButton.style.width).toBe(focusButton.style.width);
     expect(markdownButton.style.width).toBe(focusButton.style.width);
@@ -1313,6 +1315,37 @@ describe('LibrarianView render', () => {
     expect(terminalButton.style.height).toBe(focusButton.style.width);
     expect(focusButton.style.height).toBe(focusButton.style.width);
     expect(riverButton.style.borderStyle).toBe('none');
+  });
+
+  it('keeps the Library document toolbar in Browser mode while excluding terminal controls', async () => {
+    const relPath = 'scratchpad/browser-library-terminal-exclusion-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'browser-library-terminal-exclusion-test',
+      title: 'browser-library-terminal-exclusion-test',
+      lastUpdated: 1,
+      content: 'Browser Library body',
+      documentVersion: { mtimeMs: 1, size: 20, sha256: 'browser-terminal-exclusion' },
+    };
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(
+      <LibrarianView
+        browserLibrarySurface
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Browser Library body');
+    expect(screen.getByRole('button', { name: 'Open in New Window' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Switch to Markdown source' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Enter immersive view' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open Terminal' })).toBeNull();
+    expect(container.querySelector('[data-ft-codex-terminal-panel="true"]')).toBeNull();
   });
 
   it('anchors copy feedback to the editor pane when the terminal is open', async () => {
