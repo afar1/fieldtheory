@@ -4424,7 +4424,7 @@ async function installOrAccessLocalLlmModel(model: string): Promise<{ success: b
 }
 
 function openScratchpadDefaultFromHotkey(): WikiPage | null {
-  if (!librarianManager || !clipboardHistoryWindow) return null;
+  if (!librarianManager) return null;
   if (!canWriteFieldTheoryContent()) {
     blockWrite();
     return null;
@@ -4437,6 +4437,12 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   const page = librarianManager.createScratchpadDefault();
   if (!page) return null;
   recordRecentWikiPage(page);
+  if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openScratchpad', relPath: page.relPath }, { broadcastFallback: false })) {
+    return page;
+  }
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
   clipboardHistoryWindow.showLibrary(boundsToUse);
