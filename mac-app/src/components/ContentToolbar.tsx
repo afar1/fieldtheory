@@ -192,6 +192,12 @@ interface ContentToolbarProps {
   todoMarker?: 'circle' | 'square';
   onTodoMarkerChange?: (marker: 'circle' | 'square') => void;
 
+  blinkTextCursor?: boolean;
+  onBlinkTextCursorChange?: (enabled: boolean) => void;
+
+  renderedTextCursorStyle?: 'bar' | 'block';
+  onRenderedTextCursorStyleChange?: (style: 'bar' | 'block') => void;
+
   onTypographyMenuOpenChange?: (open: boolean) => void;
 
   // Edit state
@@ -603,6 +609,10 @@ export default function ContentToolbar({
   onUnorderedListMarkerChange,
   todoMarker,
   onTodoMarkerChange,
+  blinkTextCursor,
+  onBlinkTextCursorChange,
+  renderedTextCursorStyle,
+  onRenderedTextCursorStyleChange,
   onTypographyMenuOpenChange,
   isEditing = false,
   isDirty = false,
@@ -701,7 +711,9 @@ export default function ContentToolbar({
     (showTextSize && onTextSizeChange) ||
     (lineHeightOptions?.length && onLineHeightChange) ||
     onUnorderedListMarkerChange ||
-    onTodoMarkerChange
+    onTodoMarkerChange ||
+    onBlinkTextCursorChange ||
+    onRenderedTextCursorStyleChange
   );
   const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
@@ -1248,6 +1260,26 @@ export default function ContentToolbar({
                   <div style={typographySegmentedControlStyle}>
                     {[{ id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' }, { id: 'square' as const, label: '□', title: 'Square todo checkboxes' }].map((option) => (
                       <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === todoMarker, '15px')}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {onRenderedTextCursorStyleChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Cursor</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {[{ id: 'bar' as const, label: 'Bar', title: 'Bar cursor' }, { id: 'block' as const, label: 'Block', title: 'Block cursor' }].map((option) => (
+                      <button key={option.id} type="button" onClick={() => onRenderedTextCursorStyleChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === renderedTextCursorStyle)}>{option.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {onBlinkTextCursorChange && (
+                <div style={typographyMenuRowStyle}>
+                  <span style={typographyMenuLabelStyle}>Blink</span>
+                  <div style={typographySegmentedControlStyle}>
+                    {[{ id: true, label: 'On', title: 'Blinking cursor on' }, { id: false, label: 'Off', title: 'Blinking cursor off' }].map((option) => (
+                      <button key={option.label} type="button" onClick={() => onBlinkTextCursorChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === blinkTextCursor)}>{option.label}</button>
                     ))}
                   </div>
                 </div>
