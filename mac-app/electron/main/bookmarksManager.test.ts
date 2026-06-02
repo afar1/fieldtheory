@@ -4,11 +4,13 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import os from 'os';
 import path from 'path';
-import { BookmarksManager, parseRawBookmark, parseRawWebBookmark, type RawBookmark } from './bookmarksManager';
+import { BookmarksManager, parseRawBookmark, parseRawWebBookmark, resolveBookmarkMediaFile, type RawBookmark } from './bookmarksManager';
 
 vi.mock('./logger', () => ({
   createLogger: () => ({ error: () => {}, warn: () => {}, info: () => {}, debug: () => {} }),
 }));
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('parseRawBookmark', () => {
   it('extracts photos with dimensions and picks highest-bitrate mp4 for videos', () => {
@@ -151,6 +153,24 @@ describe('BookmarksManager.getSnapshot', () => {
   it('returns an empty snapshot when no jsonl exists', () => {
     const mgr = new BookmarksManager();
     expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [], xLastSyncedAt: null });
+  });
+
+  it('resolves bookmark media only when the real file stays inside the media directory', () => {
+    const mediaDir = path.join(tmpDir, 'media');
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-media-outside-'));
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(path.join(mediaDir, 'image.jpg'), 'image');
+    fs.writeFileSync(path.join(outsideDir, 'escaped.jpg'), 'escaped');
+    fs.symlinkSync(path.join(outsideDir, 'escaped.jpg'), path.join(mediaDir, 'escaped-link.jpg'));
+
+    try {
+      expect(resolveBookmarkMediaFile('image.jpg')).toBe(fs.realpathSync(path.join(mediaDir, 'image.jpg')));
+      expect(resolveBookmarkMediaFile('../image.jpg')).toBeNull();
+      expect(resolveBookmarkMediaFile('escaped-link.jpg')).toBeNull();
+      expect(resolveBookmarkMediaFile('missing.jpg')).toBeNull();
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 
   it('loads X bookmarks from legacy bookmark data when canonical data is absent', () => {
@@ -546,5 +566,44 @@ describe('BookmarksManager.getSnapshot', () => {
     );
     const second = new BookmarksManager();
     expect(second.getSnapshot().bookmarks[0].folders).toEqual(['Reading']);
+  });
+
+  it('emits bookmark changes when media inputs update after the snapshot loads', async () => {
+    const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
+    fs.mkdirSync(path.join(tmpDir, 'media'), { recursive: true });
+    fs.writeFileSync(jsonl, JSON.stringify({
+      tweetId: 'media1',
+      text: 'media arrives later',
+      postedAt: '2026-01-01T00:00:00.000Z',
+      mediaObjects: [{ type: 'photo', url: 'https://pbs/photo.jpg', width: 800, height: 600 }],
+    }) + '\n');
+
+    const mgr = new BookmarksManager();
+    const changed = new Promise<void>((resolve) => {
+      mgr.once('bookmarks:changed', () => resolve());
+    });
+
+    mgr.startWatcher();
+    try {
+      await wait(100);
+      fs.writeFileSync(
+        path.join(tmpDir, 'media-manifest.json'),
+        JSON.stringify({
+          entries: [{
+            tweetId: 'media1',
+            sourceUrl: 'https://pbs/photo.jpg',
+            localPath: path.join(tmpDir, 'media', 'media1-photo.jpg'),
+            status: 'downloaded',
+          }],
+        }),
+      );
+
+      await expect(Promise.race([
+        changed.then(() => true),
+        wait(2000).then(() => false),
+      ])).resolves.toBe(true);
+    } finally {
+      await mgr.stopWatcher();
+    }
   });
 });
