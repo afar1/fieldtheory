@@ -413,6 +413,22 @@ describe('BrowserHelperServer', () => {
     expect(server.address().port).toBe(address.port);
   });
 
+  it('streams native scratchpad open events to browser clients', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+    });
+    servers.push(server);
+    const address = await server.start();
+    const eventPromise = readFirstEvent(`http://${address.host}:${address.port}/native/events?token=test-token`, 'wiki:openScratchpad');
+
+    setTimeout(() => server.emitNativeEvent({ type: 'wiki:openScratchpad', relPath: 'scratchpad/Today' }), 10);
+
+    await expect(eventPromise).resolves.toContain('"relPath":"scratchpad/Today"');
+  });
+
   it('guards same-document saves from stale browser clients', async () => {
     const { address, root } = await startServer();
     const firstRead = await request(`http://${address.host}:${address.port}/native/wiki/page?token=test-token&relPath=Plan`);
