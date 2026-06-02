@@ -5347,6 +5347,9 @@ const codexTerminalAPI = {
   readClipboardText: async (): Promise<string> => {
     return ipcRenderer.invoke('codexTerminal:readClipboardText');
   },
+  readTerminalPasteText: async (): Promise<string> => {
+    return ipcRenderer.invoke('codexTerminal:readTerminalPasteText');
+  },
   writeClipboardText: async (text: string): Promise<boolean> => {
     return ipcRenderer.invoke('codexTerminal:writeClipboardText', text);
   },

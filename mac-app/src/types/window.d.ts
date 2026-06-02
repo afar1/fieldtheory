@@ -2892,6 +2892,7 @@ interface CodexTerminalAPI {
   kill: (id: string) => Promise<boolean>;
   rename: (id: string, title: string) => Promise<boolean>;
   readClipboardText: () => Promise<string>;
+  readTerminalPasteText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<boolean>;
   attachPageContext: (id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }) => Promise<CodexTerminalAttachResult>;
   onData: (callback: (event: { id: string; data: string }) => void) => () => void;

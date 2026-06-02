@@ -91,11 +91,22 @@ export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'alt
   return null;
 }
 
-export function isTerminalPasteSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey'>): boolean {
+export function isTerminalPasteSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
   return event.metaKey
     && !event.altKey
     && !event.ctrlKey
+    && !event.shiftKey
     && event.key.toLowerCase() === 'v';
+}
+
+export async function pasteClipboardIntoCodexTerminal(
+  api: Pick<NonNullable<Window['codexTerminalAPI']>, 'input' | 'readTerminalPasteText'> | undefined,
+  sessionId: string,
+): Promise<boolean> {
+  if (!api) return false;
+  const text = await api.readTerminalPasteText();
+  if (!text) return false;
+  return api.input(sessionId, text);
 }
 
 export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
@@ -789,12 +800,10 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
           return;
         }
       }
-      if (event.key.toLowerCase() === 'v' && activeSessionId && !isEditableEventTarget(event.target)) {
+      if (isTerminalPasteSequence(event) && activeSessionId && !isEditableEventTarget(event.target)) {
         event.preventDefault();
         event.stopPropagation();
-        void window.codexTerminalAPI?.readClipboardText().then((text) => {
-          if (text) void window.codexTerminalAPI?.input(activeSessionId, text);
-        });
+        void pasteClipboardIntoCodexTerminal(window.codexTerminalAPI, activeSessionId);
         return;
       }
       if (event.key.toLowerCase() === 't') {
@@ -834,9 +843,7 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       if (event.type !== 'keydown') return true;
       if (isTerminalPasteSequence(event)) {
         event.preventDefault();
-        void window.codexTerminalAPI?.readClipboardText().then((text) => {
-          if (text) void window.codexTerminalAPI?.input(sessionId, text);
-        });
+        void pasteClipboardIntoCodexTerminal(window.codexTerminalAPI, sessionId);
         return false;
       }
       if (isTerminalPanelVisibilityToggleSequence(event)) {
