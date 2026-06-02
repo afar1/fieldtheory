@@ -57,6 +57,7 @@ import {
   getTerminalPasteTextFromSelection,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
+  isLibrarianSidebarHidden,
   isRenderedTaskListItem,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
@@ -2374,6 +2375,20 @@ describe('bookmarks canvas chrome activation', () => {
       isFullScreen: false,
       bookmarksCanvasActive: true,
     })).toBe(false);
+  });
+});
+
+describe('librarian sidebar visibility', () => {
+  it('keeps the collapsed sidebar hover strip available for fullscreen Bookmarks', () => {
+    expect(isLibrarianSidebarHidden({
+      isFullScreen: true,
+      selectedItemType: 'bookmarks',
+    })).toBe(false);
+
+    expect(isLibrarianSidebarHidden({
+      isFullScreen: true,
+      selectedItemType: 'wiki',
+    })).toBe(true);
   });
 });
 
