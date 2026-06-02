@@ -95,9 +95,12 @@ describe('FieldTheoryProse', () => {
   it('uses a hanging layout for rendered task-list text', () => {
     const proseCss = readFileSync('src/prose.css', 'utf-8');
     const taskRule = proseCss.match(/\.ft-prose li\.task-list-item\s*\{[^}]*\}/)?.[0] ?? '';
+    const taskCheckboxRule = proseCss.match(/\.ft-prose li\.task-list-item > input\[type='checkbox'\]\s*\{[^}]*\}/)?.[0] ?? '';
 
     expect(taskRule).toContain('display: grid;');
     expect(taskRule).toContain('grid-template-columns: max-content minmax(0, 1fr);');
+    expect(taskRule).toContain('align-items: start;');
+    expect(taskCheckboxRule).toContain('top: calc(((var(--ft-prose-line-height) * 1em) - 0.88em) / 2);');
   });
 
   it('renders local screenshot image URLs inline', () => {
