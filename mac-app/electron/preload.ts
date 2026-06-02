@@ -51,6 +51,103 @@ const GazeIPCChannels = {
   SCREEN_OVERLAY_STATE_CHANGED: 'gaze:screenOverlayStateChanged',
 } as const;
 
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
+  'library-sort-mode',
+  'wiki-expanded-folders',
+  'wiki-recent-collapsed',
+  'library-pinned-item-ids',
+  'library-sidebar-icon-color-indices',
+  'library-sidebar-icon-color-order',
+  'library-new-doc-location',
+  'librarian-last-selection',
+  'librarian-immersive',
+  'librarian-editor-session',
+  'fieldtheory.libraryRenameTrace',
+  'fieldtheory.contentToolbar.pinnedActions.v2',
+  'librarian-text-size',
+  'librarian-typography-preset',
+  'librarian-line-height',
+  'librarian-unordered-list-marker',
+  'librarian-todo-marker',
+  'librarian-maxwell-items',
+  'librarian-html-layout-by-path',
+  'fieldtheory-line-numbers',
+  'fieldtheory-rendered-edit-click-mode',
+  'fieldtheory-text-cursor-blink',
+  'fieldtheory-rendered-text-cursor-style',
+  'fieldtheory-rendered-block-cursor-opacity',
+  'fieldtheory-shared-file-toggle-hotkey',
+  'librarian-sidebar-width',
+  'librarian-sidebar-collapsed',
+  'bookmarks-view-mode',
+  'bookmarks-show-text',
+  'commands-text-size',
+  'commands-sidebar-width',
+  'darkMode',
+  'glassEffect',
+  'accentPreset',
+  'darkModeIntensity',
+  'fieldtheory-rendered-editor-debug',
+] as const;
+
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
+
+function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
+  const storage = (globalThis as unknown as {
+    localStorage?: {
+      setItem: (key: string, value: string) => void;
+      removeItem: (key: string) => void;
+    };
+  }).localStorage;
+  if (!storage) return;
+
+  try {
+    const snapshot = ipcRenderer.sendSync('browser-library:get-renderer-storage-sync') as {
+      available?: boolean;
+      values?: Record<string, string | null>;
+    } | null;
+    if (!snapshot?.available || !snapshot.values) return;
+    for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
+      const value = snapshot.values[key];
+      if (typeof value === 'string') {
+        storage.setItem(key, value);
+      } else {
+        storage.removeItem(key);
+      }
+    }
+  } catch {
+    // Best effort only; renderer-storage event sync will still catch up later.
+  }
+}
+
+function installBrowserLibraryRendererStorageForwarding(): void {
+  const storage = (globalThis as unknown as {
+    localStorage: {
+      setItem: (key: string, value: string) => void;
+      removeItem: (key: string) => void;
+    };
+  }).localStorage;
+  const originalSetItem = storage.setItem.bind(storage);
+  const originalRemoveItem = storage.removeItem.bind(storage);
+
+  storage.setItem = (key: string, value: string) => {
+    originalSetItem(key, value);
+    if (BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) {
+      ipcRenderer.send('browser-library:renderer-storage-changed', { key, value });
+    }
+  };
+
+  storage.removeItem = (key: string) => {
+    originalRemoveItem(key);
+    if (BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) {
+      ipcRenderer.send('browser-library:renderer-storage-changed', { key, value: null });
+    }
+  };
+}
+
+hydrateBrowserLibraryRendererStorageBeforeAppBoot();
+installBrowserLibraryRendererStorageForwarding();
+
 const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
   GET_MODEL_STATUS: 'transcribe:getModelStatus',
@@ -3223,7 +3320,7 @@ type MarkdownPreview = {
 };
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown' | 'typedown';
   selectionStart?: number;
