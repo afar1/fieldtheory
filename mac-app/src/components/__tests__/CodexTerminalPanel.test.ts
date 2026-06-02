@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   formatTerminalCwdLabel,
   estimateCodexTerminalSize,
@@ -16,6 +16,7 @@ import {
   shouldUseCompactRightDockToolbar,
   getTerminalLayoutRefitDelays,
   getTerminalTopExtension,
+  pasteClipboardIntoCodexTerminal,
   terminalAppearanceOptions,
   terminalContrastRatio,
   terminalTheme,
@@ -100,11 +101,36 @@ describe('nativeTerminalNavigationSequence', () => {
 });
 
 describe('isTerminalPasteSequence', () => {
-  it('captures Command+V and Command+Shift+V for xterm paste', () => {
+  it('captures plain Command+V for xterm paste', () => {
     expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true }))).toBe(true);
-    expect(isTerminalPasteSequence(keyboardEvent({ key: 'V', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isTerminalPasteSequence(keyboardEvent({ key: 'V', metaKey: true, shiftKey: true }))).toBe(false);
     expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true, altKey: true }))).toBe(false);
     expect(isTerminalPasteSequence(keyboardEvent({ key: 'v', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe('pasteClipboardIntoCodexTerminal', () => {
+  it('writes normalized terminal paste text directly to the PTY session', async () => {
+    const api = {
+      readTerminalPasteText: vi.fn(async () => '/tmp/Screenshot.png'),
+      input: vi.fn(async () => true),
+    };
+
+    await expect(pasteClipboardIntoCodexTerminal(api, 'session-1')).resolves.toBe(true);
+
+    expect(api.readTerminalPasteText).toHaveBeenCalledTimes(1);
+    expect(api.input).toHaveBeenCalledWith('session-1', '/tmp/Screenshot.png');
+  });
+
+  it('does nothing when the terminal paste resolver has no text', async () => {
+    const api = {
+      readTerminalPasteText: vi.fn(async () => ''),
+      input: vi.fn(async () => true),
+    };
+
+    await expect(pasteClipboardIntoCodexTerminal(api, 'session-1')).resolves.toBe(false);
+
+    expect(api.input).not.toHaveBeenCalled();
   });
 });
 
