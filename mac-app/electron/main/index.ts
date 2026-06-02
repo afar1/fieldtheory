@@ -35,7 +35,7 @@ import {
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
-import { BrowserHelperServer } from './browserHelperServer';
+import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
 import {
   LibraryDocumentWindowManager,
   persistableLibraryDocumentWindowBounds,
@@ -3379,15 +3379,22 @@ let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
 let globalImproveInFlight = false;
 
-function emitBrowserLibraryLauncherTarget(target: unknown): void {
+function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, options: { broadcastFallback?: boolean } = {}): boolean {
   if (
     activeBrowserLibrarySurfaceClientId &&
     browserHelperServer?.hasNativeEventClient(activeBrowserLibrarySurfaceClientId)
   ) {
-    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, { type: 'commands:openMarkdownFromLauncher', target });
-    return;
+    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, event);
+    return true;
   }
-  browserHelperServer?.emitNativeEvent({ type: 'commands:openMarkdownFromLauncher', target });
+  if (options.broadcastFallback !== false) {
+    browserHelperServer?.emitNativeEvent(event);
+  }
+  return false;
+}
+
+function emitBrowserLibraryLauncherTarget(target: unknown): boolean {
+  return emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target });
 }
 
 function ensureBookmarksManager(): BookmarksManager {
@@ -6196,6 +6203,10 @@ function routeOpenMarkdown(inputPath: string): void {
     log.info(`open-file: ignoring unsupported or unreadable path: ${inputPath}`);
     return;
   }
+  const browserHandled = resolved.kind === 'wiki'
+    ? emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath: resolved.relPath }, { broadcastFallback: false })
+    : emitBrowserLibraryNavigationEvent({ type: 'external:openPage', absPath: resolved.absPath }, { broadcastFallback: false });
+  if (browserHandled) return;
   if (!clipboardHistoryWindow) {
     log.info('open-file: main window not ready, queueing');
     pendingOpenMarkdownPath = inputPath;
@@ -6207,10 +6218,8 @@ function routeOpenMarkdown(inputPath: string): void {
   const webContents = clipboardHistoryWindow.getWindow()?.webContents;
   if (!webContents) return;
   if (resolved.kind === 'wiki') {
-    browserHelperServer?.emitNativeEvent({ type: 'wiki:openPage', relPath: resolved.relPath });
     webContents.send('wiki:openPage', resolved.relPath);
   } else {
-    browserHelperServer?.emitNativeEvent({ type: 'external:openPage', absPath: resolved.absPath });
     webContents.send('external:openPage', resolved.absPath);
   }
 }
@@ -11281,6 +11290,20 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Field Theory window not available' };
     }
 
+    if (
+      target.kind !== 'clipboard' &&
+      emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target }, { broadcastFallback: false })
+    ) {
+      commandLauncherWindow?.hide(true);
+      appendCommandLauncherTrace('open-field-theory-markdown-success', {
+        kind: target.kind,
+        path: target.path,
+        contentMode: target.contentMode ?? null,
+        target: 'browser-library',
+      });
+      return { success: true };
+    }
+
     const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
       ? clipboardHistoryWindow.getCurrentSizeKey()
       : target.kind === 'clipboard'
@@ -13835,15 +13858,21 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const relPath = resolved?.kind === 'wiki'
         ? resolved.relPath
         : path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+      if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath }, { broadcastFallback: false })) {
+        if (immersive) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+        }
+        return;
+      }
 
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.showLibrary(boundsToUse);
-        browserHelperServer?.emitNativeEvent({ type: 'wiki:openPage', relPath });
+        emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath });
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
         if (immersive) {
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:setFullscreen', fullscreen: true });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -13865,8 +13894,14 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (librarianManager) {
         const reading = librarianManager.getReading(decodedPath);
         if (reading) {
+          if (emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path }, { broadcastFallback: false })) {
+            if (fullscreen) {
+              emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+            }
+            return;
+          }
           // Send the reading path to the renderer to display it
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:showReading', readingPath: reading.path });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path });
           clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
         }
       }
@@ -13878,7 +13913,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
         clipboardHistoryWindow.showLibrary(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {
-          browserHelperServer?.emitNativeEvent({ type: 'librarian:setFullscreen', fullscreen: true });
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
