@@ -2027,7 +2027,7 @@ describe('LibrarianView render', () => {
     expect(onActionFeedback).toHaveBeenCalledWith('Selection sent to Codex');
   });
 
-  it('anchors copy feedback to the editor pane when the terminal is open', async () => {
+  it('centers copy feedback in the Library root instead of the editor pane', async () => {
     const relPath = 'briefs/Example CLI Org Scoped Benchmark Brief';
     const page: WikiPage = {
       relPath,
@@ -2060,7 +2060,8 @@ describe('LibrarianView render', () => {
     const feedback = await screen.findByRole('status');
     const editorPane = container.querySelector('[data-ft-reader-editor-pane="true"]');
     expect(feedback.textContent).toBe('Copied file path');
-    expect(editorPane?.contains(feedback)).toBe(true);
+    expect(container.firstElementChild?.contains(feedback)).toBe(true);
+    expect(editorPane?.contains(feedback)).toBe(false);
   });
 
   it('refreshes River availability after auth session changes', async () => {
