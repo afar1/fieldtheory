@@ -64,8 +64,8 @@ describe('launcher file index', () => {
       expect((await fsPromises.stat(docsDir)).isDirectory()).toBe(true);
       expect((await fsPromises.stat(docsFile)).isFile()).toBe(true);
 
-      await warmLauncherFileIndex({ roots: [root], maxAgeMs: 0, maxEntries: 10 });
-      const result = await searchLauncherFiles('drafts', { roots: [root], maxAgeMs: 10_000, maxEntries: 10 });
+      await warmLauncherFileIndex({ roots: [root], now: 1, maxAgeMs: 0, maxEntries: 10 });
+      const result = await searchLauncherFiles('drafts', { roots: [root], now: 2, maxAgeMs: 10_000, maxEntries: 10 });
 
       expect(result.files.map(file => file.filePath).slice(0, 2)).toEqual([docsDir, docsFile]);
     } finally {
