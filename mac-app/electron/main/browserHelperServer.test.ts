@@ -453,7 +453,7 @@ describe('BrowserHelperServer', () => {
       service: new BrowserHelperDocumentService([root]),
       token: 'test-token',
       nativeBridge: {
-        getRendererStorage: () => values,
+        getRendererStorage: () => ({ available: true, values }),
         setRendererStorage: (key, value) => {
           values[key] = value;
         },
@@ -470,8 +470,26 @@ describe('BrowserHelperServer', () => {
     });
 
     expect(listResponse.body.values['library-pinned-item-ids']).toBe('["wiki:Plan"]');
+    expect(listResponse.body.available).toBe(true);
     expect(setResponse.status).toBe(200);
     expect(values['fieldtheory.contentToolbar.pinnedActions.v2']).toBe('["fieldtheory"]');
+  });
+
+  it('reports renderer storage as unavailable when no native bridge snapshot exists', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/renderer-storage?token=test-token`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.available).toBe(false);
+    expect(response.body.values).toEqual({});
   });
 
   it('bridges librarian footer actions through the native bridge', async () => {

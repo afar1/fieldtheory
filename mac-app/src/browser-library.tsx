@@ -70,6 +70,11 @@ type RendererStorageApplyOptions = {
   removeItem?: (key: string) => void;
 };
 
+type RendererStorageResponse = {
+  available: boolean;
+  values: Record<string, string | null>;
+};
+
 type FooterLocalCommandStatus = {
   status: 'running' | 'success' | 'error' | 'notice';
   message: string;
@@ -256,8 +261,9 @@ async function syncRendererStorage(
   request: ReturnType<typeof createBrowserHelperClient>,
   options: RendererStorageApplyOptions = {},
 ): Promise<void> {
-  const response: { values: Record<string, string | null> } = await request<{ values: Record<string, string | null> }>('/native/renderer-storage')
-    .catch(() => ({ values: {} }));
+  const response = await request<RendererStorageResponse>('/native/renderer-storage')
+    .catch(() => ({ available: false, values: {} }));
+  if (!response.available) return;
   const setItem = options.setItem ?? window.localStorage.setItem.bind(window.localStorage);
   const removeItem = options.removeItem ?? window.localStorage.removeItem.bind(window.localStorage);
   for (const key of RENDERER_STORAGE_SYNC_KEYS) {

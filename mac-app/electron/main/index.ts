@@ -3326,17 +3326,20 @@ const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
 ] as const;
 const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
 
-async function getBrowserLibraryRendererStorage(): Promise<Record<string, string | null>> {
+async function getBrowserLibraryRendererStorage(): Promise<{ available: boolean; values: Record<string, string | null> }> {
   const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
-  if (!webContents || webContents.isDestroyed()) return {};
-  return webContents.executeJavaScript(`
+  if (!webContents || webContents.isDestroyed()) return { available: false, values: {} };
+  const values = await webContents.executeJavaScript(`
     (() => {
       const keys = ${JSON.stringify(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS)};
       const values = {};
       for (const key of keys) values[key] = window.localStorage.getItem(key);
       return values;
     })()
-  `, true).catch(() => ({}));
+  `, true).catch(() => null);
+  return values && typeof values === 'object'
+    ? { available: true, values: values as Record<string, string | null> }
+    : { available: false, values: {} };
 }
 
 async function setBrowserLibraryRendererStorage(key: string, value: string | null): Promise<void> {

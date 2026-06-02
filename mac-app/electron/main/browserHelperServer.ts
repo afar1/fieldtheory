@@ -88,6 +88,11 @@ export type BrowserHelperNativeEvent =
   | { type: 'bookmarks:changed' }
   | { type: 'agent:kickoffStatus'; event: unknown };
 
+export type BrowserHelperRendererStorageSnapshot = {
+  available: boolean;
+  values: Record<string, string | null>;
+};
+
 export type BrowserHelperNativeBridge = {
   getHiddenFolders?: () => string[];
   setFolderHidden?: (folderId: string, hidden: boolean) => string[];
@@ -156,7 +161,7 @@ export type BrowserHelperNativeBridge = {
   makeImagesPortable?: (documentPath: string, content: string) => unknown | Promise<unknown>;
   deleteUnusedCopiedImages?: (documentPath: string, removedMarkdown: string, remainingContent: string) => unknown | Promise<unknown>;
   getFieldTheorySyncStatus?: () => unknown | Promise<unknown>;
-  getRendererStorage?: () => Record<string, string | null> | Promise<Record<string, string | null>>;
+  getRendererStorage?: () => BrowserHelperRendererStorageSnapshot | Promise<BrowserHelperRendererStorageSnapshot>;
   setRendererStorage?: (key: string, value: string | null) => void | Promise<void>;
 };
 
@@ -300,7 +305,8 @@ export class BrowserHelperServer {
       }
 
       if (req.method === 'GET' && parsed.pathname === '/native/renderer-storage') {
-        writeJson(res, 200, { ok: true, values: await this.nativeBridge.getRendererStorage?.() ?? {} }, req.headers.origin);
+        const snapshot = await this.nativeBridge.getRendererStorage?.() ?? { available: false, values: {} };
+        writeJson(res, 200, { ok: true, ...snapshot }, req.headers.origin);
         return;
       }
 
