@@ -63,6 +63,7 @@ export type BrowserHelperNativeEvent =
   | { type: 'wiki:deleted'; relPath: string }
   | { type: 'wiki:renamed'; event: unknown }
   | { type: 'wiki:openPage'; relPath: string }
+  | { type: 'wiki:openScratchpad'; relPath: string }
   | { type: 'library:changed' }
   | { type: 'library:renamed'; event: unknown }
   | { type: 'external:openPage'; absPath: string }
