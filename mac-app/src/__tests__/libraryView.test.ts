@@ -76,6 +76,7 @@ import {
   restoreLibrarianEditorSession,
   restoreLibrarianTodoMarker,
   restoreLibrarianUnorderedListMarker,
+  resolveLibrarianInitialSelection,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
@@ -2045,6 +2046,36 @@ describe('librarian editor session helpers', () => {
       },
       { type: 'wiki', relPath: 'entries/note' },
     )).toBe(true);
+  });
+
+  it('uses a stored editor session instead of stale bookmarks on startup', () => {
+    expect(resolveLibrarianInitialSelection(
+      { type: 'bookmarks' },
+      {
+        itemType: 'wiki',
+        itemPath: 'scratchpad/Progress',
+        contentMode: 'rendered',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      false,
+    )).toEqual({ type: 'wiki', relPath: 'scratchpad/Progress' });
+  });
+
+  it('keeps explicit launch targets ahead of stored editor sessions', () => {
+    expect(resolveLibrarianInitialSelection(
+      { type: 'bookmarks' },
+      {
+        itemType: 'wiki',
+        itemPath: 'scratchpad/Progress',
+        contentMode: 'rendered',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      true,
+    )).toBeNull();
   });
 });
 

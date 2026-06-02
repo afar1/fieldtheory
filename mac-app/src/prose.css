@@ -137,7 +137,7 @@
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   column-gap: 0.5em;
-  align-items: baseline;
+  align-items: start;
   list-style: none;
 }
 
@@ -152,6 +152,10 @@
   vertical-align: -0.03em;
   position: relative;
   display: inline-block;
+}
+
+.ft-prose li.task-list-item > input[type='checkbox'] {
+  top: calc(((var(--ft-prose-line-height) * 1em) - 0.88em) / 2);
 }
 
 .ft-prose input[type='checkbox']:checked {

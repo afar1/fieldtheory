@@ -217,6 +217,9 @@ describe('LibrarianView render', () => {
     expect(restoreLibrarianSidebarWidth({
       getItem: (key: string) => key === 'librarian-sidebar-width' ? '260' : null,
     })).toBe(260);
+    expect(restoreLibrarianSidebarWidth({
+      getItem: (key: string) => key === 'librarian-sidebar-width' ? '120' : null,
+    })).toBe(180);
     expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-text-size')).toBe(true);
     expect(isLiveLibrarianRendererStoragePreferenceKey('fieldtheory-line-numbers')).toBe(true);
     expect(isLiveLibrarianRendererStoragePreferenceKey('librarian-sidebar-width')).toBe(true);

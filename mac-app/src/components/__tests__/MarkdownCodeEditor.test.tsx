@@ -1503,7 +1503,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       display: 'inline-block',
       position: 'absolute',
       left: 'calc(var(--ft-rendered-list-indent, 0ch) + 0.5em)',
-      top: 'calc((1lh - 0.9em) / 2)',
+      top: 'calc((var(--ft-line-number-row-height) - 0.9em) / 2)',
     });
     expect(getRenderedMarkdownTaskMarkerLayoutStyle()).not.toHaveProperty('transform');
   });

@@ -1317,7 +1317,7 @@ export function getRenderedMarkdownTaskMarkerLayoutStyle(): Record<string, strin
     display: 'inline-block',
     position: 'absolute',
     left: 'calc(var(--ft-rendered-list-indent, 0ch) + 0.5em)',
-    top: 'calc((1lh - 0.9em) / 2)',
+    top: 'calc((var(--ft-line-number-row-height) - 0.9em) / 2)',
     width: '0.9em',
     height: '0.9em',
     minWidth: '0.9em',
