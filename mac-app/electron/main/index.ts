@@ -2773,6 +2773,24 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         }
         return nativeWikiPage(manager.createWikiFileWithDefaultTitle(folderRelPath));
       },
+      createScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
+      openScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
       createWikiDir: (dirRelPath) => {
         if (!canWriteFieldTheoryContent()) {
           blockWrite();
@@ -3033,6 +3051,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         lastModified: cmd.lastModified,
       })) ?? [],
       getCommandByPath: (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
+      getMarkdownPreview: (filePath) => loadMarkdownPreview(filePath),
       saveCommand: (filePath, content, expectedVersion) => {
         if (!canWriteFieldTheoryContent()) {
           blockWrite();
@@ -4464,6 +4483,31 @@ function recordRecentExternalDocument(absPath: string | null | undefined, title:
     title: title?.trim() || stripMarkdownFileExtension(path.basename(canonical)),
     lastOpenedAt: Date.now(),
   });
+}
+
+function loadMarkdownPreview(filePath: string): { title: string; filePath: string; content: string } | null {
+  if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
+    return null;
+  }
+  try {
+    const canonicalPath = fs.realpathSync(filePath);
+    const stat = fs.statSync(canonicalPath);
+    if (!stat.isFile()) return null;
+
+    let content = fs.readFileSync(canonicalPath, 'utf-8');
+    if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
+      content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
+    }
+
+    return {
+      title: path.basename(canonicalPath),
+      filePath: canonicalPath,
+      content,
+    };
+  } catch (error) {
+    log.warn('Failed to load markdown preview:', error);
+    return null;
+  }
 }
 
 function recordRecentCreatedLibraryPage(page: WikiPage | null, rootPath: string): void {
@@ -10527,28 +10571,7 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, async (_event, filePath: string) => {
-    if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
-      return null;
-    }
-    try {
-      const canonicalPath = fs.realpathSync(filePath);
-      const stat = fs.statSync(canonicalPath);
-      if (!stat.isFile()) return null;
-
-      let content = fs.readFileSync(canonicalPath, 'utf-8');
-      if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
-        content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
-      }
-
-      return {
-        title: path.basename(canonicalPath),
-        filePath: canonicalPath,
-        content,
-      };
-    } catch (error) {
-      log.warn('Failed to load markdown preview:', error);
-      return null;
-    }
+    return loadMarkdownPreview(filePath);
   });
 
   // =========================================================================
