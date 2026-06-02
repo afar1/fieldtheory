@@ -798,6 +798,9 @@ export const LIBRARIAN_TODO_MARKER_STORAGE_KEY = 'librarian-todo-marker';
 export const LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY = 'librarian-maxwell-items';
 export const LIBRARIAN_HTML_LAYOUT_STORAGE_KEY = 'librarian-html-layout-by-path';
 export const LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY = 'librarian-sidebar-width';
+const LIBRARIAN_SIDEBAR_MIN_WIDTH = 180;
+const LIBRARIAN_SIDEBAR_DEFAULT_WIDTH = 220;
+const LIBRARIAN_SIDEBAR_MAX_WIDTH = 400;
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
 
@@ -846,8 +849,10 @@ export function isLiveLibrarianRendererStoragePreferenceKey(key: string | null |
 
 export function restoreLibrarianSidebarWidth(storage: Pick<Storage, 'getItem'> = localStorage): number {
   const saved = storage.getItem(LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY);
-  const width = saved ? parseInt(saved, 10) : 180;
-  return Number.isFinite(width) ? Math.max(120, Math.min(400, width)) : 180;
+  const width = saved ? parseInt(saved, 10) : LIBRARIAN_SIDEBAR_DEFAULT_WIDTH;
+  return Number.isFinite(width)
+    ? Math.max(LIBRARIAN_SIDEBAR_MIN_WIDTH, Math.min(LIBRARIAN_SIDEBAR_MAX_WIDTH, width))
+    : LIBRARIAN_SIDEBAR_DEFAULT_WIDTH;
 }
 
 export function restoreLibrarianTextSize(storage: Pick<Storage, 'getItem'>): LibrarianTextSizeId {
@@ -2618,6 +2623,10 @@ export function persistLibrarianEditorSession(
   storage.setItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
+export function clearLibrarianEditorSession(storage: Pick<Storage, 'removeItem'>): void {
+  storage.removeItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY);
+}
+
 export function editorSessionMatchesSelection(
   session: LibrarianEditorSession | null,
   selection: LibrarianStoredSelection | null
@@ -2626,6 +2635,30 @@ export function editorSessionMatchesSelection(
   if (selection.type === 'wiki') return session.itemType === 'wiki' && session.itemPath === selection.relPath;
   if (selection.type === 'artifact') return session.itemType === 'artifact' && session.itemPath === selection.path;
   return false;
+}
+
+export function resolveLibrarianInitialSelection(
+  restoredSelection: LibrarianStoredSelection | null,
+  restoredEditorSession: LibrarianEditorSession | null,
+  hasInitialOpenTarget: boolean,
+): LibrarianStoredSelection | null {
+  if (hasInitialOpenTarget) return null;
+  if (restoredSelection && editorSessionMatchesSelection(restoredEditorSession, restoredSelection)) {
+    return restoredSelection;
+  }
+  if (restoredSelection?.type === 'wiki' || restoredSelection?.type === 'artifact') {
+    return restoredSelection;
+  }
+  if (restoredEditorSession?.itemType === 'wiki') {
+    return { type: 'wiki', relPath: restoredEditorSession.itemPath };
+  }
+  if (restoredEditorSession?.itemType === 'artifact') {
+    return { type: 'artifact', path: restoredEditorSession.itemPath };
+  }
+  if (restoredEditorSession?.itemType === 'external') {
+    return null;
+  }
+  return restoredSelection;
 }
 
 export function resolveWikiCreateFolder(
@@ -2914,8 +2947,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
   const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
-  const initialSelection = hadInitialOpenTargetRef.current ? null : restoredSelection;
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
+  const initialSelection = useMemo(
+    () => resolveLibrarianInitialSelection(restoredSelection, restoredEditorSession, hadInitialOpenTargetRef.current),
+    [restoredEditorSession, restoredSelection],
+  );
   const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
@@ -3846,6 +3882,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setExternalOpenFile(null);
   }, []);
 
+  useEffect(() => {
+    if (hadInitialOpenTargetRef.current || initialSelection) return;
+    const session = restoredEditorSessionRef.current;
+    if (session?.itemType !== 'external') return;
+    void selectExternalFile(session.itemPath);
+  }, [initialSelection, selectExternalFile]);
+
   // Click on an unresolved [[wikilink]] — create the page in scratchpad using
   // the target text as the filename/title, then open it.
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
@@ -4149,10 +4192,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     if (selectedItemType === 'bookmarks') {
+      clearLibrarianEditorSession(localStorage);
       persistLibrarianSelection(localStorage, { type: 'bookmarks' });
       return;
     }
     if (selectedItemType === 'ember') {
+      clearLibrarianEditorSession(localStorage);
       persistLibrarianSelection(localStorage, { type: 'ember' });
       return;
     }
@@ -4195,8 +4240,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
 
       const newWidth = e.clientX - containerRect.left;
-      // Clamp between 120px and 400px
-      const clampedWidth = Math.max(120, Math.min(400, newWidth));
+      const clampedWidth = Math.max(
+        LIBRARIAN_SIDEBAR_MIN_WIDTH,
+        Math.min(LIBRARIAN_SIDEBAR_MAX_WIDTH, newWidth),
+      );
       sidebarWidthRef.current = clampedWidth;
       applySidebarWidth(clampedWidth);
     };
