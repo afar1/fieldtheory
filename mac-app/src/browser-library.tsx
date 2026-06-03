@@ -1582,6 +1582,7 @@ function BrowserLibrarySurface(props: {
   const [focusChromeContentCenterX, setFocusChromeContentCenterX] = React.useState<number | null>(null);
   const [activeLibraryFile, setActiveLibraryFile] = React.useState<{ path: string; title: string; mtime: number } | null>(null);
   const [fieldTheoryButtonProximity, setFieldTheoryButtonProximity] = React.useState(0);
+  const [fieldTheoryButtonHovered, setFieldTheoryButtonHovered] = React.useState(false);
   const [actionFeedback, setActionFeedback] = React.useState<string | null>(null);
   const focusChromeGlobalEnabledRef = React.useRef(normalizedInitialOpenTarget?.focusChrome === true);
   const focusChromePreviousSidebarCollapsedRef = React.useRef<boolean | null>(
@@ -2152,7 +2153,7 @@ function BrowserLibrarySurface(props: {
       detail: { fullscreen: false },
     }));
   }, [disableGlobalFocusChrome]);
-  const fieldTheoryButtonVisible = !browserChromeHidden && !focusChromeOverlayActive && (
+  const fieldTheoryButtonVisible = (
     surface === 'commands'
     || activeClientSurface === 'bookmarks'
     || activeClientSurface === 'ember'
@@ -2298,9 +2299,11 @@ function BrowserLibrarySurface(props: {
         <button
           type="button"
           data-fieldtheory-browser-open-native-button="true"
-          aria-label="Open in Field Theory"
-          title="Open in Field Theory"
+          aria-label="Open app"
+          title="Open app"
           onClick={openCurrentTargetInFieldTheory}
+          onMouseEnter={() => setFieldTheoryButtonHovered(true)}
+          onMouseLeave={() => setFieldTheoryButtonHovered(false)}
           style={{
             position: 'absolute',
             right: '18px',
@@ -2313,22 +2316,32 @@ function BrowserLibrarySurface(props: {
             justifyContent: 'center',
             borderRadius: '10px',
             border: `1px solid ${theme.border}`,
-            backgroundColor: theme.isDark ? 'rgba(20,20,22,0.78)' : 'rgba(255,255,255,0.86)',
+            backgroundColor: fieldTheoryButtonHovered
+              ? (theme.isDark ? 'rgba(30,30,34,0.92)' : 'rgba(255,255,255,0.96)')
+              : (theme.isDark ? 'rgba(20,20,22,0.78)' : 'rgba(255,255,255,0.86)'),
             color: theme.text,
             boxShadow: theme.isDark ? '0 10px 28px rgba(0,0,0,0.32)' : '0 10px 28px rgba(0,0,0,0.14)',
             backdropFilter: 'blur(10px)',
             WebkitBackdropFilter: 'blur(10px)',
             cursor: 'pointer',
-            opacity: 0.18 + fieldTheoryButtonProximity * 0.82,
-            transform: `translateY(${Math.round((1 - fieldTheoryButtonProximity) * 2)}px)`,
+            opacity: browserChromeHidden || focusChromeOverlayActive
+              ? (fieldTheoryButtonHovered ? 1 : 0.9)
+              : (fieldTheoryButtonHovered ? 1 : 0.18 + fieldTheoryButtonProximity * 0.82),
+            transform: fieldTheoryButtonHovered ? 'translateY(-1px)' : `translateY(${Math.round((1 - fieldTheoryButtonProximity) * 2)}px)`,
             transition: 'opacity 120ms ease, transform 120ms ease, background-color 120ms ease',
           }}
         >
-          <svg width="19" height="19" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
-            <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" opacity="0.82" />
-            <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" opacity="0.38" />
-          </svg>
+          <img
+            src="/field-theory-icon-black.png"
+            alt=""
+            aria-hidden="true"
+            style={{
+              width: '20px',
+              height: '20px',
+              display: 'block',
+              opacity: theme.isDark ? 0.86 : 0.72,
+            }}
+          />
         </button>
       ) : null}
       <BrowserLibraryFooter
