@@ -16,7 +16,7 @@ import {
 
 describe('librarian typography presets', () => {
   it('keeps the font choices curated', () => {
-    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.id)).toEqual(['book', 'note', 'draft']);
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.id)).toEqual(['book', 'note', 'draft', 'literata', 'atkinson', 'plex-mono']);
   });
 
   it('restores a saved typography preset', () => {
@@ -25,6 +25,16 @@ describe('librarian typography presets', () => {
     };
 
     expect(restoreLibrarianTypographyPreset(storage)).toBe('draft');
+  });
+
+  it('restores any selectable typography preset', () => {
+    for (const preset of LIBRARIAN_TYPOGRAPHY_PRESETS) {
+      const storage = {
+        getItem: (key: string) => key === LIBRARIAN_TYPOGRAPHY_STORAGE_KEY ? preset.id : null,
+      };
+
+      expect(restoreLibrarianTypographyPreset(storage)).toBe(preset.id);
+    }
   });
 
   it('falls back to the default preset for unknown values', () => {
