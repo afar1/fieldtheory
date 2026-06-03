@@ -60,6 +60,7 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
+  shouldSwitchLauncherDefaultPanelOnTab,
   shouldShowLauncherItemInTypedSearch,
   shouldTraceLauncherRendererEvent,
   scoreLauncherText,
@@ -170,6 +171,21 @@ describe('launcher default panel helpers', () => {
     expect(getLauncherDefaultPanelSourceLabel('recents')).toBe('Recents');
     expect(getLauncherDefaultPanelSourceLabel('clipboard')).toBe('Clipboard');
     expect(getLauncherDefaultPanelSourceLabel('bookmarks')).toBe('Bookmarks');
+  });
+
+  it('only lets Tab cycle idle panels when no launcher row is explicitly selected', () => {
+    expect(shouldSwitchLauncherDefaultPanelOnTab({
+      isRootIdleLauncher: true,
+      hasExplicitSelection: false,
+    })).toBe(true);
+    expect(shouldSwitchLauncherDefaultPanelOnTab({
+      isRootIdleLauncher: true,
+      hasExplicitSelection: true,
+    })).toBe(false);
+    expect(shouldSwitchLauncherDefaultPanelOnTab({
+      isRootIdleLauncher: false,
+      hasExplicitSelection: false,
+    })).toBe(false);
   });
 
   it('keeps synthetic recents out of typed search and identifies River rows', () => {

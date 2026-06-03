@@ -76,6 +76,7 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
+  shouldSwitchLauncherDefaultPanelOnTab,
   shouldTraceLauncherRendererEvent,
   warmLauncherSearchableItemCache,
   scoreLauncherSearchableItem,
@@ -3117,7 +3118,10 @@ function CommandLauncher() {
         return;
       }
 
-      if (isRootIdleLauncher && !hasExplicitSelectionRef.current) {
+      if (shouldSwitchLauncherDefaultPanelOnTab({
+        isRootIdleLauncher,
+        hasExplicitSelection: hasExplicitSelectionRef.current,
+      })) {
         switchDefaultPanelSource();
         return;
       }
