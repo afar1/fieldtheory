@@ -120,6 +120,13 @@ export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboar
   return 'Recents';
 }
 
+export function shouldSwitchLauncherDefaultPanelOnTab(input: {
+  isRootIdleLauncher: boolean;
+  hasExplicitSelection: boolean;
+}): boolean {
+  return input.isRootIdleLauncher && !input.hasExplicitSelection;
+}
+
 export type LauncherDefaultBookmarkEnterAction =
   | { kind: 'insert-bookmark-embed'; markdown: string }
   | { kind: 'paste-bookmark-text' }

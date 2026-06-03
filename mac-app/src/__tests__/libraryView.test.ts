@@ -12,6 +12,7 @@ import {
   getMarkdownListIndentEdit,
   getMarkdownListToggleEdit,
   getMarkdownWordDeleteBackwardPreservingListMarkerEdit,
+  getSingleCharacterRenderedListBodyDeleteEdit,
   getRenderedMarkdownNodeStartLine,
   getRenderedMarkdownDeleteShortcutEdit,
   getRenderedMarkdownEnterEdit,
@@ -1596,6 +1597,35 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '',
       selectionStart: 0,
       selectionEnd: 0,
+    });
+  });
+
+  it('returns rendered list items to a clean empty body after deleting their only character', () => {
+    expect(getSingleCharacterRenderedListBodyDeleteEdit('- a', 3, 3, 'Backspace')).toEqual({
+      nextValue: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+    expect(getSingleCharacterRenderedListBodyDeleteEdit('- a', 2, 2, 'Delete')).toEqual({
+      nextValue: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+    expect(getSingleCharacterRenderedListBodyDeleteEdit('- [ ] a', 7, 7, 'Backspace')).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- a',
+      selectionStart: 3,
+      selectionEnd: 3,
+    })).toEqual({
+      nextValue: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
     });
   });
 
