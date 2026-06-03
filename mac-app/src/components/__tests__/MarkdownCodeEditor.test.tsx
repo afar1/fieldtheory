@@ -41,6 +41,8 @@ import {
   RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT,
   RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR,
   RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR,
+  RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_BOOKMARK_ID_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
   RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS,
@@ -73,6 +75,7 @@ import {
   getRenderedMarkdownImageSelectionFromEventTarget,
   getRenderedMarkdownImageLineRanges,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownBookmarkEmbedId,
   getRenderedMarkdownInlineHtmlBlocks,
   getRenderedMarkdownInlineHtmlSelectionFromEventTarget,
   isRenderedMarkdownSelectionInsideInlineHtmlBlock,
@@ -774,6 +777,72 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('parses bookmark image destinations for rendered bookmark embeds', () => {
+    expect(getRenderedMarkdownBookmarkEmbedId('bookmark://bookmark-1')).toBe('bookmark-1');
+    expect(getRenderedMarkdownBookmarkEmbedId('<bookmark://bookmark%202>')).toBe('bookmark 2');
+    expect(getRenderedMarkdownBookmarkEmbedId('https://example.com')).toBeNull();
+  });
+
+  it('renders bookmark image markdown as an atomic bookmark embed', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = '![Bookmark](bookmark://bookmark-1)';
+    const state = EditorState.create({ doc });
+    const decorations = buildRenderedMarkdownEditorDecorations(
+      state,
+      null,
+      {
+        bookmarks: [{
+          id: 'bookmark-1',
+          sourceType: 'x',
+          text: 'Bookmark text in the editor.',
+          url: 'https://x.com/afar/status/1',
+          authorHandle: 'afar',
+          authorName: 'Afar',
+          authorAvatar: '',
+          postedAt: '2026-01-01T00:00:00Z',
+          images: [],
+          mediaCount: 0,
+          likeCount: 0,
+          repostCount: 0,
+          bookmarkCount: 0,
+          folders: [],
+        }],
+        folders: [],
+        xLastSyncedAt: null,
+      },
+    );
+
+    expect(decorations.size).toBeGreaterThan(0);
+    decorations.between(0, doc.length, (_from, _to, value) => {
+      if (value.spec.widget) parent.appendChild(value.spec.widget.toDOM());
+    });
+    const embed = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}`) as HTMLElement | null;
+    expect(embed?.getAttribute(RENDERED_MARKDOWN_EDITOR_BOOKMARK_ID_ATTR)).toBe('bookmark-1');
+    expect(embed?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('0');
+    expect(embed?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe(String(doc.length));
+    expect(embed?.textContent).toContain('Afar');
+    expect(embed?.textContent).toContain('Bookmark text in the editor.');
+    expect(getRenderedMarkdownImageSelectionFromEventTarget(embed?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__body`) ?? null)).toEqual({
+      from: 0,
+      to: doc.length,
+    });
+
+    parent.remove();
+  });
+
+  it('inserts Enter around a first rendered bookmark embed without splitting its markdown', () => {
+    const doc = '![Bookmark](bookmark://bookmark-1)\nAfter';
+    expect(getRenderedMarkdownAtomicBoundaryLineBreakEdit(doc, 0)).toEqual({
+      insertAt: 0,
+      selection: 0,
+    });
+    expect(getRenderedMarkdownAtomicBoundaryLineBreakEdit(doc, '![Bookmark](bookmark://bookmark-1)'.length)).toEqual({
+      insertAt: '![Bookmark](bookmark://bookmark-1)'.length,
+      selection: '![Bookmark](bookmark://bookmark-1)\n'.length,
+    });
   });
 
   it('skips hidden rendered inline syntax when arrowing right', () => {
