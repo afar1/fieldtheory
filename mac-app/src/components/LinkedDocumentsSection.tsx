@@ -21,6 +21,7 @@ const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
   wiki: 'Wiki',
   artifact: 'Artifact',
   command: 'Command',
+  bookmarks: 'Bookmarks',
 };
 
 type LinkedDocumentsSectionProps = {

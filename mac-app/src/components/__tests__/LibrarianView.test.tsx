@@ -1208,7 +1208,7 @@ describe('LibrarianView render', () => {
       <LibrarianView
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
-        initialOpenTarget={{ kind: 'bookmarks' }}
+        initialOpenTarget={{ kind: 'bookmarks', path: 'bookmarks' }}
       />,
     );
 
@@ -1248,7 +1248,7 @@ describe('LibrarianView render', () => {
       <LibrarianView
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
-        initialOpenTarget={{ kind: 'bookmarks' }}
+        initialOpenTarget={{ kind: 'bookmarks', path: 'bookmarks' }}
       />,
     );
 

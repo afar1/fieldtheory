@@ -20,7 +20,8 @@ export type WikiIndexInput = {
 export type WikiLinkTarget =
   | { kind: 'wiki'; relPath: string }
   | { kind: 'artifact'; path: string }
-  | { kind: 'command'; path: string };
+  | { kind: 'command'; path: string }
+  | { kind: 'bookmarks' };
 
 export type MarkdownWikiLinkPasteTarget = {
   title: string;
@@ -122,17 +123,19 @@ export function buildWikiIndex(pages: WikiIndexInput[]): WikiIndex {
 export function resolveWikiLink(
   target: string,
   index: WikiIndex,
-): { relPath: string | null; artifactPath: string | null; commandPath: string | null } {
+): { relPath: string | null; artifactPath: string | null; commandPath: string | null; bookmarks: boolean } {
   const clean = target.trim();
-  if (!clean) return { relPath: null, artifactPath: null, commandPath: null };
+  if (!clean) return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
   const relKey = normalizeWikiRelPath(clean);
-  if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null };
-  if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null };
+  if (relKey.toLowerCase() === 'bookmarks') return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
+  if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   const hit = index.byTitle.get(clean.toLowerCase());
-  if (hit?.kind === 'wiki') return { relPath: hit.relPath, artifactPath: null, commandPath: null };
-  if (hit?.kind === 'artifact') return { relPath: null, artifactPath: hit.path, commandPath: null };
-  if (hit?.kind === 'command') return { relPath: null, artifactPath: null, commandPath: hit.path };
-  return { relPath: null, artifactPath: null, commandPath: null };
+  if (hit?.kind === 'wiki') return { relPath: hit.relPath, artifactPath: null, commandPath: null, bookmarks: false };
+  if (hit?.kind === 'artifact') return { relPath: null, artifactPath: hit.path, commandPath: null, bookmarks: false };
+  if (hit?.kind === 'command') return { relPath: null, artifactPath: null, commandPath: hit.path, bookmarks: false };
+  if (hit?.kind === 'bookmarks') return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
 }
 
 function getPastedFilePathCandidates(text: string): string[] {
@@ -174,6 +177,7 @@ const UNRESOLVED_PREFIX = 'wiki://!/';
 const RESOLVED_PREFIX = 'wiki://';
 const ARTIFACT_PREFIX = 'artifact://';
 const COMMAND_PREFIX = 'command://';
+const BOOKMARKS_PREFIX = 'bookmarks://';
 
 export function isUnresolvedWikiHref(href: string | undefined): boolean {
   return !!href && href.startsWith(UNRESOLVED_PREFIX);
@@ -188,6 +192,7 @@ export type LinkAction =
   | { kind: 'wiki'; relPath: string }
   | { kind: 'artifact'; path: string }
   | { kind: 'command'; path: string }
+  | { kind: 'bookmarks' }
   | { kind: 'external'; href: string }
   | { kind: 'noop' };
 
@@ -295,6 +300,7 @@ export function classifyLinkHref(
       : '';
     return path ? { kind: 'command', path } : { kind: 'noop' };
   }
+  if (href.startsWith(BOOKMARKS_PREFIX)) return { kind: 'bookmarks' };
   // Bare relative-looking hrefs — no protocol, no leading /, #, ? — may be
   // plain markdown links that reference wiki pages by relPath. Try the index
   // before handing off to the browser.
@@ -304,10 +310,11 @@ export function classifyLinkHref(
     !href.startsWith('#') &&
     !href.startsWith('?');
   if (looksRelative) {
-    const { relPath, artifactPath, commandPath } = resolveWikiLink(href, index);
+    const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(href, index);
     if (relPath) return { kind: 'wiki', relPath };
     if (artifactPath) return { kind: 'artifact', path: artifactPath };
     if (commandPath) return { kind: 'command', path: commandPath };
+    if (bookmarks) return { kind: 'bookmarks' };
   }
   return { kind: 'external', href };
 }
@@ -319,10 +326,11 @@ function offsetInMatch(offset: number, start: number, text: string): boolean {
 function wikiLinkActionFromTarget(target: string, index: WikiIndex): LinkAction {
   const clean = target.trim();
   if (!clean) return { kind: 'noop' };
-  const { relPath, artifactPath, commandPath } = resolveWikiLink(clean, index);
+  const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(clean, index);
   if (relPath) return { kind: 'wiki', relPath };
   if (artifactPath) return { kind: 'artifact', path: artifactPath };
   if (commandPath) return { kind: 'command', path: commandPath };
+  if (bookmarks) return { kind: 'bookmarks' };
   return { kind: 'create', title: clean };
 }
 
@@ -480,6 +488,8 @@ export function getWikiLinkTargetKey(target: WikiLinkTarget): string {
       return `artifact:${target.path}`;
     case 'command':
       return `command:${target.path}`;
+    case 'bookmarks':
+      return 'bookmarks:root';
   }
 }
 
@@ -515,6 +525,8 @@ function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {
       return { kind: 'artifact', path: action.path };
     case 'command':
       return { kind: 'command', path: action.path };
+    case 'bookmarks':
+      return { kind: 'bookmarks' };
     default:
       return null;
   }
@@ -860,14 +872,16 @@ export function transformWikiLinks(body: string, index: WikiIndex): string {
           if (!target) return _m;
           const display = (rawAlias ?? target).trim() || target;
           const escapedDisplay = escapeMarkdownLinkText(display);
-          const { relPath, artifactPath, commandPath } = resolveWikiLink(target, index);
+          const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(target, index);
           const href = relPath
             ? `${RESOLVED_PREFIX}${encodeURI(relPath)}`
             : artifactPath
               ? `${ARTIFACT_PREFIX}${encodeURIComponent(artifactPath)}`
               : commandPath
                 ? `${COMMAND_PREFIX}${encodeURIComponent(commandPath)}`
-                : `${UNRESOLVED_PREFIX}${encodeURIComponent(target)}`;
+                : bookmarks
+                  ? `${BOOKMARKS_PREFIX}root`
+                  : `${UNRESOLVED_PREFIX}${encodeURIComponent(target)}`;
           return `[${escapedDisplay}](${href})`;
         },
       );

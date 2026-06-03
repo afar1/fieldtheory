@@ -29,7 +29,11 @@ import {
   getLauncherAreaActionIdForQuery,
   getLauncherClipboardSearchQuery,
   getLauncherClipboardSearchInputState,
+  getLauncherDefaultBookmarkEnterAction,
   getLauncherDefaultPanelItems,
+  getLauncherDefaultBookmarksTabAction,
+  getLauncherDefaultPanelSourceLabel,
+  formatLauncherBookmarkEmbedMarkdown,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
@@ -113,6 +117,7 @@ describe('launcher default panel helpers', () => {
   it('shows only the first five rows from the selected idle panel source', () => {
     const recentItems = Array.from({ length: 7 }, (_, index) => ({ id: `recent-${index}` }));
     const clipboardItems = Array.from({ length: 7 }, (_, index) => ({ id: `clipboard-${index}` }));
+    const bookmarkItems = Array.from({ length: 7 }, (_, index) => ({ id: `bookmark-${index}` }));
 
     expect(getLauncherDefaultPanelItems({
       expanded: true,
@@ -120,6 +125,7 @@ describe('launcher default panel helpers', () => {
       source: 'recents',
       recentItems,
       clipboardItems,
+      bookmarkItems,
     }).map(item => item.id)).toEqual(['recent-0', 'recent-1', 'recent-2', 'recent-3', 'recent-4']);
 
     expect(getLauncherDefaultPanelItems({
@@ -128,7 +134,17 @@ describe('launcher default panel helpers', () => {
       source: 'clipboard',
       recentItems,
       clipboardItems,
+      bookmarkItems,
     }).map(item => item.id)).toEqual(['clipboard-0', 'clipboard-1', 'clipboard-2', 'clipboard-3', 'clipboard-4']);
+
+    expect(getLauncherDefaultPanelItems({
+      expanded: true,
+      isRootIdle: true,
+      source: 'bookmarks',
+      recentItems,
+      clipboardItems,
+      bookmarkItems,
+    }).map(item => item.id)).toEqual(['bookmark-0', 'bookmark-1', 'bookmark-2', 'bookmark-3', 'bookmark-4']);
   });
 
   it('hides the default panel when collapsed or outside the root idle launcher', () => {
@@ -149,6 +165,12 @@ describe('launcher default panel helpers', () => {
       recentItems,
       clipboardItems: [],
     })).toEqual([]);
+  });
+
+  it('labels all default panel sources for the launcher controls', () => {
+    expect(getLauncherDefaultPanelSourceLabel('recents')).toBe('Recents');
+    expect(getLauncherDefaultPanelSourceLabel('clipboard')).toBe('Clipboard');
+    expect(getLauncherDefaultPanelSourceLabel('bookmarks')).toBe('Bookmarks');
   });
 
   it('keeps synthetic recents out of typed search and identifies River rows', () => {
@@ -1251,6 +1273,102 @@ describe('getGeneratedBookmarkTaxonomyPathInfo', () => {
     expect(getGeneratedBookmarkTaxonomyPathInfo('categories/commerce')).toEqual({ kind: 'category', value: 'commerce' });
     expect(getGeneratedBookmarkTaxonomyPathInfo('/Users/a/.fieldtheory/library/domains/commerce.md')).toEqual({ kind: 'domain', value: 'commerce' });
     expect(getGeneratedBookmarkTaxonomyPathInfo('bookmarks-from-x/entities/paulg')).toEqual({ kind: 'entity', value: 'paulg' });
+  });
+});
+
+describe('bookmark embed launcher helpers', () => {
+  it('formats bookmark launcher rows as rendered-editor bookmark embeds', () => {
+    expect(formatLauncherBookmarkEmbedMarkdown({
+      itemType: 'bookmark',
+      bookmarkId: 'bookmark 1',
+      displayName: 'Saved [thing]',
+      name: 'fallback',
+    })).toBe('![Saved \\[thing\\]](bookmark://bookmark%201)');
+  });
+
+  it('ignores non-bookmark rows and missing bookmark ids', () => {
+    expect(formatLauncherBookmarkEmbedMarkdown({
+      itemType: 'wiki-page',
+      bookmarkId: 'bookmark-1',
+      displayName: 'Page',
+    })).toBeNull();
+    expect(formatLauncherBookmarkEmbedMarkdown({
+      itemType: 'bookmark',
+      displayName: 'Bookmark',
+    })).toBeNull();
+  });
+
+  it('resolves Tab on the default Bookmarks panel to opening Bookmarks and invoking the selected bookmark', () => {
+    expect(getLauncherDefaultBookmarksTabAction({
+      itemType: 'bookmark',
+      bookmarkId: 'bookmark-1',
+    })).toEqual({
+      bookmarkTarget: { kind: 'bookmarks', path: 'bookmarks' },
+      bookmarkId: 'bookmark-1',
+    });
+    expect(getLauncherDefaultBookmarksTabAction({
+      itemType: 'bookmark-author',
+      bookmarkId: 'bookmark-1',
+    })).toBeNull();
+    expect(getLauncherDefaultBookmarksTabAction({
+      itemType: 'bookmark',
+    })).toBeNull();
+  });
+
+  it('uses Enter on default Bookmarks rows to insert embeds in Field Theory documents', () => {
+    expect(getLauncherDefaultBookmarkEnterAction({
+      itemType: 'bookmark',
+      bookmarkId: 'bookmark 1',
+      displayName: 'Saved [thing]',
+      name: 'fallback',
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+      canInsertMarkdown: true,
+      hasBookmarkPasteText: true,
+      canPasteText: true,
+      canCopyForAgent: true,
+    })).toEqual({
+      kind: 'insert-bookmark-embed',
+      markdown: '![Saved \\[thing\\]](bookmark://bookmark%201)',
+    });
+  });
+
+  it('falls back from Enter on default Bookmarks rows to paste, copy, then invoke outside Field Theory documents', () => {
+    const base = {
+      itemType: 'bookmark',
+      bookmarkId: 'bookmark-1',
+      displayName: 'Bookmark',
+      name: 'bookmark',
+      fieldTheoryActive: false,
+      hasActiveLibraryFileContext: false,
+      canInsertMarkdown: true,
+    };
+
+    expect(getLauncherDefaultBookmarkEnterAction({
+      ...base,
+      hasBookmarkPasteText: true,
+      canPasteText: true,
+      canCopyForAgent: true,
+    })).toEqual({ kind: 'paste-bookmark-text' });
+    expect(getLauncherDefaultBookmarkEnterAction({
+      ...base,
+      hasBookmarkPasteText: false,
+      canPasteText: true,
+      canCopyForAgent: true,
+    })).toEqual({ kind: 'copy-bookmark-for-agent' });
+    expect(getLauncherDefaultBookmarkEnterAction({
+      ...base,
+      hasBookmarkPasteText: false,
+      canPasteText: false,
+      canCopyForAgent: false,
+    })).toEqual({ kind: 'invoke-bookmark' });
+    expect(getLauncherDefaultBookmarkEnterAction({
+      ...base,
+      itemType: 'bookmark-author',
+      hasBookmarkPasteText: true,
+      canPasteText: true,
+      canCopyForAgent: true,
+    })).toBeNull();
   });
 });
 

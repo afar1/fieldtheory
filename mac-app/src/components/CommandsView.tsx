@@ -718,9 +718,14 @@ export default function CommandsView({
   }, [flashCopyFeedback, selectedCommand?.filePath]);
 
   const openFieldTheoryMarkdownTarget = useCallback((target: WikiLinkTarget) => {
+    const path = target.kind === 'wiki'
+      ? target.relPath
+      : target.kind === 'bookmarks'
+        ? 'bookmarks'
+        : target.path;
     void window.commandsAPI?.openFieldTheoryMarkdown?.({
       kind: target.kind,
-      path: target.kind === 'wiki' ? target.relPath : target.path,
+      path,
     });
   }, []);
 
@@ -754,6 +759,9 @@ export default function CommandsView({
         return;
       case 'command':
         void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'command', path: action.path });
+        return;
+      case 'bookmarks':
+        void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'bookmarks', path: 'bookmarks' });
         return;
       case 'external':
         window.shellAPI?.openExternal(action.href);
