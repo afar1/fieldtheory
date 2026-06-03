@@ -163,7 +163,7 @@ describe('PreferencesManager', () => {
     expect(loaded.clickAwayToDismiss).toBe(false);
   });
 
-  it('migrates legacy click-away prefs into Field Theory panel mode on load', async () => {
+  it('migrates legacy click-away prefs into Field Theory app mode on load', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(
       prefsPath,
@@ -180,9 +180,9 @@ describe('PreferencesManager', () => {
     const preferences = new PreferencesManager();
     const loaded = await preferences.load();
 
-    expect(loaded.fieldTheoryWindowMode).toBe('panel');
-    expect(loaded.showInDock).toBe(false);
-    expect(loaded.clickAwayToDismiss).toBe(true);
+    expect(loaded.fieldTheoryWindowMode).toBe('app');
+    expect(loaded.showInDock).toBe(true);
+    expect(loaded.clickAwayToDismiss).toBe(false);
   });
 
   it('does not let a click-away-only save override explicit Field Theory app mode', async () => {
@@ -228,10 +228,11 @@ describe('PreferencesManager', () => {
     expect(loaded.meetingSummaryPrompt).toContain('links, figures, and checkboxes');
   });
 
-  it('resolves missing window-mode preferences to app mode while honoring legacy panel settings', () => {
+  it('resolves missing window-mode preferences to app mode even with legacy panel settings', () => {
     expect(resolveFieldTheoryWindowMode({})).toBe('app');
-    expect(resolveFieldTheoryWindowMode({ showInDock: false })).toBe('panel');
-    expect(resolveFieldTheoryWindowMode({ clickAwayToDismiss: true })).toBe('panel');
+    expect(resolveFieldTheoryWindowMode({ showInDock: false })).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ clickAwayToDismiss: true })).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ fieldTheoryWindowMode: 'panel', showInDock: true })).toBe('panel');
   });
 
   it('mirrors shared device prefs and preserves them when signed out', async () => {

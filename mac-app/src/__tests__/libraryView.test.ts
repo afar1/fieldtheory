@@ -1035,6 +1035,15 @@ describe('shouldApplyLiveMarkdownFileUpdate', () => {
     })).toBe(false);
   });
 
+  it('does not apply disk updates while the rendered editor is active', () => {
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'rendered',
+      editContent: 'same content',
+      lastSavedContent: 'same content',
+      renderedEditingActive: true,
+    })).toBe(false);
+  });
+
   it('applies disk updates in markdown mode only when there is no local edit', () => {
     expect(shouldApplyLiveMarkdownFileUpdate({
       contentMode: 'markdown',
@@ -1441,6 +1450,20 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '\nResolved',
       selectionStart: 0,
       selectionEnd: 0,
+    });
+  });
+
+  it('moves the rendered caret forward when Enter creates another blank line', () => {
+    expect(getRenderedMarkdownEnterEdit('hello\n', 6, 6)).toEqual({
+      nextValue: 'hello\n\n',
+      selectionStart: 7,
+      selectionEnd: 7,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('', 0, 0)).toEqual({
+      nextValue: '\n',
+      selectionStart: 1,
+      selectionEnd: 1,
     });
   });
 

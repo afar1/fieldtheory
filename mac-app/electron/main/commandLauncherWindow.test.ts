@@ -744,6 +744,31 @@ describe('CommandLauncherWindow preview IPC', () => {
     });
   });
 
+  it('uses larger detached preview bounds for clipboard images', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    mockWindow.setBounds.mockClear();
+    const preview = { kind: 'clipboard', title: 'Screenshot', content: { type: 'image', data: 'abc', width: 1600, height: 1000 } };
+
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 120,
+      y: 170,
+      width: 860,
+      height: 760,
+    });
+  });
+
   it('resizes the detached preview around measured content height', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),

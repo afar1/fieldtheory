@@ -52,5 +52,12 @@ export function normalizeMarkdownImageUrl(destination: string, documentPath?: st
   if (/^file:/i.test(raw)) return raw.replace(/^file:/i, 'ftlocalfile:');
   if (SAFE_REMOTE_IMAGE_URL_RE.test(raw)) return raw;
   if (/^data:image\//i.test(raw)) return raw;
+  if (raw.startsWith('/') && LOCAL_IMAGE_EXTENSION_RE.test(raw.split(/[?#]/, 1)[0] ?? raw)) {
+    try {
+      return encodeAbsolutePathAsFileUrl(normalizeAbsolutePath(decodeURIComponent(raw))).replace(/^file:/i, 'ftlocalfile:');
+    } catch {
+      return null;
+    }
+  }
   return resolveRelativeMarkdownImageUrl(raw, documentPath);
 }

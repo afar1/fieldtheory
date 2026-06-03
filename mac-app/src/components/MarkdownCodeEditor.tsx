@@ -84,6 +84,7 @@ export const RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS = 'cm-rendered-markdown-i
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR = 'data-cm-rendered-markdown-image-src';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR = 'data-cm-rendered-markdown-image-alt';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS = 'cm-rendered-markdown-image-line';
+export const RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS = 'cm-rendered-markdown-list-image';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS = 'cm-rendered-markdown-code-block';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS = 'cm-rendered-markdown-code-block-start';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS = 'cm-rendered-markdown-code-block-end';
@@ -619,12 +620,17 @@ export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: Ed
 
 export function getRenderedMarkdownSelectionInsideListBody(state: EditorState): EditorSelection | null {
   let changed = false;
+  const value = state.doc.toString();
   const ranges = state.selection.ranges.map((range) => {
-    if (!range.empty) return range;
-    const bodyStart = getRenderedMarkdownListBodyStartAtOffset(state.doc.toString(), range.from);
-    if (bodyStart === null || range.from >= bodyStart) return range;
+    const clampListOffset = (offset: number): number => {
+      const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, offset);
+      return bodyStart === null || offset >= bodyStart ? offset : bodyStart;
+    };
+    const anchor = clampListOffset(range.anchor);
+    const head = clampListOffset(range.head);
+    if (anchor === range.anchor && head === range.head) return range;
     changed = true;
-    return EditorSelection.cursor(bodyStart);
+    return anchor === head ? EditorSelection.cursor(anchor) : EditorSelection.range(anchor, head);
   });
   return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
 }
@@ -908,6 +914,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
     private readonly documentPath: string | null | undefined,
     private readonly sourceFrom: number,
     private readonly sourceTo: number,
+    private readonly className = '',
   ) {
     super();
   }
@@ -917,7 +924,8 @@ class RenderedMarkdownImageWidget extends WidgetType {
       && other.destination === this.destination
       && other.documentPath === this.documentPath
       && other.sourceFrom === this.sourceFrom
-      && other.sourceTo === this.sourceTo;
+      && other.sourceTo === this.sourceTo
+      && other.className === this.className;
   }
 
   ignoreEvent(event: Event): boolean {
@@ -926,7 +934,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
 
   toDOM(): HTMLElement {
     const image = document.createElement('span');
-    image.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS;
+    image.className = [RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS, this.className].filter(Boolean).join(' ');
     image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
     image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
 
@@ -1755,9 +1763,11 @@ export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): bool
   if (!selection.empty) return false;
   const edit = getMarkdownListMarkerProtectedDeleteBackwardEdit(view.state.doc.toString(), selection.from);
   if (!edit) return false;
+  const visualLineStart = view.moveToLineBoundary(selection, false, true).head;
+  const from = Math.max(edit.from, Math.min(selection.from, visualLineStart));
   view.dispatch({
-    changes: edit.from === edit.to ? undefined : { from: edit.from, to: edit.to },
-    selection: { anchor: edit.selection, head: edit.selection },
+    changes: from === edit.to ? undefined : { from, to: edit.to },
+    selection: { anchor: from, head: from },
   });
   return true;
 }
@@ -1822,6 +1832,7 @@ function pushRenderedInlineDecorations(
   lineFrom: number,
   text: string,
   documentPath?: string | null,
+  imageClassName = '',
 ): void {
 	  const protectedRanges: Array<{ from: number; to: number }> = [];
 	  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
@@ -1838,7 +1849,7 @@ function pushRenderedInlineDecorations(
       decorations,
       from,
       to,
-      new RenderedMarkdownImageWidget(match[1], match[2], documentPath, from, to),
+      new RenderedMarkdownImageWidget(match[1], match[2], documentPath, from, to, imageClassName),
     );
   }
 
@@ -2141,7 +2152,14 @@ function pushRenderedMarkdownEditorLineDecorations(
     pushRenderedListBodyDecoration(decorations, markerTo, line.to);
   }
 
-  pushRenderedInlineDecorations(state, decorations, line.from + inlineStart, text.slice(inlineStart), documentPath);
+  pushRenderedInlineDecorations(
+    state,
+    decorations,
+    line.from + inlineStart,
+    text.slice(inlineStart),
+    documentPath,
+    listMatch || taskMatch ? RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS : '',
+  );
   return codeFenceMarker;
 }
 
@@ -2916,6 +2934,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}:has(.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS})`]: {
             cursor: 'default',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS}`]: {
+            display: 'inline-flex',
+            width: 'auto',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
             display: 'block',

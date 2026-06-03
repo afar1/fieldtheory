@@ -161,6 +161,12 @@ describe('clipboard markdown export', () => {
     expect(formatLocalImageMarkdown('/tmp/Figure 1.png', 'figure A')).toBe('![figure A](<file:///tmp/Figure%201.png>)');
   });
 
+  it('normalizes pasted file image URLs with spaces before embedding them', () => {
+    expect(formatPastedLocalImageMarkdown(
+      'file:///Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-06-02 at 4.51.23 PM.png',
+    )).toBe('![Image](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-06-02%20at%204.51.23%20PM.png>)');
+  });
+
   it('converts pasted local image paths into markdown image embeds', () => {
     expect(formatPastedLocalImageMarkdown(
       '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 11.57.03 AM.png',
