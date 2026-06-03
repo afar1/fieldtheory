@@ -2140,6 +2140,21 @@ describe('librarian editor session helpers', () => {
     )).toEqual({ type: 'wiki', relPath: 'scratchpad/Progress' });
   });
 
+  it('uses a stored external editor session instead of stale wiki selection on startup', () => {
+    expect(resolveLibrarianInitialSelection(
+      { type: 'wiki', relPath: 'scratchpad/FT feedback for (in codex panel and mac app)' },
+      {
+        itemType: 'external',
+        itemPath: '/Users/afar/notes/current.md',
+        contentMode: 'markdown',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      false,
+    )).toEqual({ type: 'external', path: '/Users/afar/notes/current.md' });
+  });
+
   it('keeps explicit launch targets ahead of stored editor sessions', () => {
     expect(resolveLibrarianInitialSelection(
       { type: 'bookmarks' },
@@ -2709,6 +2724,12 @@ describe('librarian selection persistence', () => {
     expect(JSON.parse(state['librarian-last-selection'])).toEqual({
       type: 'artifact',
       path: '/tmp/example.md',
+    });
+
+    persistLibrarianSelection(storage, { type: 'external', path: '/tmp/external.md' });
+    expect(JSON.parse(state['librarian-last-selection'])).toEqual({
+      type: 'external',
+      path: '/tmp/external.md',
     });
 
     persistLibrarianSelection(storage, null);

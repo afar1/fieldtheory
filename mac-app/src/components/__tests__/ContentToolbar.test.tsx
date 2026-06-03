@@ -175,21 +175,25 @@ describe('ContentToolbar', () => {
     expect(screen.queryByLabelText('Copy file path (⌘C)')).toBeNull();
   });
 
-  it('shows todo marker choices in the text style menu', () => {
+  it('does not show todo marker choices in the text style menu', () => {
     const onTodoMarkerChange = vi.fn();
 
     render(
       <ContentToolbar
         showCopy={false}
+        showTextSize
+        textSize="normal"
+        onTextSizeChange={vi.fn()}
         todoMarker="circle"
         onTodoMarkerChange={onTodoMarkerChange}
       />
     );
 
     fireEvent.click(screen.getByLabelText('Text style'));
-    fireEvent.click(screen.getByTitle('Square todo checkboxes'));
 
-    expect(onTodoMarkerChange).toHaveBeenCalledWith('square');
+    expect(screen.queryByText('Todos')).toBeNull();
+    expect(screen.queryByTitle('Square todo checkboxes')).toBeNull();
+    expect(onTodoMarkerChange).not.toHaveBeenCalled();
   });
 
   it('can keep the center spacer in the renderer hit-test path', () => {
@@ -575,15 +579,15 @@ describe('ContentToolbar', () => {
     expect(pill?.contains(menu)).toBe(true);
     expect(menu?.style.top).toBe('calc(100% + 10px)');
     expect(menu?.style.right).toBe('0px');
-    expect(menu?.style.width).toBe('286px');
+    expect(menu?.style.width).toBe('376px');
     expect(menu?.style.padding).toBe('5px');
     expect(menu?.style.gap).toBe('2px');
     expect(menu?.style.transform).toBe('');
     expect(menu?.style.zIndex).toBe('1002');
     const control = screen.getByTitle('Book font').parentElement as HTMLDivElement;
     expect(control.style.display).toBe('grid');
-    expect(control.style.gridAutoColumns).toBe('minmax(0, 1fr)');
-    expect(control.closest('div[style*="grid-template-columns"]')?.getAttribute('style')).toContain('grid-template-columns: 52px minmax(0, 1fr)');
+    expect(control.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))');
+    expect((control.parentElement as HTMLDivElement).style.gridTemplateColumns).toBe('52px minmax(0, 1fr)');
     expect((screen.getByTitle('Draft font') as HTMLButtonElement).style.minWidth).toBe('0');
 
     fireEvent.click(screen.getByTitle('Bar cursor'));
