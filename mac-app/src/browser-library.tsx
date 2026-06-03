@@ -1583,6 +1583,7 @@ function BrowserLibrarySurface(props: {
   const [activeLibraryFile, setActiveLibraryFile] = React.useState<{ path: string; title: string; mtime: number } | null>(null);
   const [fieldTheoryButtonProximity, setFieldTheoryButtonProximity] = React.useState(0);
   const [fieldTheoryButtonHovered, setFieldTheoryButtonHovered] = React.useState(false);
+  const [browserTextSelected, setBrowserTextSelected] = React.useState(false);
   const [actionFeedback, setActionFeedback] = React.useState<string | null>(null);
   const focusChromeGlobalEnabledRef = React.useRef(normalizedInitialOpenTarget?.focusChrome === true);
   const focusChromePreviousSidebarCollapsedRef = React.useRef<boolean | null>(
@@ -1653,6 +1654,14 @@ function BrowserLibrarySurface(props: {
       element.removeEventListener('mousemove', updateProximity);
       element.removeEventListener('mouseleave', clearProximity);
     };
+  }, []);
+  React.useEffect(() => {
+    const updateBrowserTextSelected = () => {
+      setBrowserTextSelected((document.getSelection()?.toString().trim().length ?? 0) > 0);
+    };
+    document.addEventListener('selectionchange', updateBrowserTextSelected);
+    updateBrowserTextSelected();
+    return () => document.removeEventListener('selectionchange', updateBrowserTextSelected);
   }, []);
 
   React.useEffect(() => {
@@ -2158,7 +2167,7 @@ function BrowserLibrarySurface(props: {
     || activeClientSurface === 'bookmarks'
     || activeClientSurface === 'ember'
     || Boolean(activeLibraryFile)
-  );
+  ) && !browserTextSelected;
   const immersiveExitVisible = librarianSurfaceVisible && (librarianImmersive || focusChromeSurfaceEnabled);
 
   return (
