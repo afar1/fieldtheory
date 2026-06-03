@@ -17,10 +17,8 @@ import {
 } from '../WikiSidebar';
 
 const libraryRootPath = '/Users/afar/.fieldtheory/library';
-type TestSidebarNode = Parameters<typeof virtualizeBookmarksGroup>[0][number];
-type TestSidebarFileNode = Extract<TestSidebarNode, { kind: 'file' }>;
 
-function fileNode(id: string, title: string): TestSidebarFileNode {
+function fileNode(id: string, title: string) {
   return {
     kind: 'file' as const,
     id,
@@ -36,7 +34,7 @@ function fileNode(id: string, title: string): TestSidebarFileNode {
   };
 }
 
-function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${name}/note`, 'note')]): TestSidebarNode {
+function dirNode(name: string, children = [fileNode(`wiki:${name}/note`, 'note')]) {
   return {
     kind: 'dir' as const,
     id: `${libraryRootPath}::${name}`,
@@ -112,7 +110,7 @@ describe('WikiSidebar River root helpers', () => {
   });
 
   it('virtualizes native bookmark folders into the same Bookmarks shortcut used by the app', () => {
-    const nodes: Parameters<typeof virtualizeBookmarksGroup>[0] = [
+    const nodes = [
       dirNode('scratchpad'),
       dirNode('bookmarks-from-x', [dirNode('categories')]),
     ];
