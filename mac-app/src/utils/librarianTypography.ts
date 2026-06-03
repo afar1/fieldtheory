@@ -3,7 +3,7 @@ import { fonts } from '../design/tokens';
 export const LIBRARIAN_TYPOGRAPHY_STORAGE_KEY = 'librarian-typography-preset';
 export const LIBRARIAN_LINE_HEIGHT_STORAGE_KEY = 'librarian-line-height';
 
-export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft';
+export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft' | 'literata' | 'atkinson' | 'plex-mono';
 export type LibrarianLineHeightId = 'tight' | 'normal' | 'loose';
 export type LibrarianTextSizeId = 'small' | 'normal' | 'large';
 
@@ -19,6 +19,7 @@ export type LibrarianTypographyPreset = {
 
 export const DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET: LibrarianTypographyPresetId = 'book';
 export const DEFAULT_LIBRARIAN_LINE_HEIGHT: LibrarianLineHeightId = 'normal';
+const LIBRARIAN_TYPOGRAPHY_PRESET_IDS: LibrarianTypographyPresetId[] = ['book', 'note', 'draft', 'literata', 'atkinson', 'plex-mono'];
 
 export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   {
@@ -48,6 +49,33 @@ export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
     lineHeight: 1.7,
     maxWidth: 'min(680px, 64ch)',
   },
+  {
+    id: 'literata',
+    label: 'Literata',
+    title: 'Open serif built for long-form digital reading',
+    fontFamily: `"Literata", ${fonts.serif}`,
+    headingFontFamily: `"Literata", ${fonts.serif}`,
+    lineHeight: 1.64,
+    maxWidth: 'min(720px, 68ch)',
+  },
+  {
+    id: 'atkinson',
+    label: 'Atkinson',
+    title: 'Open hyperlegible sans for clear everyday writing',
+    fontFamily: `"Atkinson Hyperlegible Next", ${fonts.sans}`,
+    headingFontFamily: `"Atkinson Hyperlegible Next", ${fonts.sans}`,
+    lineHeight: 1.58,
+    maxWidth: 'min(700px, 66ch)',
+  },
+  {
+    id: 'plex-mono',
+    label: 'Plex Mono',
+    title: 'Open monospace for markdown drafting',
+    fontFamily: `"IBM Plex Mono", ${fonts.mono}`,
+    headingFontFamily: `"IBM Plex Mono", ${fonts.mono}`,
+    lineHeight: 1.7,
+    maxWidth: 'min(680px, 64ch)',
+  },
 ];
 
 export const LIBRARIAN_LINE_HEIGHT_OPTIONS: Array<{
@@ -62,7 +90,7 @@ export const LIBRARIAN_LINE_HEIGHT_OPTIONS: Array<{
 ];
 
 export function isLibrarianTypographyPresetId(value: unknown): value is LibrarianTypographyPresetId {
-  return value === 'book' || value === 'note' || value === 'draft';
+  return typeof value === 'string' && LIBRARIAN_TYPOGRAPHY_PRESET_IDS.includes(value as LibrarianTypographyPresetId);
 }
 
 export function isLibrarianLineHeightId(value: unknown): value is LibrarianLineHeightId {

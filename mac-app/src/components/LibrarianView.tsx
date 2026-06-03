@@ -2526,6 +2526,7 @@ export const LIBRARIAN_EDITOR_SESSION_STORAGE_KEY = 'librarian-editor-session';
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
   | { type: 'artifact'; path: string }
+  | { type: 'external'; path: string }
   | { type: 'bookmarks' }
   | { type: 'ember' };
 
@@ -2634,6 +2635,12 @@ export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): Li
         path: parsed.path.trim(),
       };
     }
+    if (parsed?.type === 'external' && typeof parsed.path === 'string' && parsed.path.trim()) {
+      return {
+        type: 'external',
+        path: parsed.path.trim(),
+      };
+    }
     if (parsed?.type === 'bookmarks') {
       return { type: 'bookmarks' };
     }
@@ -2704,6 +2711,7 @@ export function editorSessionMatchesSelection(
   if (!session || !selection) return false;
   if (selection.type === 'wiki') return session.itemType === 'wiki' && session.itemPath === selection.relPath;
   if (selection.type === 'artifact') return session.itemType === 'artifact' && session.itemPath === selection.path;
+  if (selection.type === 'external') return session.itemType === 'external' && session.itemPath === selection.path;
   return false;
 }
 
@@ -2716,9 +2724,6 @@ export function resolveLibrarianInitialSelection(
   if (restoredSelection && editorSessionMatchesSelection(restoredEditorSession, restoredSelection)) {
     return restoredSelection;
   }
-  if (restoredSelection?.type === 'wiki' || restoredSelection?.type === 'artifact') {
-    return restoredSelection;
-  }
   if (restoredEditorSession?.itemType === 'wiki') {
     return { type: 'wiki', relPath: restoredEditorSession.itemPath };
   }
@@ -2726,7 +2731,7 @@ export function resolveLibrarianInitialSelection(
     return { type: 'artifact', path: restoredEditorSession.itemPath };
   }
   if (restoredEditorSession?.itemType === 'external') {
-    return null;
+    return { type: 'external', path: restoredEditorSession.itemPath };
   }
   return restoredSelection;
 }
@@ -3104,6 +3109,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!initialSelection) return null;
     if (initialSelection.type === 'wiki') return `wiki:${initialSelection.relPath}`;
     if (initialSelection.type === 'artifact') return `artifact:${initialSelection.path}`;
+    if (initialSelection.type === 'external') return `external:${initialSelection.path}`;
     if (initialSelection.type === 'ember') return EMBER_ITEM_ID;
     return BOOKMARKS_ITEM_ID;
   });
@@ -3979,6 +3985,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     void selectExternalFile(session.itemPath);
   }, [initialSelection, selectExternalFile]);
 
+  useEffect(() => {
+    if (hadInitialOpenTargetRef.current) return;
+    if (initialSelection?.type !== 'external') return;
+    void selectExternalFile(initialSelection.path);
+  }, [initialSelection, selectExternalFile]);
+
   // Click on an unresolved [[wikilink]] — create the page in scratchpad using
   // the target text as the filename/title, then open it.
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
@@ -4307,9 +4319,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     if (selectedItemType === 'external') {
-      // External files are transient — don't overwrite the stored wiki/
-      // artifact/bookmarks selection, so closing and reopening the library
-      // restores the durable view.
+      if (externalOpenFile?.path) {
+        persistLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path });
+      }
       return;
     }
     if (selectedPath) {
@@ -4317,7 +4329,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     persistLibrarianSelection(localStorage, null);
-  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
+  }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!currentNavigationEntry) return;
@@ -7044,6 +7056,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!session) return;
     persistLibrarianEditorSession(localStorage, session);
   }, [browserLibrarySurface, captureEditorSession]);
+
+  useEffect(() => {
+    persistEditorSession();
+  }, [persistEditorSession]);
 
   const scheduleEditorSessionPersist = useCallback(() => {
     if (editorSessionPersistTimerRef.current !== null) {
