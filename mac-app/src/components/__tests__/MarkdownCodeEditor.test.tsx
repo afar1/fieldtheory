@@ -28,6 +28,7 @@ import {
   RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_INLINE_HTML_CLASS,
+  RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS,
   RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
@@ -880,6 +881,13 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
     const bodySelection = getRenderedMarkdownSelectionInsideListBody(markerState);
     expect(bodySelection?.main.from).toBe('- first\n- '.length);
+    const rangeState = EditorState.create({
+      doc,
+      selection: EditorSelection.range(0, '- first\n- second'.length),
+    });
+    const clampedRangeSelection = getRenderedMarkdownSelectionInsideListBody(rangeState);
+    expect(clampedRangeSelection?.main.anchor).toBe(2);
+    expect(clampedRangeSelection?.main.head).toBe('- first\n- second'.length);
     expect(getRenderedMarkdownCommandArrowSelection(doc, 0, 'left')).toBe(2);
     expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first\n'.length)).toEqual({
       selection: '- first\n- '.length,
@@ -952,6 +960,26 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(handleMarkdownCodeEditorCommandBackspace(view)).toBe(true);
     expect(view.state.doc.toString()).toBe('- ');
     expect(view.state.selection.main.from).toBe(2);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps Command+Backspace inside the current visual list line', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- first item wraps here',
+        selection: EditorSelection.cursor('- first item wraps'.length),
+      }),
+      parent,
+    });
+    vi.spyOn(view, 'moveToLineBoundary').mockReturnValue(EditorSelection.cursor('- first item'.length));
+
+    expect(handleMarkdownCodeEditorCommandBackspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe('- first item here');
+    expect(view.state.selection.main.from).toBe('- first item'.length);
 
     view.destroy();
     parent.remove();
@@ -1509,6 +1537,34 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     // jsdom cannot prove wrapped-line pixels; the live check needs to verify that this body column wraps under "first".
     expect(body?.textContent).toBe('first bold tail');
     expect(body?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`)?.textContent).toBe('bold');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps rendered list images in the list body column', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- ![Diagram](<file:///tmp/diagram.png>)',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const line = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`) as HTMLElement | null;
+    const marker = line?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`) as HTMLElement | null;
+    const image = line?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`) as HTMLElement | null;
+    const appearsBefore = (before: Element | null, after: Element | null): boolean => (
+      !!before && !!after && Boolean(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
+
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS}`)).toBeNull();
+    expect(marker?.textContent).toBe('•');
+    expect(image?.textContent).toBe('Diagram');
+    expect(image?.classList.contains(RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS)).toBe(true);
+    expect(appearsBefore(marker, image)).toBe(true);
 
     view.destroy();
     parent.remove();
