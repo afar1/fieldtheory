@@ -1792,7 +1792,11 @@ export function getRenderedMarkdownArrowRightEdit(value: string, offset: number)
 
 export function getRenderedMarkdownArrowLeftEdit(value: string, offset: number): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
-  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const listBodyStart = getRenderedMarkdownListBodyStartAtOffset(value, caret);
+  if (listBodyStart !== null && caret === listBodyStart && caret === lineEnd && lineStart > 0) {
+    return { selection: lineStart - 1 };
+  }
   const blockBodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, caret);
   if (blockBodyStart !== null && caret <= blockBodyStart && caret > lineStart) {
     return { selection: blockBodyStart };
