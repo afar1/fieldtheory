@@ -2350,6 +2350,36 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('does not let Browser Library surfaces overwrite the native startup editor session', async () => {
+    const relPath = 'scratchpad/browser-panel-session-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'browser-panel-session-test',
+      title: 'browser-panel-session-test',
+      lastUpdated: 1,
+      content: 'Browser panel body',
+      documentVersion: { mtimeMs: 1, size: 18, sha256: 'browser-panel-session-version' },
+    };
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { unmount } = render(
+      <LibrarianView
+        browserLibrarySurface
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Browser panel body');
+    unmount();
+
+    const sessionCalls = vi.mocked(window.localStorage.setItem).mock.calls
+      .filter(([key]) => key === 'librarian-editor-session');
+    expect(sessionCalls).toHaveLength(0);
+  });
+
   it('keeps command-launcher image insertion in rendered mode when rendered is active', async () => {
     const relPath = 'scratchpad/rendered-command-image-insert-test';
     const content = 'hello rendered command image';

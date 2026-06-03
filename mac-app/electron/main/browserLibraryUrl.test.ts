@@ -9,7 +9,7 @@ const address = {
 };
 
 describe('buildBrowserLibraryUrl', () => {
-  it('builds dev-server Browser Library URLs with helper API, token, and encoded targets', () => {
+  it('builds dev-server Browser Library URLs with helper API, token, and readable target params', () => {
     const url = new URL(buildBrowserLibraryUrl({
       address,
       devServer: 'http://localhost:5173/',
@@ -27,17 +27,16 @@ describe('buildBrowserLibraryUrl', () => {
     expect(url.pathname).toBe('/browser-library.html');
     expect(url.searchParams.get('api')).toBe('http://127.0.0.1:59971');
     expect(url.searchParams.get('token')).toBe('test-token');
-    expect(JSON.parse(url.searchParams.get('target') ?? '{}')).toEqual({
-      kind: 'wiki',
-      path: 'scratchpad/June 2.md',
-      contentMode: 'markdown',
-      sidebarCollapsed: true,
-      selectionStart: 10,
-      selectionEnd: 20,
-    });
+    expect(url.searchParams.get('target')).toBeNull();
+    expect(url.searchParams.get('kind')).toBe('wiki');
+    expect(url.searchParams.get('path')).toBe('scratchpad/June 2.md');
+    expect(url.searchParams.get('contentMode')).toBe('markdown');
+    expect(url.searchParams.get('sidebarCollapsed')).toBe('1');
+    expect(url.searchParams.get('selectionStart')).toBe('10');
+    expect(url.searchParams.get('selectionEnd')).toBe('20');
   });
 
-  it('preserves production helper URL shape while adding API and optional target params', () => {
+  it('preserves production helper URL shape while adding API and optional readable target params', () => {
     const url = new URL(buildBrowserLibraryUrl({
       address,
       target: { kind: 'bookmarks' },
@@ -47,6 +46,7 @@ describe('buildBrowserLibraryUrl', () => {
     expect(url.pathname).toBe('/browser-library.html');
     expect(url.searchParams.get('api')).toBe('http://127.0.0.1:59971');
     expect(url.searchParams.get('token')).toBe('test-token');
-    expect(JSON.parse(url.searchParams.get('target') ?? '{}')).toEqual({ kind: 'bookmarks' });
+    expect(url.searchParams.get('target')).toBeNull();
+    expect(url.searchParams.get('kind')).toBe('bookmarks');
   });
 });
