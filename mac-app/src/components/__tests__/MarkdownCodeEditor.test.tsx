@@ -903,6 +903,12 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(getRenderedMarkdownArrowLeftEdit('See [[Target|Alias]]', 13)).toBeNull();
   });
 
+  it('moves ArrowLeft from an empty rendered list item to the previous line', () => {
+    expect(getRenderedMarkdownArrowLeftEdit('- first\n- ', 10)).toEqual({
+      selection: 7,
+    });
+  });
+
   it('uses Option+Arrow to jump rendered inline units without entering syntax', () => {
     expect(getRenderedMarkdownOptionArrowEdit('See [[Target|Alias]] today', 4, 'right')).toEqual({
       selection: 20,
