@@ -1727,6 +1727,35 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('keeps Backspace from revealing rendered task brackets after the text is deleted', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [ ] task',
+        selection: EditorSelection.cursor('- [ ] task'.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    view.dispatch({
+      changes: { from: '- [ ] '.length, to: '- [ ] task'.length },
+      selection: { anchor: '- [ ] '.length },
+    });
+
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- [ ] ');
+    expect(view.state.selection.main.from).toBe('- [ ] '.length);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('moves rendered list marker clicks to the first text position', () => {
     const event = new MouseEvent('mousedown', { button: 0 });
 
