@@ -17,8 +17,9 @@ describe('LibraryFooterLogo', () => {
 
     const logo = document.querySelector('img[aria-label="Field Theory"]') as HTMLImageElement | null;
     if (!logo) throw new Error('Field Theory logo missing');
-    expect(logo.getAttribute('src')).toBe('/field-theory-icon-black.png');
+    expect(logo.getAttribute('src')).toBe('/fieldtheory-logo-black.png');
     expect(logo.style.display).toBe('block');
+    expect(logo.style.maxWidth).toBe('132px');
   });
 
   it('renders the Field Theory footer logo in dark mode', () => {
@@ -26,6 +27,6 @@ describe('LibraryFooterLogo', () => {
 
     const logo = document.querySelector('img[aria-label="Field Theory"]') as HTMLImageElement | null;
     if (!logo) throw new Error('Field Theory logo missing');
-    expect(logo.getAttribute('src')).toBe('/fieldtheory-icon.png');
+    expect(logo.getAttribute('src')).toBe('/fieldtheory-logo-white.png');
   });
 });
