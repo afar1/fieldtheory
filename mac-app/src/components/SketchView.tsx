@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
+import '@excalidraw/excalidraw/index.css';
 import { useTheme } from '../contexts/ThemeContext';
 
 type TranscriptItem = {

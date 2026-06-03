@@ -1978,6 +1978,14 @@ function getLibrarianHookBridge(
 function staticRelativePath(pathname: string): string | null {
   const decoded = decodeURIComponent(pathname);
   if (decoded === '/' || decoded === '/browser-library.html') return 'browser-library.html';
+  if (
+    decoded === '/field-theory-icon-black.png'
+    || decoded === '/fieldtheory-icon.png'
+    || decoded === '/fieldtheory-logo-black.png'
+    || decoded === '/fieldtheory-logo-white.png'
+  ) {
+    return decoded.slice(1);
+  }
   if (!decoded.startsWith('/assets/')) return null;
   const relativePath = decoded.slice(1);
   return relativePath.includes('\0') ? null : relativePath;
