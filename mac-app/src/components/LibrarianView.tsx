@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -3747,6 +3748,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusChromeActive,
     focusChromePinnedVisible,
   });
+  const focusStandaloneImmersiveVisible = focusChromeActive && !focusToolbarControlsVisible && canUseFocusImmersive;
   const contentTopPadding = getLibrarianContentTopPadding({
     contentMode,
     focusChromeActive,
@@ -9966,7 +9968,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               zIndex: focusChromeActive ? 20 : undefined,
               boxSizing: 'border-box',
               opacity: 1,
-              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned ? 'none' : 'auto',
+              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned && !focusStandaloneImmersiveVisible ? 'none' : 'auto',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -10200,6 +10202,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onMaxwellRemoveItem={removeMaxwellItem}
                   onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
                 />
+              )}
+              {focusStandaloneImmersiveVisible && (
+                <div style={{ marginLeft: 'auto', opacity: 1, pointerEvents: 'auto' }}>
+                  <ImmersiveToggle
+                    isFullScreen={isFullScreen || focusImmersive}
+                    onToggle={toggleFocusChromeShortcut}
+                  />
+                </div>
               )}
               {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
                 <div

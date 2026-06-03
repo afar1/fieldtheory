@@ -45,7 +45,6 @@ import {
   getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherDefaultBookmarkEnterAction,
-  getLauncherDefaultBookmarksTabAction,
   getLauncherDefaultPanelSourceLabel,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
@@ -3115,40 +3114,7 @@ function CommandLauncher() {
       const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
 
       if (clipboardSearchQuery !== null) {
-        const selectedItem = filtered[currentIndex];
-        if (selectedItem) void openClipboardLauncherItem(selectedItem);
         return;
-      }
-
-      if (defaultBookmarksPanelActive) {
-        const selectedItem = filtered[currentIndex];
-        const action = getLauncherDefaultBookmarksTabAction({
-          itemType: selectedItem?.type,
-          bookmarkId: selectedItem?.bookmarkId,
-        });
-        if (action) {
-          void (async () => {
-            const result = await commandsAPI.openFieldTheoryMarkdown(action.bookmarkTarget);
-            if (!result.success) {
-              traceLauncher('open-bookmarks-error', { error: result.error ?? 'Open bookmarks failed' });
-              showLauncherMessage(result.error ?? 'Open bookmarks failed');
-              return;
-            }
-            const invokeResult = await bookmarksAPI?.invokeBookmark(action.bookmarkId);
-            if (invokeResult && !invokeResult.success) {
-              traceLauncher('open-bookmark-error', { error: invokeResult.error ?? 'Open bookmark failed' });
-              showLauncherMessage(invokeResult.error ?? 'Open bookmark failed');
-              return;
-            }
-            prepareLauncherForNextOpen({ revealWhenReady: false });
-            commandsAPI.launcherClose({ skipActivation: true, generation: launcherGenerationRef.current });
-          })().catch((error) => {
-            const message = error instanceof Error ? error.message : 'Open bookmark failed';
-            traceLauncher('open-bookmark-error', { error: message });
-            showLauncherMessage(message);
-          });
-          return;
-        }
       }
 
       if (isRootIdleLauncher && !hasExplicitSelectionRef.current) {
@@ -3190,33 +3156,7 @@ function CommandLauncher() {
         return;
       }
 
-      if (hasExplicitSelectionRef.current) {
-        const selectedFieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
-          filtered,
-          allItems,
-          currentIndex,
-          rawQuery,
-          true,
-        );
-        if (selectedFieldTheoryTarget) {
-          void invokeItem(selectedFieldTheoryTarget, { openFieldTheoryTarget: true });
-          return;
-        }
-      }
-
       if (fileSearchQuery !== null) return;
-
-      const commandTarget = resolveLauncherCommandOpenTarget(
-        filtered,
-        commandItems,
-        currentIndex,
-        rawQuery,
-        hasExplicitSelectionRef.current,
-      );
-      if (commandTarget) {
-        void invokeItem(commandTarget, { openFieldTheoryTarget: true });
-        return;
-      }
 
       const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
       if (directory?.directoryPath) {
@@ -3227,18 +3167,6 @@ function CommandLauncher() {
         });
         setQuery('');
         selectIndex(0);
-        return;
-      }
-
-      const fieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
-        filtered,
-        allItems,
-        currentIndex,
-        rawQuery,
-        hasExplicitSelectionRef.current,
-      );
-      if (fieldTheoryTarget) {
-        void invokeItem(fieldTheoryTarget, { openFieldTheoryTarget: true });
         return;
       }
 
@@ -3368,6 +3296,7 @@ function CommandLauncher() {
       setPreviewPayload(null);
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      const openInFieldTheory = e.metaKey;
       const rawQuery = query.trim();
       const inScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
       if (filtered.length > 0) {
@@ -3389,7 +3318,11 @@ function CommandLauncher() {
             return;
           }
         }
-        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
+        if (selectedItem) {
+          invokeItem(selectedItem, openInFieldTheory
+            ? { openFieldTheoryTarget: true }
+            : { insertWikiLink: selectedItem.type !== 'command' });
+        }
         return;
       }
       const normalMatch = inScopedMode ? null : getNormalModeMatches(rawQuery)[0];
@@ -3398,7 +3331,9 @@ function CommandLauncher() {
           query: rawQuery,
           selectedItem: describeLauncherItem(normalMatch),
         });
-        invokeItem(normalMatch, { insertWikiLink: normalMatch.type !== 'command' });
+        invokeItem(normalMatch, openInFieldTheory
+          ? { openFieldTheoryTarget: true }
+          : { insertWikiLink: normalMatch.type !== 'command' });
         return;
       }
       const commandTarget = inScopedMode
@@ -3409,7 +3344,7 @@ function CommandLauncher() {
           query: rawQuery,
           selectedItem: describeLauncherItem(commandTarget),
         });
-        invokeItem(commandTarget, { insertWikiLink: false });
+        invokeItem(commandTarget, openInFieldTheory ? { openFieldTheoryTarget: true } : { insertWikiLink: false });
         return;
       }
       const fallback = localInstructionFallbackForQuery(rawQuery, 0, inScopedMode);

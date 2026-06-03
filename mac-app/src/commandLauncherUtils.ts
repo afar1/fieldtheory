@@ -114,17 +114,6 @@ export function formatLauncherBookmarkEmbedMarkdown(input: {
   return `![${alt}](bookmark://${encodeURIComponent(input.bookmarkId)})`;
 }
 
-export function getLauncherDefaultBookmarksTabAction(input: {
-  itemType?: string | null;
-  bookmarkId?: string | null;
-}): { bookmarkTarget: LauncherFieldTheoryMarkdownTarget; bookmarkId: string } | null {
-  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
-  return {
-    bookmarkTarget: { kind: 'bookmarks', path: 'bookmarks' },
-    bookmarkId: input.bookmarkId,
-  };
-}
-
 export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks'): string {
   if (source === 'clipboard') return 'Clipboard';
   if (source === 'bookmarks') return 'Bookmarks';

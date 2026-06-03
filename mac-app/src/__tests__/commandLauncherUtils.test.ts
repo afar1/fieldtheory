@@ -31,7 +31,6 @@ import {
   getLauncherClipboardSearchInputState,
   getLauncherDefaultBookmarkEnterAction,
   getLauncherDefaultPanelItems,
-  getLauncherDefaultBookmarksTabAction,
   getLauncherDefaultPanelSourceLabel,
   formatLauncherBookmarkEmbedMarkdown,
   getLauncherNativeIconPathForItem,
@@ -1295,23 +1294,6 @@ describe('bookmark embed launcher helpers', () => {
     expect(formatLauncherBookmarkEmbedMarkdown({
       itemType: 'bookmark',
       displayName: 'Bookmark',
-    })).toBeNull();
-  });
-
-  it('resolves Tab on the default Bookmarks panel to opening Bookmarks and invoking the selected bookmark', () => {
-    expect(getLauncherDefaultBookmarksTabAction({
-      itemType: 'bookmark',
-      bookmarkId: 'bookmark-1',
-    })).toEqual({
-      bookmarkTarget: { kind: 'bookmarks', path: 'bookmarks' },
-      bookmarkId: 'bookmark-1',
-    });
-    expect(getLauncherDefaultBookmarksTabAction({
-      itemType: 'bookmark-author',
-      bookmarkId: 'bookmark-1',
-    })).toBeNull();
-    expect(getLauncherDefaultBookmarksTabAction({
-      itemType: 'bookmark',
     })).toBeNull();
   });
 
