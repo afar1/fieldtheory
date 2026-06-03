@@ -71,6 +71,7 @@ import {
   getMarkdownListMarkerProtectedDeleteBackwardEdit,
   hasMarkdownCodeEditorRangeSelection,
   getRenderedMarkdownImageSelectionFromEventTarget,
+  getRenderedMarkdownImageLineRanges,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownInlineHtmlBlocks,
   getRenderedMarkdownInlineHtmlSelectionFromEventTarget,
@@ -1945,6 +1946,36 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(decorations.size).toBeGreaterThan(0);
     expect(decorations.size).toBeLessThan(500);
     expect(elapsedMs).toBeLessThan(16);
+  });
+
+  it('keeps offscreen image lines decorated while rebuilding visible rendered ranges', () => {
+    const doc = [
+      'Visible paragraph',
+      '',
+      'Middle paragraph',
+      '',
+      '![Diagram](<file:///tmp/diagram.png>)',
+      '',
+      'After paragraph',
+    ].join('\n');
+    const state = EditorState.create({ doc });
+    const visibleLine = state.doc.line(1);
+    const imageLine = state.doc.line(5);
+    const stableImageRanges = getRenderedMarkdownImageLineRanges(state);
+    const decorations = buildRenderedMarkdownEditorDecorationsForRanges(
+      state,
+      [{ from: visibleLine.from, to: visibleLine.to }],
+      null,
+      stableImageRanges,
+    );
+    const classes: string[] = [];
+
+    decorations.between(imageLine.from, imageLine.to, (_from, _to, value) => {
+      if (typeof value.spec.class === 'string') classes.push(value.spec.class);
+    });
+
+    expect(stableImageRanges).toEqual([{ from: imageLine.from, to: imageLine.to }]);
+    expect(classes).toContain(RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS);
   });
 
   it('keeps code block styling when a visible range starts inside a fenced block', () => {

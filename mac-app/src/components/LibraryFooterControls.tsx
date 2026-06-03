@@ -292,11 +292,12 @@ export function LibraryFooterLogo(props: {
   const { theme } = props;
   return (
     <img
-      src={theme.isDark ? '/fieldtheory-icon.png' : '/field-theory-icon-black.png'}
+      src={theme.isDark ? '/fieldtheory-logo-white.png' : '/fieldtheory-logo-black.png'}
       alt=""
       aria-label="Field Theory"
       style={{
         height: '18px',
+        maxWidth: '132px',
         width: 'auto',
         objectFit: 'contain',
         opacity: 0.72,

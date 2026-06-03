@@ -2244,9 +2244,10 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   state: EditorState,
   ranges: readonly RenderedMarkdownEditorRange[],
   documentPath?: string | null,
+  stableRanges: readonly RenderedMarkdownEditorRange[] = [],
 ): DecorationSet {
   const decorations: RenderedMarkdownDecoration[] = [];
-  const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, ranges);
+  const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, [...ranges, ...stableRanges]);
   const inlineHtmlBlocks = getRenderedMarkdownInlineHtmlBlocks(state);
   const visibleInlineHtmlBlocks = inlineHtmlBlocks.filter((block) => (
     ranges.some((range) => rangesIntersect(block, range))
@@ -2288,6 +2289,17 @@ export function buildRenderedMarkdownEditorDecorations(state: EditorState, docum
   return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }], documentPath);
 }
 
+export function getRenderedMarkdownImageLineRanges(state: EditorState): RenderedMarkdownEditorRange[] {
+  const ranges: RenderedMarkdownEditorRange[] = [];
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    if (/!\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]*)\)/.test(line.text)) {
+      ranges.push({ from: line.from, to: line.to });
+    }
+  }
+  return ranges;
+}
+
 function countRenderedMarkdownEditorRangeLines(
   state: EditorState,
   ranges: readonly RenderedMarkdownEditorRange[],
@@ -2300,11 +2312,18 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      stableImageRanges: RenderedMarkdownEditorRange[];
 
       constructor(view: EditorView) {
         const activeDocumentPath = documentPath ?? view.state.facet(renderedMarkdownDocumentPathFacet);
         const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
-        this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(view.state, view.visibleRanges, activeDocumentPath);
+        this.stableImageRanges = getRenderedMarkdownImageLineRanges(view.state);
+        this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(
+          view.state,
+          view.visibleRanges,
+          activeDocumentPath,
+          this.stableImageRanges,
+        );
         if (startedAt > 0) {
           emitRenderedMarkdownEditorTiming('rendered-decorations-initial-build', {
             durationMs: performance.now() - startedAt,
@@ -2324,7 +2343,13 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
         ) {
           const activeDocumentPath = documentPath ?? update.state.facet(renderedMarkdownDocumentPathFacet);
           const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
-          this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges, activeDocumentPath);
+          if (update.docChanged) this.stableImageRanges = getRenderedMarkdownImageLineRanges(update.state);
+          this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(
+            update.state,
+            update.view.visibleRanges,
+            activeDocumentPath,
+            this.stableImageRanges,
+          );
           if (startedAt > 0) {
             emitRenderedMarkdownEditorTiming('rendered-decorations-update', {
               durationMs: performance.now() - startedAt,
@@ -3008,6 +3033,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             margin: '0',
             verticalAlign: 'top',
             cursor: 'zoom-in',
+            overflowAnchor: 'none',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}:has(.${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS})`]: {
             cursor: 'default',

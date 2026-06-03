@@ -752,7 +752,7 @@ describe('BrowserLibraryApp', () => {
     expect(document.querySelector('[data-top-nav-mode="library"]')).toBeFalsy();
     expect(document.querySelector('[data-top-nav-mode="commands"]')).toBeFalsy();
     expect(document.querySelector('[data-fieldtheory-browser-library-footer="true"]')).toBeTruthy();
-    expect(document.querySelector('[data-fieldtheory-browser-library-footer="true"] img[aria-label="Field Theory"]')?.getAttribute('src')).toBe('/field-theory-icon-black.png');
+    expect(document.querySelector('[data-fieldtheory-browser-library-footer="true"] img[aria-label="Field Theory"]')?.getAttribute('src')).toBe('/fieldtheory-logo-black.png');
     expect(screen.getByText('v25.6.1')).toBeTruthy();
     expect(await screen.findByText('river')).toBeTruthy();
     fireEvent.mouseEnter(screen.getByText('v25.6.1').parentElement as HTMLElement);
