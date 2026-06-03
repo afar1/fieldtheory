@@ -7,7 +7,27 @@ export type BrowserLibraryUrlTarget = Record<string, unknown> & {
 
 export function appendBrowserLibraryTargetParams(url: URL, target?: BrowserLibraryUrlTarget | null): void {
   if (!target || typeof target !== 'object') return;
-  url.searchParams.set('target', JSON.stringify(target));
+  if (typeof target.kind === 'string') url.searchParams.set('kind', target.kind);
+  if (typeof target.path === 'string') url.searchParams.set('path', target.path);
+  if (
+    target.contentMode === 'rendered'
+    || target.contentMode === 'markdown'
+    || target.contentMode === 'typedown'
+  ) {
+    url.searchParams.set('contentMode', target.contentMode);
+  }
+  if (typeof target.sidebarCollapsed === 'boolean') {
+    url.searchParams.set('sidebarCollapsed', target.sidebarCollapsed ? '1' : '0');
+  }
+  if (typeof target.focusChrome === 'boolean') {
+    url.searchParams.set('focusChrome', target.focusChrome ? '1' : '0');
+  }
+  if (typeof target.selectionStart === 'number' && Number.isFinite(target.selectionStart)) {
+    url.searchParams.set('selectionStart', String(target.selectionStart));
+  }
+  if (typeof target.selectionEnd === 'number' && Number.isFinite(target.selectionEnd)) {
+    url.searchParams.set('selectionEnd', String(target.selectionEnd));
+  }
 }
 
 export function buildBrowserLibraryUrl(input: {

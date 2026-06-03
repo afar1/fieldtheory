@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -1463,6 +1464,32 @@ export function getEmptyMarkdownListMarkerDeleteEdit(
   };
 }
 
+export function getSingleCharacterRenderedListBodyDeleteEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: 'Backspace' | 'Delete',
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const markerEnd = getMarkdownProtectedListMarkerEnd(line);
+  if (markerEnd === null) return null;
+  const bodyStart = lineStart + markerEnd;
+  if (lineEnd - bodyStart !== 1) return null;
+
+  const deleteStart = key === 'Backspace' ? selectionStart - 1 : selectionStart;
+  if (deleteStart !== bodyStart) return null;
+
+  return {
+    nextValue: `${value.slice(0, bodyStart)}${value.slice(lineEnd)}`,
+    selectionStart: bodyStart,
+    selectionEnd: bodyStart,
+  };
+}
+
 export function getRenderedMarkdownPasteTextEdit(
   value: string,
   selectionStart: number,
@@ -2001,6 +2028,14 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
   if (emptyMarkerEdit) return emptyMarkerEdit;
+
+  const listBodyDeleteEdit = getSingleCharacterRenderedListBodyDeleteEdit(
+    input.value,
+    selectionStart,
+    selectionEnd,
+    key,
+  );
+  if (listBodyDeleteEdit) return listBodyDeleteEdit;
 
   const imageRange = getAdjacentRenderedMarkdownImageDeleteRange(
     input.value,
@@ -3747,6 +3782,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusChromeActive,
     focusChromePinnedVisible,
   });
+  const focusStandaloneImmersiveVisible = focusChromeActive && !focusToolbarControlsVisible && canUseFocusImmersive;
   const contentTopPadding = getLibrarianContentTopPadding({
     contentMode,
     focusChromeActive,
@@ -7003,10 +7039,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [contentMode, getEditorSessionTarget]);
 
   const persistEditorSession = useCallback(() => {
+    if (browserLibrarySurface) return;
     const session = captureEditorSession();
     if (!session) return;
     persistLibrarianEditorSession(localStorage, session);
-  }, [captureEditorSession]);
+  }, [browserLibrarySurface, captureEditorSession]);
 
   const scheduleEditorSessionPersist = useCallback(() => {
     if (editorSessionPersistTimerRef.current !== null) {
@@ -9966,7 +10003,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               zIndex: focusChromeActive ? 20 : undefined,
               boxSizing: 'border-box',
               opacity: 1,
-              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned ? 'none' : 'auto',
+              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned && !focusStandaloneImmersiveVisible ? 'none' : 'auto',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -10200,6 +10237,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onMaxwellRemoveItem={removeMaxwellItem}
                   onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
                 />
+              )}
+              {focusStandaloneImmersiveVisible && (
+                <div style={{ marginLeft: 'auto', opacity: 1, pointerEvents: 'auto' }}>
+                  <ImmersiveToggle
+                    isFullScreen={isFullScreen || focusImmersive}
+                    onToggle={toggleFocusChromeShortcut}
+                  />
+                </div>
               )}
               {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
                 <div
@@ -10694,7 +10739,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       'data-ft-agent-title': activeReading.title,
                     }}
                     spellCheck
-                    bottomRoomPx={0}
+                    bottomRoomPx={contentBottomScrollSpace}
                     style={{
                       width: '100%',
                       minHeight: '160px',
