@@ -48,7 +48,7 @@ export interface MarkdownAssetsConsolidationResult {
 
 const PRIVATE_FIELD_THEORY_FIGURES_RE = /\/Library\/Application Support\/fieldtheory-mac\/users\/[^/]+\/figures\//i;
 const MARKDOWN_FILE_RE = /\.(?:md|markdown)$/i;
-const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\s]+)\)/g;
+const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\n]+)\)/g;
 const ASSETS_DIR_NAME = '.assets';
 const LEGACY_ASSETS_DIR_RE = /\.assets$/i;
 const DATA_IMAGE_RE = /^data:(image\/(?:avif|gif|jpe?g|png|svg\+xml|webp));base64,([a-z0-9+/=\s]+)$/i;
