@@ -363,6 +363,7 @@ describe('BrowserLibraryApp', () => {
         '/native/metrics/fetch-from-supabase': { ok: true, success: true },
         '/native/quota/quotas': { ok: true, quotas: { tier: 'pro' } },
         '/native/shell/open-field-theory-markdown': { ok: true, result: { success: true } },
+        '/native/clipboard/text': { ok: true, result: { success: true } },
       };
       return {
         ok: true,
@@ -408,6 +409,12 @@ describe('BrowserLibraryApp', () => {
       await expect(window.metricsAPI?.fetchFromSupabase?.()).resolves.toBe(true);
       await expect(window.quotaAPI?.getQuotas?.()).resolves.toEqual({ tier: 'pro' });
       await expect(window.shellAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: 'Plan.md' })).resolves.toEqual({ success: true });
+      await expect(window.clipboardAPI?.writeText?.('Copied from panel')).resolves.toEqual({ success: true });
+      expect(window.__fieldTheoryBrowserLibraryRequestTimings?.some((entry) => (
+        entry.path === '/native/clipboard/text'
+        && entry.method === 'POST'
+        && entry.ok
+      ))).toBe(true);
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/auth/session', expect.objectContaining({
         headers: expect.objectContaining({
           'X-FieldTheory-Browser-Token': 'runtime-token',
@@ -435,6 +442,14 @@ describe('BrowserLibraryApp', () => {
         }),
       }));
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/auth/callsign', expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-FieldTheory-Browser-Token': 'runtime-token',
+          'X-FieldTheory-Browser-Client': 'client-one',
+        }),
+      }));
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/clipboard/text', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ text: 'Copied from panel' }),
         headers: expect.objectContaining({
           'X-FieldTheory-Browser-Token': 'runtime-token',
           'X-FieldTheory-Browser-Client': 'client-one',
@@ -571,6 +586,7 @@ describe('BrowserLibraryApp', () => {
   });
 
   it('refreshes snapshot surfaces when the helper event stream reconnects', async () => {
+    vi.useFakeTimers();
     const previousFetch = globalThis.fetch;
     const previousEventSource = window.EventSource;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -635,6 +651,16 @@ describe('BrowserLibraryApp', () => {
 
       act(() => {
         eventSourceInstance?.onopen?.();
+        eventSourceInstance?.onopen?.();
+      });
+
+      expect(libraryChanged).not.toHaveBeenCalled();
+      expect(wikiChanged).not.toHaveBeenCalled();
+      expect(recentChanged).not.toHaveBeenCalled();
+      expect(bookmarksChanged).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(75);
       });
 
       expect(libraryChanged).toHaveBeenCalledTimes(1);
@@ -659,6 +685,7 @@ describe('BrowserLibraryApp', () => {
         configurable: true,
         value: previousEventSource,
       });
+      vi.useRealTimers();
     }
   });
 
@@ -1639,9 +1666,18 @@ describe('BrowserLibraryApp', () => {
     const focusIcon = document.querySelector('[data-fieldtheory-focus-chrome-icon="true"]') as HTMLElement;
     const focusIconImage = focusIcon.querySelector('img') as HTMLImageElement;
     expect(focusIcon.style.height).toBe('20px');
+    expect(focusIcon.style.top).toBe('9px');
     expect(focusIconImage.style.height).toBe('20px');
     expect(focusIconImage.getAttribute('src')).toBe('/field-theory-icon-black.png');
     expect(focusIcon.style.height).not.toBe('32px');
+
+    const exitButton = screen.getByRole('button', { name: 'Exit immersive view' });
+    expect(exitButton).toBeTruthy();
+    fireEvent.click(exitButton);
+    expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-immersive', 'false');
+    await waitFor(() => {
+      expect(document.querySelector('[data-fieldtheory-browser-exit-immersive-button="true"]')).toBeNull();
+    });
   });
 
   it('starts with the native Library immersive preference in Browser mode', async () => {

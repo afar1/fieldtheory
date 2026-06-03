@@ -474,6 +474,7 @@ interface ClipboardAPI {
   deleteItem: (id: number) => Promise<void>;
   restoreItem?: (item: ClipboardItem) => Promise<number>;
   pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
+  writeText?: (text: string) => Promise<{ success?: boolean; error?: string }>;
 
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;

@@ -2082,10 +2082,17 @@ describe('LibrarianView render', () => {
       content: 'Benchmark body',
       documentVersion: { mtimeMs: 1, size: 14, sha256: 'feedback-anchor' },
     };
-    const writeText = vi.fn(async () => {});
+    const writeText = vi.fn(async () => {
+      throw new Error('web clipboard unavailable');
+    });
+    const nativeWriteText = vi.fn(async () => ({ success: true }));
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
+    });
+    Object.defineProperty(window, 'clipboardAPI', {
+      configurable: true,
+      value: { writeText: nativeWriteText },
     });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
@@ -2104,6 +2111,8 @@ describe('LibrarianView render', () => {
     const feedback = await screen.findByRole('status');
     const editorPane = container.querySelector('[data-ft-reader-editor-pane="true"]');
     expect(feedback.textContent).toBe('Copied file path');
+    expect(nativeWriteText).toHaveBeenCalledWith(page.absPath);
+    expect(writeText).not.toHaveBeenCalled();
     expect(container.firstElementChild?.contains(feedback)).toBe(true);
     expect(editorPane?.contains(feedback)).toBe(false);
     expect(feedback.style.left).not.toBe('');
