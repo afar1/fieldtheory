@@ -872,6 +872,51 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('Select a file')).toBeTruthy();
   });
 
+  it('ignores rapid repeated sidebar default-create clicks for the same folder', async () => {
+    const createdRelPath = 'Handoff/new-page';
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Handoff',
+        relPath: 'Handoff',
+        children: [],
+      }],
+    }]);
+
+    let resolveCreate: ((page: WikiPage) => void) | null = null;
+    vi.mocked(window.wikiAPI!.createFileWithDefaultTitle).mockImplementation(() => new Promise((resolve) => {
+      resolveCreate = resolve;
+    }));
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const createButton = await screen.findByRole('button', { name: 'New file in Handoff' });
+    fireEvent.click(createButton);
+    fireEvent.click(createButton);
+
+    expect(window.wikiAPI!.createFileWithDefaultTitle).toHaveBeenCalledTimes(1);
+    expect(window.wikiAPI!.createFileWithDefaultTitle).toHaveBeenCalledWith('Handoff');
+
+    act(() => {
+      resolveCreate?.({
+        relPath: createdRelPath,
+        absPath: `${testLibraryRootPath}/${createdRelPath}.md`,
+        name: 'new-page',
+        title: 'New Page',
+        lastUpdated: 2,
+        content: '',
+        documentVersion: { mtimeMs: 2, size: 0, sha256: 'new' },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('New Page')).toBeTruthy();
+    });
+  });
+
   function pasteText(target: HTMLElement, text: string): void {
     fireEvent.paste(target, {
       clipboardData: {

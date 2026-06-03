@@ -68,6 +68,7 @@ const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
 const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
 const LIBRARY_SIDEBAR_DEPTH_INDENT = 12;
 const LIBRARY_SIDEBAR_EDGE_PADDING = 12;
+const LIBRARY_SIDEBAR_CREATE_BUTTON_NEAR_DISTANCE_PX = 18;
 const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
 const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
@@ -1399,6 +1400,17 @@ function getLibraryCreateLocationKey(location: LibraryCreateLocation): string {
   return `${location.rootPath}::${location.relPath}`;
 }
 
+export function isPointerNearRect(
+  point: { clientX: number; clientY: number },
+  rect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>,
+  distancePx: number = LIBRARY_SIDEBAR_CREATE_BUTTON_NEAR_DISTANCE_PX,
+): boolean {
+  return point.clientX >= rect.left - distancePx
+    && point.clientX <= rect.right + distancePx
+    && point.clientY >= rect.top - distancePx
+    && point.clientY <= rect.bottom + distancePx;
+}
+
 function getLibraryCreateLocationPathLabel(location: Pick<LibraryCreateLocation, 'relPath'>): string {
   const label = location.relPath
     ? location.relPath.split('/').filter(Boolean).join(' / ')
@@ -1676,6 +1688,9 @@ function WikiSidebar({
   const [creating, setCreating] = useState<CreatingState>(null);
   const [newName, setNewName] = useState('');
   const createInputRef = useRef<HTMLInputElement | null>(null);
+  const defaultCreateInFlightRef = useRef<Set<string>>(new Set());
+  const [defaultCreateInFlightKeys, setDefaultCreateInFlightKeys] = useState<Set<string>>(new Set());
+  const [nearCreateButtonNodeId, setNearCreateButtonNodeId] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
     return getInitialSidebarPreferences().recentCollapsed;
@@ -2184,9 +2199,24 @@ function WikiSidebar({
     // Built-in markdown pages open with the document title field selected, so
     // the filename title is edited in the main surface instead of the sidebar.
     if (location.builtin && onCreateDefaultFile) {
+      const locationKey = getLibraryCreateLocationKey(location);
+      if (defaultCreateInFlightRef.current.has(locationKey)) return;
+      defaultCreateInFlightRef.current.add(locationKey);
+      setDefaultCreateInFlightKeys((prev) => new Set(prev).add(locationKey));
       void (async () => {
-        const created = await onCreateDefaultFile(location);
-        if (created !== false) expandCreateLocation(location);
+        try {
+          const created = await onCreateDefaultFile(location);
+          if (created !== false) expandCreateLocation(location);
+        } catch (error) {
+          console.warn('Failed to create default wiki page:', error);
+        } finally {
+          defaultCreateInFlightRef.current.delete(locationKey);
+          setDefaultCreateInFlightKeys((prev) => {
+            const next = new Set(prev);
+            next.delete(locationKey);
+            return next;
+          });
+        }
       })();
       return;
     }
@@ -2374,7 +2404,7 @@ function WikiSidebar({
     if (bookmarkCount === null || bookmarkCount <= 0) return null;
     return { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() };
   }, [bookmarksActionNodeFromTree, bookmarkCount, hiddenDefaultFolders]);
-  const bookmarksActionItem = bookmarksActionNode?.item ?? null;
+  const bookmarksActionItem = bookmarksActionNode?.kind === 'file' ? bookmarksActionNode.item : null;
   const sidebarShortcutVisibility = getSidebarShortcutVisibility({
     isSearching,
     hasBookmarksActionItem: Boolean(bookmarksActionItem),
@@ -3180,7 +3210,8 @@ function WikiSidebar({
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
         <style>{`
-          .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
+          .bm-folder-header:hover .bm-new-file-btn { opacity: 0.28; }
+          .bm-folder-header .bm-new-file-btn-near { opacity: 1; }
           .bm-new-file-btn:hover { opacity: 1 !important; }
           .bm-file-row:not(.bm-file-row-selected):hover,
           .bm-file-row-context:not(.bm-file-row-selected) {
@@ -3411,6 +3442,9 @@ function WikiSidebar({
               submitCreate={submitCreate}
               cancelCreate={cancelCreate}
               beginCreateFile={beginCreateFile}
+              defaultCreateInFlightKeys={defaultCreateInFlightKeys}
+              nearCreateButtonNodeId={nearCreateButtonNodeId}
+              setNearCreateButtonNodeId={setNearCreateButtonNodeId}
               selectedId={selectedId}
               selectedKeyboardActive={selectedKeyboardActive}
               selectedItemRef={selectedItemRef}
@@ -3463,6 +3497,9 @@ function WikiSidebar({
           submitCreate={submitCreate}
           cancelCreate={cancelCreate}
           beginCreateFile={beginCreateFile}
+          defaultCreateInFlightKeys={defaultCreateInFlightKeys}
+          nearCreateButtonNodeId={nearCreateButtonNodeId}
+          setNearCreateButtonNodeId={setNearCreateButtonNodeId}
           selectedId={selectedId}
           selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
@@ -3710,6 +3747,9 @@ function TreeNode({
   submitCreate,
   cancelCreate,
   beginCreateFile,
+  defaultCreateInFlightKeys,
+  nearCreateButtonNodeId,
+  setNearCreateButtonNodeId,
   selectedId,
   selectedKeyboardActive,
   selectedItemRef,
@@ -3745,6 +3785,9 @@ function TreeNode({
   submitCreate: () => void | Promise<void>;
   cancelCreate: () => void;
   beginCreateFile: (target?: LibraryCreateTarget) => void;
+  defaultCreateInFlightKeys: ReadonlySet<string>;
+  nearCreateButtonNodeId: string | null;
+  setNearCreateButtonNodeId: (update: string | null | ((current: string | null) => string | null)) => void;
   selectedId: string | null;
   selectedKeyboardActive: boolean;
   selectedItemRef: MutableRefObject<HTMLDivElement | null>;
@@ -3822,6 +3865,9 @@ function TreeNode({
   const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? folderHoverBg : 'transparent';
   const stickyFolderBackgroundColor = depth === 0 ? theme.bg : folderBackgroundColor;
   const showPinnedFolderFade = shouldShowSidebarPinnedFolderFade(depth, isExpanded, pinnedFolderFadeIds.has(node.id));
+  const createLocationKey = getLibraryCreateLocationKey(nodeCreateLocation);
+  const createInFlight = defaultCreateInFlightKeys.has(createLocationKey);
+  const createButtonNear = nearCreateButtonNodeId === node.id;
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -3878,7 +3924,21 @@ function TreeNode({
           onClick={() => toggleFolder(node.id)}
           onContextMenu={(event) => onContextMenu(event, node)}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : folderHoverBg)}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = stickyFolderBackgroundColor)}
+          onMouseMove={(event) => {
+            if (!node.canCreateFile) return;
+            const button = event.currentTarget.querySelector('.bm-new-file-btn');
+            if (!(button instanceof HTMLElement)) return;
+            const near = isPointerNearRect(event, button.getBoundingClientRect());
+            setNearCreateButtonNodeId((current) => (
+              near
+                ? (current === node.id ? current : node.id)
+                : (current === node.id ? null : current)
+            ));
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = stickyFolderBackgroundColor;
+            setNearCreateButtonNodeId((current) => (current === node.id ? null : current));
+          }}
           style={{
             ...getSidebarFolderHeaderPositionStyle(depth),
             display: 'flex',
@@ -3932,8 +3992,13 @@ function TreeNode({
             <span aria-hidden="true" style={{ flex: '1 0 auto', minWidth: '8px' }} />
             {node.canCreateFile && (
               <button
-                className="bm-new-file-btn"
-                onClick={(e) => { e.stopPropagation(); beginCreateFile(nodeCreateLocation); }}
+                className={`bm-new-file-btn${createButtonNear ? ' bm-new-file-btn-near' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (createInFlight) return;
+                  beginCreateFile(nodeCreateLocation);
+                }}
+                disabled={createInFlight}
                 title={node.name === SCRATCHPAD_FOLDER_NAME ? 'New scratchpad entry' : 'New file'}
                 aria-label={`New file in ${node.label}`}
                 style={{
@@ -3947,7 +4012,7 @@ function TreeNode({
                   border: 'none',
                   borderRadius: '3px',
                   color: theme.textSecondary,
-                  cursor: 'pointer',
+                  cursor: createInFlight ? 'default' : 'pointer',
                   opacity: 0,
                   transition: 'opacity 0.12s ease, background 0.12s ease',
                 }}
@@ -4013,6 +4078,9 @@ function TreeNode({
           submitCreate={submitCreate}
           cancelCreate={cancelCreate}
           beginCreateFile={beginCreateFile}
+          defaultCreateInFlightKeys={defaultCreateInFlightKeys}
+          nearCreateButtonNodeId={nearCreateButtonNodeId}
+          setNearCreateButtonNodeId={setNearCreateButtonNodeId}
           selectedId={selectedId}
           selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
@@ -4091,6 +4159,9 @@ function TreeNode({
           submitCreate={submitCreate}
           cancelCreate={cancelCreate}
           beginCreateFile={beginCreateFile}
+          defaultCreateInFlightKeys={defaultCreateInFlightKeys}
+          nearCreateButtonNodeId={nearCreateButtonNodeId}
+          setNearCreateButtonNodeId={setNearCreateButtonNodeId}
           selectedId={selectedId}
           selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
