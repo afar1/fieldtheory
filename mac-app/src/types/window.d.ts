@@ -2422,6 +2422,9 @@ declare global {
   interface FieldTheoryBookmarkMediaAPI {
     mediaUrl: (filename: string) => string;
   }
+  interface FieldTheoryLocalImageAPI {
+    localImageUrl: (url: string) => string;
+  }
 
   /**
    * Concepts index for story/lesson deduplication.
@@ -2798,6 +2801,7 @@ declare global {
     recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;
     fieldTheoryBookmarkMediaAPI?: FieldTheoryBookmarkMediaAPI;
+    fieldTheoryLocalImageAPI?: FieldTheoryLocalImageAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;

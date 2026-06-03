@@ -82,6 +82,8 @@ import {
   getRenderedMarkdownOptionArrowEdit,
   getRenderedMarkdownArrowRightEdit,
   getRenderedMarkdownSelectionInsideListBody,
+  getRenderedMarkdownSelectionOutsideHiddenSyntax,
+  getRenderedMarkdownAtomicBoundaryLineBreakEdit,
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
   getRenderedMarkdownBlockBodyClickPosition,
   getRenderedMarkdownBlockBodyStart,
@@ -733,6 +735,46 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
   });
 
+  it('inserts Enter around a first rendered image without splitting its markdown', () => {
+    const doc = '![Diagram](<file:///tmp/diagram.png>)\nAfter';
+    expect(getRenderedMarkdownAtomicBoundaryLineBreakEdit(doc, 0)).toEqual({
+      insertAt: 0,
+      selection: 0,
+    });
+    expect(getRenderedMarkdownAtomicBoundaryLineBreakEdit(doc, '![Diagram](<file:///tmp/diagram.png>)'.length)).toEqual({
+      insertAt: '![Diagram](<file:///tmp/diagram.png>)'.length,
+      selection: '![Diagram](<file:///tmp/diagram.png>)\n'.length,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(0),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe(`\n${doc}`);
+    expect(view.state.selection.main.from).toBe(0);
+
+    const imageEnd = view.state.doc.toString().indexOf('\nAfter');
+    view.dispatch({ selection: EditorSelection.cursor(imageEnd) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe(`\n![Diagram](<file:///tmp/diagram.png>)\n\nAfter`);
+    expect(view.state.selection.main.from).toBe(imageEnd + 1);
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('skips hidden rendered inline syntax when arrowing right', () => {
     const boldLine = '**Software commission**\n- Total';
     const boldContentEnd = 2 + 'Software commission'.length;
@@ -827,6 +869,111 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('normalizes rendered selections away from hidden markdown syntax', () => {
+    const boldStartState = EditorState.create({
+      doc: '**Fixed in this pass**',
+      selection: EditorSelection.cursor(2),
+    });
+    expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(boldStartState)).toBeNull();
+
+    const boldEndState = EditorState.create({
+      doc: '**Fixed in this pass**',
+      selection: EditorSelection.cursor('**Fixed in this pass'.length),
+    });
+    expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(boldEndState)).toBeNull();
+    for (const item of [
+      { doc: '*italic*', offset: 1 },
+      { doc: '`code`', offset: 1 },
+      { doc: '~~gone~~', offset: 2 },
+      { doc: '<u>under</u>', offset: 3 },
+      { doc: '[Guide](wiki://guide)', offset: 1 },
+    ]) {
+      const state = EditorState.create({
+        doc: item.doc,
+        selection: EditorSelection.cursor(item.offset),
+      });
+      expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(state)).toBeNull();
+    }
+
+    const cases = [
+      { doc: '**Fixed in this pass**', offset: 1, expected: 0 },
+      { doc: '**Fixed in this pass**', offset: '**Fixed in this pass*'.length, expected: '**Fixed in this pass**'.length },
+      { doc: '~~gone~~', offset: 1, expected: 0 },
+      { doc: '<u>under</u>', offset: 1, expected: 0 },
+      { doc: '[Guide](wiki://guide)', offset: 7, expected: '[Guide](wiki://guide)'.length },
+      { doc: '# Heading', offset: 1, expected: 2 },
+      { doc: '> Quote', offset: 1, expected: 2 },
+      { doc: '- List item', offset: 1, expected: 2 },
+      { doc: '![Diagram](<file:///tmp/diagram.png>)', offset: 12, expected: 0 },
+    ];
+
+    for (const item of cases) {
+      const state = EditorState.create({
+        doc: item.doc,
+        selection: EditorSelection.cursor(item.offset),
+      });
+      expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(state)?.main.from).toBe(item.expected);
+    }
+  });
+
+  it('allows rich-editor movement from the first visible character across rendered syntax', () => {
+    const cases = [
+      { doc: '**ab**', from: 2, to: 3 },
+      { doc: '*ab*', from: 1, to: 2 },
+      { doc: '`ab`', from: 1, to: 2 },
+      { doc: '~~ab~~', from: 2, to: 3 },
+      { doc: '<u>ab</u>', from: 3, to: 4 },
+      { doc: '[ab](wiki://target)', from: 1, to: 2 },
+      { doc: '# ab', from: 2, to: 3 },
+      { doc: '> ab', from: 2, to: 3 },
+      { doc: '- ab', from: 2, to: 3 },
+      { doc: '10. ab', from: 4, to: 5 },
+      { doc: '- [ ] ab', from: 6, to: 7 },
+    ];
+
+    for (const item of cases) {
+      const state = EditorState.create({
+        doc: item.doc,
+        selection: EditorSelection.cursor(item.to),
+      });
+      expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(
+        state,
+        EditorSelection.create([EditorSelection.cursor(item.from)]),
+      )).toBeNull();
+    }
+  });
+
+  it('uses movement direction when normalizing atomic rendered images', () => {
+    const doc = '![Alt](url)';
+    const intoImageFromLeft = EditorState.create({
+      doc,
+      selection: EditorSelection.cursor(1),
+    });
+    const intoImageFromRight = EditorState.create({
+      doc,
+      selection: EditorSelection.cursor(doc.length - 1),
+    });
+
+    expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(
+      intoImageFromLeft,
+      EditorSelection.create([EditorSelection.cursor(0)]),
+    )?.main.from).toBe(doc.length);
+    expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(
+      intoImageFromRight,
+      EditorSelection.create([EditorSelection.cursor(doc.length)]),
+    )?.main.from).toBe(0);
+  });
+
+  it('keeps wikilink syntax available as the rich editor exception', () => {
+    const doc = 'See [[Target|Alias]] today';
+    const state = EditorState.create({
+      doc,
+      selection: EditorSelection.cursor(doc.indexOf('Alias')),
+    });
+
+    expect(getRenderedMarkdownSelectionOutsideHiddenSyntax(state)).toBeNull();
   });
 
   it('does not reveal wiki syntax for non-collapsed rendered selections', () => {

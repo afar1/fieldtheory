@@ -2286,6 +2286,34 @@ describe('BrowserHelperServer', () => {
     expect(traversal.status).toBe(404);
   });
 
+  it('serves allowed local images for browser-rendered markdown', async () => {
+    const root = makeTempDir();
+    const imagePath = path.join(root, 'Figure 1.png');
+    const textPath = path.join(root, 'notes.txt');
+    fs.writeFileSync(imagePath, 'image-bytes');
+    fs.writeFileSync(textPath, 'not-image');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const imageUrl = `ftlocalfile://${imagePath.split('/').map((part, index) => (
+      index === 0 ? '' : encodeURIComponent(part)
+    )).join('/')}`;
+    const textUrl = `ftlocalfile://${textPath.split('/').map((part, index) => (
+      index === 0 ? '' : encodeURIComponent(part)
+    )).join('/')}`;
+    const image = await request(`http://${address.host}:${address.port}/native/local-image?token=test-token&url=${encodeURIComponent(imageUrl)}`);
+    const text = await request(`http://${address.host}:${address.port}/native/local-image?token=test-token&url=${encodeURIComponent(textUrl)}`);
+
+    expect(image.status).toBe(200);
+    expect(image.rawBody).toBe('image-bytes');
+    expect(image.headers['content-type']).toBe('image/png');
+    expect(text.status).toBe(404);
+  });
+
   it('bridges Maxwell history, memory, undo/redo, and local command status', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');

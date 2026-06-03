@@ -651,6 +651,10 @@ describe('LibrarianView render', () => {
       expect(container.querySelector('[data-ft-active-document-scrolled-title="true"]')?.textContent).toBe('Scrolled Title');
     });
     expect(container.querySelector('[data-ft-active-document-identity="true"]')?.textContent).toContain('scratchpad');
+    const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
+    expect(topFade.style.height).toBe('58px');
+    expect(topFade.style.background).toContain('8%');
+    expect(topFade.style.maskImage).toContain('10%');
   });
 
   it('keeps the scrolled file title visible in fullscreen focus chrome', async () => {
@@ -689,7 +693,9 @@ describe('LibrarianView render', () => {
     const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
     expect(topFade.style.top).toBe('0px');
     expect(topFade.style.right).toBe('14px');
-    expect(topFade.style.height).toBe('30px');
+    expect(topFade.style.height).toBe('96px');
+    expect(topFade.style.background).toContain('18%');
+    expect(topFade.style.maskImage).toContain('22%');
     expect(topFade.style.opacity).toBe('0.72');
     expect(scrollEl.style.scrollbarGutter).toBe('stable');
   });
