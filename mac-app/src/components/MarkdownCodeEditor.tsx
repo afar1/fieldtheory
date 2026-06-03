@@ -1493,6 +1493,26 @@ function getRenderedMarkdownBlockBodyStartAtOffset(value: string, offset: number
   return getRenderedMarkdownBlockBodyStartForLine(value, getMarkdownLineBounds(value, offset).lineStart);
 }
 
+export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)$/.exec(lineText);
+  if (!taskMatch) return null;
+  const bodyStart = lineStart + taskMatch[0].length;
+  if (caret !== bodyStart) return null;
+  if (lineStart === 0 && lineEnd === value.length) {
+    return { from: 0, to: value.length, selection: 0 };
+  }
+  if (lineEnd < value.length) {
+    return { from: lineStart, to: lineEnd + 1, selection: lineStart };
+  }
+  return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
+}
+
 export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
   const clampedOffset = Math.max(0, Math.min(value.length, offset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, clampedOffset);
@@ -1542,6 +1562,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if (input.inputType === 'deleteContentBackward' && !input.isComposing) {
     const value = view.state.doc.toString();
+    const emptyTaskEdit = getRenderedMarkdownEmptyTaskDeleteBackwardEdit(value, selection.from);
+    if (emptyTaskEdit) {
+      view.dispatch({
+        changes: { from: emptyTaskEdit.from, to: emptyTaskEdit.to },
+        selection: { anchor: emptyTaskEdit.selection, head: emptyTaskEdit.selection },
+      });
+      return true;
+    }
     const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, selection.from);
     if (bodyStart !== null && selection.from <= bodyStart) {
       if (selection.from !== bodyStart) {
