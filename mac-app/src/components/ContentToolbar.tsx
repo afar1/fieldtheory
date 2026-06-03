@@ -607,8 +607,6 @@ export default function ContentToolbar({
   onLineHeightChange,
   unorderedListMarker,
   onUnorderedListMarkerChange,
-  todoMarker,
-  onTodoMarkerChange,
   blinkTextCursor,
   onBlinkTextCursorChange,
   renderedTextCursorStyle,
@@ -711,7 +709,6 @@ export default function ContentToolbar({
     (showTextSize && onTextSizeChange) ||
     (lineHeightOptions?.length && onLineHeightChange) ||
     onUnorderedListMarkerChange ||
-    onTodoMarkerChange ||
     onBlinkTextCursorChange ||
     onRenderedTextCursorStyleChange
   );
@@ -878,6 +875,12 @@ export default function ContentToolbar({
     borderRadius: '7px',
     border: `1px solid ${pillBorder}`,
     backgroundColor: theme.isDark ? theme.surface1 : theme.background,
+  };
+  const typographyFontSegmentedControlStyle: CSSProperties = {
+    ...typographySegmentedControlStyle,
+    gridAutoFlow: 'row',
+    gridAutoColumns: undefined,
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   };
   const typographySegmentButtonStyle = (active: boolean, fontSize: string = '12px', fontFamily?: string): CSSProperties => ({
     minWidth: 0,
@@ -1213,11 +1216,11 @@ export default function ContentToolbar({
             </>
           )}
           {typographyMenuOpen && hasTypographyMenu && (
-            <ToolbarDropdownSurface data-content-toolbar-typography-menu ref={typographyMenuRef} width="286px" maxWidth="min(286px, calc(100vw - 24px))" borderColor={pillBorder} backgroundColor={menuBackground}>
+            <ToolbarDropdownSurface data-content-toolbar-typography-menu ref={typographyMenuRef} width="376px" maxWidth="min(376px, calc(100vw - 24px))" borderColor={pillBorder} backgroundColor={menuBackground}>
               {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
                 <div style={typographyMenuRowStyle}>
                   <span style={typographyMenuLabelStyle}>Font</span>
-                  <div style={typographySegmentedControlStyle}>
+                  <div style={typographyFontSegmentedControlStyle}>
                     {typographyPresetOptions.map((option) => (
                       <button key={option.id} type="button" onClick={() => onTypographyPresetChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === typographyPreset, '12px', option.fontFamily)}>{option.label}</button>
                     ))}
@@ -1250,16 +1253,6 @@ export default function ContentToolbar({
                   <div style={typographySegmentedControlStyle}>
                     {[{ id: 'dash' as const, label: '-', title: 'Dash unordered lists' }, { id: 'carrot' as const, label: '›', title: 'Carrot unordered lists' }].map((option) => (
                       <button key={option.id} type="button" onClick={() => onUnorderedListMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === unorderedListMarker, option.id === 'carrot' ? '15px' : '12px')}>{option.label}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {onTodoMarkerChange && (
-                <div style={typographyMenuRowStyle}>
-                  <span style={typographyMenuLabelStyle}>Todos</span>
-                  <div style={typographySegmentedControlStyle}>
-                    {[{ id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' }, { id: 'square' as const, label: '□', title: 'Square todo checkboxes' }].map((option) => (
-                      <button key={option.id} type="button" onClick={() => onTodoMarkerChange(option.id)} title={option.title} style={typographySegmentButtonStyle(option.id === todoMarker, '15px')}>{option.label}</button>
                     ))}
                   </div>
                 </div>
