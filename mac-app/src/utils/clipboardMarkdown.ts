@@ -39,7 +39,14 @@ export function getClipboardItemsMarkdownTitle(items: ClipboardItem[]): string {
 }
 
 export function localFilePathToMarkdownUrl(filePath: string): string {
-  if (/^file:\/\//i.test(filePath)) return filePath;
+  if (/^file:\/\//i.test(filePath)) {
+    try {
+      const url = new URL(filePath);
+      return localFilePathToMarkdownUrl(decodeURIComponent(url.pathname));
+    } catch {
+      return filePath.replace(/\s/g, '%20');
+    }
+  }
   const expandedPath = expandHomePath(filePath);
   if (!expandedPath.startsWith('/')) return filePath;
   return `file://${expandedPath.split('/').map((part, index) => (

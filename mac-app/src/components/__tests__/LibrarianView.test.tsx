@@ -694,6 +694,41 @@ describe('LibrarianView render', () => {
     expect(scrollEl.style.scrollbarGutter).toBe('stable');
   });
 
+  it('resamples rendered top fade after scroll geometry settles', async () => {
+    const relPath = 'scratchpad/settled-top-fade';
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'settled-top-fade',
+      title: 'Settled Top Fade',
+      lastUpdated: 1,
+      content: Array.from({ length: 40 }, (_, index) => `settled line ${index + 1}`).join('\n\n'),
+      documentVersion: { mtimeMs: 1, size: 400, sha256: 'settled-top-fade' },
+    });
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+        focusChromeEnabled
+      />
+    );
+
+    await screen.findByText('settled line 1');
+    const scrollEl = container.querySelector('[data-ft-librarian-content-scroll="true"]') as HTMLDivElement;
+    Object.defineProperty(scrollEl, 'scrollTop', { configurable: true, value: 48 });
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, value: 1200 });
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, value: 600 });
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 90));
+    });
+
+    const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
+    expect(topFade.style.opacity).toBe('0.72');
+  });
+
   it('keeps the source selection when a document window fails to open', async () => {
     const relPath = 'scratchpad/popout-failure';
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
@@ -2030,7 +2065,7 @@ describe('LibrarianView render', () => {
     expect(onActionFeedback).toHaveBeenCalledWith('Selection sent to Codex');
   });
 
-  it('centers copy feedback in the Library root instead of the editor pane', async () => {
+  it('centers copy feedback over the reader content instead of the terminal', async () => {
     const relPath = 'briefs/Example CLI Org Scoped Benchmark Brief';
     const page: WikiPage = {
       relPath,
@@ -2065,6 +2100,7 @@ describe('LibrarianView render', () => {
     expect(feedback.textContent).toBe('Copied file path');
     expect(container.firstElementChild?.contains(feedback)).toBe(true);
     expect(editorPane?.contains(feedback)).toBe(false);
+    expect(feedback.style.left).not.toBe('');
   });
 
   it('refreshes River availability after auth session changes', async () => {
@@ -3261,7 +3297,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.save).toHaveBeenNthCalledWith(
         2,
         relPath,
-        'river first?',
+        'river first!?',
         syncedVersion,
       );
     }, { timeout: 1200 });

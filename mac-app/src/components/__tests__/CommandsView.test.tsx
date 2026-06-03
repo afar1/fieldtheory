@@ -328,6 +328,37 @@ describe('CommandsView command naming', () => {
     expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
   });
 
+  it('keeps active command source edits when the command list refreshes', async () => {
+    let commandsChanged: ((commands: Array<{
+      name: string;
+      displayName: string;
+      filePath: string;
+      lastModified: number;
+    }>) => void) | null = null;
+    window.commandsAPI!.onCommandsChanged = vi.fn((callback) => {
+      commandsChanged = callback;
+      return () => {};
+    });
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# existing\n\nlocal draft' } });
+
+    act(() => {
+      commandsChanged?.([{
+        name: 'existing',
+        displayName: 'existing',
+        filePath: '/tmp/commands/existing.md',
+        lastModified: 2,
+      }]);
+    });
+
+    expect(editor.value).toBe('# existing\n\nlocal draft');
+  });
+
   it('updates mounted command display preferences when native renderer storage changes', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
