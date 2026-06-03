@@ -586,7 +586,7 @@ export function isCodexTerminalEventTarget(target: EventTarget | null): boolean 
   return target instanceof HTMLElement && !!target.closest('[data-ft-codex-terminal-panel="true"]');
 }
 
-const MARKDOWN_IMAGE_REFERENCE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\s]+)\)/g;
+const MARKDOWN_IMAGE_REFERENCE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\n]+)\)/g;
 
 export function getMarkdownImageReferenceSnapshot(content: string): string[] {
   return Array.from(content.matchAll(MARKDOWN_IMAGE_REFERENCE_RE), (match) => match[0]);
