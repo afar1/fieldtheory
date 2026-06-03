@@ -171,7 +171,7 @@ export function LibraryFocusChromeIcon(props: {
       }}
     >
       <img
-        src={isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
+        src={isDark ? '/fieldtheory-icon.png' : '/field-theory-icon-black.png'}
         alt=""
         style={{
           height: `${size}px`,

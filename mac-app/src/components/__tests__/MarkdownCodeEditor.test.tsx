@@ -957,6 +957,26 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('keeps Command+Backspace inside the current visual list line', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- first item wraps here',
+        selection: EditorSelection.cursor('- first item wraps'.length),
+      }),
+      parent,
+    });
+    vi.spyOn(view, 'moveToLineBoundary').mockReturnValue(EditorSelection.cursor('- first item'.length));
+
+    expect(handleMarkdownCodeEditorCommandBackspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe('- first item here');
+    expect(view.state.selection.main.from).toBe('- first item'.length);
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('applies list body navigation in source mode too', () => {
     const doc = '- first\n- second';
     expect(getMarkdownListArrowRightBoundaryEdit(doc, '- first'.length)).toEqual({
