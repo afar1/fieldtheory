@@ -922,6 +922,7 @@ function CommandLauncher() {
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
   const [launcherSessionReady, setLauncherSessionReady] = useState(false);
+  const [clipboardOpenReloadKey, setClipboardOpenReloadKey] = useState(0);
   const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
     fieldTheoryActive: false,
     hasActiveLibraryFileContext: false,
@@ -1549,6 +1550,7 @@ function CommandLauncher() {
         launcherClosingForInvocationRef.current = false;
         setPinnedItemIds(readLibraryPinnedItemIds());
         clearLauncherSessionState();
+        setClipboardOpenReloadKey((key) => key + 1);
         if (earlyTypedQuery) setQuery(earlyTypedQuery);
         setLauncherSessionReady(true);
       });
@@ -2349,7 +2351,7 @@ function CommandLauncher() {
     return () => {
       cancelled = true;
     };
-  }, [clipboardLoadQuery, loadClipboardLauncherResults]);
+  }, [clipboardLoadQuery, clipboardOpenReloadKey, loadClipboardLauncherResults]);
 
   useEffect(() => {
     if (clipboardLoadQuery === null) return;

@@ -446,7 +446,9 @@ export function shouldApplyLiveMarkdownFileUpdate(input: {
   lastSavedContent: string | null;
   hasPendingRenderedSave?: boolean;
   hasRenderedSaveInFlight?: boolean;
+  renderedEditingActive?: boolean;
 }): boolean {
+  if (input.contentMode === 'rendered' && input.renderedEditingActive) return false;
   if (input.hasPendingRenderedSave) return false;
   if (input.hasRenderedSaveInFlight) return false;
   return input.lastSavedContent !== null && input.editContent === input.lastSavedContent;
@@ -1765,6 +1767,14 @@ function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): 
   return value.slice(visibleStart, lineEnd).trim().length > 0 ? lineStart : null;
 }
 
+function isRenderedMarkdownEmptyLineAtOffset(value: string, offset: number): boolean {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return caret === lineStart && value.slice(lineStart, lineEnd).length === 0;
+}
+
 export function getRenderedMarkdownEnterEdit(
   value: string,
   selectionStart: number,
@@ -1776,7 +1786,10 @@ export function getRenderedMarkdownEnterEdit(
   const insertionOffset = openingOffset === selectionStart
     ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
     : openingOffset;
-  const keepCaretOnInsertedBlankLine = lineStartOffset === insertionOffset || openingOffset !== selectionStart;
+  const keepCaretOnInsertedBlankLine = (
+    (lineStartOffset === insertionOffset && !isRenderedMarkdownEmptyLineAtOffset(value, insertionOffset))
+    || openingOffset !== selectionStart
+  );
   const listEnterEdit = lineStartOffset === insertionOffset
     ? null
     : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
@@ -3169,6 +3182,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
+  const [readerStatusFeedbackLeft, setReaderStatusFeedbackLeft] = useState<number | null>(null);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
 
@@ -4350,23 +4364,30 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       frame = null;
       updateResponsivePanelSize();
       refreshEditorLayout();
-      if (!active || !focusChromeActive) {
-        onFocusChromeContentCenterChange?.(null);
+      const readerPane = readerPaneRef.current;
+      const containerRect = containerRef.current?.getBoundingClientRect() ?? null;
+      if (!readerPane || !containerRect) {
+        setReaderStatusFeedbackLeft(null);
+        if (!active || !focusChromeActive) onFocusChromeContentCenterChange?.(null);
         return;
       }
-      const readerPane = readerPaneRef.current;
-      if (!readerPane) return;
       const readerRect = readerPane.getBoundingClientRect();
       const terminalRect = readerPane
         .querySelector<HTMLElement>('[data-ft-codex-terminal-panel="true"]')
         ?.getBoundingClientRect() ?? null;
-      onFocusChromeContentCenterChange?.(getFocusChromeContentCenterX({
+      const contentCenterX = getFocusChromeContentCenterX({
         readerLeft: readerRect.left,
         readerRight: readerRect.right,
         terminalLeft: terminalRect?.left ?? null,
         terminalDockedRight: effectiveCodexTerminalDockSide === 'right',
         terminalVisible: effectiveCodexTerminalVisible,
-      }));
+      });
+      setReaderStatusFeedbackLeft(Math.round(contentCenterX - containerRect.left));
+      if (!active || !focusChromeActive) {
+        onFocusChromeContentCenterChange?.(null);
+        return;
+      }
+      onFocusChromeContentCenterChange?.(contentCenterX);
     };
     const scheduleUpdateCenter = () => {
       if (frame !== null) return;
@@ -5139,6 +5160,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       lastSavedContent: lastSavedContentRef.current,
       hasPendingRenderedSave: pendingRenderedSaveRef.current !== null,
       hasRenderedSaveInFlight: renderedSaveInFlightRef.current > 0,
+      renderedEditingActive: renderedEditingActiveRef.current,
     })) {
       return false;
     }
@@ -6551,6 +6573,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [applyRenderedEditorBody, focusRenderedEditor, recordRenderedEditorDebug]);
 
   const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
+    if (snapshot.docChanged && snapshot.inputType) {
+      renderedEditUndoStackRef.current = [];
+    }
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
     reportActiveLibraryFileContext();
     showSelectionPastePopoverFromEditorSnapshot(snapshot);
@@ -7603,8 +7628,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       updateRenderedDocumentTopFade(null);
       return;
     }
-    const frame = requestAnimationFrame(() => updateRenderedDocumentTopFade(contentScrollRef.current));
-    return () => cancelAnimationFrame(frame);
+    const sample = () => updateRenderedDocumentTopFade(contentScrollRef.current);
+    const frame = requestAnimationFrame(sample);
+    const settleTimer = window.setTimeout(sample, 80);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+    };
   }, [contentMode, displaySourceBody, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
@@ -9360,7 +9390,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       data-ft-reader-status-feedback="true"
       style={{
         position: 'absolute',
-        left: '50%',
+        left: readerStatusFeedbackLeft === null ? '50%' : `${readerStatusFeedbackLeft}px`,
         bottom: '14px',
         transform: 'translateX(-50%)',
         padding: '4px 8px',

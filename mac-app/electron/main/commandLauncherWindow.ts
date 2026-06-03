@@ -109,7 +109,9 @@ export class CommandLauncherWindow {
   private readonly WINDOW_HEIGHT_COLLAPSED = 52;
   private readonly WINDOW_HEIGHT_RESULTS = 430;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
+  private readonly PREVIEW_IMAGE_WINDOW_WIDTH = 860;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
+  private readonly PREVIEW_IMAGE_WINDOW_MAX_HEIGHT = 760;
   private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;
 
   private resizeBurstCount = 0;
@@ -706,8 +708,8 @@ export class CommandLauncherWindow {
     const initialTheme = this.getInitialThemeOptions();
     this.previewWindow = new BrowserWindow({
       title: 'Field Theory Command Preview',
-      width: this.PREVIEW_WINDOW_WIDTH,
-      height: this.PREVIEW_WINDOW_MAX_HEIGHT,
+      width: this.PREVIEW_IMAGE_WINDOW_WIDTH,
+      height: this.PREVIEW_IMAGE_WINDOW_MAX_HEIGHT,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -778,7 +780,7 @@ export class CommandLauncherWindow {
       this.createPreviewWindow();
     }
 
-    const bounds = this.getPreviewBounds(this.PREVIEW_WINDOW_MAX_HEIGHT);
+    const bounds = this.getPreviewBounds(this.getPreviewMaxHeight(preview), preview);
 
     this.previewWindow!.setBounds(bounds);
     appendCommandLauncherTrace('preview-show', {
@@ -800,19 +802,33 @@ export class CommandLauncherWindow {
     this.previewWindow!.moveTop();
   }
 
-  private getPreviewBounds(requestedHeight: number): Electron.Rectangle {
+  private isImagePreview(preview: Record<string, unknown> | null | undefined = this.previewPayload): boolean {
+    if (!preview || preview.kind !== 'clipboard' || typeof preview.content !== 'object' || !preview.content) return false;
+    return (preview.content as Record<string, unknown>).type === 'image';
+  }
+
+  private getPreviewWidth(preview: Record<string, unknown> | null | undefined = this.previewPayload): number {
+    return this.isImagePreview(preview) ? this.PREVIEW_IMAGE_WINDOW_WIDTH : this.PREVIEW_WINDOW_WIDTH;
+  }
+
+  private getPreviewMaxHeight(preview: Record<string, unknown> | null | undefined = this.previewPayload): number {
+    return this.isImagePreview(preview) ? this.PREVIEW_IMAGE_WINDOW_MAX_HEIGHT : this.PREVIEW_WINDOW_MAX_HEIGHT;
+  }
+
+  private getPreviewBounds(requestedHeight: number, preview: Record<string, unknown> | null | undefined = this.previewPayload): Electron.Rectangle {
     const anchor = this.previewAnchorBounds ?? (() => {
       const cursorPoint = screen.getCursorScreenPoint();
       return screen.getDisplayNearestPoint(cursorPoint).bounds;
     })();
+    const width = this.getPreviewWidth(preview);
     const height = Math.max(
       this.PREVIEW_WINDOW_MIN_HEIGHT,
-      Math.min(Math.ceil(requestedHeight), this.PREVIEW_WINDOW_MAX_HEIGHT)
+      Math.min(Math.ceil(requestedHeight), this.getPreviewMaxHeight(preview))
     );
     return {
-      x: Math.round(anchor.x + (anchor.width - this.PREVIEW_WINDOW_WIDTH) / 2),
+      x: Math.round(anchor.x + (anchor.width - width) / 2),
       y: Math.round(anchor.y + (anchor.height - height) / 2),
-      width: this.PREVIEW_WINDOW_WIDTH,
+      width,
       height,
     };
   }

@@ -1755,9 +1755,11 @@ export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): bool
   if (!selection.empty) return false;
   const edit = getMarkdownListMarkerProtectedDeleteBackwardEdit(view.state.doc.toString(), selection.from);
   if (!edit) return false;
+  const visualLineStart = view.moveToLineBoundary(selection, false, true).head;
+  const from = Math.max(edit.from, Math.min(selection.from, visualLineStart));
   view.dispatch({
-    changes: edit.from === edit.to ? undefined : { from: edit.from, to: edit.to },
-    selection: { anchor: edit.selection, head: edit.selection },
+    changes: from === edit.to ? undefined : { from, to: edit.to },
+    selection: { anchor: from, head: from },
   });
   return true;
 }

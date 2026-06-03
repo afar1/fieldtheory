@@ -72,6 +72,7 @@ describe('BrowserHelperServer', () => {
     fs.writeFileSync(path.join(staticDir, 'browser-library.html'), '<!doctype html><script src="/assets/app.js"></script>');
     fs.writeFileSync(path.join(staticDir, 'assets', 'app.js'), 'window.loaded = true;');
     fs.writeFileSync(path.join(staticDir, 'field-theory-icon-black.png'), 'icon');
+    fs.writeFileSync(path.join(staticDir, 'fieldtheory-icon.png'), 'dark icon');
     fs.writeFileSync(path.join(staticDir, 'fieldtheory-logo-black.png'), 'logo');
     const currentReports: unknown[] = [];
     const server = new BrowserHelperServer({
@@ -260,6 +261,7 @@ describe('BrowserHelperServer', () => {
     const html = await request(`http://${address.host}:${address.port}/?token=test-token`);
     const asset = await request(`http://${address.host}:${address.port}/assets/app.js?token=test-token`);
     const icon = await request(`http://${address.host}:${address.port}/field-theory-icon-black.png?token=test-token`);
+    const darkIcon = await request(`http://${address.host}:${address.port}/fieldtheory-icon.png?token=test-token`);
     const logo = await request(`http://${address.host}:${address.port}/fieldtheory-logo-black.png?token=test-token`);
     const traversal = await request(`http://${address.host}:${address.port}/assets/../browserHelperServer.ts?token=test-token`);
 
@@ -269,6 +271,8 @@ describe('BrowserHelperServer', () => {
     expect(asset.rawBody).toContain('window.loaded');
     expect(icon.status).toBe(200);
     expect(icon.rawBody).toContain('icon');
+    expect(darkIcon.status).toBe(200);
+    expect(darkIcon.rawBody).toContain('dark icon');
     expect(logo.status).toBe(200);
     expect(logo.rawBody).toContain('logo');
     expect(traversal.status).toBe(404);
