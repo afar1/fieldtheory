@@ -16,6 +16,13 @@ describe('portable markdown images', () => {
     )).toBe('ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png');
   });
 
+  it('renders raw absolute local image paths from paste flows', () => {
+    expect(normalizeMarkdownImageUrl(
+      '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png',
+      '/Users/afar/Google Drive/Team Notes.md',
+    )).toBe('ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png');
+  });
+
   it('does not resolve relative non-image links', () => {
     expect(resolveRelativeMarkdownImageUrl('./notes.md', '/Users/afar/Notes/Team.md')).toBeNull();
   });

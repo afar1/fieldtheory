@@ -133,22 +133,13 @@ export function resolveFieldTheoryWindowMode(
     return prefs.fieldTheoryWindowMode;
   }
 
-  if (prefs?.showInDock === true || prefs?.clickAwayToDismiss === false) {
-    return 'app';
-  }
-  if (prefs?.showInDock === false || prefs?.clickAwayToDismiss === true) {
-    return 'panel';
-  }
-
   return 'app';
 }
 
 function normalizeFieldTheoryWindowMode(prefs: Partial<Preferences>): Partial<Preferences> {
   const hasExplicitMode = prefs.fieldTheoryWindowMode === 'app' || prefs.fieldTheoryWindowMode === 'panel';
-  const hasLegacyAppMode = prefs.showInDock === true || prefs.clickAwayToDismiss === false;
-  const hasLegacyPanelMode = prefs.showInDock === false || prefs.clickAwayToDismiss === true;
 
-  if (hasExplicitMode || hasLegacyAppMode || hasLegacyPanelMode) {
+  if (hasExplicitMode || prefs.showInDock !== undefined || prefs.clickAwayToDismiss !== undefined) {
     const mode = resolveFieldTheoryWindowMode(prefs);
     return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
   }

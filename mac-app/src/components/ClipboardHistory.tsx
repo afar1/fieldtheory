@@ -1134,9 +1134,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
-  // Center footer logo visibility follows the old fieldtheory.dev footer setting.
-  const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
-
   // In-app performance HUD visibility.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
 
@@ -1185,13 +1182,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   useEffect(() => {
     window.clipboardAPI?.getShowInDock?.().then(show => {
       setShowInDock(show);
-    });
-  }, [isVisible]);
-
-  // Load show fieldtheory.dev link setting.
-  useEffect(() => {
-    window.clipboardAPI?.getShowFieldTheoryLink?.().then(show => {
-      setShowFieldTheoryLink(show);
     });
   }, [isVisible]);
 
@@ -6858,7 +6848,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
 
         {/* Center: Field Theory logo */}
         {(() => {
-          const showFooterLogo = !localCommandStatus && !agentImproveStatus && showFieldTheoryLink &&
+          const showFooterLogo = !localCommandStatus && !agentImproveStatus &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
 
           return showFooterLogo ? (
