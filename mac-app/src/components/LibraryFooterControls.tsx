@@ -137,7 +137,12 @@ export function LibraryFooterSidebarToggle(props: {
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
       disabled={!enabled}
       title={title}
       aria-label="Toggle sidebar"
