@@ -98,6 +98,11 @@ describe('resolveWikiLink', () => {
     expect(resolveWikiLink('.meetings/meeting-1/transcript.md', index).relPath).toBe('.meetings/meeting-1/transcript');
   });
 
+  it('resolves the bookmarks page as a built-in destination', () => {
+    expect(resolveWikiLink('bookmarks', index).bookmarks).toBe(true);
+    expect(resolveWikiLink('Bookmarks.md', index).bookmarks).toBe(true);
+  });
+
   it('returns null for unknown targets', () => {
     expect(resolveWikiLink('nothing here', index).relPath).toBeNull();
     expect(resolveWikiLink('', index).relPath).toBeNull();
@@ -200,6 +205,11 @@ describe('transformWikiLinks', () => {
     ]);
     const out = transformWikiLinks('Run [[refactor]].', commandIndex);
     expect(out).toBe('Run [refactor](command://%2Ftmp%2Frefactor.md).');
+  });
+
+  it('rewrites bookmarks wikilinks to the built-in bookmarks destination', () => {
+    const out = transformWikiLinks('Open [[bookmarks]].', index);
+    expect(out).toBe('Open [bookmarks](bookmarks://root).');
   });
 
   it('leaves wikilink syntax inside fenced code blocks untouched', () => {
@@ -314,6 +324,10 @@ describe('classifyLinkHref', () => {
     });
   });
 
+  it('routes bookmarks:// hrefs to the built-in bookmarks destination', () => {
+    expect(classifyLinkHref('bookmarks://root', index)).toEqual({ kind: 'bookmarks' });
+  });
+
   it('treats bare relative hrefs that match the index as wiki links', () => {
     expect(classifyLinkHref('debates/consensus', index)).toEqual({
       kind: 'wiki',
@@ -376,6 +390,13 @@ describe('getMarkdownEditorLinkActionAtOffset', () => {
     expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('Consensus'), index)).toEqual({
       kind: 'wiki',
       relPath: 'debates/consensus',
+    });
+  });
+
+  it('activates built-in bookmarks wikilinks from edit mode', () => {
+    const input = 'Open [[bookmarks]] now.';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('bookmarks'), index)).toEqual({
+      kind: 'bookmarks',
     });
   });
 

@@ -17,6 +17,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import {
   EditorSelection,
@@ -59,6 +60,7 @@ import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
 import { getHtmlPreviewSrcDoc } from '../utils/htmlPreview';
 import { DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY, DEFAULT_RENDERED_TEXT_CURSOR_STYLE, type RenderedTextCursorStyle } from '../utils/editorShortcuts';
 import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEditor';
+import { onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS = 1200;
@@ -85,6 +87,8 @@ export const RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR = 'data-cm-rendered-markdow
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR = 'data-cm-rendered-markdown-image-alt';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS = 'cm-rendered-markdown-image-line';
 export const RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS = 'cm-rendered-markdown-list-image';
+export const RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS = 'cm-rendered-markdown-bookmark';
+export const RENDERED_MARKDOWN_EDITOR_BOOKMARK_ID_ATTR = 'data-cm-rendered-markdown-bookmark-id';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS = 'cm-rendered-markdown-code-block';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS = 'cm-rendered-markdown-code-block-start';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS = 'cm-rendered-markdown-code-block-end';
@@ -229,6 +233,26 @@ export function replaceMarkdownImageAltAtSource(markdown: string, sourceFrom: nu
   const edit = getMarkdownImageAltEditAtSource(markdown, sourceFrom, sourceTo, nextAlt);
   if (!edit) return null;
   return `${markdown.slice(0, edit.from)}${edit.insert}${markdown.slice(edit.to)}`;
+}
+
+function normalizeRenderedMarkdownImageDestination(destination: string): string {
+  const trimmed = destination.trim();
+  return trimmed.startsWith('<') && trimmed.endsWith('>')
+    ? trimmed.slice(1, -1).trim()
+    : trimmed;
+}
+
+export function getRenderedMarkdownBookmarkEmbedId(destination: string): string | null {
+  const clean = normalizeRenderedMarkdownImageDestination(destination);
+  if (!clean.toLowerCase().startsWith('bookmark://')) return null;
+  const rawId = clean.slice('bookmark://'.length).split(/[?#]/, 1)[0] ?? '';
+  try {
+    const decoded = decodeURIComponent(rawId).trim();
+    return decoded || null;
+  } catch {
+    const fallback = rawId.trim();
+    return fallback || null;
+  }
 }
 
 interface MarkdownCodeEditorProps {
@@ -831,6 +855,12 @@ export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarg
 export function getRenderedMarkdownImageSelectionFromEventTarget(target: EventTarget | null): { from: number; to: number } | null {
   if (!(target instanceof Element)) return null;
   if (target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}, .${RENDERED_MARKDOWN_EDITOR_IMAGE_EDIT_CLASS}`)) return null;
+  const bookmark = target.closest(`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}`);
+  if (bookmark instanceof HTMLElement) {
+    const sourceFrom = parseNullableMarkdownSourceOffset(bookmark.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
+    const sourceTo = parseNullableMarkdownSourceOffset(bookmark.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
+    if (sourceFrom !== null && sourceTo !== null && sourceTo > sourceFrom) return { from: sourceFrom, to: sourceTo };
+  }
   const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
   if (!(image instanceof HTMLElement) || target !== image) return null;
   const sourceFrom = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
@@ -991,6 +1021,84 @@ class RenderedMarkdownImageWidget extends WidgetType {
   }
 }
 
+function renderedMarkdownBookmarkTitle(bookmark: Bookmark | null, fallbackAlt: string, bookmarkId: string): string {
+  if (!bookmark) return fallbackAlt || `Bookmark ${bookmarkId}`;
+  if (bookmark.sourceType === 'web') return bookmark.title || bookmark.domain || bookmark.url || fallbackAlt || 'Bookmark';
+  return bookmark.authorName || (bookmark.authorHandle ? `@${bookmark.authorHandle}` : fallbackAlt || 'Bookmark');
+}
+
+function renderedMarkdownBookmarkBody(bookmark: Bookmark | null): string {
+  if (!bookmark) return '';
+  return bookmark.sourceType === 'web'
+    ? bookmark.excerpt || bookmark.text
+    : bookmark.text;
+}
+
+function renderedMarkdownBookmarkMeta(bookmark: Bookmark | null, bookmarkId: string): string {
+  if (!bookmark) return bookmarkId;
+  if (bookmark.sourceType === 'web') return bookmark.domain || bookmark.url;
+  return bookmark.authorHandle ? `@${bookmark.authorHandle}` : bookmark.url;
+}
+
+class RenderedMarkdownBookmarkWidget extends WidgetType {
+  constructor(
+    private readonly bookmarkId: string,
+    private readonly alt: string,
+    private readonly bookmark: Bookmark | null,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+    private readonly className = '',
+  ) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownBookmarkWidget): boolean {
+    return other.bookmarkId === this.bookmarkId
+      && other.alt === this.alt
+      && other.bookmark === this.bookmark
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo
+      && other.className === this.className;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return !['click', 'mousedown'].includes(event.type);
+  }
+
+  toDOM(): HTMLElement {
+    const root = document.createElement('span');
+    root.className = [RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS, this.className].filter(Boolean).join(' ');
+    root.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
+    root.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
+    root.setAttribute(RENDERED_MARKDOWN_EDITOR_BOOKMARK_ID_ATTR, this.bookmarkId);
+    root.setAttribute('role', 'button');
+    root.setAttribute('aria-label', `Bookmark ${renderedMarkdownBookmarkTitle(this.bookmark, this.alt, this.bookmarkId)}`);
+
+    const title = document.createElement('span');
+    title.className = `${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__title`;
+    title.textContent = renderedMarkdownBookmarkTitle(this.bookmark, this.alt, this.bookmarkId);
+    root.appendChild(title);
+
+    const bodyText = renderedMarkdownBookmarkBody(this.bookmark);
+    if (bodyText) {
+      const body = document.createElement('span');
+      body.className = `${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__body`;
+      body.textContent = bodyText;
+      root.appendChild(body);
+    }
+
+    const metaText = renderedMarkdownBookmarkMeta(this.bookmark, this.bookmarkId);
+    if (metaText) {
+      const meta = document.createElement('span');
+      meta.className = `${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__meta`;
+      meta.textContent = metaText;
+      root.appendChild(meta);
+    }
+
+    return root;
+  }
+}
+
 class RenderedMarkdownInlineHtmlWidget extends WidgetType {
   constructor(
     private readonly html: string,
@@ -1118,6 +1226,9 @@ type RenderedMarkdownDecoration = Range<Decoration>;
 
 const renderedMarkdownDocumentPathFacet = Facet.define<string | null, string | null>({
   combine: (values) => values[0] ?? null,
+});
+const renderedMarkdownBookmarksVersionFacet = Facet.define<number, number>({
+  combine: (values) => values[0] ?? 0,
 });
 type RenderedMarkdownEditorRange = { from: number; to: number };
 type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
@@ -1910,6 +2021,7 @@ function pushRenderedInlineDecorations(
   text: string,
   documentPath?: string | null,
   imageClassName = '',
+  bookmarksById: ReadonlyMap<string, Bookmark> = new Map(),
 ): void {
 	  const protectedRanges: Array<{ from: number; to: number }> = [];
 	  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
@@ -1921,12 +2033,15 @@ function pushRenderedInlineDecorations(
 	    if (match.index === undefined) continue;
     const from = lineFrom + match.index;
     const to = from + match[0].length;
+    const bookmarkId = getRenderedMarkdownBookmarkEmbedId(match[2]);
     protect(from, to);
     pushRenderedSyntaxReplacement(
       decorations,
       from,
       to,
-      new RenderedMarkdownImageWidget(match[1], match[2], documentPath, from, to, imageClassName),
+      bookmarkId
+        ? new RenderedMarkdownBookmarkWidget(bookmarkId, match[1], bookmarksById.get(bookmarkId) ?? null, from, to, imageClassName)
+        : new RenderedMarkdownImageWidget(match[1], match[2], documentPath, from, to, imageClassName),
     );
   }
 
@@ -2124,6 +2239,7 @@ function pushRenderedMarkdownEditorLineDecorations(
   lineNumber: number,
   codeFenceMarker: string | null,
   documentPath?: string | null,
+  bookmarksById: ReadonlyMap<string, Bookmark> = new Map(),
 ): string | null {
   const line = state.doc.line(lineNumber);
   const text = line.text;
@@ -2236,6 +2352,7 @@ function pushRenderedMarkdownEditorLineDecorations(
     text.slice(inlineStart),
     documentPath,
     listMatch || taskMatch ? RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS : '',
+    bookmarksById,
   );
   return codeFenceMarker;
 }
@@ -2245,8 +2362,10 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   ranges: readonly RenderedMarkdownEditorRange[],
   documentPath?: string | null,
   stableRanges: readonly RenderedMarkdownEditorRange[] = [],
+  bookmarksSnapshot?: BookmarksSnapshot | null,
 ): DecorationSet {
   const decorations: RenderedMarkdownDecoration[] = [];
+  const bookmarksById = new Map((bookmarksSnapshot?.bookmarks ?? []).map((bookmark) => [bookmark.id, bookmark] as const));
   const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, [...ranges, ...stableRanges]);
   const inlineHtmlBlocks = getRenderedMarkdownInlineHtmlBlocks(state);
   const visibleInlineHtmlBlocks = inlineHtmlBlocks.filter((block) => (
@@ -2273,7 +2392,7 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
       if (visibleInlineHtmlBlocks.some((block) => lineNumber >= block.fromLine && lineNumber <= block.toLine)) {
         continue;
       }
-      codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker, documentPath);
+      codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker, documentPath, bookmarksById);
     }
   }
 
@@ -2285,8 +2404,12 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   );
 }
 
-export function buildRenderedMarkdownEditorDecorations(state: EditorState, documentPath?: string | null): DecorationSet {
-  return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }], documentPath);
+export function buildRenderedMarkdownEditorDecorations(
+  state: EditorState,
+  documentPath?: string | null,
+  bookmarksSnapshot?: BookmarksSnapshot | null,
+): DecorationSet {
+  return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }], documentPath, [], bookmarksSnapshot);
 }
 
 export function getRenderedMarkdownImageLineRanges(state: EditorState): RenderedMarkdownEditorRange[] {
@@ -2323,6 +2446,7 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
           view.visibleRanges,
           activeDocumentPath,
           this.stableImageRanges,
+          peekBookmarks(),
         );
         if (startedAt > 0) {
           emitRenderedMarkdownEditorTiming('rendered-decorations-initial-build', {
@@ -2340,6 +2464,7 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
           || update.viewportChanged
           || update.selectionSet
           || update.startState.facet(renderedMarkdownDocumentPathFacet) !== update.state.facet(renderedMarkdownDocumentPathFacet)
+          || update.startState.facet(renderedMarkdownBookmarksVersionFacet) !== update.state.facet(renderedMarkdownBookmarksVersionFacet)
         ) {
           const activeDocumentPath = documentPath ?? update.state.facet(renderedMarkdownDocumentPathFacet);
           const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
@@ -2349,6 +2474,7 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
             update.view.visibleRanges,
             activeDocumentPath,
             this.stableImageRanges,
+            peekBookmarks(),
           );
           if (startedAt > 0) {
             emitRenderedMarkdownEditorTiming('rendered-decorations-update', {
@@ -2695,6 +2821,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const containerRef = useRef<HTMLDivElement | null>(null);
     const viewRef = useRef<EditorView | null>(null);
     const bottomRoomPxRef = useRef(bottomRoomPx);
+    const [bookmarksVersion, setBookmarksVersion] = useState(0);
     const onChangeRef = useRef(onChange);
     const onKeyDownRef = useRef(props.onKeyDown);
     const onMouseDownRef = useRef(props.onMouseDown);
@@ -2713,6 +2840,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const historyCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
     const documentPathCompartment = useRef(new Compartment()).current;
+    const bookmarksVersionCompartment = useRef(new Compartment()).current;
     const findQueryCompartment = useRef(new Compartment()).current;
     const selectionDrawCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
@@ -3042,6 +3170,52 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             display: 'inline-flex',
             width: 'auto',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}`]: {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            boxSizing: 'border-box',
+            gap: '5px',
+            width: 'min(100%, 640px)',
+            maxWidth: '100%',
+            padding: '10px 12px',
+            borderRadius: '8px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.025)',
+            color: theme.text,
+            cursor: 'default',
+            overflowAnchor: 'none',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_IMAGE_CLASS}.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}`]: {
+            width: 'min(100%, 560px)',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__title`]: {
+            display: 'block',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            fontSize: '0.9em',
+            lineHeight: 1.25,
+            fontWeight: 650,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__body`]: {
+            display: '-webkit-box',
+            WebkitLineClamp: '3',
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            fontSize: '0.88em',
+            lineHeight: 1.35,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_BOOKMARK_CLASS}__meta`]: {
+            display: 'block',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.62)' : 'rgba(17,17,17,0.62)'),
+            fontSize: '0.78em',
+            lineHeight: 1.25,
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
             display: 'block',
             width: 'auto',
@@ -3266,6 +3440,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           ]),
           markdown(),
           documentPathCompartment.of(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
+          bookmarksVersionCompartment.of(renderedMarkdownBookmarksVersionFacet.of(bookmarksVersion)),
           findQueryCompartment.of(markdownCodeEditorFindQueryFacet.of(findQuery)),
           markdownCodeEditorFindMatchExtension,
           ...(presentation === 'rendered' ? [createRenderedMarkdownEditorPresentationExtension()] : []),
@@ -3532,6 +3707,19 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ),
       });
     }, [bottomRoomPx, cursorScrollMarginCompartment]);
+
+    useEffect(() => {
+      if (presentation !== 'rendered') return undefined;
+      return onBookmarksChanged(() => setBookmarksVersion((version) => version + 1));
+    }, [presentation]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: bookmarksVersionCompartment.reconfigure(renderedMarkdownBookmarksVersionFacet.of(bookmarksVersion)),
+      });
+    }, [bookmarksVersion, bookmarksVersionCompartment]);
 
     // Reconfigure read-only.
     useEffect(() => {
