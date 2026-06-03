@@ -1471,6 +1471,10 @@ describe('BrowserHelperServer', () => {
       service: new BrowserHelperDocumentService([root]),
       token: 'test-token',
       nativeBridge: {
+        writeClipboardText: (text) => {
+          calls.push(['text', text]);
+          return { success: true };
+        },
         getClipboardImagePath: () => '/tmp/current-clipboard.png',
         savePastedImageFile: (file) => {
           calls.push(file);
@@ -1482,6 +1486,11 @@ describe('BrowserHelperServer', () => {
     const address = await server.start();
 
     const imagePath = await request(`http://${address.host}:${address.port}/native/clipboard/image-path?token=test-token`);
+    const copiedText = await request(`http://${address.host}:${address.port}/native/clipboard/text`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { text: 'Copy me' },
+    });
     const pasted = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
@@ -1489,8 +1498,10 @@ describe('BrowserHelperServer', () => {
     });
 
     expect(imagePath.body.path).toBe('/tmp/current-clipboard.png');
+    expect(copiedText.body.result).toEqual({ success: true });
     expect(pasted.body.path).toBe('/tmp/pasted-image.png');
     expect(calls).toEqual([
+      ['text', 'Copy me'],
       {
         name: 'paste.png',
         type: 'image/png',

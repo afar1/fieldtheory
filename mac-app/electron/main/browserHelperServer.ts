@@ -243,6 +243,7 @@ export type BrowserHelperNativeBridge = {
   setRepresentedFilename?: (filePath: string, clientId?: string | null) => void | Promise<void>;
   pasteIntoCodexInput?: (text: string) => unknown | Promise<unknown>;
   openFieldTheoryMarkdownInNativeApp?: (target: unknown) => unknown | Promise<unknown>;
+  writeClipboardText?: (text: string) => unknown | Promise<unknown>;
   getClipboardImagePath?: () => string | null | Promise<string | null>;
   savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: unknown }) => string | null | Promise<string | null>;
   pickFolder?: () => string | null | Promise<string | null>;
@@ -1623,6 +1624,16 @@ export class BrowserHelperServer {
       if (req.method === 'GET' && parsed.pathname === '/native/clipboard/image-path') {
         const path = await this.nativeBridge.getClipboardImagePath?.() ?? null;
         writeJson(res, 200, { ok: true, path }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/clipboard/text') {
+        const body = await readJsonBody(req);
+        const text = typeof body.text === 'string' ? body.text : '';
+        const result = text
+          ? await this.nativeBridge.writeClipboardText?.(text) ?? { success: false, error: 'Clipboard text bridge is not available' }
+          : { success: false, error: 'No text to copy' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 
