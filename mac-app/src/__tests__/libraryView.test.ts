@@ -2125,7 +2125,7 @@ describe('librarian editor session helpers', () => {
     )).toBe(true);
   });
 
-  it('uses a stored editor session instead of stale bookmarks on startup', () => {
+  it('uses restored selection instead of stale editor session on startup', () => {
     expect(resolveLibrarianInitialSelection(
       { type: 'bookmarks' },
       {
@@ -2137,12 +2137,27 @@ describe('librarian editor session helpers', () => {
         scrollTop: 0,
       },
       false,
-    )).toEqual({ type: 'wiki', relPath: 'scratchpad/Progress' });
+    )).toEqual({ type: 'bookmarks' });
   });
 
-  it('uses a stored external editor session instead of stale wiki selection on startup', () => {
+  it('uses restored wiki selection instead of stale external editor session on startup', () => {
     expect(resolveLibrarianInitialSelection(
       { type: 'wiki', relPath: 'scratchpad/FT feedback for (in codex panel and mac app)' },
+      {
+        itemType: 'external',
+        itemPath: '/Users/afar/notes/current.md',
+        contentMode: 'markdown',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      false,
+    )).toEqual({ type: 'wiki', relPath: 'scratchpad/FT feedback for (in codex panel and mac app)' });
+  });
+
+  it('falls back to stored editor session when no restored selection exists', () => {
+    expect(resolveLibrarianInitialSelection(
+      null,
       {
         itemType: 'external',
         itemPath: '/Users/afar/notes/current.md',
