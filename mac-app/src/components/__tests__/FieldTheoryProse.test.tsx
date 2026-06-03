@@ -1,12 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
 
 const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 
 describe('FieldTheoryProse', () => {
+  afterEach(() => {
+    delete window.fieldTheoryLocalImageAPI;
+  });
+
   it('renders GFM tables, task lists, and line breaks', () => {
     render(
       <FieldTheoryProse remarkLineBreaks>
@@ -112,6 +116,21 @@ describe('FieldTheoryProse', () => {
 
     const image = screen.getByRole('img', { name: 'Figure A' });
     expect(image.getAttribute('src')).toBe(LOCAL_SCREENSHOT_RENDER_URL);
+  });
+
+  it('routes local screenshot images through the browser helper when available', () => {
+    window.fieldTheoryLocalImageAPI = {
+      localImageUrl: (url) => `/native/local-image?url=${encodeURIComponent(url)}`,
+    };
+
+    render(
+      <FieldTheoryProse>
+        {`![Figure A](<${LOCAL_SCREENSHOT_URL}>)`}
+      </FieldTheoryProse>
+    );
+
+    const image = screen.getByRole('img', { name: 'Figure A' });
+    expect(image.getAttribute('src')).toBe('/native/local-image?url=ftlocalfile%3A%2F%2F%2FUsers%2Fafar%2FLibrary%2FApplication%2520Support%2Ffieldtheory-mac%2Fusers%2Fu%2Ffigures%2FScreenshot%25201.png');
   });
 
   it('routes file image URLs through the Field Theory local-file protocol', () => {
