@@ -749,9 +749,8 @@ describe('BrowserLibraryApp', () => {
 
     expect(screen.getByTestId('library-view')).toBeTruthy();
     expect(screen.getByText('browser-library')).toBeTruthy();
-    expect(document.querySelector('[data-top-nav-mode="library"]')).toBeTruthy();
-    expect(document.querySelector('[data-top-nav-mode="commands"]')).toBeTruthy();
-    expect(document.querySelector('[data-top-nav-mode="clipboard"]')).toBeFalsy();
+    expect(document.querySelector('[data-top-nav-mode="library"]')).toBeFalsy();
+    expect(document.querySelector('[data-top-nav-mode="commands"]')).toBeFalsy();
     expect(document.querySelector('[data-fieldtheory-browser-library-footer="true"]')).toBeTruthy();
     expect(screen.getByText('v25.6.1')).toBeTruthy();
     expect(await screen.findByText('river')).toBeTruthy();
@@ -771,12 +770,14 @@ describe('BrowserLibraryApp', () => {
     });
     expect(screen.getByTestId('library-view')).toBeTruthy();
     expect(screen.getByText('no-pending-reading')).toBeTruthy();
-    await waitFor(() => expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeTruthy());
+    expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeFalsy();
 
     fireEvent.click(screen.getByText('Select ember'));
     expect(window.__fieldTheoryBrowserReportActiveSurface).toHaveBeenCalledWith('ember');
 
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
     expect(screen.getByText('no-command')).toBeTruthy();
     expect(window.__fieldTheoryBrowserReportActiveSurface).toHaveBeenCalledWith('commands');
@@ -784,7 +785,7 @@ describe('BrowserLibraryApp', () => {
     act(() => {
       newReadingListener?.('/tmp/new-reading.md');
     });
-    expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeTruthy();
+    expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeFalsy();
 
     act(() => {
       showNewReadingListener?.('/tmp/show-now.md');
@@ -794,13 +795,13 @@ describe('BrowserLibraryApp', () => {
     expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeFalsy();
 
     vi.mocked(window.localStorage.setItem).mockClear();
-    fireEvent.click(document.querySelector('[data-top-nav-mode="library"]') as HTMLElement);
+    fireEvent.click(screen.getByLabelText('Toggle sidebar'));
     expect(await screen.findByTestId('library-view')).toBeTruthy();
     expect(document.querySelector('[data-top-nav-indicator="library"]')).toBeFalsy();
     expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-sidebar-collapsed', '1');
 
     vi.mocked(window.localStorage.setItem).mockClear();
-    fireEvent.click(document.querySelector('[data-top-nav-mode="library"]') as HTMLElement);
+    fireEvent.click(screen.getByLabelText('Toggle sidebar'));
     expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-sidebar-collapsed', '0');
 
     fireEvent.click(screen.getByText('Open command'));
@@ -808,7 +809,9 @@ describe('BrowserLibraryApp', () => {
     expect(await screen.findByText('external')).toBeTruthy();
     expect(screen.getByText('/tmp/Commands/plan.md')).toBeTruthy();
 
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
     fireEvent.click(screen.getByText('Select command'));
     expect(window.commandsAPI?.setActiveLibraryFileContext).toHaveBeenCalledWith(null);
@@ -819,7 +822,9 @@ describe('BrowserLibraryApp', () => {
     fireEvent.keyDown(window, { key: ']', code: 'BracketRight', metaKey: true });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
 
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
 
     act(() => {
@@ -901,8 +906,8 @@ describe('BrowserLibraryApp', () => {
       />,
     );
 
-    expect(await screen.findByText('Pro:')).toBeTruthy();
-    expect(await screen.findByText('1,234 words transcribed')).toBeTruthy();
+    expect(await screen.findByText('Pro')).toBeTruthy();
+    expect(screen.queryByText('1,234 words transcribed')).toBeNull();
   });
 
   it('shows native local command status in the Browser Library footer and can cancel a run', async () => {
@@ -1424,7 +1429,9 @@ describe('BrowserLibraryApp', () => {
     );
 
     expect(await screen.findByTestId('library-view')).toBeTruthy();
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
 
     act(() => {
@@ -1460,7 +1467,9 @@ describe('BrowserLibraryApp', () => {
     );
 
     expect((await screen.findByTestId('library-view')).getAttribute('data-active')).toBe('true');
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
     expect(screen.getByTestId('library-view').getAttribute('data-active')).toBe('false');
 
@@ -1510,7 +1519,9 @@ describe('BrowserLibraryApp', () => {
     fireEvent.change(draftInput, { target: { value: 'still here' } });
     expect(mountCount).toBe(1);
 
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
     expect(screen.getByTestId('library-view').getAttribute('data-active')).toBe('false');
     expect((document.querySelector('[data-fieldtheory-browser-library-keepalive="library"]') as HTMLElement | null)?.style.display).toBe('none');
@@ -1585,22 +1596,16 @@ describe('BrowserLibraryApp', () => {
     );
 
     const footer = document.querySelector('[data-fieldtheory-browser-library-footer="true"]') as HTMLElement;
-    const topTabs = document.querySelector('[data-top-nav-mode="library"]')?.parentElement as HTMLElement;
     expect(screen.getByText('initial-standard')).toBeTruthy();
     expect(footer.style.display).toBe('flex');
-    expect(topTabs.style.opacity).toBe('1');
 
     fireEvent.click(screen.getByText('Enter fullscreen'));
     expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-immersive', 'true');
     expect(footer.style.display).toBe('none');
-    expect(topTabs.style.opacity).toBe('0');
-    expect(topTabs.style.pointerEvents).toBe('none');
 
     fireEvent.click(screen.getByText('Exit fullscreen'));
     expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-immersive', 'false');
     expect(footer.style.display).toBe('flex');
-    expect(topTabs.style.opacity).toBe('1');
-    expect(topTabs.style.pointerEvents).toBe('auto');
   });
 
   it('sizes the immersive focus mark to the Browser panel instead of the native window default', async () => {
@@ -1808,9 +1813,6 @@ describe('BrowserLibraryApp', () => {
     expect(screen.getByText('focus-on')).toBeTruthy();
     expect(screen.getByText('focus-opacity:0')).toBeTruthy();
     expect(screen.getByText('sidebar-collapsed')).toBeTruthy();
-    const topTabs = document.querySelector('[data-top-nav-mode="library"]')?.parentElement as HTMLElement;
-    expect(topTabs.style.opacity).toBe('0');
-    expect(topTabs.style.pointerEvents).toBe('none');
     expect(window.localStorage.setItem).not.toHaveBeenCalledWith('librarian-sidebar-collapsed', '1');
 
     fireEvent.mouseMove(window, { clientX: 20, clientY: 10 });
@@ -1898,7 +1900,9 @@ describe('BrowserLibraryApp', () => {
       />,
     );
 
-    fireEvent.click(document.querySelector('[data-top-nav-mode="commands"]') as HTMLElement);
+    act(() => {
+      openMarkdownListener?.({ kind: 'commands', path: 'commands' });
+    });
     expect(await screen.findByTestId('commands-view')).toBeTruthy();
 
     await act(async () => {
