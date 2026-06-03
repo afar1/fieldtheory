@@ -3,6 +3,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import InlineHtmlBlock from './InlineHtmlBlock';
+import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
 import '../prose.css';
 
 type FieldTheoryProseSize = 'reader' | 'compact' | 'preview';
@@ -81,9 +82,11 @@ export function localFileUrlToFieldTheoryUrl(url: string): string {
   return url.replace(/^file:/i, 'ftlocalfile:');
 }
 
-function fieldTheoryUrlTransform(url: string, key: string): string {
-  if (key === 'src' && /^file:/i.test(url)) return localFileUrlToFieldTheoryUrl(url);
-  if (key === 'src' && /^(ftlocalfile|ftmedia):/i.test(url)) return url;
+function fieldTheoryUrlTransform(url: string, key: string, documentPath?: string | null): string {
+  if (key === 'src') {
+    const localImageUrl = normalizeMarkdownImageUrl(url, documentPath);
+    if (localImageUrl) return localImageUrl;
+  }
   if (key === 'href' && /^(wiki|artifact|command):/i.test(url)) return url;
   return defaultUrlTransform(url);
 }
@@ -140,7 +143,7 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         components={fieldTheoryComponents}
-        urlTransform={fieldTheoryUrlTransform}
+        urlTransform={(url, key) => fieldTheoryUrlTransform(url, key, documentPath)}
       >
         {children}
       </ReactMarkdown>

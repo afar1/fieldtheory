@@ -1258,6 +1258,7 @@ describe('markdownContentMayNeedPortableImages', () => {
     expect(markdownContentMayNeedPortableImages('plain text\n[link](https://example.com)')).toBe(false);
     expect(markdownContentMayNeedPortableImages('plain text with literal ![ marker')).toBe(false);
     expect(markdownContentMayNeedPortableImages('![Image](</tmp/a.png>)')).toBe(true);
+    expect(markdownContentMayNeedPortableImages('![Image](/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png)')).toBe(true);
   });
 });
 
