@@ -99,6 +99,66 @@ export function getLauncherInvocationVisibilityPolicy(input: {
   };
 }
 
+function escapeLauncherBookmarkEmbedAlt(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+}
+
+export function formatLauncherBookmarkEmbedMarkdown(input: {
+  itemType?: string | null;
+  bookmarkId?: string | null;
+  displayName?: string | null;
+  name?: string | null;
+}): string | null {
+  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
+  const alt = escapeLauncherBookmarkEmbedAlt(input.displayName || input.name || 'Bookmark');
+  return `![${alt}](bookmark://${encodeURIComponent(input.bookmarkId)})`;
+}
+
+export function getLauncherDefaultBookmarksTabAction(input: {
+  itemType?: string | null;
+  bookmarkId?: string | null;
+}): { bookmarkTarget: LauncherFieldTheoryMarkdownTarget; bookmarkId: string } | null {
+  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
+  return {
+    bookmarkTarget: { kind: 'bookmarks', path: 'bookmarks' },
+    bookmarkId: input.bookmarkId,
+  };
+}
+
+export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks'): string {
+  if (source === 'clipboard') return 'Clipboard';
+  if (source === 'bookmarks') return 'Bookmarks';
+  return 'Recents';
+}
+
+export type LauncherDefaultBookmarkEnterAction =
+  | { kind: 'insert-bookmark-embed'; markdown: string }
+  | { kind: 'paste-bookmark-text' }
+  | { kind: 'copy-bookmark-for-agent' }
+  | { kind: 'invoke-bookmark' };
+
+export function getLauncherDefaultBookmarkEnterAction(input: {
+  itemType?: string | null;
+  bookmarkId?: string | null;
+  displayName?: string | null;
+  name?: string | null;
+  fieldTheoryActive: boolean;
+  hasActiveLibraryFileContext: boolean;
+  canInsertMarkdown: boolean;
+  hasBookmarkPasteText: boolean;
+  canPasteText: boolean;
+  canCopyForAgent: boolean;
+}): LauncherDefaultBookmarkEnterAction | null {
+  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
+  if (input.fieldTheoryActive && input.hasActiveLibraryFileContext && input.canInsertMarkdown) {
+    const markdown = formatLauncherBookmarkEmbedMarkdown(input);
+    return markdown ? { kind: 'insert-bookmark-embed', markdown } : null;
+  }
+  if (input.hasBookmarkPasteText && input.canPasteText) return { kind: 'paste-bookmark-text' };
+  if (input.canCopyForAgent) return { kind: 'copy-bookmark-for-agent' };
+  return { kind: 'invoke-bookmark' };
+}
+
 // =============================================================================
 // Library Markdown Flattening
 // =============================================================================
@@ -896,14 +956,17 @@ export function isLauncherRiverItem(item: { source?: string; sourceLabel?: strin
 export function getLauncherDefaultPanelItems<T>(input: {
   expanded: boolean;
   isRootIdle: boolean;
-  source: 'recents' | 'clipboard';
+  source: 'recents' | 'clipboard' | 'bookmarks';
   recentItems: T[];
   clipboardItems: T[];
+  bookmarkItems?: T[];
   maxItems?: number;
 }): T[] {
   if (!input.expanded || !input.isRootIdle) return [];
   const maxItems = input.maxItems ?? 5;
-  return (input.source === 'clipboard' ? input.clipboardItems : input.recentItems).slice(0, maxItems);
+  if (input.source === 'clipboard') return input.clipboardItems.slice(0, maxItems);
+  if (input.source === 'bookmarks') return (input.bookmarkItems ?? []).slice(0, maxItems);
+  return input.recentItems.slice(0, maxItems);
 }
 
 function joinLauncherPath(parent: string, child: string): string {
