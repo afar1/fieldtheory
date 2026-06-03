@@ -5292,6 +5292,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     || (contentMode === 'markdown' && markdownDocumentTopFade)
   );
   const topFadeActive = !!activeReading && readerTopFadeVisible;
+  const readerTopFadeHeight = focusChromeActive ? 96 : 58;
+  const readerTopFadeSolidStop = focusChromeActive ? 18 : 8;
+  const readerTopFadeMaskSolidStop = focusChromeActive ? 22 : 10;
   const activeReadingToolbarIdentityVisible = activeReadingToolbarHasBreadcrumb || topFadeActive;
   const activeReadingToolbarIdentityPinned = topFadeActive && focusChromeActive;
   const activeReadingBreadcrumbLabel = selectedItemType === 'wiki' || selectedItemType === 'external'
@@ -5951,6 +5954,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }, COPY_PATH_FEEDBACK_MS);
   }, []);
 
+  const writeTextToClipboard = useCallback(async (text: string) => {
+    const nativeResult = await window.clipboardAPI?.writeText?.(text);
+    if (nativeResult) {
+      if (nativeResult.success === false) {
+        throw new Error(nativeResult.error ?? 'Clipboard write failed');
+      }
+      return;
+    }
+    await navigator.clipboard?.writeText(text);
+  }, []);
+
   const pasteTextToCodexTerminal = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || !window.codexTerminalAPI) return;
@@ -5983,9 +5997,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     try {
-      await navigator.clipboard?.writeText(text);
+      await writeTextToClipboard(text);
     } catch {}
-  }, [browserLibrarySurface, flashCopyFeedback, onActionFeedback]);
+  }, [browserLibrarySurface, flashCopyFeedback, onActionFeedback, writeTextToClipboard]);
 
   const getNativeTerminalPasteContentRect = useCallback((): Pick<DOMRect, 'right'> | null => (
     renderedContentRef.current?.getBoundingClientRect()
@@ -8216,10 +8230,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
-    await navigator.clipboard.writeText(shareStatus.url);
+    await writeTextToClipboard(shareStatus.url);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
-  }, [shareStatus?.url]);
+  }, [shareStatus?.url, writeTextToClipboard]);
 
   const getRenderedSelectionText = useCallback((): string => {
     const root = renderedContentRef.current;
@@ -8264,22 +8278,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const payload = getActiveReadingCopyPayload();
     if (!payload) return;
     try {
-      await navigator.clipboard.writeText(payload.text);
+      await writeTextToClipboard(payload.text);
       flashCopyFeedback(payload.label);
     } catch (err) {
       console.warn('[Librarian] Failed to copy text or path:', err);
     }
-  }, [flashCopyFeedback, getActiveReadingCopyPayload]);
+  }, [flashCopyFeedback, getActiveReadingCopyPayload, writeTextToClipboard]);
 
   const copyActiveReadingPath = useCallback(async () => {
     if (!activeReading?.path) return;
     try {
-      await navigator.clipboard.writeText(activeReading.path);
+      await writeTextToClipboard(activeReading.path);
       flashCopyFeedback('Copied file path');
     } catch (err) {
       console.warn('[Librarian] Failed to copy path:', err);
     }
-  }, [activeReading?.path, flashCopyFeedback]);
+  }, [activeReading?.path, flashCopyFeedback, writeTextToClipboard]);
 
   useEffect(() => {
     return () => {
@@ -9649,7 +9663,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               zIndex: focusChromeActive ? 20 : undefined,
               boxSizing: 'border-box',
               opacity: 1,
-              pointerEvents: focusChromeActive ? 'none' : 'auto',
+              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned ? 'none' : 'auto',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -10489,7 +10503,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             if (result) {
                               setShareStatus({ shared: true, slug: result.slug, url: result.url });
                               // Copy link to clipboard
-                              await navigator.clipboard.writeText(result.url);
+                              await writeTextToClipboard(result.url);
                               setLinkCopied(true);
                               setTimeout(() => setLinkCopied(false), 2000);
                             } else {
@@ -10556,13 +10570,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             top: 0,
             left: 0,
             right: `${LIBRARIAN_READER_SCROLLBAR_GUTTER_PX}px`,
-            height: '30px',
+            height: `${readerTopFadeHeight}px`,
             pointerEvents: 'none',
-            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 28%, transparent 100%)`,
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} ${readerTopFadeSolidStop}%, transparent 100%)`,
             backdropFilter: topFadeActive ? 'blur(3px)' : 'none',
             WebkitBackdropFilter: topFadeActive ? 'blur(3px)' : 'none',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
-            maskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
+            WebkitMaskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
+            maskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
             opacity: topFadeActive ? 0.72 : 0,
             zIndex: 3,
             transition: 'opacity 0.12s ease, backdrop-filter 0.12s ease',

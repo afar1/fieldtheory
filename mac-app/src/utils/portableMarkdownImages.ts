@@ -1,6 +1,12 @@
 const SAFE_REMOTE_IMAGE_URL_RE = /^(https?|ftlocalfile|ftmedia):/i;
 const LOCAL_IMAGE_EXTENSION_RE = /\.(avif|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i;
 
+function resolveBrowserLocalImageUrl(url: string): string {
+  if (!/^ftlocalfile:/i.test(url)) return url;
+  if (typeof window === 'undefined') return url;
+  return window.fieldTheoryLocalImageAPI?.localImageUrl(url) ?? url;
+}
+
 function stripMarkdownDestinationBrackets(destination: string): string {
   return destination.trim().replace(/^<(.+)>$/, '$1');
 }
@@ -49,15 +55,16 @@ export function resolveRelativeMarkdownImageUrl(destination: string, documentPat
 
 export function normalizeMarkdownImageUrl(destination: string, documentPath?: string | null): string | null {
   const raw = stripMarkdownDestinationBrackets(destination);
-  if (/^file:/i.test(raw)) return raw.replace(/^file:/i, 'ftlocalfile:');
-  if (SAFE_REMOTE_IMAGE_URL_RE.test(raw)) return raw;
+  if (/^file:/i.test(raw)) return resolveBrowserLocalImageUrl(raw.replace(/^file:/i, 'ftlocalfile:'));
+  if (SAFE_REMOTE_IMAGE_URL_RE.test(raw)) return resolveBrowserLocalImageUrl(raw);
   if (/^data:image\//i.test(raw)) return raw;
   if (raw.startsWith('/') && LOCAL_IMAGE_EXTENSION_RE.test(raw.split(/[?#]/, 1)[0] ?? raw)) {
     try {
-      return encodeAbsolutePathAsFileUrl(normalizeAbsolutePath(decodeURIComponent(raw))).replace(/^file:/i, 'ftlocalfile:');
+      return resolveBrowserLocalImageUrl(encodeAbsolutePathAsFileUrl(normalizeAbsolutePath(decodeURIComponent(raw))).replace(/^file:/i, 'ftlocalfile:'));
     } catch {
       return null;
     }
   }
-  return resolveRelativeMarkdownImageUrl(raw, documentPath);
+  const resolved = resolveRelativeMarkdownImageUrl(raw, documentPath);
+  return resolved ? resolveBrowserLocalImageUrl(resolved) : null;
 }

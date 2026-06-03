@@ -3635,6 +3635,16 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       },
       pasteIntoCodexInput: (text) => pasteTextIntoCodexInputFromBrowserLibrary(text),
       openFieldTheoryMarkdownInNativeApp: (target) => openFieldTheoryMarkdownInNativeApp(target),
+      writeClipboardText: (text) => {
+        try {
+          clipboard.writeText(text);
+          clipboardManager?.syncClipboardHash();
+          return { success: true };
+        } catch (error) {
+          log.error('Error writing Browser Library clipboard text:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
       getClipboardImagePath: () => clipboardManager?.exportCurrentClipboardImageToCache() ?? null,
       savePastedImageFile: (file) => clipboardManager?.savePastedImageFileToCache(file as { name?: string | null; type?: string | null; data: Uint8Array }) ?? null,
       pickFolder: async () => {

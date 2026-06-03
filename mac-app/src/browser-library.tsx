@@ -15,7 +15,6 @@ import {
 } from './components/LibraryFooterControls';
 import {
   FOCUS_CHROME_ICON_OPACITY,
-  FOCUS_CHROME_ICON_TOP_PX,
   LibraryFocusChromeIcon,
 } from './components/LibrarySurfaceTopTabs';
 import './styles.css';
@@ -80,11 +79,15 @@ declare global {
       colno?: number;
       stack?: string;
     }>;
+    __fieldTheoryBrowserLibraryRequestTimings?: BrowserHelperRequestTimingEntry[];
     __fieldTheoryBrowserOpenMarkdownTarget?: (target: any) => boolean;
     __fieldTheoryBrowserActiveSurface?: BrowserHelperClientSurfaceName;
     __fieldTheoryBrowserReportActiveSurface?: (surface: BrowserHelperClientSurfaceName) => void;
     fieldTheoryBookmarkMediaAPI?: {
       mediaUrl: (filename: string) => string;
+    };
+    fieldTheoryLocalImageAPI?: {
+      localImageUrl: (url: string) => string;
     };
   }
 }
@@ -92,6 +95,7 @@ declare global {
 const noopUnsubscribe = () => {};
 const LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY = 'librarian-sidebar-collapsed';
 const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
+const BROWSER_LIBRARY_SET_FULLSCREEN_EVENT = 'fieldtheory:browser-library-set-fullscreen';
 const RENDERER_STORAGE_SYNC_KEYS = BROWSER_LIBRARY_RENDERER_STORAGE_KEYS;
 const RENDERER_STORAGE_SYNC_KEY_SET = new Set<string>(RENDERER_STORAGE_SYNC_KEYS);
 const RENDERER_STORAGE_CHANGED_EVENT_BY_KEY = new Map<string, string>([
@@ -112,8 +116,18 @@ type RendererStorageResponse = {
   values: Record<string, string | null>;
 };
 type BrowserCreatedCommand = { path: string; name: string };
+type BrowserHelperRequestTimingEntry = {
+  path: string;
+  method: string;
+  status: number | null;
+  ok: boolean;
+  durationMs: number;
+  startedAt: number;
+  error?: string;
+};
 
 export const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
+export const BROWSER_HELPER_REQUEST_TIMING_EVENT = 'fieldtheory:browser-helper-request-timing';
 
 type BrowserLibrarySurfaceName = 'library' | 'commands';
 type BrowserHelperClientSurfaceName = BrowserLibrarySurfaceName | 'bookmarks' | 'ember';
@@ -123,6 +137,9 @@ const BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES = [
   'recent:changed',
   'bookmarks:changed',
 ];
+const BROWSER_HELPER_COALESCED_REFRESH_EVENT_TYPES = new Set(BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES);
+const BROWSER_HELPER_REFRESH_COALESCE_MS = 75;
+const BROWSER_HELPER_REQUEST_TIMING_LIMIT = 120;
 
 export function getBrowserLibraryInitialOpenTarget(location: Pick<Location, 'search'>): any | null {
   return browserLibraryTargetFromSearchParams(new URLSearchParams(location.search));
@@ -191,25 +208,57 @@ function readBrowserClientId(): string {
 
 export function createBrowserHelperClient(config: BrowserHelperConfig) {
   return async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const response = await fetch(`${config.api}${path}`, {
-      ...options,
-      body: options.json === undefined ? options.body : JSON.stringify(options.json),
-      headers: {
-        'X-FieldTheory-Browser-Token': config.token,
-        'X-FieldTheory-Browser-Client': config.clientId,
-        ...(options.json === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(options.headers ?? {}),
-      },
-    });
-    const body = await response.json().catch(() => ({}));
-    if (options.allowErrorResult && body && typeof body === 'object' && 'result' in body) {
+    const startedAt = performance.now();
+    const method = options.method ?? 'GET';
+    let status: number | null = null;
+    try {
+      const response = await fetch(`${config.api}${path}`, {
+        ...options,
+        body: options.json === undefined ? options.body : JSON.stringify(options.json),
+        headers: {
+          'X-FieldTheory-Browser-Token': config.token,
+          'X-FieldTheory-Browser-Client': config.clientId,
+          ...(options.json === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(options.headers ?? {}),
+        },
+      });
+      status = response.status;
+      const body = await response.json().catch(() => ({}));
+      if (options.allowErrorResult && body && typeof body === 'object' && 'result' in body) {
+        recordBrowserHelperRequestTiming({ path, method, status, ok: response.ok, startedAt });
+        return body as T;
+      }
+      if (!response.ok || body.ok === false) {
+        throw new Error(body.error ?? body.result?.reason ?? `Request failed: ${response.status}`);
+      }
+      recordBrowserHelperRequestTiming({ path, method, status, ok: true, startedAt });
       return body as T;
+    } catch (error) {
+      recordBrowserHelperRequestTiming({
+        path,
+        method,
+        status,
+        ok: false,
+        startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
-    if (!response.ok || body.ok === false) {
-      throw new Error(body.error ?? body.result?.reason ?? `Request failed: ${response.status}`);
-    }
-    return body as T;
   };
+}
+
+function recordBrowserHelperRequestTiming(input: Omit<BrowserHelperRequestTimingEntry, 'durationMs'>): void {
+  const entry: BrowserHelperRequestTimingEntry = {
+    ...input,
+    durationMs: Math.round((performance.now() - input.startedAt) * 10) / 10,
+  };
+  const timings = window.__fieldTheoryBrowserLibraryRequestTimings ?? [];
+  timings.push(entry);
+  if (timings.length > BROWSER_HELPER_REQUEST_TIMING_LIMIT) {
+    timings.splice(0, timings.length - BROWSER_HELPER_REQUEST_TIMING_LIMIT);
+  }
+  window.__fieldTheoryBrowserLibraryRequestTimings = timings;
+  window.dispatchEvent(new CustomEvent(BROWSER_HELPER_REQUEST_TIMING_EVENT, { detail: entry }));
 }
 
 function installBookmarkMediaResolver(config: BrowserHelperConfig): void {
@@ -220,9 +269,49 @@ function installBookmarkMediaResolver(config: BrowserHelperConfig): void {
   };
 }
 
+function installLocalImageResolver(config: BrowserHelperConfig): void {
+  window.fieldTheoryLocalImageAPI = {
+    localImageUrl: (url: string) => (
+      `${config.api}/native/local-image?token=${encodeURIComponent(config.token)}&url=${encodeURIComponent(url)}`
+    ),
+  };
+}
+
 function createBrowserEventHub(config: BrowserHelperConfig) {
   const listeners = new Map<string, Set<(detail: any) => void>>();
+  const coalescedRefreshDetails = new Map<string, any>();
+  const coalescedRefreshTimers = new Map<string, number>();
   let eventSource: EventSource | null = null;
+  const notifyListeners = (type: string, detail: any) => {
+    listeners.get(type)?.forEach((listener) => listener(detail));
+  };
+  const notifyChangedListeners = (type: string, detail: any) => {
+    if (!BROWSER_HELPER_COALESCED_REFRESH_EVENT_TYPES.has(type)) {
+      notifyListeners(type, detail);
+      return;
+    }
+    const previous = coalescedRefreshDetails.get(type);
+    const previousSources = Array.isArray(previous?.sources)
+      ? previous.sources
+      : previous
+        ? [previous.source ?? type]
+        : [];
+    const sources = [
+      ...new Set([
+        ...previousSources,
+        detail?.reconnect ? 'reconnect' : type,
+      ]),
+    ];
+    coalescedRefreshDetails.set(type, { ...previous, ...detail, sources });
+    if (coalescedRefreshTimers.has(type)) return;
+    const timer = window.setTimeout(() => {
+      coalescedRefreshTimers.delete(type);
+      const nextDetail = coalescedRefreshDetails.get(type) ?? {};
+      coalescedRefreshDetails.delete(type);
+      notifyListeners(type, nextDetail);
+    }, BROWSER_HELPER_REFRESH_COALESCE_MS);
+    coalescedRefreshTimers.set(type, timer);
+  };
 
   const ensureEventSource = () => {
     if (eventSource) return;
@@ -230,7 +319,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
     eventSource.onopen = () => {
       window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
       for (const type of BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES) {
-        listeners.get(type)?.forEach((listener) => listener({ reconnect: true }));
+        notifyChangedListeners(type, { reconnect: true });
       }
     };
     for (const type of [
@@ -283,7 +372,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
     ]) {
       eventSource.addEventListener(type, (event) => {
         const detail = parseBrowserEventDetail(event);
-        listeners.get(type)?.forEach((listener) => listener(detail));
+        notifyChangedListeners(type, detail);
       });
     }
   };
@@ -300,6 +389,9 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
         if (listeners.size === 0) {
           eventSource?.close();
           eventSource = null;
+          coalescedRefreshTimers.forEach((timer) => window.clearTimeout(timer));
+          coalescedRefreshTimers.clear();
+          coalescedRefreshDetails.clear();
         }
       };
     },
@@ -570,6 +662,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   const request = createBrowserHelperClient(config);
   const events = createBrowserEventHub(config);
   installBookmarkMediaResolver(config);
+  installLocalImageResolver(config);
   window.__fieldTheoryBrowserActiveSurface = 'library';
   window.__fieldTheoryBrowserReportActiveSurface = (surface) => {
     window.__fieldTheoryBrowserActiveSurface = surface;
@@ -915,7 +1008,17 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     onNewReadingAvailable: (callback: (readingPath: string) => void) => events.on('librarian:newReadingAvailable', (detail) => callback(detail.readingPath)),
     onShowNewReading: (callback: (readingPath: string) => void) => events.on('librarian:showNewReading', (detail) => callback(detail.readingPath)),
     onShowReading: (callback: (readingPath: string) => void) => events.on('librarian:showReading', (detail) => callback(detail.readingPath)),
-    onSetFullscreen: (callback: (fullscreen: boolean) => void) => events.on('librarian:setFullscreen', (detail) => callback(detail.fullscreen === true)),
+    onSetFullscreen: (callback: (fullscreen: boolean) => void) => {
+      const unsubscribeNative = events.on('librarian:setFullscreen', (detail) => callback(detail.fullscreen === true));
+      const onLocalFullscreen = (event: Event) => {
+        callback((event as CustomEvent<{ fullscreen?: boolean }>).detail?.fullscreen === true);
+      };
+      window.addEventListener(BROWSER_LIBRARY_SET_FULLSCREEN_EVENT, onLocalFullscreen);
+      return () => {
+        unsubscribeNative();
+        window.removeEventListener(BROWSER_LIBRARY_SET_FULLSCREEN_EVENT, onLocalFullscreen);
+      };
+    },
     onInsertMarkdownText: (callback: (text: string) => void) => events.on('librarian:insertMarkdownText', (detail) => callback(String(detail.text ?? ''))),
     onInsertPlainMarkdownText: (callback: (text: string) => void) => events.on('librarian:insertPlainMarkdownText', (detail) => callback(String(detail.text ?? ''))),
     onReplaceSelectedMarkdownText: (callback: (request: any) => boolean | Promise<boolean>) => events.on('librarian:replaceSelectedMarkdownText', (detail) => {
@@ -1029,6 +1132,12 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   } as any;
 
   window.clipboardAPI = {
+    writeText: async (text: string) => (
+      await request<{ result: { success?: boolean; error?: string } }>('/native/clipboard/text', {
+        method: 'POST',
+        json: { text },
+      })
+    ).result,
     getClipboardImagePath: async () => (
       await request<{ path: string | null }>('/native/clipboard/image-path')
     ).path,
@@ -1503,7 +1612,7 @@ function BrowserLibrarySurface(props: {
   const footerChromeInteractive = footerChromeOpacity > 0.05;
   const focusChromeIconSize = Math.max(20, Math.min(28, Math.round(shellWidth * 0.024)));
   const focusChromeIconTop = bookmarksCanvasToolbarTop === null
-    ? FOCUS_CHROME_ICON_TOP_PX
+    ? Math.max(8, Math.round(focusChromeIconSize * 0.45))
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - focusChromeIconSize / 2));
   const reportActiveSurface = React.useCallback((nextSurface: BrowserHelperClientSurfaceName) => {
     activeClientSurfaceRef.current = nextSurface;
@@ -2034,12 +2143,22 @@ function BrowserLibrarySurface(props: {
       showActionFeedback(result?.success ? 'Opened in Field Theory' : result?.error ?? 'Could not open Field Theory');
     })();
   }, [resolveFieldTheoryNativeOpenTarget, showActionFeedback]);
+  const exitBrowserImmersive = React.useCallback(() => {
+    setLibrarianImmersive(false);
+    disableGlobalFocusChrome();
+    setFocusChromeChildActive(false);
+    setFocusChromeGroupOpacity(0);
+    window.dispatchEvent(new CustomEvent(BROWSER_LIBRARY_SET_FULLSCREEN_EVENT, {
+      detail: { fullscreen: false },
+    }));
+  }, [disableGlobalFocusChrome]);
   const fieldTheoryButtonVisible = !browserChromeHidden && !focusChromeOverlayActive && (
     surface === 'commands'
     || activeClientSurface === 'bookmarks'
     || activeClientSurface === 'ember'
     || Boolean(activeLibraryFile)
   );
+  const immersiveExitVisible = librarianSurfaceVisible && (librarianImmersive || focusChromeSurfaceEnabled);
 
   return (
     <div
@@ -2062,6 +2181,38 @@ function BrowserLibrarySurface(props: {
           opacity={FOCUS_CHROME_ICON_OPACITY}
           size={focusChromeIconSize}
         />
+      ) : null}
+      {immersiveExitVisible ? (
+        <button
+          type="button"
+          data-fieldtheory-browser-exit-immersive-button="true"
+          aria-label="Exit immersive view"
+          title="Exit immersive view"
+          onClick={exitBrowserImmersive}
+          style={{
+            position: 'absolute',
+            top: '8px',
+            right: '12px',
+            zIndex: 28,
+            width: '28px',
+            height: '28px',
+            padding: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            backgroundColor: theme.isDark ? 'rgba(20, 20, 22, 0.78)' : 'rgba(255, 255, 255, 0.88)',
+            color: theme.textSecondary,
+            boxShadow: theme.isDark ? '0 8px 22px rgba(0,0,0,0.28)' : '0 8px 22px rgba(0,0,0,0.1)',
+            cursor: 'pointer',
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4.5 4.5 11.5 11.5" />
+            <path d="M11.5 4.5 4.5 11.5" />
+          </svg>
+        </button>
       ) : null}
       {actionFeedback ? (
         <span
