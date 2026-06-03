@@ -101,6 +101,21 @@ describe('portable markdown images main helpers', () => {
     expect(fs.existsSync(path.join(tmpDir, '.assets', assetName))).toBe(true);
   });
 
+  it('repairs unbracketed absolute private figure paths with spaces', () => {
+    const documentPath = path.join(tmpDir, 'Absolute.md');
+    const privateFigureDir = path.join(tmpDir, 'Library/Application Support/fieldtheory-mac/users/u/figures');
+    fs.mkdirSync(privateFigureDir, { recursive: true });
+    const privateFigurePath = path.join(privateFigureDir, 'Screenshot 3.png');
+    fs.writeFileSync(privateFigurePath, Buffer.from([8, 9, 10]));
+
+    const result = makeMarkdownImagesPortable(documentPath, `![Image](${privateFigurePath})`, { libraryRoots: [tmpDir] });
+    const assetName = sha256Name(Buffer.from([8, 9, 10]));
+
+    expect(result.rewritten).toBe(1);
+    expect(result.content).toBe(`![Image](<./.assets/${assetName}>)`);
+    expect(fs.existsSync(path.join(tmpDir, '.assets', assetName))).toBe(true);
+  });
+
   it('deletes removed copied image assets when no remaining image references them', () => {
     const documentPath = path.join(tmpDir, 'Delete Me.md');
     const imagePath = path.join(tmpDir, 'Screenshot 3.png');
