@@ -3117,7 +3117,7 @@ function CommandLauncher() {
         return;
       }
 
-      if (isRootIdleLauncher) {
+      if (isRootIdleLauncher && !hasExplicitSelectionRef.current) {
         switchDefaultPanelSource();
         return;
       }
