@@ -92,6 +92,7 @@ import {
   getRenderedMarkdownBlockBodyClickPosition,
   getRenderedMarkdownBlockBodyStart,
   getRenderedMarkdownBlockBodyStartForLine,
+  getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListBodyStartForLine,
@@ -1727,7 +1728,23 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
-  it('keeps Backspace from revealing rendered task brackets after the text is deleted', () => {
+  it('removes an empty rendered task row on Backspace after the text is deleted', () => {
+    expect(getRenderedMarkdownEmptyTaskDeleteBackwardEdit('- [ ] ', '- [ ] '.length)).toEqual({
+      from: 0,
+      to: '- [ ] '.length,
+      selection: 0,
+    });
+    expect(getRenderedMarkdownEmptyTaskDeleteBackwardEdit('before\n- [ ] \nafter', 'before\n- [ ] '.length)).toEqual({
+      from: 'before\n'.length,
+      to: 'before\n- [ ] \n'.length,
+      selection: 'before\n'.length,
+    });
+    expect(getRenderedMarkdownEmptyTaskDeleteBackwardEdit('before\n- [ ] ', 'before\n- [ ] '.length)).toEqual({
+      from: 'before'.length,
+      to: 'before\n- [ ] '.length,
+      selection: 'before'.length,
+    });
+
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
@@ -1748,8 +1765,8 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
       inputType: 'deleteContentBackward',
     }))).toBe(true);
-    expect(view.state.doc.toString()).toBe('- [ ] ');
-    expect(view.state.selection.main.from).toBe('- [ ] '.length);
+    expect(view.state.doc.toString()).toBe('');
+    expect(view.state.selection.main.from).toBe(0);
     expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
 
     view.destroy();
