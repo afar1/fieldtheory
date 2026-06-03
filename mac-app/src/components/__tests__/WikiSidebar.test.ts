@@ -7,6 +7,7 @@ import {
   flattenBuiltinSidebarRoots,
   getSidebarContextHideDirLabel,
   getSidebarShortcutVisibility,
+  isPointerNearRect,
   isRiverSidebarItemId,
   isSharedRiverSidebarItem,
   isWikiSidebarStorageKey,
@@ -17,6 +18,18 @@ import {
 } from '../WikiSidebar';
 
 const libraryRootPath = '/Users/afar/.fieldtheory/library';
+
+type TestSidebarNode = ReturnType<typeof fileNode> | {
+  kind: 'dir';
+  id: string;
+  name: string;
+  label: string;
+  relPath: string;
+  rootPath: string;
+  builtin: boolean;
+  canCreateFile: boolean;
+  children: TestSidebarNode[];
+};
 
 function fileNode(id: string, title: string) {
   return {
@@ -34,7 +47,7 @@ function fileNode(id: string, title: string) {
   };
 }
 
-function dirNode(name: string, children = [fileNode(`wiki:${name}/note`, 'note')]) {
+function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${name}/note`, 'note')]): TestSidebarNode {
   return {
     kind: 'dir' as const,
     id: `${libraryRootPath}::${name}`,
@@ -91,6 +104,14 @@ describe('WikiSidebar River root helpers', () => {
     expect(preferences.iconColorIndices).toEqual({});
     expect(preferences.iconColorOrder).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(preferences.newDocLocationKey).toBe('');
+  });
+
+  it('detects when the cursor is close to a sidebar create button', () => {
+    const rect = { left: 100, right: 118, top: 40, bottom: 58 };
+
+    expect(isPointerNearRect({ clientX: 92, clientY: 50 }, rect, 10)).toBe(true);
+    expect(isPointerNearRect({ clientX: 118, clientY: 68 }, rect, 10)).toBe(true);
+    expect(isPointerNearRect({ clientX: 89, clientY: 50 }, rect, 10)).toBe(false);
   });
 
   it('hides the virtual Bookmarks shortcut when the native preference says bookmarks are hidden', () => {
