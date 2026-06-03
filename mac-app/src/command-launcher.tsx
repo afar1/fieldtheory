@@ -44,6 +44,8 @@ import {
   getLauncherDefaultPanelItems,
   getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherDefaultBookmarkEnterAction,
+  getLauncherDefaultPanelSourceLabel,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
@@ -166,7 +168,7 @@ interface HandoffInfo {
 }
 
 type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks' | 'actions';
-type LauncherDefaultPanelSource = 'recents' | 'clipboard';
+type LauncherDefaultPanelSource = 'recents' | 'clipboard' | 'bookmarks';
 
 type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
@@ -340,7 +342,8 @@ const LAUNCHER_DEFAULT_PANEL_EXPANDED_STORAGE_KEY = 'fieldTheory.launcher.defaul
 
 function readLauncherDefaultPanelSource(): LauncherDefaultPanelSource {
   try {
-    return localStorage.getItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY) === 'clipboard' ? 'clipboard' : 'recents';
+    const stored = localStorage.getItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY);
+    return stored === 'clipboard' || stored === 'bookmarks' ? stored : 'recents';
   } catch {
     return 'recents';
   }
@@ -415,6 +418,7 @@ interface LauncherClipboardAPI {
   queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
   getItem?: (id: number) => Promise<ClipboardItem | null>;
   pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
+  pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
   pasteStack?: (ids: number[], targetBundleId?: string) => Promise<void>;
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
   getUniqueStacks?: () => Promise<StackInfo[]>;
@@ -455,6 +459,7 @@ interface LauncherBookmarksAPI {
   saveActiveWebPage?: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
   invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
   invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
+  copyForAgent?: (id: string) => Promise<{ success: boolean; error?: string }>;
   onChanged?: (callback: () => void) => () => void;
 }
 
@@ -530,6 +535,19 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
     clipboardItemId: item.clipboardItemId ?? null,
     clipboardStackId: item.clipboardStackId ?? null,
   };
+}
+
+function formatLauncherBookmarkPasteText(bookmark: Bookmark): string {
+  const author = [bookmark.authorName.trim(), bookmark.authorHandle.trim() ? `@${bookmark.authorHandle.trim().replace(/^@/, '')}` : '']
+    .filter(Boolean)
+    .join(' ');
+  const title = bookmark.sourceType === 'web' ? bookmark.title?.trim() : '';
+  return [
+    author ? `Bookmark from ${author}` : title || 'Bookmark',
+    title && title !== bookmark.text.trim() ? title : '',
+    bookmark.text.trim() || bookmark.excerpt?.trim() || '',
+    bookmark.url,
+  ].filter(Boolean).join('\n\n');
 }
 
 function launcherItemTypeLabel(item: LauncherItem): string {
@@ -1368,12 +1386,13 @@ function CommandLauncher() {
       loadLibraryMarkdown(),
       loadArtifacts(),
       loadBookmarkAuthors(),
+      loadBookmarkPosts(),
       loadActiveWebPage(),
     ]);
     traceLauncherLoad('load-launcher-background-data', startedAt, {
       rejectedCount: results.filter(result => result.status === 'rejected').length,
     });
-  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadLibraryMarkdown, warmLauncherFileIndex]);
+  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
@@ -1584,6 +1603,7 @@ function CommandLauncher() {
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
       loadBookmarkAuthors();
+      loadBookmarkPosts();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
       const namespace = bookmarkNamespaceRef.current;
@@ -1986,6 +2006,9 @@ function CommandLauncher() {
   const defaultClipboardPanelActive = isRootIdleLauncher
     && launcherDefaultPanelExpanded
     && launcherDefaultPanelSource === 'clipboard';
+  const defaultBookmarksPanelActive = isRootIdleLauncher
+    && launcherDefaultPanelExpanded
+    && launcherDefaultPanelSource === 'bookmarks';
   const clipboardLauncherModeActive = clipboardSearchQuery !== null || defaultClipboardPanelActive;
   const defaultPanelItems = useMemo((): LauncherItem[] => {
     return getLauncherDefaultPanelItems({
@@ -1994,8 +2017,9 @@ function CommandLauncher() {
       source: launcherDefaultPanelSource,
       recentItems: recentFileItems,
       clipboardItems: clipboardLauncherItems,
+      bookmarkItems: bookmarkPostItems,
     });
-  }, [clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
+  }, [bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
 
   const getDefaultPanelItemsForSource = useCallback((source: LauncherDefaultPanelSource, expanded: boolean): LauncherItem[] => (
     getLauncherDefaultPanelItems({
@@ -2004,8 +2028,17 @@ function CommandLauncher() {
       source,
       recentItems: recentFileItems,
       clipboardItems: clipboardLauncherItems,
+      bookmarkItems: bookmarkPostItems,
     })
-  ), [clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+  ), [bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+
+  const nextDefaultPanelSource = launcherDefaultPanelSource === 'recents'
+    ? 'clipboard'
+    : launcherDefaultPanelSource === 'clipboard'
+      ? 'bookmarks'
+      : 'recents';
+  const defaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(launcherDefaultPanelSource);
+  const nextDefaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(nextDefaultPanelSource);
 
   const resizeLauncherForDefaultPanel = useCallback((expanded: boolean) => {
     resizeLauncherForListHeight(expanded
@@ -2030,18 +2063,17 @@ function CommandLauncher() {
   ]);
 
   const switchDefaultPanelSource = useCallback(() => {
-    const nextSource = launcherDefaultPanelSource === 'recents' ? 'clipboard' : 'recents';
-    writeLauncherDefaultPanelSource(nextSource);
+    writeLauncherDefaultPanelSource(nextDefaultPanelSource);
     writeLauncherDefaultPanelExpanded(true);
-    setLauncherDefaultPanelSource(nextSource);
+    setLauncherDefaultPanelSource(nextDefaultPanelSource);
     setLauncherDefaultPanelExpanded(true);
-    applyFilteredResults(getDefaultPanelItemsForSource(nextSource, true));
+    applyFilteredResults(getDefaultPanelItemsForSource(nextDefaultPanelSource, true));
     resetSoftSelection();
     resizeLauncherForDefaultPanel(true);
   }, [
     applyFilteredResults,
     getDefaultPanelItemsForSource,
-    launcherDefaultPanelSource,
+    nextDefaultPanelSource,
     resetSoftSelection,
     resizeLauncherForDefaultPanel,
   ]);
@@ -3079,16 +3111,14 @@ function CommandLauncher() {
       e.preventDefault();
       const rawQuery = query.trim();
       const q = rawQuery.toLowerCase();
-      const currentIndex = selectedIndexRef.current;
+      const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
 
-      if (isRootIdleLauncher && !hasExplicitSelectionRef.current) {
-        switchDefaultPanelSource();
+      if (clipboardSearchQuery !== null) {
         return;
       }
 
-      if (clipboardSearchQuery !== null) {
-        const selectedItem = filtered[currentIndex];
-        if (selectedItem) void openClipboardLauncherItem(selectedItem);
+      if (isRootIdleLauncher) {
+        switchDefaultPanelSource();
         return;
       }
 
@@ -3126,33 +3156,7 @@ function CommandLauncher() {
         return;
       }
 
-      if (hasExplicitSelectionRef.current) {
-        const selectedFieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
-          filtered,
-          allItems,
-          currentIndex,
-          rawQuery,
-          true,
-        );
-        if (selectedFieldTheoryTarget) {
-          void invokeItem(selectedFieldTheoryTarget, { openFieldTheoryTarget: true });
-          return;
-        }
-      }
-
       if (fileSearchQuery !== null) return;
-
-      const commandTarget = resolveLauncherCommandOpenTarget(
-        filtered,
-        commandItems,
-        currentIndex,
-        rawQuery,
-        hasExplicitSelectionRef.current,
-      );
-      if (commandTarget) {
-        void invokeItem(commandTarget, { openFieldTheoryTarget: true });
-        return;
-      }
 
       const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
       if (directory?.directoryPath) {
@@ -3163,18 +3167,6 @@ function CommandLauncher() {
         });
         setQuery('');
         selectIndex(0);
-        return;
-      }
-
-      const fieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
-        filtered,
-        allItems,
-        currentIndex,
-        rawQuery,
-        hasExplicitSelectionRef.current,
-      );
-      if (fieldTheoryTarget) {
-        void invokeItem(fieldTheoryTarget, { openFieldTheoryTarget: true });
         return;
       }
 
@@ -3304,6 +3296,7 @@ function CommandLauncher() {
       setPreviewPayload(null);
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      const openInFieldTheory = e.metaKey;
       const rawQuery = query.trim();
       const inScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
       if (filtered.length > 0) {
@@ -3325,7 +3318,11 @@ function CommandLauncher() {
             return;
           }
         }
-        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
+        if (selectedItem) {
+          invokeItem(selectedItem, openInFieldTheory
+            ? { openFieldTheoryTarget: true }
+            : { insertWikiLink: selectedItem.type !== 'command' });
+        }
         return;
       }
       const normalMatch = inScopedMode ? null : getNormalModeMatches(rawQuery)[0];
@@ -3334,7 +3331,9 @@ function CommandLauncher() {
           query: rawQuery,
           selectedItem: describeLauncherItem(normalMatch),
         });
-        invokeItem(normalMatch, { insertWikiLink: normalMatch.type !== 'command' });
+        invokeItem(normalMatch, openInFieldTheory
+          ? { openFieldTheoryTarget: true }
+          : { insertWikiLink: normalMatch.type !== 'command' });
         return;
       }
       const commandTarget = inScopedMode
@@ -3345,7 +3344,7 @@ function CommandLauncher() {
           query: rawQuery,
           selectedItem: describeLauncherItem(commandTarget),
         });
-        invokeItem(commandTarget, { insertWikiLink: false });
+        invokeItem(commandTarget, openInFieldTheory ? { openFieldTheoryTarget: true } : { insertWikiLink: false });
         return;
       }
       const fallback = localInstructionFallbackForQuery(rawQuery, 0, inScopedMode);
@@ -3577,6 +3576,43 @@ function CommandLauncher() {
       }
     } else if (item.type === 'bookmark') {
       if (item.bookmarkId) {
+        if (defaultBookmarksPanelActive) {
+          const bookmark = bookmarkForItem(item);
+          const text = bookmark ? formatLauncherBookmarkPasteText(bookmark) : '';
+          const action = getLauncherDefaultBookmarkEnterAction({
+            itemType: item.type,
+            bookmarkId: item.bookmarkId,
+            displayName: item.displayName,
+            name: item.name,
+            fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
+            hasActiveLibraryFileContext: latestContext?.hasActiveLibraryFileContext ?? false,
+            canInsertMarkdown: Boolean(commandsAPI.insertMarkdownText),
+            hasBookmarkPasteText: text.length > 0,
+            canPasteText: Boolean(clipboardAPI.pasteText),
+            canCopyForAgent: Boolean(bookmarksAPI?.copyForAgent),
+          });
+          if (action?.kind === 'insert-bookmark-embed') {
+            const result = await commandsAPI.insertMarkdownText(action.markdown).catch((error) => ({
+              success: false,
+              error: error instanceof Error ? error.message : 'Insert failed',
+            }));
+            if (!result.success) {
+              showInvocationError('insert-bookmark-markdown-error', result.error, 'Insert failed');
+              return;
+            }
+            prepareLauncherForNextOpen({ revealWhenReady: visibilityPolicy.revealWhenReadyAfterSuccess });
+            return;
+          }
+          if (action?.kind === 'paste-bookmark-text') {
+            await clipboardAPI.pasteText(text, latestContext?.targetApp?.bundleId);
+          } else if (action?.kind === 'copy-bookmark-for-agent') {
+            await bookmarksAPI.copyForAgent(item.bookmarkId);
+          } else if (action?.kind === 'invoke-bookmark') {
+            await bookmarksAPI?.invokeBookmark(item.bookmarkId);
+          }
+          closeForInvocation();
+          return;
+        }
         await bookmarksAPI?.invokeBookmark(item.bookmarkId);
       }
       closeForInvocation();
@@ -3805,7 +3841,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, clipboardPreviewContentForItem, dismissPreview, enterLauncherSource, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadBookmarkPosts, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, bookmarkForItem, clipboardPreviewContentForItem, defaultBookmarksPanelActive, dismissPreview, enterLauncherSource, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadBookmarkPosts, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   const openMainFieldTheoryWindow = useCallback(async () => {
     dismissPreview();
@@ -3972,17 +4008,17 @@ function CommandLauncher() {
             <button
               type="button"
               aria-label={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource}`}
-              title={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}`}
+              title={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${defaultPanelSourceLabel}`}
               style={styles.defaultPanelToggle}
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleDefaultPanelToggleClick}
             >
-              <span>{launcherDefaultPanelSource === 'recents' ? 'Recents' : 'Clipboard'}</span>
+              <span>{defaultPanelSourceLabel}</span>
             </button>
             <button
               type="button"
-              aria-label={`Switch to ${launcherDefaultPanelSource === 'recents' ? 'Clipboard' : 'Recents'}`}
-              title={`Tab switches to ${launcherDefaultPanelSource === 'recents' ? 'Clipboard' : 'Recents'}`}
+              aria-label={`Switch to ${nextDefaultPanelSourceLabel}`}
+              title={`Tab switches to ${nextDefaultPanelSourceLabel}`}
               style={styles.defaultPanelTabButton}
               onMouseDown={(event) => event.preventDefault()}
               onClick={switchDefaultPanelSource}
@@ -4016,7 +4052,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...selectedItemStyle(item, globalIndex),
                       }}
-                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
+                      onClick={(event) => invokeItem(item, event.metaKey ? { openFieldTheoryTarget: true } : {})}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -4041,7 +4077,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...selectedItemStyle(item, globalIndex),
                       }}
-                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
+                      onClick={(event) => invokeItem(item, event.metaKey ? { openFieldTheoryTarget: true } : {})}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -4066,7 +4102,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...selectedItemStyle(item, globalIndex),
                       }}
-                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
+                      onClick={(event) => invokeItem(item, event.metaKey ? { openFieldTheoryTarget: true } : {})}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName || item.name}</span>
@@ -4119,7 +4155,7 @@ function CommandLauncher() {
                     ...(isClipboardDropTarget ? styles.listItemClipboardDropTarget : {}),
                     cursor: clipboardDragItemId ? (clipboardDragId ? 'grabbing' : 'grab') : styles.listItem.cursor,
                   }}
-                  onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
+                  onClick={(event) => invokeItem(item, event.metaKey ? { openFieldTheoryTarget: true } : {})}
                 >
                   {renderItemIcon(item)}
                   <span style={styles.itemName}>
