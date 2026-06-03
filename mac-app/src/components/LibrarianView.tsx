@@ -5292,6 +5292,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     || (contentMode === 'markdown' && markdownDocumentTopFade)
   );
   const topFadeActive = !!activeReading && readerTopFadeVisible;
+  const readerTopFadeHeight = focusChromeActive ? 96 : 58;
+  const readerTopFadeSolidStop = focusChromeActive ? 18 : 8;
+  const readerTopFadeMaskSolidStop = focusChromeActive ? 22 : 10;
   const activeReadingToolbarIdentityVisible = activeReadingToolbarHasBreadcrumb || topFadeActive;
   const activeReadingToolbarIdentityPinned = topFadeActive && focusChromeActive;
   const activeReadingBreadcrumbLabel = selectedItemType === 'wiki' || selectedItemType === 'external'
@@ -10556,13 +10559,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             top: 0,
             left: 0,
             right: `${LIBRARIAN_READER_SCROLLBAR_GUTTER_PX}px`,
-            height: '30px',
+            height: `${readerTopFadeHeight}px`,
             pointerEvents: 'none',
-            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 28%, transparent 100%)`,
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} ${readerTopFadeSolidStop}%, transparent 100%)`,
             backdropFilter: topFadeActive ? 'blur(3px)' : 'none',
             WebkitBackdropFilter: topFadeActive ? 'blur(3px)' : 'none',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
-            maskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
+            WebkitMaskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
+            maskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
             opacity: topFadeActive ? 0.72 : 0,
             zIndex: 3,
             transition: 'opacity 0.12s ease, backdrop-filter 0.12s ease',

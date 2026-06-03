@@ -86,6 +86,9 @@ declare global {
     fieldTheoryBookmarkMediaAPI?: {
       mediaUrl: (filename: string) => string;
     };
+    fieldTheoryLocalImageAPI?: {
+      localImageUrl: (url: string) => string;
+    };
   }
 }
 
@@ -216,6 +219,14 @@ function installBookmarkMediaResolver(config: BrowserHelperConfig): void {
   window.fieldTheoryBookmarkMediaAPI = {
     mediaUrl: (filename: string) => (
       `${config.api}/native/bookmarks/media/${encodeURIComponent(filename)}?token=${encodeURIComponent(config.token)}`
+    ),
+  };
+}
+
+function installLocalImageResolver(config: BrowserHelperConfig): void {
+  window.fieldTheoryLocalImageAPI = {
+    localImageUrl: (url: string) => (
+      `${config.api}/native/local-image?token=${encodeURIComponent(config.token)}&url=${encodeURIComponent(url)}`
     ),
   };
 }
@@ -570,6 +581,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   const request = createBrowserHelperClient(config);
   const events = createBrowserEventHub(config);
   installBookmarkMediaResolver(config);
+  installLocalImageResolver(config);
   window.__fieldTheoryBrowserActiveSurface = 'library';
   window.__fieldTheoryBrowserReportActiveSurface = (surface) => {
     window.__fieldTheoryBrowserActiveSurface = surface;

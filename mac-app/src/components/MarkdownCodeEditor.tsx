@@ -1430,7 +1430,9 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   if (!selection.empty) return false;
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
-    const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(view.state.doc.toString(), selection.from);
+    const value = view.state.doc.toString();
+    const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
+      ?? getRenderedMarkdownAtomicBoundaryLineBreakEdit(value, selection.from);
     if (!edit) return false;
     view.dispatch({
       changes: { from: edit.insertAt, insert: '\n' },
@@ -1498,7 +1500,7 @@ type RenderedMarkdownInlineSourceRange = {
   to: number;
   contentFrom: number;
   contentTo: number;
-  kind: 'formatting' | 'wiki';
+  kind: 'formatting' | 'wiki' | 'atomic';
 };
 
 function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number): RenderedMarkdownInlineSourceRange[] {
@@ -1522,6 +1524,13 @@ function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number
     protect(from, to);
     ranges.push({ from, to, contentFrom, contentTo, kind });
   };
+
+  for (const match of text.matchAll(/!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from, to, 'atomic');
+  }
 
   for (const match of text.matchAll(/`([^`\n]+)`/g)) {
     if (match.index === undefined) continue;
@@ -1579,6 +1588,74 @@ function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number
 
   return ranges;
 }
+
+export function getRenderedMarkdownAtomicBoundaryLineBreakEdit(
+  value: string,
+  offset: number,
+): { insertAt: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
+    if (range.kind !== 'atomic') continue;
+    if (caret === range.from) return { insertAt: range.from, selection: range.from };
+    if (caret === range.to) return { insertAt: range.to, selection: range.to + 1 };
+  }
+  return null;
+}
+
+function getRenderedMarkdownSelectionOffsetOutsideHiddenSyntax(value: string, offset: number, previousOffset?: number): number {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const blockBodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, caret);
+  if (blockBodyStart !== null && caret < blockBodyStart) return blockBodyStart;
+
+  for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
+    if (range.kind === 'wiki') continue;
+    if (range.kind === 'atomic' && caret > range.from && caret < range.to) {
+      if (typeof previousOffset === 'number') {
+        if (previousOffset <= range.from) return range.to;
+        if (previousOffset >= range.to) return range.from;
+      }
+      return caret - range.from <= range.to - caret ? range.from : range.to;
+    }
+    if (caret > range.from && caret < range.contentFrom) return range.from;
+    if (caret > range.contentTo && caret < range.to) return range.to;
+  }
+
+  return caret;
+}
+
+export function getRenderedMarkdownSelectionOutsideHiddenSyntax(state: EditorState, previousSelection?: EditorSelection): EditorSelection | null {
+  const value = state.doc.toString();
+  let changed = false;
+  const ranges = state.selection.ranges.map((range, index) => {
+    const previousRange = previousSelection?.ranges[index];
+    const anchor = getRenderedMarkdownSelectionOffsetOutsideHiddenSyntax(value, range.anchor, previousRange?.anchor);
+    const head = getRenderedMarkdownSelectionOffsetOutsideHiddenSyntax(value, range.head, previousRange?.head);
+    if (anchor === range.anchor && head === range.head) return range;
+    changed = true;
+    return anchor === head ? EditorSelection.cursor(anchor) : EditorSelection.range(anchor, head);
+  });
+  return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
+}
+
+export const renderedMarkdownHiddenSyntaxSelectionExtension = [
+  EditorState.transactionFilter.of((tr) => {
+    if (!tr.selection || tr.docChanged || tr.effects.length > 0) return tr;
+    const selection = getRenderedMarkdownSelectionOutsideHiddenSyntax(EditorState.create({
+      doc: tr.newDoc,
+      selection: tr.newSelection,
+    }), tr.startState.selection);
+    return selection ? { selection, scrollIntoView: tr.scrollIntoView } : tr;
+  }),
+  ViewPlugin.fromClass(
+    class {
+      update(update: ViewUpdate): void {
+        if (!update.selectionSet) return;
+        const selection = getRenderedMarkdownSelectionOutsideHiddenSyntax(update.state, update.startState.selection);
+        if (selection) update.view.dispatch({ selection });
+      }
+    },
+  ),
+];
 
 export function getRenderedMarkdownArrowRightEdit(value: string, offset: number): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
@@ -3173,7 +3250,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           selectionDrawCompartment.of(drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor))),
           checkedMarkdownTaskLineExtension,
           trailingLineStartSelectionExtension,
-          ...(presentation === 'rendered' ? [renderedMarkdownListCaretBoundaryExtension] : []),
+          ...(presentation === 'rendered' ? [
+            renderedMarkdownListCaretBoundaryExtension,
+            renderedMarkdownHiddenSyntaxSelectionExtension,
+          ] : []),
           rangeSelectionClassExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
