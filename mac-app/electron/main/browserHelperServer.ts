@@ -6,6 +6,7 @@ import { URL } from 'url';
 import { BrowserHelperDocumentService, type BrowserHelperWikiPage } from './browserHelperDocumentService';
 import type { DocumentVersion } from './documentSaveGuard';
 import type { DocumentPresenceContext } from './documentPresence';
+import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
 import { isPathInside } from './pathSafety';
 import type { RecentEntry, RecentKind } from './recentManager';
 
@@ -242,6 +243,7 @@ export type BrowserHelperNativeBridge = {
   setRepresentedFilename?: (filePath: string, clientId?: string | null) => void | Promise<void>;
   pasteIntoCodexInput?: (text: string) => unknown | Promise<unknown>;
   openFieldTheoryMarkdownInNativeApp?: (target: unknown) => unknown | Promise<unknown>;
+  writeClipboardText?: (text: string) => unknown | Promise<unknown>;
   getClipboardImagePath?: () => string | null | Promise<string | null>;
   savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: unknown }) => string | null | Promise<string | null>;
   pickFolder?: () => string | null | Promise<string | null>;
@@ -405,6 +407,22 @@ export class BrowserHelperServer {
 
       if (req.method === 'GET' && parsed.pathname === '/native/events') {
         this.openEventStream(req, res);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/local-image') {
+        const url = parsed.searchParams.get('url') ?? '';
+        const filePath = localImagePathFromProtocolUrl(url);
+        if (!filePath || !isAllowedLocalImagePath(filePath)) {
+          writeEmpty(res, 404, req.headers.origin);
+          return;
+        }
+        try {
+          const image = await fs.promises.readFile(filePath);
+          writeBuffer(res, 200, image, getLocalImageContentType(filePath), req.headers.origin);
+        } catch {
+          writeEmpty(res, 404, req.headers.origin);
+        }
         return;
       }
 
@@ -1609,6 +1627,16 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'POST' && parsed.pathname === '/native/clipboard/text') {
+        const body = await readJsonBody(req);
+        const text = typeof body.text === 'string' ? body.text : '';
+        const result = text
+          ? await this.nativeBridge.writeClipboardText?.(text) ?? { success: false, error: 'Clipboard text bridge is not available' }
+          : { success: false, error: 'No text to copy' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/clipboard/pasted-image-file') {
         const body = await readJsonBody(req);
         const name = typeof body.name === 'string' ? body.name : null;
@@ -2042,6 +2070,16 @@ function writeJson(res: http.ServerResponse, statusCode: number, payload: Record
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function writeBuffer(res: http.ServerResponse, statusCode: number, body: Buffer, contentType: string, origin?: string): void {
+  res.writeHead(statusCode, {
+    ...corsHeaders(origin),
+    'Content-Type': contentType,
+    'Content-Length': body.byteLength,
+    'Cache-Control': 'private, max-age=3600',
   });
   res.end(body);
 }

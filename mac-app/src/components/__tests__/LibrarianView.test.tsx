@@ -651,6 +651,10 @@ describe('LibrarianView render', () => {
       expect(container.querySelector('[data-ft-active-document-scrolled-title="true"]')?.textContent).toBe('Scrolled Title');
     });
     expect(container.querySelector('[data-ft-active-document-identity="true"]')?.textContent).toContain('scratchpad');
+    const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
+    expect(topFade.style.height).toBe('58px');
+    expect(topFade.style.background).toContain('8%');
+    expect(topFade.style.maskImage).toContain('10%');
   });
 
   it('keeps the scrolled file title visible in fullscreen focus chrome', async () => {
@@ -689,7 +693,9 @@ describe('LibrarianView render', () => {
     const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
     expect(topFade.style.top).toBe('0px');
     expect(topFade.style.right).toBe('14px');
-    expect(topFade.style.height).toBe('30px');
+    expect(topFade.style.height).toBe('96px');
+    expect(topFade.style.background).toContain('18%');
+    expect(topFade.style.maskImage).toContain('22%');
     expect(topFade.style.opacity).toBe('0.72');
     expect(scrollEl.style.scrollbarGutter).toBe('stable');
   });
@@ -2076,10 +2082,17 @@ describe('LibrarianView render', () => {
       content: 'Benchmark body',
       documentVersion: { mtimeMs: 1, size: 14, sha256: 'feedback-anchor' },
     };
-    const writeText = vi.fn(async () => {});
+    const writeText = vi.fn(async () => {
+      throw new Error('web clipboard unavailable');
+    });
+    const nativeWriteText = vi.fn(async () => ({ success: true }));
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
+    });
+    Object.defineProperty(window, 'clipboardAPI', {
+      configurable: true,
+      value: { writeText: nativeWriteText },
     });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
@@ -2098,6 +2111,8 @@ describe('LibrarianView render', () => {
     const feedback = await screen.findByRole('status');
     const editorPane = container.querySelector('[data-ft-reader-editor-pane="true"]');
     expect(feedback.textContent).toBe('Copied file path');
+    expect(nativeWriteText).toHaveBeenCalledWith(page.absPath);
+    expect(writeText).not.toHaveBeenCalled();
     expect(container.firstElementChild?.contains(feedback)).toBe(true);
     expect(editorPane?.contains(feedback)).toBe(false);
     expect(feedback.style.left).not.toBe('');
