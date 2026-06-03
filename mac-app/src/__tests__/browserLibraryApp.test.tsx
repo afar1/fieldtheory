@@ -1008,7 +1008,9 @@ describe('BrowserLibraryApp', () => {
       />,
     );
 
-    const button = await screen.findByLabelText('Open in Field Theory');
+    const button = await screen.findByLabelText('Open app');
+    expect(button.getAttribute('title')).toBe('Open app');
+    expect((button.querySelector('img') as HTMLImageElement | null)?.getAttribute('src')).toBe('/field-theory-icon-black.png');
     fireEvent.click(button);
 
     await waitFor(() => expect(openFieldTheoryMarkdown).toHaveBeenCalledWith({
@@ -1019,7 +1021,7 @@ describe('BrowserLibraryApp', () => {
     expect(await screen.findByText('Opened in Field Theory')).toBeTruthy();
   });
 
-  it('hides the native Field Theory escape hatch while Library immersive reading is active', async () => {
+  it('keeps the native Field Theory escape hatch while Library immersive reading is active', async () => {
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = (props: {
       onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
@@ -1040,10 +1042,13 @@ describe('BrowserLibraryApp', () => {
       />,
     );
 
-    expect(await screen.findByLabelText('Open in Field Theory')).toBeTruthy();
+    expect(await screen.findByLabelText('Open app')).toBeTruthy();
     fireEvent.click(screen.getByText('Enter immersive'));
 
-    await waitFor(() => expect(screen.queryByLabelText('Open in Field Theory')).toBeNull());
+    const button = await screen.findByLabelText('Open app');
+    expect(button).toBeTruthy();
+    expect(button.getAttribute('title')).toBe('Open app');
+    expect((button.querySelector('img') as HTMLImageElement | null)?.getAttribute('src')).toBe('/field-theory-icon-black.png');
   });
 
   it('opens included Browser Library targets during cold start', async () => {
