@@ -67,6 +67,7 @@ import {
   persistLibrarianTodoMarker,
   persistLibrarianUnorderedListMarker,
   persistLibrarianEditorSession,
+  persistNativeLibrarianSelection,
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
@@ -2749,6 +2750,54 @@ describe('librarian selection persistence', () => {
 
     persistLibrarianSelection(storage, null);
     expect(state['librarian-last-selection']).toBeUndefined();
+  });
+
+  it('does not persist native startup selection from browser library surfaces', () => {
+    const state: Record<string, string> = {
+      'librarian-last-selection': JSON.stringify({ type: 'wiki', relPath: 'scratchpad/Native' }),
+    };
+    const storage = {
+      setItem(key: string, value: string) {
+        state[key] = value;
+      },
+      removeItem(key: string) {
+        delete state[key];
+      },
+    };
+
+    expect(persistNativeLibrarianSelection(
+      storage,
+      { type: 'wiki', relPath: 'scratchpad/Codex Panel' },
+      true,
+    )).toBe(false);
+
+    expect(JSON.parse(state['librarian-last-selection'])).toEqual({
+      type: 'wiki',
+      relPath: 'scratchpad/Native',
+    });
+  });
+
+  it('persists native startup selection from the app surface', () => {
+    const state: Record<string, string> = {};
+    const storage = {
+      setItem(key: string, value: string) {
+        state[key] = value;
+      },
+      removeItem(key: string) {
+        delete state[key];
+      },
+    };
+
+    expect(persistNativeLibrarianSelection(
+      storage,
+      { type: 'wiki', relPath: 'scratchpad/Mac App' },
+      false,
+    )).toBe(true);
+
+    expect(JSON.parse(state['librarian-last-selection'])).toEqual({
+      type: 'wiki',
+      relPath: 'scratchpad/Mac App',
+    });
   });
 });
 
