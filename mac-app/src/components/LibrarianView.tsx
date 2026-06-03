@@ -2721,9 +2721,7 @@ export function resolveLibrarianInitialSelection(
   hasInitialOpenTarget: boolean,
 ): LibrarianStoredSelection | null {
   if (hasInitialOpenTarget) return null;
-  if (restoredSelection && editorSessionMatchesSelection(restoredEditorSession, restoredSelection)) {
-    return restoredSelection;
-  }
+  if (restoredSelection) return restoredSelection;
   if (restoredEditorSession?.itemType === 'wiki') {
     return { type: 'wiki', relPath: restoredEditorSession.itemPath };
   }
