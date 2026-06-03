@@ -1051,6 +1051,49 @@ describe('BrowserLibraryApp', () => {
     expect((button.querySelector('img') as HTMLImageElement | null)?.getAttribute('src')).toBe('/field-theory-icon-black.png');
   });
 
+  it('hides the native Field Theory escape hatch while Browser text is selected', async () => {
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = (props: {
+      onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
+    }) => {
+      React.useEffect(() => {
+        props.onActiveFileUpdatedChange?.({ path: '/tmp/note.md', title: 'Note', mtime: 1 });
+      }, [props.onActiveFileUpdatedChange]);
+      return <p data-testid="selectable-text">Selected panel text</p>;
+    };
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    expect(await screen.findByLabelText('Open app')).toBeTruthy();
+
+    const text = screen.getByTestId('selectable-text').firstChild;
+    if (!text) throw new Error('selectable text missing');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = window.getSelection();
+    act(() => {
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      fireEvent(document, new Event('selectionchange'));
+    });
+
+    await waitFor(() => expect(screen.queryByLabelText('Open app')).toBeNull());
+
+    act(() => {
+      selection?.removeAllRanges();
+      fireEvent(document, new Event('selectionchange'));
+    });
+
+    expect(await screen.findByLabelText('Open app')).toBeTruthy();
+  });
+
   it('opens included Browser Library targets during cold start', async () => {
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = (props: {
