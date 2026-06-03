@@ -6,7 +6,13 @@ import { URL } from 'url';
 import { BrowserHelperDocumentService, type BrowserHelperWikiPage } from './browserHelperDocumentService';
 import type { DocumentVersion } from './documentSaveGuard';
 import type { DocumentPresenceContext } from './documentPresence';
-import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
+import {
+  getLocalImageCacheHeaders,
+  getLocalImageContentType,
+  isAllowedLocalImagePath,
+  localImagePathFromProtocolUrl,
+  shouldReturnLocalImageNotModified,
+} from './localImageProtocol';
 import { isPathInside } from './pathSafety';
 import type { RecentEntry, RecentKind } from './recentManager';
 
@@ -418,8 +424,17 @@ export class BrowserHelperServer {
           return;
         }
         try {
+          const stat = await fs.promises.stat(filePath);
+          const cacheHeaders = getLocalImageCacheHeaders(stat);
+          if (shouldReturnLocalImageNotModified(stat, {
+            ifNoneMatch: req.headers['if-none-match'],
+            ifModifiedSince: req.headers['if-modified-since'],
+          })) {
+            writeNotModified(res, req.headers.origin, cacheHeaders);
+            return;
+          }
           const image = await fs.promises.readFile(filePath);
-          writeBuffer(res, 200, image, getLocalImageContentType(filePath), req.headers.origin);
+          writeBuffer(res, 200, image, getLocalImageContentType(filePath), req.headers.origin, cacheHeaders);
         } catch {
           writeEmpty(res, 404, req.headers.origin);
         }
@@ -2074,14 +2089,30 @@ function writeJson(res: http.ServerResponse, statusCode: number, payload: Record
   res.end(body);
 }
 
-function writeBuffer(res: http.ServerResponse, statusCode: number, body: Buffer, contentType: string, origin?: string): void {
+function writeBuffer(
+  res: http.ServerResponse,
+  statusCode: number,
+  body: Buffer,
+  contentType: string,
+  origin?: string,
+  extraHeaders: Record<string, string> = {},
+): void {
   res.writeHead(statusCode, {
     ...corsHeaders(origin),
     'Content-Type': contentType,
     'Content-Length': body.byteLength,
     'Cache-Control': 'private, max-age=3600',
+    ...extraHeaders,
   });
   res.end(body);
+}
+
+function writeNotModified(res: http.ServerResponse, origin: string | undefined, cacheHeaders: Record<string, string>): void {
+  res.writeHead(304, {
+    ...corsHeaders(origin),
+    ...cacheHeaders,
+  });
+  res.end();
 }
 
 function writeEmpty(res: http.ServerResponse, statusCode: number, origin?: string): void {

@@ -2666,6 +2666,16 @@ export function persistLibrarianSelection(
   storage.setItem(LIBRARIAN_SELECTION_STORAGE_KEY, JSON.stringify(selection));
 }
 
+export function persistNativeLibrarianSelection(
+  storage: Pick<Storage, 'setItem' | 'removeItem'>,
+  selection: LibrarianStoredSelection | null,
+  browserLibrarySurface: boolean,
+): boolean {
+  if (browserLibrarySurface) return false;
+  persistLibrarianSelection(storage, selection);
+  return true;
+}
+
 export function restoreLibrarianEditorSession(storage: Pick<Storage, 'getItem'>): LibrarianEditorSession | null {
   const raw = storage.getItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY);
   if (!raw) return null;
@@ -2721,9 +2731,7 @@ export function resolveLibrarianInitialSelection(
   hasInitialOpenTarget: boolean,
 ): LibrarianStoredSelection | null {
   if (hasInitialOpenTarget) return null;
-  if (restoredSelection && editorSessionMatchesSelection(restoredEditorSession, restoredSelection)) {
-    return restoredSelection;
-  }
+  if (restoredSelection) return restoredSelection;
   if (restoredEditorSession?.itemType === 'wiki') {
     return { type: 'wiki', relPath: restoredEditorSession.itemPath };
   }
@@ -4300,36 +4308,37 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, onSelectedItemTypeChange, selectedItemType]);
 
   useEffect(() => {
+    if (browserLibrarySurface) return;
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-      persistLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath }, browserLibrarySurface);
       return;
     }
     if (selectedItemType === 'artifact' && selectedPath) {
-      persistLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath }, browserLibrarySurface);
       return;
     }
     if (selectedItemType === 'bookmarks') {
       clearLibrarianEditorSession(localStorage);
-      persistLibrarianSelection(localStorage, { type: 'bookmarks' });
+      persistNativeLibrarianSelection(localStorage, { type: 'bookmarks' }, browserLibrarySurface);
       return;
     }
     if (selectedItemType === 'ember') {
       clearLibrarianEditorSession(localStorage);
-      persistLibrarianSelection(localStorage, { type: 'ember' });
+      persistNativeLibrarianSelection(localStorage, { type: 'ember' }, browserLibrarySurface);
       return;
     }
     if (selectedItemType === 'external') {
       if (externalOpenFile?.path) {
-        persistLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path });
+        persistNativeLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path }, browserLibrarySurface);
       }
       return;
     }
     if (selectedPath) {
-      persistLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath }, browserLibrarySurface);
       return;
     }
-    persistLibrarianSelection(localStorage, null);
-  }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
+    persistNativeLibrarianSelection(localStorage, null, browserLibrarySurface);
+  }, [browserLibrarySurface, externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!currentNavigationEntry) return;

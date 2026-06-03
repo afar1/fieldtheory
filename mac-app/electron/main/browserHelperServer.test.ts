@@ -5,6 +5,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer } from './browserHelperServer';
+import { getLocalImageCacheHeaders } from './localImageProtocol';
 
 const tempDirs: string[] = [];
 const servers: BrowserHelperServer[] = [];
@@ -2318,11 +2319,24 @@ describe('BrowserHelperServer', () => {
     )).join('/')}`;
     const image = await request(`http://${address.host}:${address.port}/native/local-image?token=test-token&url=${encodeURIComponent(imageUrl)}`);
     const text = await request(`http://${address.host}:${address.port}/native/local-image?token=test-token&url=${encodeURIComponent(textUrl)}`);
+    const expectedCacheHeaders = getLocalImageCacheHeaders(fs.statSync(imagePath));
 
     expect(image.status).toBe(200);
     expect(image.rawBody).toBe('image-bytes');
     expect(image.headers['content-type']).toBe('image/png');
+    expect(image.headers['cache-control']).toBe(expectedCacheHeaders['Cache-Control']);
+    expect(image.headers.etag).toBe(expectedCacheHeaders.ETag);
+    expect(image.headers['last-modified']).toBe(expectedCacheHeaders['Last-Modified']);
     expect(text.status).toBe(404);
+
+    const cachedImage = await request(
+      `http://${address.host}:${address.port}/native/local-image?token=test-token&url=${encodeURIComponent(imageUrl)}`,
+      { headers: { 'If-None-Match': expectedCacheHeaders.ETag } },
+    );
+
+    expect(cachedImage.status).toBe(304);
+    expect(cachedImage.rawBody).toBe('');
+    expect(cachedImage.headers.etag).toBe(expectedCacheHeaders.ETag);
   });
 
   it('bridges Maxwell history, memory, undo/redo, and local command status', async () => {

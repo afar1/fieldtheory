@@ -184,7 +184,13 @@ import {
 import { browserLibraryTargetFromProtocolUrl } from './fieldTheoryProtocolTarget';
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
-import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
+import {
+  getLocalImageCacheHeaders,
+  getLocalImageContentType,
+  isAllowedLocalImagePath,
+  localImagePathFromProtocolUrl,
+  shouldReturnLocalImageNotModified,
+} from './localImageProtocol';
 import { consolidateMarkdownAssetsForLibraryRoot, copyImageDataUrlForMarkdownDocument, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
@@ -14843,10 +14849,21 @@ if (!gotTheLock) {
         return new Response('', { status: 404 });
       }
       try {
+        const stat = await fs.promises.stat(filePath);
+        const cacheHeaders = getLocalImageCacheHeaders(stat);
+        if (shouldReturnLocalImageNotModified(stat, {
+          ifNoneMatch: req.headers.get('if-none-match'),
+          ifModifiedSince: req.headers.get('if-modified-since'),
+        })) {
+          return new Response(null, { status: 304, headers: cacheHeaders });
+        }
         const image = await fs.promises.readFile(filePath);
         log.debug('ftlocalfile served image: %s (%d bytes)', obscureHomePath(filePath), image.byteLength);
         return new Response(image, {
-          headers: { 'Content-Type': getLocalImageContentType(filePath) },
+          headers: {
+            'Content-Type': getLocalImageContentType(filePath),
+            ...cacheHeaders,
+          },
         });
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
