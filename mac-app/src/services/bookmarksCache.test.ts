@@ -69,8 +69,7 @@ describe('bookmarksCache', () => {
     onBookmarksChanged(listener);
 
     expect(window.bookmarksAPI.onChanged).toHaveBeenCalledTimes(1);
-    expect(nativeChanged).toBeTruthy();
-    (nativeChanged as unknown as () => void)();
+    nativeChanged?.();
 
     await vi.waitFor(() => {
       expect(listener).toHaveBeenCalledWith(updatedSnapshot);
@@ -107,8 +106,7 @@ describe('bookmarksCache', () => {
     await expect(getBookmarks()).resolves.toBe(initialSnapshot);
     expect(peekBookmarks()).toBe(initialSnapshot);
 
-    expect(nativeChanged).toBeTruthy();
-    (nativeChanged as unknown as () => void)();
+    nativeChanged?.();
 
     await vi.waitFor(() => {
       expect(peekBookmarks()).toBe(updatedSnapshot);

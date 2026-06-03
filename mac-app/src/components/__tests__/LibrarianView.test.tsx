@@ -1065,7 +1065,7 @@ describe('LibrarianView render', () => {
       expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
     });
 
-    vi.mocked(window.commandsAPI!.setActiveLibraryFileContext!).mockClear();
+    vi.mocked(window.commandsAPI!.setActiveLibraryFileContext).mockClear();
     vi.mocked(window.librarianAPI!.setSizeKey).mockClear();
     vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
     vi.mocked(window.shellAPI!.setRepresentedFilename).mockClear();
@@ -1167,7 +1167,7 @@ describe('LibrarianView render', () => {
       <LibrarianView
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
-        initialOpenTarget={{ kind: 'bookmarks', path: 'bookmarks' }}
+        initialOpenTarget={{ kind: 'bookmarks' }}
       />,
     );
 
@@ -1207,7 +1207,7 @@ describe('LibrarianView render', () => {
       <LibrarianView
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
-        initialOpenTarget={{ kind: 'bookmarks', path: 'bookmarks' }}
+        initialOpenTarget={{ kind: 'bookmarks' }}
       />,
     );
 
@@ -1240,7 +1240,6 @@ describe('LibrarianView render', () => {
       absPath: `${testLibraryRootPath}/Ember/Ada Lovelace.md`,
       name: 'Ada Lovelace',
       title: 'Ada Lovelace',
-      lastUpdated: 1,
       content: [
         '---',
         'ember_frequency: weekly',
@@ -1253,7 +1252,7 @@ describe('LibrarianView render', () => {
     };
     vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
       path: testLibraryRootPath,
-      label: 'Wiki',
+      name: 'Wiki',
       tree: [{
         kind: 'dir',
         name: 'Ember',
@@ -1277,7 +1276,7 @@ describe('LibrarianView render', () => {
     render(
       <LibrarianView
         browserLibrarySurface
-        initialOpenTarget={{ kind: 'ember', path: 'ember' }}
+        initialOpenTarget={{ kind: 'ember' }}
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
       />,

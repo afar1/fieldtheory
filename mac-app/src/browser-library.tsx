@@ -58,7 +58,6 @@ import {
   getGroupedFocusChromeProximityOpacity,
   isClientPointOutsideBounds,
 } from './utils/focusChrome';
-import type { LibrarianSelectedItemType } from './components/LibrarianView';
 
 type BrowserHelperConfig = {
   api: string;
@@ -360,7 +359,7 @@ export async function syncRendererStorage(
   options: RendererStorageApplyOptions = {},
 ): Promise<void> {
   const response = await request<RendererStorageResponse>('/native/renderer-storage')
-    .catch((): RendererStorageResponse => ({ available: false, values: {} }));
+    .catch(() => ({ available: false, values: {} }));
   if (!response.available) return;
   const setItem = options.setItem ?? window.localStorage.setItem.bind(window.localStorage);
   const removeItem = options.removeItem ?? window.localStorage.removeItem.bind(window.localStorage);
@@ -2124,7 +2123,7 @@ function BrowserLibrarySurface(props: {
               onFocusChromeActiveChange={handleFocusChromeActiveChange}
               onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
               onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
-              onSelectedItemTypeChange={(type: LibrarianSelectedItemType) => {
+              onSelectedItemTypeChange={(type) => {
                 if (surface !== 'library') return;
                 if (type === 'bookmarks' || type === 'ember') {
                   reportActiveSurface(type);
@@ -2295,9 +2294,7 @@ function BrowserLibraryFooter(props: {
         }
       `}</style>
       <div
-      ref={(element) => {
-        (footerRef as React.MutableRefObject<HTMLDivElement | null>).current = element;
-      }}
+      ref={footerRef}
       data-fieldtheory-browser-library-footer="true"
       style={{
         position: interactive ? 'relative' : 'absolute',

@@ -182,13 +182,7 @@ describe('CommandsView command naming', () => {
   });
 
   it('does not show fake shared commands when the real shared source is unavailable', async () => {
-    window.fieldTheorySyncAPI!.getStatus = vi.fn(async () => ({
-      localEnabled: true,
-      authenticated: true,
-      serverEnforced: true,
-      enabled: true,
-      reason: 'enabled',
-    } as const));
+    window.fieldTheorySyncAPI!.getStatus = vi.fn(async () => ({ enabled: true }));
     window.commandsAPI!.getCommands = vi.fn(async () => []);
 
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);

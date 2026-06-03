@@ -12,7 +12,7 @@ describe('bookmark copy helpers', () => {
     } as any;
 
     await expect(copyBookmarkContent('bookmark-1')).resolves.toBe(true);
-    expect(window.bookmarksAPI!.copyForAgent).toHaveBeenCalledWith('bookmark-1');
+    expect(window.bookmarksAPI.copyForAgent).toHaveBeenCalledWith('bookmark-1');
   });
 
   it('sends bookmark content to Codex through the native Codex path', async () => {
@@ -22,8 +22,8 @@ describe('bookmark copy helpers', () => {
     } as any;
 
     await expect(sendBookmarkToCodex('bookmark-1')).resolves.toBe(true);
-    expect(window.bookmarksAPI!.sendToCodex).toHaveBeenCalledWith('bookmark-1');
-    expect(window.bookmarksAPI!.invokeBookmark).not.toHaveBeenCalled();
+    expect(window.bookmarksAPI.sendToCodex).toHaveBeenCalledWith('bookmark-1');
+    expect(window.bookmarksAPI.invokeBookmark).not.toHaveBeenCalled();
   });
 
   it('falls back to the native invoke path for older hosts', async () => {
@@ -32,6 +32,6 @@ describe('bookmark copy helpers', () => {
     } as any;
 
     await expect(sendBookmarkToCodex('bookmark-1')).resolves.toBe(true);
-    expect(window.bookmarksAPI!.invokeBookmark).toHaveBeenCalledWith('bookmark-1');
+    expect(window.bookmarksAPI.invokeBookmark).toHaveBeenCalledWith('bookmark-1');
   });
 });
