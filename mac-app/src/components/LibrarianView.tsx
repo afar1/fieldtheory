@@ -6552,20 +6552,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
-    if (
-      snapshot.docChanged
-      && (snapshot.inputType === 'insertParagraph' || snapshot.inputType === 'insertLineBreak')
-    ) {
-      pendingRenderedEditorSelectionRef.current = {
-        start: snapshot.selectionStart,
-        end: snapshot.selectionEnd,
-      };
-      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
-    }
     reportActiveLibraryFileContext();
     showSelectionPastePopoverFromEditorSnapshot(snapshot);
     updateRenderedEditorWikiLinkCompletion(snapshot);
-  }, [focusRenderedEditor, reportActiveLibraryFileContext, showSelectionPastePopoverFromEditorSnapshot, updateRenderedEditorWikiLinkCompletion]);
+  }, [reportActiveLibraryFileContext, showSelectionPastePopoverFromEditorSnapshot, updateRenderedEditorWikiLinkCompletion]);
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
     if (!isRenderedMarkdownLinkEventTarget(event.target)) return false;
