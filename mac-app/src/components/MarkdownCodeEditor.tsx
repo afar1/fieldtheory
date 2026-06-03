@@ -1540,6 +1540,17 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   }
   if (!selection.empty) return false;
 
+  if (input.inputType === 'deleteContentBackward' && !input.isComposing) {
+    const value = view.state.doc.toString();
+    const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, selection.from);
+    if (bodyStart !== null && selection.from <= bodyStart) {
+      if (selection.from !== bodyStart) {
+        view.dispatch({ selection: { anchor: bodyStart, head: bodyStart } });
+      }
+      return true;
+    }
+  }
+
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
     const value = view.state.doc.toString();
     const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
