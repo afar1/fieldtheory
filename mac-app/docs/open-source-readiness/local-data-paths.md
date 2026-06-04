@@ -19,6 +19,7 @@ That path stores data such as:
 - per-user directories under `users/{callsign}`;
 - preferences;
 - `clipboard.db`;
+- `library-index.db`, a rebuildable cache of Library document metadata used to avoid rereading unchanged Markdown during repair scans;
 - figures and copied images;
 - local metrics and caches;
 - model directories such as `models`.

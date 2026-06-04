@@ -3,6 +3,8 @@
 // targets get a sentinel href (wiki://!/<title>) so the renderer can style them
 // differently and create the page on click.
 
+import { getRawMarkdownLinkHits } from '../../electron/shared/wikiLinkParser';
+
 export type WikiIndex = {
   byTitle: Map<string, WikiLinkTarget>;
   byRelPath: Set<string>;
@@ -338,16 +340,6 @@ function trimBareHref(href: string): string {
   return href.replace(/[.,;:!?]+$/g, '');
 }
 
-function getTrimmedRange(start: number, raw: string): { start: number; end: number; text: string } {
-  const leading = raw.match(/^\s*/)?.[0].length ?? 0;
-  const text = raw.trim();
-  return {
-    start: start + leading,
-    end: start + leading + text.length,
-    text,
-  };
-}
-
 function escapeMarkdownLinkText(text: string): string {
   return text.replace(/[\[\]]/g, '\\$&');
 }
@@ -396,73 +388,18 @@ export function getMarkdownEditorLinkHits(
   markdown: string,
   index: WikiIndex,
 ): MarkdownEditorLinkHit[] {
-  const hits: MarkdownEditorLinkHit[] = [];
-
-  for (const match of markdown.matchAll(/\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const targetStart = start + 2;
-    const targetRange = getTrimmedRange(targetStart, match[1]);
-    const alias = match[2];
-    const displayRange = alias === undefined
-      ? targetRange
-      : getTrimmedRange(targetStart + match[1].length + 1, alias);
-    const displayText = displayRange.text || targetRange.text;
-    const displayStart = displayRange.text ? displayRange.start : targetRange.start;
-    hits.push({
-      action: wikiLinkActionFromTarget(match[1], index),
-      start,
-      end: start + match[0].length,
-      displayStart,
-      displayEnd: displayStart + displayText.length,
-      displayText,
-    });
-  }
-
-  for (const match of markdown.matchAll(/!?\[([^\]\n]*)\]\(([^)\n]*)\)/g)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const href = match[2].trim() || match[1].trim();
-    const labelStart = start + (match[0].startsWith('!') ? 2 : 1);
-    const labelRange = getTrimmedRange(labelStart, match[1]);
-    hits.push({
-      action: classifyLinkHref(href, index),
-      start,
-      end: start + match[0].length,
-      displayStart: labelRange.start,
-      displayEnd: labelRange.end,
-      displayText: labelRange.text,
-    });
-  }
-
-  for (const match of markdown.matchAll(/<([a-z][a-z0-9+.-]*:[^<>\s]+)>/gi)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    hits.push({
-      action: classifyLinkHref(match[1], index),
-      start,
-      end: start + match[0].length,
-      displayStart: start + 1,
-      displayEnd: start + 1 + match[1].length,
-      displayText: match[1],
-    });
-  }
-
-  for (const match of markdown.matchAll(/\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)[^\s<>()]+/gi)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const href = trimBareHref(match[0]);
-    hits.push({
-      action: classifyLinkHref(href, index),
-      start,
-      end: start + href.length,
-      displayStart: start,
-      displayEnd: start + href.length,
-      displayText: href,
-    });
-  }
-
-  return hits.filter((hit) => hit.action.kind !== 'noop');
+  return getRawMarkdownLinkHits(markdown)
+    .map((hit): MarkdownEditorLinkHit => ({
+      action: hit.kind === 'wikilink'
+        ? wikiLinkActionFromTarget(hit.rawTarget, index)
+        : classifyLinkHref(hit.href, index),
+      start: hit.start,
+      end: hit.end,
+      displayStart: hit.displayStart,
+      displayEnd: hit.displayEnd,
+      displayText: hit.displayText,
+    }))
+    .filter((hit) => hit.action.kind !== 'noop');
 }
 
 function getMarkdownLinkRelationDocumentHits(
@@ -493,6 +430,36 @@ export function getWikiLinkTargetKey(target: WikiLinkTarget): string {
   }
 }
 
+export function getMarkdownLinkRelationMetadataDocuments(
+  pages: WikiIndexInput[],
+): MarkdownLinkRelationDocument[] {
+  return mergeMarkdownLinkRelationDocuments(pages.map((page) => {
+    const target: WikiLinkTarget = page.artifactPath
+      ? { kind: 'artifact', path: page.artifactPath }
+      : page.commandPath
+        ? { kind: 'command', path: page.commandPath }
+        : { kind: 'wiki', relPath: page.relPath };
+    return {
+      target,
+      title: page.title,
+      content: '',
+      linkHits: [],
+    };
+  }));
+}
+
+export function mergeMarkdownLinkRelationDocuments(
+  ...documentGroups: MarkdownLinkRelationDocument[][]
+): MarkdownLinkRelationDocument[] {
+  const byTargetKey = new Map<string, MarkdownLinkRelationDocument>();
+  for (const documents of documentGroups) {
+    for (const document of documents) {
+      byTargetKey.set(getWikiLinkTargetKey(document.target), document);
+    }
+  }
+  return Array.from(byTargetKey.values());
+}
+
 export function refreshMarkdownLinkRelationDocumentHits(
   documents: MarkdownLinkRelationDocument[],
   index: WikiIndex,
@@ -515,6 +482,14 @@ export function upsertMarkdownLinkRelationDocument(
     return document;
   });
   return found ? next : [...next, document];
+}
+
+export function removeMarkdownLinkRelationDocument(
+  documents: MarkdownLinkRelationDocument[],
+  target: WikiLinkTarget,
+): MarkdownLinkRelationDocument[] {
+  const targetKey = getWikiLinkTargetKey(target);
+  return documents.filter((existing) => getWikiLinkTargetKey(existing.target) !== targetKey);
 }
 
 function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {

@@ -153,12 +153,15 @@ import {
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownLinkRelationMetadataDocuments,
   getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  mergeMarkdownLinkRelationDocuments,
   normalizeWikiRelPath,
+  removeMarkdownLinkRelationDocument,
   transformWikiLinks,
   upsertMarkdownLinkRelationDocument,
   type WikiIndex,
@@ -796,6 +799,8 @@ const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
 const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
 const LIBRARIAN_READER_SCROLLBAR_GUTTER_PX = 14;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
+const LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS = 180;
+const FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
 const RENDERED_SAVE_INITIAL_DELAY_MS = 400;
 const RENDERED_SAVE_QUIET_DELAY_MS = 750;
 const RENDERED_SAVE_IN_FLIGHT_RETRY_MS = 150;
@@ -3974,7 +3979,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
+  const wikiIndexPagesRef = useRef<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const [markdownLinkRelationRepairVersion, setMarkdownLinkRelationRepairVersion] = useState(0);
+  const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
+  const markdownLinkRelationDocumentsRequestRef = useRef(0);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
   const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
@@ -5527,7 +5536,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+  wikiIndexPagesRef.current = wikiIndexPages;
   wikiIndexRef.current = wikiIndex;
+  const buildCurrentWikiIndexForPages = useCallback((pages: WikiIndexInput[]) => buildWikiIndex([
+    ...pages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings]);
 
   const activeMarkdownLinkTarget = useMemo<WikiLinkTarget | null>(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -5539,6 +5558,48 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return null;
   }, [activeReading?.path, selectedItemType, wikiSelectedRelPath]);
 
+  const linkedDocumentsSourceContent = activeReading
+    ? activeReadingContent ?? activeReading.content
+    : null;
+  const linkedDocumentsSourceIdentity = `${selectedItemType ?? 'none'}:${activeReadingPath ?? ''}`;
+  const [debouncedLinkedDocumentsContent, setDebouncedLinkedDocumentsContent] = useState<{
+    identity: string;
+    content: string | null;
+  }>({ identity: linkedDocumentsSourceIdentity, content: linkedDocumentsSourceContent });
+  useEffect(() => {
+    setDebouncedLinkedDocumentsContent({
+      identity: linkedDocumentsSourceIdentity,
+      content: linkedDocumentsSourceContent,
+    });
+  }, [linkedDocumentsSourceIdentity]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedLinkedDocumentsContent({
+        identity: linkedDocumentsSourceIdentity,
+        content: linkedDocumentsSourceContent,
+      });
+    }, LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [linkedDocumentsSourceContent, linkedDocumentsSourceIdentity]);
+  const linkedDocumentsContent = debouncedLinkedDocumentsContent.identity === linkedDocumentsSourceIdentity
+    ? debouncedLinkedDocumentsContent.content
+    : linkedDocumentsSourceContent;
+  const markdownLinkRelationMetadataDocuments = useMemo(() => getMarkdownLinkRelationMetadataDocuments([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
+  const visibleMarkdownLinkRelationDocuments = useMemo(() => (
+    mergeMarkdownLinkRelationDocuments(
+      markdownLinkRelationMetadataDocuments,
+      markdownLinkRelationDocuments,
+    )
+  ), [markdownLinkRelationDocuments, markdownLinkRelationMetadataDocuments]);
+
   const linkedDocumentsResult = useMemo<{
     links: MarkdownLinkedDocument[];
     timing: Record<string, unknown>;
@@ -5549,16 +5610,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       durationMs: startedAt > 0 ? performance.now() - startedAt : null,
       reason,
       linkCount: 0,
-      relationDocumentCount: markdownLinkRelationDocuments.length,
-      contentLength: activeReadingContent?.length ?? activeReading?.content.length ?? 0,
+      relationDocumentCount: visibleMarkdownLinkRelationDocuments.length,
+      hydratedRelationDocumentCount: markdownLinkRelationDocuments.length,
+      contentLength: linkedDocumentsContent?.length ?? 0,
     });
     if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks' || selectedItemType === 'ember') {
       return { links: [], timing: emptyTiming('inactive') };
     }
+    const linkedContent = linkedDocumentsContent ?? '';
     const links = getMarkdownLinkedDocuments(
       activeMarkdownLinkTarget,
-      activeReadingContent ?? activeReading.content,
-      markdownLinkRelationDocuments,
+      linkedContent,
+      visibleMarkdownLinkRelationDocuments,
       wikiIndex,
     );
     return {
@@ -5567,17 +5630,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         stage: 'linked-documents-compute',
         durationMs: startedAt > 0 ? performance.now() - startedAt : null,
         linkCount: links.length,
-        relationDocumentCount: markdownLinkRelationDocuments.length,
-        contentLength: (activeReadingContent ?? activeReading.content).length,
+        relationDocumentCount: visibleMarkdownLinkRelationDocuments.length,
+        hydratedRelationDocumentCount: markdownLinkRelationDocuments.length,
+        contentLength: linkedContent.length,
       },
     };
   }, [
     activeMarkdownLinkTarget,
     activeReading,
-    activeReadingContent,
     activeIsMarkdownDocument,
+    linkedDocumentsContent,
     markdownLinkRelationDocuments,
     selectedItemType,
+    visibleMarkdownLinkRelationDocuments,
     wikiIndex,
   ]);
   const linkedDocuments = linkedDocumentsResult.links;
@@ -5625,8 +5690,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
+  const shouldLoadMarkdownLinkRelationDocuments = (
+    active
+    && !!activeReading
+    && activeIsMarkdownDocument
+    && selectedItemType !== 'bookmarks'
+    && selectedItemType !== 'ember'
+  );
   useEffect(() => {
-    if (!active) {
+    const requestId = markdownLinkBacklinkDocumentsRequestRef.current + 1;
+    markdownLinkBacklinkDocumentsRequestRef.current = requestId;
+    if (
+      !shouldLoadMarkdownLinkRelationDocuments
+      || !activeMarkdownLinkTarget
+      || activeMarkdownLinkTarget.kind === 'command'
+      || activeMarkdownLinkTarget.kind === 'bookmarks'
+    ) return;
+
+    const load = async () => {
+      const documents = await window.libraryAPI?.getBacklinkRelationDocuments?.(activeMarkdownLinkTarget);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (
+        markdownLinkBacklinkDocumentsRequestRef.current !== requestId
+        || !documents?.length
+        || !currentWikiIndex
+      ) return;
+      setMarkdownLinkRelationDocuments((prev) => documents.reduce((next, document) => (
+        upsertMarkdownLinkRelationDocument(next, {
+          ...document,
+          linkHits: getMarkdownEditorLinkHits(document.content, currentWikiIndex),
+        })
+      ), prev));
+    };
+
+    void load();
+  }, [activeMarkdownLinkTarget, shouldLoadMarkdownLinkRelationDocuments]);
+
+  useEffect(() => {
+    const requestId = markdownLinkRelationDocumentsRequestRef.current + 1;
+    markdownLinkRelationDocumentsRequestRef.current = requestId;
+
+    if (!shouldLoadMarkdownLinkRelationDocuments) {
       setMarkdownLinkRelationDocuments([]);
       return;
     }
@@ -5677,18 +5781,77 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             : null;
         }),
       );
-      if (cancelled) return;
+      if (cancelled || markdownLinkRelationDocumentsRequestRef.current !== requestId) return;
       setMarkdownLinkRelationDocuments(
         [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
           .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
-    void load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, FULL_LINK_RELATION_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [active, commandIndexPages, readings, wikiIndex, wikiIndexPages]);
+  }, [commandIndexPages, markdownLinkRelationRepairVersion, readings, shouldLoadMarkdownLinkRelationDocuments, wikiIndex, wikiIndexPages]);
+
+  useEffect(() => {
+    if (!shouldLoadMarkdownLinkRelationDocuments) return;
+
+    let cancelled = false;
+    const upsertWikiRelationDocument = async (relPath: string) => {
+      const page = await window.wikiAPI?.getPage(relPath);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (cancelled || !page || !currentWikiIndex) return;
+      setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+        target: { kind: 'wiki', relPath: page.relPath },
+        title: page.title,
+        content: page.content,
+        linkHits: getMarkdownEditorLinkHits(page.content, currentWikiIndex),
+      }));
+    };
+
+    const onPageChanged = (event?: LibraryChangeEvent) => {
+      if (!event) return;
+      if ((event.type === 'file-added' || event.type === 'file-changed') && event.page?.relPath) {
+        markdownLinkRelationDocumentsRequestRef.current += 1;
+        setMarkdownLinkRelationRepairVersion((version) => version + 1);
+        void upsertWikiRelationDocument(event.page.relPath);
+        return;
+      }
+      if (event.type === 'file-deleted') {
+        markdownLinkRelationDocumentsRequestRef.current += 1;
+        setMarkdownLinkRelationRepairVersion((version) => version + 1);
+        setMarkdownLinkRelationDocuments((prev) => removeMarkdownLinkRelationDocument(prev, {
+          kind: 'wiki',
+          relPath: event.relPath,
+        }));
+      }
+    };
+    const onPageRenamed = (event: LibraryRenameEvent) => {
+      markdownLinkRelationDocumentsRequestRef.current += 1;
+      setMarkdownLinkRelationRepairVersion((version) => version + 1);
+      const renamedPages = renameWikiIndexPages(wikiIndexPagesRef.current, event.oldRelPath, event.newRelPath);
+      wikiIndexPagesRef.current = renamedPages;
+      wikiIndexRef.current = buildCurrentWikiIndexForPages(renamedPages);
+      setWikiIndexPages(renamedPages);
+      setMarkdownLinkRelationDocuments((prev) => removeMarkdownLinkRelationDocument(prev, {
+        kind: 'wiki',
+        relPath: event.oldRelPath,
+      }));
+      void upsertWikiRelationDocument(event.newRelPath);
+    };
+
+    const unsubscribeChanged = window.wikiAPI?.onPageChanged(onPageChanged);
+    const unsubscribeRenamed = window.wikiAPI?.onPageRenamed(onPageRenamed);
+    return () => {
+      cancelled = true;
+      unsubscribeChanged?.();
+      unsubscribeRenamed?.();
+    };
+  }, [buildCurrentWikiIndexForPages, shouldLoadMarkdownLinkRelationDocuments]);
 
   const flushPendingCopiedImageDeletes = useCallback((documentPath: string, remainingContent: string) => {
     const pending = pendingCopiedImageDeletesRef.current;
@@ -9603,12 +9766,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!rename?.oldRelPath || !rename.newRelPath) return;
       setWikiIndexPages((prev) => renameWikiIndexPages(prev, rename.oldRelPath, rename.newRelPath));
     };
+    const onWikiRenamed = (event: LibraryRenameEvent) => {
+      if (!event?.oldRelPath || !event.newRelPath) return;
+      setWikiIndexPages((prev) => renameWikiIndexPages(prev, event.oldRelPath, event.newRelPath));
+      scheduleFullReload();
+    };
     const onLocalWikiDeleted = (event: Event) => {
       const payload = (event as CustomEvent<{ relPaths: string[] }>).detail;
       if (!payload?.relPaths?.length) return;
       setWikiIndexPages((prev) => removeWikiIndexPages(prev, payload.relPaths));
     };
 
+    const unsubscribeRenamed = window.wikiAPI?.onPageRenamed?.(onWikiRenamed);
     window.addEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
     window.addEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
     window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
@@ -9618,6 +9787,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       cancelled = true;
       if (reloadTimer) clearTimeout(reloadTimer);
       unsubscribe?.();
+      unsubscribeRenamed?.();
       window.removeEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
       window.removeEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
       window.removeEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);

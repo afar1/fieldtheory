@@ -851,6 +851,37 @@ function addWikiPageToNodes(nodes: WikiNode[], page: WikiPageMeta, parentRelPath
   return { nodes: [...nodes, makeWikiDirChain(parts, page)], changed: true };
 }
 
+function makeWikiDirNode(parts: string[], parentRelPath = ''): WikiNode {
+  const [head, ...rest] = parts;
+  const relPath = parentRelPath ? `${parentRelPath}/${head}` : head;
+  if (rest.length === 0) return { kind: 'dir', name: head, relPath, children: [] };
+  return { kind: 'dir', name: head, relPath, children: [makeWikiDirNode(rest, relPath)] };
+}
+
+function addWikiDirToNodes(nodes: WikiNode[], relPath: string, parentRelPath = ''): { nodes: WikiNode[]; changed: boolean } {
+  const remainingRelPath = parentRelPath && relPath.startsWith(`${parentRelPath}/`)
+    ? relPath.slice(parentRelPath.length + 1)
+    : relPath;
+  const parts = remainingRelPath.split('/').filter(Boolean);
+  if (parts.length === 0) return { nodes, changed: false };
+
+  const [dirName] = parts;
+  const dirRelPath = parentRelPath ? `${parentRelPath}/${dirName}` : dirName;
+  const existing = nodes.find((node) => node.kind === 'dir' && node.relPath === dirRelPath);
+  if (existing && parts.length === 1) return { nodes, changed: false };
+
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.kind !== 'dir' || node.relPath !== dirRelPath) return node;
+    const added = addWikiDirToNodes(node.children, relPath, dirRelPath);
+    if (!added.changed) return node;
+    changed = true;
+    return { ...node, children: added.nodes };
+  });
+  if (changed) return { nodes: next, changed };
+  return { nodes: [...nodes, makeWikiDirNode(parts, parentRelPath)], changed: true };
+}
+
 function renameWikiRelPathInNodes(nodes: WikiNode[], event: LibraryRenameEvent): { nodes: WikiNode[]; changed: boolean } {
   let changed = false;
   const next = nodes.map((node) => {
@@ -880,6 +911,18 @@ export function removeWikiRelPathFromLibraryRoots(roots: LibraryRoot[], relPath:
   let changed = false;
   const next = roots.map((root) => {
     if (!root.builtin) return root;
+    const pruned = removeWikiRelPathFromNodes(root.tree, relPath);
+    if (!pruned.changed) return root;
+    changed = true;
+    return { ...root, tree: pruned.nodes };
+  });
+  return changed ? next : roots;
+}
+
+export function removeRelPathFromLibraryRoot(roots: LibraryRoot[], rootPath: string, relPath: string): LibraryRoot[] {
+  let changed = false;
+  const next = roots.map((root) => {
+    if (root.path !== rootPath) return root;
     const pruned = removeWikiRelPathFromNodes(root.tree, relPath);
     if (!pruned.changed) return root;
     changed = true;
@@ -930,6 +973,18 @@ export function addPageToLibraryRoot(roots: LibraryRoot[], rootPath: string, pag
   const next = roots.map((root) => {
     if (root.path !== rootPath) return root;
     const added = addWikiPageToNodes(root.tree, page);
+    if (!added.changed) return root;
+    changed = true;
+    return { ...root, tree: added.nodes };
+  });
+  return changed ? next : roots;
+}
+
+export function addDirToLibraryRoot(roots: LibraryRoot[], rootPath: string, relPath: string): LibraryRoot[] {
+  let changed = false;
+  const next = roots.map((root) => {
+    if (root.path !== rootPath) return root;
+    const added = addWikiDirToNodes(root.tree, relPath);
     if (!added.changed) return root;
     changed = true;
     return { ...root, tree: added.nodes };
@@ -1709,6 +1764,16 @@ function rootToSidebarNode(
   };
 }
 
+function nextSidebarRequestId(ref: MutableRefObject<number>): number {
+  const requestId = ref.current + 1;
+  ref.current = requestId;
+  return requestId;
+}
+
+function isLatestSidebarRequest(ref: MutableRefObject<number>, requestId: number): boolean {
+  return requestId === ref.current;
+}
+
 function WikiSidebar({
   active = true,
   canHideSidebarDefaultFolders = true,
@@ -1788,6 +1853,11 @@ function WikiSidebar({
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
+  const loadTreeRequestIdRef = useRef(0);
+  const loadArtifactsRequestIdRef = useRef(0);
+  const loadRecentRequestIdRef = useRef(0);
+  const loadTaggedDocsRequestIdRef = useRef(0);
+  const loadSharedPinsRequestIdRef = useRef(0);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
   const iconColorUndoStackRef = useRef<Record<string, number>[]>([]);
@@ -1832,16 +1902,47 @@ function WikiSidebar({
     setLibraryRoots((prev) => removeWikiRelPathFromLibraryRoots(prev, relPath));
   }, []);
 
+  const patchChangedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
+    if ((event.type !== 'file-added' && event.type !== 'file-changed') || !event.page) return false;
+    if (event.builtin) {
+      setWikiTree((prev) => addWikiPageToTree(prev, event.page!));
+    }
+    setLibraryRoots((prev) => addPageToLibraryRoot(prev, event.rootPath, event.page!));
+    return true;
+  }, []);
+
+  const patchDeletedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
+    if (event.type !== 'file-deleted') return false;
+    if (event.builtin) {
+      pruneDeletedWikiPage(event.relPath);
+      return true;
+    }
+    setLibraryRoots((prev) => removeRelPathFromLibraryRoot(prev, event.rootPath, event.relPath));
+    return true;
+  }, [pruneDeletedWikiPage]);
+
   const loadTree = useCallback(async (reason = 'manual') => {
+    const requestId = loadTreeRequestIdRef.current + 1;
+    loadTreeRequestIdRef.current = requestId;
     const startedAt = Date.now();
-    traceLibrarySidebar('sidebar-loadTree-start', { reason });
+    traceLibrarySidebar('sidebar-loadTree-start', { reason, requestId });
     const [treeResult, rootsResult, hiddenFoldersResult] = await Promise.all([
       window.wikiAPI?.getTree(),
       window.libraryAPI?.getRoots(),
       window.libraryAPI?.getHiddenFolders(),
     ]);
+    if (requestId !== loadTreeRequestIdRef.current) {
+      traceLibrarySidebar('sidebar-loadTree-stale', {
+        reason,
+        requestId,
+        latestRequestId: loadTreeRequestIdRef.current,
+        durationMs: Date.now() - startedAt,
+      });
+      return undefined;
+    }
     traceLibrarySidebar('sidebar-loadTree-ipc-done', {
       reason,
+      requestId,
       durationMs: Date.now() - startedAt,
       folders: treeResult?.length ?? null,
       roots: rootsResult?.length ?? null,
@@ -1873,29 +1974,34 @@ function WikiSidebar({
     }
     traceLibrarySidebar('sidebar-loadTree-state-scheduled', {
       reason,
+      requestId,
       durationMs: Date.now() - startedAt,
     });
     return nextRoots;
   }, []);
 
   const loadArtifacts = useCallback(async () => {
+    const requestId = nextSidebarRequestId(loadArtifactsRequestIdRef);
     const result = await window.librarianAPI?.getReadings();
-    if (result) setArtifacts(result);
+    if (result && isLatestSidebarRequest(loadArtifactsRequestIdRef, requestId)) setArtifacts(result);
   }, []);
 
   const loadRecent = useCallback(async () => {
+    const requestId = nextSidebarRequestId(loadRecentRequestIdRef);
     const result = await window.recentAPI?.list();
-    if (result) setRecent(result);
+    if (result && isLatestSidebarRequest(loadRecentRequestIdRef, requestId)) setRecent(result);
   }, []);
 
   const loadTaggedDocs = useCallback(async () => {
+    const requestId = nextSidebarRequestId(loadTaggedDocsRequestIdRef);
     const result = await window.taggedDocsAPI?.list();
-    if (result) setTaggedDocs(result);
+    if (result && isLatestSidebarRequest(loadTaggedDocsRequestIdRef, requestId)) setTaggedDocs(result);
   }, []);
 
   const loadSharedPins = useCallback(async () => {
+    const requestId = nextSidebarRequestId(loadSharedPinsRequestIdRef);
     const result = await window.sharedFilesAPI?.getPinnedItemIds?.();
-    if (result) setSharedPinnedItemIds(new Set(result));
+    if (result && isLatestSidebarRequest(loadSharedPinsRequestIdRef, requestId)) setSharedPinnedItemIds(new Set(result));
   }, []);
 
   const combinedPinnedItemIds = useMemo(() => {
@@ -1909,8 +2015,10 @@ function WikiSidebar({
     loadRecent();
     loadTaggedDocs();
     loadSharedPins();
-    const unsubWiki = window.wikiAPI?.onPageChanged(() => {
+    const unsubWiki = window.wikiAPI?.onPageChanged((event) => {
       traceLibrarySidebar('sidebar-wiki-changed-received');
+      if ((event?.type === 'file-added' || event?.type === 'file-changed') && patchChangedLibraryFile(event)) return;
+      if (event?.type === 'file-deleted' && patchDeletedLibraryFile(event)) return;
       loadTree('wiki:changed');
     });
     const unsubDeletedWiki = window.wikiAPI?.onPageDeleted((relPath) => pruneDeletedWikiPage(relPath));
@@ -1967,8 +2075,11 @@ function WikiSidebar({
       }
     };
     window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
-    const unsubLibrary = window.libraryAPI?.onRootsChanged(() => {
+    const unsubLibrary = window.libraryAPI?.onRootsChanged((event) => {
       traceLibrarySidebar('sidebar-library-changed-received');
+      if (event?.builtin) return;
+      if ((event?.type === 'file-added' || event?.type === 'file-changed') && patchChangedLibraryFile(event)) return;
+      if (event?.type === 'file-deleted' && patchDeletedLibraryFile(event)) return;
       loadTree('library:changed');
     });
     const unsubRenamedLibrary = window.libraryAPI?.onItemRenamed?.((event) => {
@@ -1995,7 +2106,13 @@ function WikiSidebar({
       }
       loadArtifacts();
     });
-    const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
+    const unsubRecent = window.recentAPI?.onChanged((entries) => {
+      if (entries) {
+        setRecent(entries);
+        return;
+      }
+      loadRecent();
+    });
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     const unsubSharedPins = window.sharedFilesAPI?.onPinsChanged?.(() => loadSharedPins());
     const unsubBookmarks = window.bookmarksAPI?.onChanged?.(() => {
@@ -2042,7 +2159,7 @@ function WikiSidebar({
       window.removeEventListener('focus', onFocus);
       window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, onBrowserHelperReconnect);
     };
-  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, pruneDeletedWikiPage]);
+  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, pruneDeletedWikiPage]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
@@ -2238,14 +2355,13 @@ function WikiSidebar({
       return;
     }
     setMoveError(null);
-    await reloadTreeAndExpandLocation(target, newRelPath);
+    expandCreateLocation(target, newRelPath);
     if (item.kind === 'file') {
       const root = libraryRoots.find((entry) => entry.path === target.rootPath);
-      setTimeout(() => {
-        onSelectItem(getMovedLibraryFileSelectionItem(target, newRelPath, root));
-      }, 0);
+      onSelectItem(getMovedLibraryFileSelectionItem(target, newRelPath, root));
     }
-  }, [libraryRoots, onSelectItem, reloadTreeAndExpandLocation]);
+    void reloadTreeAndExpandLocation(target, newRelPath);
+  }, [expandCreateLocation, libraryRoots, onSelectItem, reloadTreeAndExpandLocation]);
 
   const beginCreateFile = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, SCRATCHPAD_FOLDER_NAME);
@@ -2335,7 +2451,9 @@ function WikiSidebar({
         const created = await onCreateDir(nextLocation);
         if (created !== false) {
           createdSuccessfully = true;
-          await reloadTreeAndExpandLocation(nextLocation);
+          setLibraryRoots((prev) => addDirToLibraryRoot(prev, nextLocation.rootPath, nextLocation.relPath));
+          expandCreateLocation(nextLocation);
+          void reloadTreeAndExpandLocation(nextLocation);
         }
       }
     } catch (error) {
