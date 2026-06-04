@@ -7,6 +7,7 @@ import {
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownLinkRelationMetadataDocuments,
   getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
@@ -16,8 +17,10 @@ import {
   getWikiLinkedPages,
   getWikiOutboundLinks,
   isUnresolvedWikiHref,
+  mergeMarkdownLinkRelationDocuments,
   normalizeWikiRelPath,
   refreshMarkdownLinkRelationDocumentHits,
+  removeMarkdownLinkRelationDocument,
   resolveWikiLink,
   transformWikiLinks,
   upsertMarkdownLinkRelationDocument,
@@ -632,6 +635,63 @@ describe('getMarkdownLinkedDocuments', () => {
     ]);
   });
 
+  it('uses metadata-only relation documents for immediate outbound links', () => {
+    const metadataDocuments = getMarkdownLinkRelationMetadataDocuments([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: artifactPath, title: 'Artifact One', artifactPath },
+      { relPath: commandPath, title: 'refactor', commandPath },
+    ]);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/source' },
+      'See [[Artifact One]] and [[refactor]].',
+      metadataDocuments,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'artifact', path: artifactPath },
+        title: 'Artifact One',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'outbound',
+      },
+      {
+        target: { kind: 'command', path: commandPath },
+        title: 'refactor',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'outbound',
+      },
+    ]);
+  });
+
+  it('lets hydrated relation documents replace metadata-only entries', () => {
+    const metadataDocuments = getMarkdownLinkRelationMetadataDocuments([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: artifactPath, title: 'Artifact One', artifactPath },
+    ]);
+    const hydratedDocuments = mergeMarkdownLinkRelationDocuments(metadataDocuments, [
+      {
+        target: { kind: 'artifact' as const, path: artifactPath },
+        title: 'Artifact One',
+        content: 'Back to [[Source]].',
+        linkHits: getMarkdownEditorLinkHits('Back to [[Source]].', linkedIndex),
+      },
+    ]);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/source' },
+      'See [[Artifact One]].',
+      hydratedDocuments,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'artifact', path: artifactPath },
+        title: 'Artifact One',
+        excerpt: 'See [[Artifact One]].',
+        direction: 'bidirectional',
+      },
+    ]);
+  });
+
   it('shows backlinks to command documents', () => {
     expect(getMarkdownLinkedDocuments(
       { kind: 'command', path: commandPath },
@@ -759,6 +819,32 @@ describe('getMarkdownLinkedDocuments', () => {
         title: 'Source',
         excerpt: 'See [[New Target]].',
         direction: 'inbound',
+      },
+    ]);
+  });
+
+  it('removes a relation document by target', () => {
+    const documents = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'See [[Target]].',
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/target' },
+        title: 'Target',
+        content: '',
+      },
+    ];
+
+    expect(removeMarkdownLinkRelationDocument(documents, {
+      kind: 'wiki',
+      relPath: 'scratchpad/source',
+    })).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/target' },
+        title: 'Target',
+        content: '',
       },
     ]);
   });

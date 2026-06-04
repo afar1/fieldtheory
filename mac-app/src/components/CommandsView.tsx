@@ -33,7 +33,9 @@ import {
   classifyLinkHref,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownLinkRelationMetadataDocuments,
   isUnresolvedWikiHref,
+  mergeMarkdownLinkRelationDocuments,
   transformWikiLinks,
   type LinkAction,
   type MarkdownLinkedDocument,
@@ -55,6 +57,7 @@ const COMMANDS_TEXT_SIZE_STORAGE_KEY = 'commands-text-size';
 const COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY = 'commands-sidebar-width';
 const COMMANDS_RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
+const COMMANDS_FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
 type CommandsTextSize = 'small' | 'normal' | 'large';
 
 function loadCommandsTextSize(): CommandsTextSize {
@@ -287,6 +290,8 @@ export default function CommandsView({
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
+  const markdownLinkRelationDocumentsRequestRef = useRef(0);
 
   // Popular commands state
   const [popularCommands, setPopularCommands] = useState<PopularCommand[]>([]);
@@ -640,16 +645,31 @@ export default function CommandsView({
     return null;
   }, [selectedCommand, viewMode]);
   const hasSelectedCommand = Boolean(selectedCommand);
+  const markdownLinkRelationMetadataDocuments = useMemo(() => getMarkdownLinkRelationMetadataDocuments([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
+  const visibleMarkdownLinkRelationDocuments = useMemo(() => (
+    mergeMarkdownLinkRelationDocuments(
+      markdownLinkRelationMetadataDocuments,
+      markdownLinkRelationDocuments,
+    )
+  ), [markdownLinkRelationDocuments, markdownLinkRelationMetadataDocuments]);
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!selectedCommand) return [];
     return getMarkdownLinkedDocuments(
       activeLinkTarget,
       selectedCommand.content,
-      markdownLinkRelationDocuments,
+      visibleMarkdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeLinkTarget, markdownLinkRelationDocuments, selectedCommand, wikiIndex]);
+  }, [activeLinkTarget, selectedCommand, visibleMarkdownLinkRelationDocuments, wikiIndex]);
 
   const flashCopyFeedback = useCallback((label: string) => {
     setCopyFeedbackLabel(label);
@@ -1131,6 +1151,38 @@ export default function CommandsView({
       return;
     }
 
+    const requestId = markdownLinkBacklinkDocumentsRequestRef.current + 1;
+    markdownLinkBacklinkDocumentsRequestRef.current = requestId;
+    if (!activeLinkTarget || activeLinkTarget.kind !== 'command') return;
+
+    const load = async () => {
+      const documents = await window.libraryAPI?.getBacklinkRelationDocuments?.(activeLinkTarget);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (
+        markdownLinkBacklinkDocumentsRequestRef.current !== requestId
+        || !documents?.length
+        || !currentWikiIndex
+      ) return;
+      setMarkdownLinkRelationDocuments((prev) => documents.reduce((next, document) => (
+        upsertMarkdownLinkRelationDocument(next, {
+          ...document,
+          linkHits: getMarkdownEditorLinkHits(document.content, currentWikiIndex),
+        })
+      ), prev));
+    };
+
+    void load();
+  }, [activeLinkTarget, hasSelectedCommand]);
+
+  useEffect(() => {
+    const requestId = markdownLinkRelationDocumentsRequestRef.current + 1;
+    markdownLinkRelationDocumentsRequestRef.current = requestId;
+
+    if (!hasSelectedCommand) {
+      setMarkdownLinkRelationDocuments([]);
+      return;
+    }
+
     let cancelled = false;
     const load = async () => {
       const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
@@ -1177,16 +1229,19 @@ export default function CommandsView({
             : null;
         }),
       );
-      if (cancelled) return;
+      if (cancelled || markdownLinkRelationDocumentsRequestRef.current !== requestId) return;
       setMarkdownLinkRelationDocuments(
         [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
           .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
-    void load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, COMMANDS_FULL_LINK_RELATION_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [commandIndexPages, hasSelectedCommand, readings, wikiIndex, wikiIndexPages]);
 
