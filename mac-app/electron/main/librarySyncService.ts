@@ -14,6 +14,7 @@ import { AuthManager } from './authManager';
 import { fieldTheoryDir, libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
 import { isSharedFilesPath, sharedFilesRoot } from './sharedFiles';
+import { writeTextFileAtomically } from './documentSaveGuard';
 
 const log = createLogger('LibrarySync');
 
@@ -306,6 +307,13 @@ function moveFileToTrash(filePath: string): boolean {
 
   fs.renameSync(filePath, targetPath);
   return true;
+}
+
+function writeLibraryConflictCopy(filePath: string, content: string): string {
+  const parsed = path.parse(filePath);
+  const conflictPath = path.join(parsed.dir, `${parsed.name}.sync-conflict-${Date.now()}${parsed.ext}`);
+  fs.writeFileSync(conflictPath, content, 'utf-8');
+  return conflictPath;
 }
 
 export class LibrarySyncService {
@@ -691,14 +699,15 @@ export class LibrarySyncService {
         continue;
       }
 
+      let previousContent: string | null = null;
       if (fs.existsSync(targetPath)) {
         const stats = fs.statSync(targetPath);
         if (!stats.isFile()) {
           result.errors.push(`Skipped library path that is not a file: ${sourcePath}`);
           continue;
         }
-        const content = fs.readFileSync(targetPath, 'utf-8');
-        if (sha256(content) === remoteHash) {
+        previousContent = fs.readFileSync(targetPath, 'utf-8');
+        if (sha256(previousContent) === remoteHash) {
           result.skipped++;
           continue;
         }
@@ -709,7 +718,10 @@ export class LibrarySyncService {
       }
 
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(targetPath, row.content ?? '', 'utf-8');
+      if (previousContent !== null) {
+        writeLibraryConflictCopy(targetPath, previousContent);
+      }
+      writeTextFileAtomically(targetPath, row.content ?? '');
       result.downloaded++;
     }
   }

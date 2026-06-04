@@ -557,12 +557,16 @@ describe('SharedSyncService cache behavior', () => {
                 return {
                   eq() {
                     return {
-                      is() {
+                      eq() {
                         return {
-                          select() {
+                          is() {
                             return {
-                              async single() {
-                                return { data: serverRef.row, error: null };
+                              select() {
+                                return {
+                                  async single() {
+                                    return { data: serverRef.row, error: null };
+                                  },
+                                };
                               },
                             };
                           },
@@ -1159,12 +1163,16 @@ describe('SharedSyncService cache behavior', () => {
           return {
             eq() {
               return {
-                is() {
+                eq() {
                   return {
-                    select() {
+                    is() {
                       return {
-                        async single() {
-                          return { data: { ...currentRow, ...row }, error: null };
+                        select() {
+                          return {
+                            async single() {
+                              return { data: { ...currentRow, ...row }, error: null };
+                            },
+                          };
                         },
                       };
                     },
