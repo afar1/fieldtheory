@@ -3362,6 +3362,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const effectiveCodexTerminalVisible = codexTerminalAvailable
     && codexTerminalVisible
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
+  const selectionPastePopoverAvailable = browserLibrarySurface || effectiveCodexTerminalVisible;
   const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
     responsivePanelState,
     userResizing: userResizingPanel,
@@ -6135,7 +6136,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ) => {
     const selectedText = snapshot.value.slice(snapshot.selectionStart, snapshot.selectionEnd);
     const readerPane = readerPaneRef.current;
-    if (snapshot.isCollapsed || !selectedText.trim() || !readerPane) {
+    if (!selectionPastePopoverAvailable || snapshot.isCollapsed || !selectedText.trim() || !readerPane) {
       setTerminalPastePopover(null);
       return;
     }
@@ -6167,16 +6168,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           height: window.innerHeight,
         }, getNativeTerminalPasteContentRect())),
     });
-  }, [browserLibrarySurface, getNativeTerminalPasteContentRect]);
+  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, selectionPastePopoverAvailable]);
+
+  useEffect(() => {
+    if (!selectionPastePopoverAvailable) setTerminalPastePopover(null);
+  }, [selectionPastePopoverAvailable]);
 
   useEffect(() => {
     const updateSelectionPopover = () => {
       const selection = window.getSelection();
       const pasteText = getTerminalPasteTextFromSelection(selection);
-      if (!selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
+      if (!selectionPastePopoverAvailable || !selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
         const activeElement = document.activeElement;
         const latestEditorSnapshot = latestMarkdownCursorSnapshotRef.current;
-        if (activeElement instanceof Element && latestEditorSnapshot && shouldPreserveEditorSelectionPastePopover({
+        if (selectionPastePopoverAvailable && activeElement instanceof Element && latestEditorSnapshot && shouldPreserveEditorSelectionPastePopover({
           activeElement,
           latestEditorSnapshot,
         })) {
@@ -6235,7 +6240,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener('scroll', updateSelectionPopover, true);
       window.removeEventListener('resize', updateSelectionPopover);
     };
-  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, showSelectionPastePopoverFromEditorSnapshot]);
+  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, selectionPastePopoverAvailable, showSelectionPastePopoverFromEditorSnapshot]);
 
   useEffect(() => {
     const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
@@ -10976,7 +10981,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         />
         </div>
         {inlineDrawDialog}
-        {terminalPastePopover && (
+        {selectionPastePopoverAvailable && terminalPastePopover && (
           <button
             type="button"
             aria-label={browserLibrarySurface ? 'Paste selection to Codex input' : 'Paste selection to terminal'}
