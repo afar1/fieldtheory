@@ -979,6 +979,38 @@ describe('LibrarianView render', () => {
     expect(getHoverStrip()).toBeTruthy();
   });
 
+  it('lets Bookmarks collapse the sidebar like a selected document', async () => {
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    const { container } = render(<LibrarianView browserLibrarySurface sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
+    ) as HTMLElement | null;
+
+    fireEvent.click(await screen.findByText('Bookmarks'));
+
+    await waitFor(() => {
+      expect(window.bookmarksAPI!.getAll).toHaveBeenCalled();
+    });
+    expect(getSidebarPane()?.style.width).toBe('0px');
+    expect(getHoverStrip()).toBeTruthy();
+  });
+
   function pasteText(target: HTMLElement, text: string): void {
     fireEvent.paste(target, {
       clipboardData: {
