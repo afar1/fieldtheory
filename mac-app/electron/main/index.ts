@@ -41,6 +41,7 @@ import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryR
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
 import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
 import {
+  getBrowserLibraryMarkdownCommandTargetClientId,
   getBrowserLibraryNativeFocusHandoff,
   shouldPromoteBrowserLibraryClientContext,
   shouldTargetBrowserLibraryNavigation,
@@ -2229,14 +2230,12 @@ function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
 
 function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
   return Boolean(
     activeLibraryFileContext &&
     ((clipboardWindow &&
       !clipboardWindow.isDestroyed() &&
       clipboardWindow.isVisible()) ||
-      (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) ||
-      browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
+      getActiveBrowserLibraryMarkdownCommandTargetClientId())
   );
 }
 
@@ -2255,18 +2254,9 @@ function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
     return false;
   }
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
-  if (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) {
-    return browserHelperServer.emitNativeEventToClient(activeBrowserClientId, { type: 'librarian:insertMarkdownText', text });
-  }
-  if (
-    (browserLibraryMarkdownEditorFocused ||
-      !clipboardHistoryWindow?.getWindow() ||
-      clipboardHistoryWindow.getWindow()?.isDestroyed() ||
-      !clipboardHistoryWindow.getWindow()?.isVisible()) &&
-    browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
-  ) {
-    return browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
+  if (targetBrowserClientId) {
+    return browserHelperServer?.emitNativeEventToClient(targetBrowserClientId, { type: 'librarian:insertMarkdownText', text }) ?? false;
   }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
@@ -2294,12 +2284,7 @@ async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
 }): Promise<boolean> {
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
-  const targetBrowserClientId = activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)
-    ? activeBrowserClientId
-    : browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
-      ? activeBrowserLibraryClientId
-      : null;
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
   if (
     input.expectedText &&
     input.replacementText &&
@@ -3254,8 +3239,13 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (browserLibraryMarkdownEditorFocused) {
           activeBrowserLibraryClientId = clientId ?? null;
           librarianMarkdownEditorFocused = false;
+          promoteBrowserLibraryClientContext(activeBrowserLibraryClientId);
         } else if (!clientId || activeBrowserLibraryClientId === clientId) {
           activeBrowserLibraryClientId = null;
+        }
+        if (!browserLibraryMarkdownEditorFocused && activeLibraryFileContextSourceId === browserLibraryWindowId(clientId)) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
         }
       },
       replaceSelectedMarkdownTextResult: (result) => handleBrowserLibraryReplaceSelectedTextResult(result),
@@ -3807,6 +3797,14 @@ function browserLibraryClientIdFromWindowId(windowId: string | null | undefined)
   return windowId?.startsWith(prefix) ? windowId.slice(prefix.length) : null;
 }
 
+function getActiveBrowserLibraryMarkdownCommandTargetClientId(): string | null {
+  const targetClientId = getBrowserLibraryMarkdownCommandTargetClientId({
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+  });
+  return targetClientId && browserHelperServer?.hasNativeEventClient(targetClientId) ? targetClientId : null;
+}
+
 function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
   const next: ActiveLibraryFileContext = {
     type: context.type,
@@ -3862,7 +3860,12 @@ function archiveActiveLibraryFileForLauncher(): { success: boolean; error?: stri
 
 function promoteBrowserLibraryClientContext(clientId: string | null | undefined): void {
   if (!clientId) return;
-  if (!shouldPromoteBrowserLibraryClientContext({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused })) return;
+  if (!shouldPromoteBrowserLibraryClientContext({
+    nativeMarkdownEditorFocused: librarianMarkdownEditorFocused,
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+    candidateClientId: clientId,
+  })) return;
   const context = browserLibraryContextByClientId.get(clientId);
   if (!context) return;
   activeLibraryFileContext = activeLibraryFileContextFromPresence(context);

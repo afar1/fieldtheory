@@ -3,9 +3,16 @@ export interface BrowserLibraryActiveContextState {
 }
 
 export function shouldPromoteBrowserLibraryClientContext(
-  state: BrowserLibraryActiveContextState,
+  state: BrowserLibraryActiveContextState & {
+    browserMarkdownEditorFocused: boolean;
+    activeBrowserMarkdownClientId?: string | null;
+    candidateClientId?: string | null;
+  },
 ): boolean {
-  return !state.nativeMarkdownEditorFocused;
+  return !state.nativeMarkdownEditorFocused
+    && state.browserMarkdownEditorFocused
+    && Boolean(state.candidateClientId)
+    && state.candidateClientId === state.activeBrowserMarkdownClientId;
 }
 
 export function shouldTargetBrowserLibraryNavigation(
@@ -24,4 +31,12 @@ export function getBrowserLibraryNativeFocusHandoff(focused: boolean): {
     clearBrowserNavigationOwner: focused,
     promoteBrowserNavigationOwner: !focused,
   };
+}
+
+export function getBrowserLibraryMarkdownCommandTargetClientId(input: {
+  browserMarkdownEditorFocused: boolean;
+  activeBrowserMarkdownClientId?: string | null;
+}): string | null {
+  if (!input.browserMarkdownEditorFocused || !input.activeBrowserMarkdownClientId) return null;
+  return input.activeBrowserMarkdownClientId;
 }
