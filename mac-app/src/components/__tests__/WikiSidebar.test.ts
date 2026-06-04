@@ -1,12 +1,21 @@
-import { describe, expect, it } from 'vitest';
-import {
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
+import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   BOOKMARKS_SHORTCUT_FOLDER_ID,
+  canDropLibraryItem,
   collectSidebarIconTargetIds,
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
+  getMovedLibraryFileSelectionItem,
+  getNextVisibleSidebarItemAfterRemoval,
   getSidebarContextHideDirLabel,
   getSidebarShortcutVisibility,
+  type LibraryCreateLocation,
+  type WikiArchiveController,
+  type UnifiedItem,
   isPointerNearRect,
   isRiverSidebarItemId,
   isSharedRiverSidebarItem,
@@ -17,7 +26,34 @@ import {
   virtualizeBookmarksGroup,
 } from '../WikiSidebar';
 
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: {
+      accent: '#0f766e',
+      border: '#d1d5db',
+      text: '#111111',
+      textSecondary: '#666666',
+      bg: '#ffffff',
+      bgSecondary: '#f9fafb',
+      bgTertiary: '#f3f4f6',
+      surface1: '#ffffff',
+      surface2: '#f9fafb',
+      hoverBg: '#f3f4f6',
+      inputBg: '#ffffff',
+      isDark: false,
+      glassEnabled: false,
+    },
+  }),
+}));
+
 const libraryRootPath = '/Users/afar/.fieldtheory/library';
+
+type TestLibraryRoot = {
+  path: string;
+  label: string;
+  builtin: boolean;
+  tree: Array<Record<string, unknown>>;
+};
 
 type TestSidebarNode = ReturnType<typeof fileNode> | {
   kind: 'dir';
@@ -47,6 +83,144 @@ function fileNode(id: string, title: string) {
   };
 }
 
+function sidebarItem(id: string, title: string = id) {
+  return fileNode(id, title).item;
+}
+
+function mockSidebarNativeApis(
+  tree: Array<Record<string, unknown>> = [],
+  roots: TestLibraryRoot[] = [{
+    path: libraryRootPath,
+    label: 'Library',
+    builtin: true,
+    tree,
+  }],
+): void {
+  Object.defineProperty(window, 'wikiAPI', {
+    configurable: true,
+    value: {
+      getTree: vi.fn(async () => []),
+      rename: vi.fn(async () => null),
+      deletePage: vi.fn(async () => true),
+      onPageChanged: vi.fn(() => undefined),
+      onPageDeleted: vi.fn(() => undefined),
+      onPageRenamed: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'libraryAPI', {
+    configurable: true,
+    value: {
+      getRoots: vi.fn(async () => roots),
+      moveItem: vi.fn(async () => null),
+      getHiddenFolders: vi.fn(async () => []),
+      onRootsChanged: vi.fn(() => undefined),
+      onItemRenamed: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'librarianAPI', {
+    configurable: true,
+    value: {
+      getReadings: vi.fn(async () => []),
+      onReadingAdded: vi.fn(() => undefined),
+      onReadingRemoved: vi.fn(() => undefined),
+      onReadingUpdated: vi.fn(() => undefined),
+      onReadingRenamed: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'recentAPI', {
+    configurable: true,
+    value: {
+      list: vi.fn(async () => []),
+      onChanged: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'taggedDocsAPI', {
+    configurable: true,
+    value: {
+      list: vi.fn(async () => []),
+      onUpdated: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'sharedFilesAPI', {
+    configurable: true,
+    value: {
+      getPinnedItemIds: vi.fn(async () => []),
+      onPinsChanged: vi.fn(() => undefined),
+    },
+  });
+  Object.defineProperty(window, 'bookmarksAPI', {
+    configurable: true,
+    value: {
+      getAll: vi.fn(async () => ({ bookmarks: [], folders: [], xLastSyncedAt: null })),
+      onChanged: vi.fn(() => undefined),
+    },
+  });
+}
+
+function renderSidebarForTest(options: {
+  tree?: Array<Record<string, unknown>>;
+  roots?: TestLibraryRoot[];
+  selectedId?: string | null;
+  onSelectItem?: (item: UnifiedItem) => void;
+  onCreateFile?: (location: LibraryCreateLocation, fileName: string) => boolean | Promise<boolean>;
+  archiveControllerRef?: { current: WikiArchiveController | null };
+} = {}) {
+  mockSidebarNativeApis(options.tree ?? [], options.roots);
+  const flatItemsRef = { current: [] as UnifiedItem[] };
+  return render(createElement(WikiSidebar, {
+    active: true,
+    onSelectItem: options.onSelectItem ?? vi.fn(),
+    selectedId: options.selectedId ?? null,
+    onCreateFile: options.onCreateFile ?? vi.fn(async () => false),
+    onCreateDir: vi.fn(async () => false),
+    flatItemsRef,
+    searchQuery: '',
+    onSearchQueryChange: vi.fn(),
+    archiveControllerRef: options.archiveControllerRef,
+  }));
+}
+
+function createDataTransferStub() {
+  const data = new Map<string, string>();
+  const dataTransfer = {
+    types: [] as string[],
+    effectAllowed: '',
+    dropEffect: '',
+    setData: vi.fn((type: string, value: string) => {
+      data.set(type, value);
+      if (!dataTransfer.types.includes(type)) dataTransfer.types.push(type);
+    }),
+    getData: vi.fn((type: string) => data.get(type) ?? ''),
+  };
+  return dataTransfer;
+}
+
+beforeEach(() => {
+  resetBookmarksCacheForTests();
+  const values = new Map<string, string>();
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+      clear: vi.fn(() => { values.clear(); }),
+    },
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  delete (window as Partial<Window>).wikiAPI;
+  delete (window as Partial<Window>).libraryAPI;
+  delete (window as Partial<Window>).librarianAPI;
+  delete (window as Partial<Window>).recentAPI;
+  delete (window as Partial<Window>).taggedDocsAPI;
+  delete (window as Partial<Window>).sharedFilesAPI;
+  delete (window as Partial<Window>).bookmarksAPI;
+});
+
 function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${name}/note`, 'note')]): TestSidebarNode {
   return {
     kind: 'dir' as const,
@@ -62,6 +236,301 @@ function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${n
 }
 
 describe('WikiSidebar River root helpers', () => {
+  it('keeps the create input open with feedback when file creation fails', async () => {
+    const onCreateFile = vi.fn(async () => false);
+    renderSidebarForTest({
+      tree: [{
+        kind: 'dir',
+        name: 'projects',
+        relPath: 'projects',
+        children: [],
+      }],
+      onCreateFile,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New file in Projects' }));
+    const input = screen.getByPlaceholderText('Untitled');
+    fireEvent.change(input, { target: { value: 'Duplicate' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(onCreateFile).toHaveBeenCalledWith(expect.objectContaining({
+        rootPath: libraryRootPath,
+        relPath: 'projects',
+        builtin: true,
+      }), 'Duplicate');
+      expect(screen.getByRole('alert').textContent).toContain('Could not create file');
+    });
+    expect(screen.getByDisplayValue('Duplicate')).toBeTruthy();
+  });
+
+  it('keeps the rename input open with feedback when sidebar rename fails', async () => {
+    const relPath = 'projects/original';
+    renderSidebarForTest({
+      tree: [{
+        kind: 'dir',
+        name: 'projects',
+        relPath: 'projects',
+        children: [{
+          kind: 'file',
+          relPath,
+          absPath: `${libraryRootPath}/${relPath}.md`,
+          name: 'original',
+          title: 'Original',
+          lastUpdated: 1,
+        }],
+      }],
+      selectedId: `wiki:${relPath}`,
+    });
+
+    fireEvent.click(await screen.findByText('Projects'));
+    fireEvent.doubleClick(await screen.findByText('Original'));
+    const input = screen.getByDisplayValue('Original');
+    fireEvent.change(input, { target: { value: 'Existing' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(window.wikiAPI?.rename).toHaveBeenCalledWith(relPath, 'Existing');
+      expect(screen.getByRole('alert').textContent).toContain('Could not rename');
+    });
+    expect(screen.getByDisplayValue('Existing')).toBeTruthy();
+  });
+
+  it('selects a visible fallback after deleting the selected sidebar page', async () => {
+    const selectedRelPath = 'projects/selected';
+    const fallbackRelPath = 'projects/fallback';
+    const onSelectItem = vi.fn();
+    const archiveControllerRef = { current: null as WikiArchiveController | null };
+    renderSidebarForTest({
+      tree: [{
+        kind: 'dir',
+        name: 'projects',
+        relPath: 'projects',
+        children: [
+          {
+            kind: 'file',
+            relPath: selectedRelPath,
+            absPath: `${libraryRootPath}/${selectedRelPath}.md`,
+            name: 'selected',
+            title: 'Selected',
+            lastUpdated: 1,
+          },
+          {
+            kind: 'file',
+            relPath: fallbackRelPath,
+            absPath: `${libraryRootPath}/${fallbackRelPath}.md`,
+            name: 'fallback',
+            title: 'Fallback',
+            lastUpdated: 2,
+          },
+        ],
+      }],
+      selectedId: `wiki:${selectedRelPath}`,
+      onSelectItem,
+      archiveControllerRef,
+    });
+
+    fireEvent.click(await screen.findByText('Projects'));
+    await screen.findByText('Selected');
+    await waitFor(() => expect(archiveControllerRef.current).not.toBeNull());
+    act(() => {
+      expect(archiveControllerRef.current?.toggleFocusedSelection()).toBe(true);
+      expect(archiveControllerRef.current?.deleteSelectedItems()).toBe(true);
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to Trash' }));
+
+    await waitFor(() => {
+      expect(window.wikiAPI?.deletePage).toHaveBeenCalledWith(selectedRelPath);
+      expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+        id: `wiki:${fallbackRelPath}`,
+        title: 'Fallback',
+      }));
+    });
+  });
+
+  it('passes source and target roots through rendered cross-root file drag/drop', async () => {
+    const externalRootPath = '/Users/afar/Documents/Notes';
+    const onSelectItem = vi.fn();
+    renderSidebarForTest({
+      roots: [
+        {
+          path: libraryRootPath,
+          label: 'Library',
+          builtin: true,
+          tree: [{
+            kind: 'dir',
+            name: 'scratchpad',
+            relPath: 'scratchpad',
+            children: [{
+              kind: 'file',
+              relPath: 'scratchpad/source',
+              absPath: `${libraryRootPath}/scratchpad/source.md`,
+              name: 'source',
+              title: 'Source',
+              lastUpdated: 1,
+            }],
+          }],
+        },
+        {
+          path: externalRootPath,
+          label: 'Notes',
+          builtin: false,
+          tree: [{
+            kind: 'dir',
+            name: 'Target',
+            relPath: 'Target',
+            children: [],
+          }],
+        },
+      ],
+      onSelectItem,
+    });
+    vi.mocked(window.libraryAPI!.moveItem).mockResolvedValue('Target/source');
+
+    fireEvent.click(await screen.findByText('Scratchpad'));
+    fireEvent.click(await screen.findByText('Notes'));
+    const sourceRow = (await screen.findByText('Source')).closest('[data-library-sidebar-row-id]');
+    const targetRow = (await screen.findByText('Target')).closest('[data-library-sidebar-row-id]');
+    expect(sourceRow).toBeTruthy();
+    expect(targetRow).toBeTruthy();
+    const dataTransfer = createDataTransferStub();
+
+    fireEvent.dragStart(sourceRow!, { dataTransfer });
+    fireEvent.dragOver(targetRow!, { dataTransfer });
+    fireEvent.drop(targetRow!, { dataTransfer });
+
+    await waitFor(() => {
+      expect(window.libraryAPI?.moveItem).toHaveBeenCalledWith(
+        libraryRootPath,
+        'file',
+        'scratchpad/source',
+        'Target',
+        externalRootPath,
+      );
+      expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+        id: `external:${externalRootPath}/Target/source.md`,
+        type: 'external',
+        relPath: 'Target/source',
+      }));
+    });
+  });
+
+  it('allows cross-root file drops but keeps cross-root folders blocked', () => {
+    const sourceRoot = '/library';
+    const targetRoot = '/project';
+    const target = { rootPath: targetRoot, relPath: 'Notes', builtin: false };
+
+    expect(canDropLibraryItem({
+      rootPath: sourceRoot,
+      relPath: 'scratchpad/note',
+      kind: 'file',
+    }, target)).toBe(true);
+
+    expect(canDropLibraryItem({
+      rootPath: sourceRoot,
+      relPath: 'scratchpad',
+      kind: 'dir',
+    }, target)).toBe(false);
+  });
+
+  it('still rejects same-root folder drops into themselves or descendants', () => {
+    const rootPath = '/library';
+    const item = { rootPath, relPath: 'Projects', kind: 'dir' as const };
+
+    expect(canDropLibraryItem(item, { rootPath, relPath: 'Projects', builtin: true })).toBe(false);
+    expect(canDropLibraryItem(item, { rootPath, relPath: 'Projects/Nested', builtin: true })).toBe(false);
+    expect(canDropLibraryItem(item, { rootPath, relPath: 'scratchpad', builtin: true })).toBe(true);
+  });
+
+  it('builds wiki selection state for moved markdown files in the built-in root', () => {
+    const item = getMovedLibraryFileSelectionItem(
+      { rootPath: libraryRootPath, relPath: 'scratchpad', builtin: true },
+      'scratchpad/moved',
+      { builtin: true },
+      123,
+    );
+
+    expect(item).toEqual({
+      id: 'wiki:scratchpad/moved',
+      title: 'moved',
+      type: 'wiki',
+      absPath: '',
+      relPath: 'scratchpad/moved',
+      rootPath: libraryRootPath,
+      timestamp: 123,
+    });
+  });
+
+  it('builds external selection state for moved files in external roots', () => {
+    const rootPath = '/Users/afar/Documents/Notes';
+
+    expect(getMovedLibraryFileSelectionItem(
+      { rootPath, relPath: 'Inbox', builtin: false },
+      'Inbox/moved',
+      { builtin: false },
+      123,
+    )).toEqual(expect.objectContaining({
+      id: 'external:/Users/afar/Documents/Notes/Inbox/moved.md',
+      title: 'moved',
+      type: 'external',
+      absPath: '/Users/afar/Documents/Notes/Inbox/moved.md',
+      relPath: 'Inbox/moved',
+      rootPath,
+    }));
+
+    expect(getMovedLibraryFileSelectionItem(
+      { rootPath, relPath: 'Web', builtin: false },
+      'Web/site.html',
+      { builtin: false },
+      123,
+    )).toEqual(expect.objectContaining({
+      id: 'external:/Users/afar/Documents/Notes/Web/site.html',
+      title: 'site.html',
+      type: 'external',
+      absPath: '/Users/afar/Documents/Notes/Web/site.html',
+      relPath: 'Web/site.html',
+    }));
+  });
+
+  it('chooses the next visible sibling after deleting the selected item', () => {
+    const first = sidebarItem('wiki:first');
+    const selected = sidebarItem('wiki:selected');
+    const next = sidebarItem('wiki:next');
+
+    expect(getNextVisibleSidebarItemAfterRemoval(
+      [first, selected, next],
+      [first, selected, next],
+      selected.id,
+      new Set([selected.id]),
+    )).toBe(next);
+  });
+
+  it('chooses the previous visible sibling when deleting the last selected item', () => {
+    const previous = sidebarItem('wiki:previous');
+    const selected = sidebarItem('wiki:selected');
+
+    expect(getNextVisibleSidebarItemAfterRemoval(
+      [previous, selected],
+      [previous, selected],
+      selected.id,
+      new Set([selected.id]),
+    )).toBe(previous);
+  });
+
+  it('falls back to the flat visible list when an entire sibling group is removed', () => {
+    const outside = sidebarItem('wiki:outside');
+    const selected = sidebarItem('wiki:selected');
+    const sibling = sidebarItem('wiki:sibling');
+
+    expect(getNextVisibleSidebarItemAfterRemoval(
+      [selected, sibling],
+      [outside, selected, sibling],
+      selected.id,
+      new Set([selected.id, sibling.id]),
+    )).toBe(outside);
+  });
+
   it('reads native-synced sidebar display preferences from renderer storage', () => {
     const values = new Map<string, string>([
       ['library-sort-mode', 'time'],
