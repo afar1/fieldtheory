@@ -7,6 +7,7 @@ import {
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
@@ -114,6 +115,7 @@ import {
   isVisualLineNumberRowSelected,
   shouldMoveCaretToDocumentEndFromClick,
   startMarkdownCodeEditorBlankSpaceSelection,
+  startMarkdownCodeEditorLineNumberSelection,
   trailingLineStartSelectionExtension,
 } from '../MarkdownCodeEditor';
 
@@ -476,6 +478,57 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
     expect(dispatches).toEqual([
       expect.objectContaining({ selection: { anchor: 'alpha\nlast line'.length, head: 'alpha\nlast line'.length } }),
       { selection: { anchor: 'alpha\nlast line'.length, head: 'alpha\n'.length } },
+    ]);
+    expect(listeners.mousemove).toBeUndefined();
+  });
+
+  it('starts rendered line-number gutter drags at the visual row text start', () => {
+    const hitArea = document.createElement('div');
+    hitArea.className = MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS;
+    const listeners: Partial<Record<string, (event: MouseEvent) => void>> = {};
+    const dispatches: unknown[] = [];
+    const ownerDocument = {
+      addEventListener: (type: string, listener: EventListener) => {
+        listeners[type] = listener as (event: MouseEvent) => void;
+      },
+      removeEventListener: (type: string) => {
+        delete listeners[type];
+      },
+    };
+    const view = {
+      contentDOM: {
+        getBoundingClientRect: () => ({ left: 240 }),
+      },
+      dom: { ownerDocument },
+      focus: vi.fn(),
+      posAtCoords: vi.fn(({ x, y }: { x: number; y: number }) => {
+        if (x === 241 && y === 80) return 6;
+        if (x === 241 && y === 120) return 18;
+        return null;
+      }),
+      dispatch: vi.fn((spec) => dispatches.push(spec)),
+    } as unknown as EditorView;
+    const event = new MouseEvent('mousedown', {
+      button: 0,
+      clientX: 170,
+      clientY: 80,
+    });
+    Object.defineProperty(event, 'target', { value: hitArea });
+
+    const cleanup = startMarkdownCodeEditorLineNumberSelection(view, event);
+    listeners.mousemove?.(new MouseEvent('mousemove', {
+      buttons: 1,
+      clientX: 160,
+      clientY: 120,
+    }));
+    cleanup?.();
+
+    expect(cleanup).not.toBeNull();
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(1, { x: 241, y: 80 });
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(2, { x: 241, y: 120 });
+    expect(dispatches).toEqual([
+      { selection: { anchor: 6, head: 6 } },
+      { selection: { anchor: 6, head: 18 } },
     ]);
     expect(listeners.mousemove).toBeUndefined();
   });

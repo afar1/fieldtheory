@@ -110,6 +110,7 @@ export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
 export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS = 'cm-ft-lineNumberSelectionHitArea';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -534,6 +535,7 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
 export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
   class {
     private readonly dom: HTMLElement;
+    private readonly hitArea: HTMLElement;
     private readonly view: EditorView;
     private readonly handleSelectionChange: () => void;
     private pendingMeasure = false;
@@ -541,6 +543,9 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
 
     constructor(view: EditorView) {
       this.view = view;
+      this.hitArea = document.createElement('div');
+      this.hitArea.className = MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS;
+      view.dom.appendChild(this.hitArea);
       this.dom = document.createElement('div');
       this.dom.className = 'cm-ft-lineNumberOverlay';
       view.dom.appendChild(this.dom);
@@ -561,6 +566,7 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
 
     destroy() {
       this.view.dom.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange);
+      this.hitArea.remove();
       this.dom.remove();
     }
 
@@ -2746,6 +2752,52 @@ export function startMarkdownCodeEditorBlankSpaceSelection(
   return cleanup;
 }
 
+function getMarkdownCodeEditorVisualRowStartPosition(view: EditorView, event: MouseEvent): number | null {
+  if (!(event.target instanceof Element)) return null;
+  if (!event.target.closest(`.${MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS}`)) return null;
+
+  const contentRect = view.contentDOM.getBoundingClientRect();
+  const clampedX = contentRect.left + 1;
+  return view.posAtCoords({ x: clampedX, y: event.clientY });
+}
+
+export function startMarkdownCodeEditorLineNumberSelection(
+  view: EditorView,
+  event: MouseEvent,
+): (() => void) | null {
+  if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey) return null;
+
+  const anchor = getMarkdownCodeEditorVisualRowStartPosition(view, event);
+  if (anchor === null) return null;
+
+  event.preventDefault();
+  view.focus();
+  let head = anchor;
+  view.dispatch({ selection: { anchor, head } });
+
+  const ownerDocument = view.dom.ownerDocument;
+  const handleMouseMove = (moveEvent: MouseEvent): void => {
+    if (moveEvent.buttons !== 1) {
+      cleanup();
+      return;
+    }
+    const contentRect = view.contentDOM.getBoundingClientRect();
+    const x = moveEvent.clientX < contentRect.left ? contentRect.left + 1 : moveEvent.clientX;
+    const nextHead = view.posAtCoords({ x, y: moveEvent.clientY });
+    if (nextHead === null || nextHead === head) return;
+    head = nextHead;
+    view.dispatch({ selection: { anchor, head } });
+  };
+  const handleMouseUp = (): void => cleanup();
+  const cleanup = (): void => {
+    ownerDocument.removeEventListener('mousemove', handleMouseMove);
+    ownerDocument.removeEventListener('mouseup', handleMouseUp);
+  };
+  ownerDocument.addEventListener('mousemove', handleMouseMove);
+  ownerDocument.addEventListener('mouseup', handleMouseUp);
+  return cleanup;
+}
+
 export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean): React.CSSProperties {
   return blinkCursor ? {} : { animation: 'none', animationName: 'none', animationDuration: '0s' };
 }
@@ -3031,6 +3083,17 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontSize: '0.78em',
             pointerEvents: 'none',
             zIndex: 2,
+          },
+          '.cm-ft-lineNumberSelectionHitArea': {
+            position: 'absolute',
+            left: '0',
+            top: '0',
+            bottom: '0',
+            width: '6.5em',
+            transform: 'translateX(calc(-100% - 0.65em))',
+            cursor: 'text',
+            pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',
+            zIndex: 1,
           },
           '.cm-ft-lineNumberOverlayNumber': {
             position: 'absolute',
@@ -3559,6 +3622,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             mousedown: (event, view) => {
               if (presentation === 'rendered' && event.target instanceof Element && event.target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_TEXT_CLASS}`)) {
                 return false;
+              }
+              const lineNumberSelectionCleanup = presentation === 'rendered'
+                ? startMarkdownCodeEditorLineNumberSelection(view, event)
+                : null;
+              if (lineNumberSelectionCleanup) {
+                blankSpaceSelectionCleanupRef.current?.();
+                blankSpaceSelectionCleanupRef.current = lineNumberSelectionCleanup;
+                return true;
               }
               const blankSpaceSelectionCleanup = startMarkdownCodeEditorBlankSpaceSelection(
                 view,
