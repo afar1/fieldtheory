@@ -4643,6 +4643,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+  const hasActiveLibrarySurface =
+    Boolean(activeReading) ||
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'ember';
+  const effectiveFullScreen = isFullScreen || focusImmersive;
   const activeReadingPath = activeReading?.path ?? null;
   const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
@@ -9708,7 +9713,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
-  const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !activeReading && !isFullScreen);
+  const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !hasActiveLibrarySurface && !isFullScreen);
   const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !userResizingPanel && !isFullScreen && !sidebarForcedVisible;
   const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -9947,7 +9952,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           >
             <BookmarksPane
               active={active && selectedItemType === 'bookmarks'}
-              isFullScreen={isFullScreen || focusImmersive}
+              isFullScreen={effectiveFullScreen}
               onToggleFullScreen={toggleImmersive}
               onCanvasModeActiveChange={setBookmarksCanvasActive}
               onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}
