@@ -4835,6 +4835,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const text = editor?.getValue().slice(start, end) ?? '';
     return { start, end, text };
   }, []);
+  const restoreInlineGemmaEditorSelection = useCallback((selection: MaxwellToolbarSelection) => {
+    if (!selection || selection.start === selection.end) return;
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    editor?.setSelectionRange(selection.start, selection.end);
+  }, []);
   const openInlineGemmaCommand = useCallback(() => {
     const selection = getActiveMaxwellSelection();
     setInlineGemmaSelection(selection);
@@ -4842,9 +4849,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setInlineGemmaError(getMaxwellToolbarRunMode(selection).mode === 'selection' ? null : 'Select text first.');
     setInlineGemmaOpen(true);
     requestAnimationFrame(() => {
+      restoreInlineGemmaEditorSelection(selection);
       inlineGemmaInstructionRef.current?.focus();
+      requestAnimationFrame(() => {
+        restoreInlineGemmaEditorSelection(selection);
+      });
     });
-  }, [getActiveMaxwellSelection]);
+  }, [getActiveMaxwellSelection, restoreInlineGemmaEditorSelection]);
   const closeInlineGemmaCommand = useCallback(() => {
     if (inlineGemmaRunning) return;
     setInlineGemmaOpen(false);
@@ -4861,6 +4872,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setInlineGemmaRunning(true);
     setInlineGemmaError(null);
     void (async () => {
+      restoreInlineGemmaEditorSelection(inlineGemmaSelection);
       await flushCurrentEdit();
       const result = await window.commandsAPI?.runLocalCommand?.(request);
       if (!result) {
@@ -4879,7 +4891,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }).finally(() => {
       setInlineGemmaRunning(false);
     });
-  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection]);
+  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection, restoreInlineGemmaEditorSelection]);
   const runMaxwellItem = useCallback((id: string) => {
     const item = maxwellItems.find((candidate) => candidate.id === id);
     if (!item) return;
