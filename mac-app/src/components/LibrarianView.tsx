@@ -825,7 +825,7 @@ export type LibrarianMaxwellItem = {
   relPath?: string;
 };
 
-type MaxwellToolbarSelection = { start: number; end: number } | null;
+type MaxwellToolbarSelection = { start: number; end: number; text?: string } | null;
 type TerminalPastePopover = { text: string; top: number; left: number } | null;
 type SelectionPastePopoverSide = 'left' | 'right';
 const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
@@ -839,7 +839,7 @@ type MaxwellToolbarRunMode =
 export type InlineGemmaLocalCommandRequest = {
   customInstruction: string;
   mode: 'selection';
-  selection: { start: number; end: number };
+  selection: { start: number; end: number; text?: string };
 };
 const LIVE_RENDERER_STORAGE_PREFERENCE_KEYS = new Set([
   LIBRARIAN_TEXT_SIZE_STORAGE_KEY,
@@ -978,6 +978,7 @@ export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): Ma
     selection: {
       start: Math.min(selection.start, selection.end),
       end: Math.max(selection.start, selection.end),
+      ...(selection.text ? { text: selection.text } : {}),
     },
   };
 }
@@ -4829,7 +4830,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       : renderedMarkdownEditorRef.current;
     const selection = editor?.getSelectionRange() ?? null;
     if (!selection) return null;
-    return { start: selection.start, end: selection.end };
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    const text = editor?.getValue().slice(start, end) ?? '';
+    return { start, end, text };
   }, []);
   const openInlineGemmaCommand = useCallback(() => {
     const selection = getActiveMaxwellSelection();
