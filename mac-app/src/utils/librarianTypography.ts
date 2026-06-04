@@ -24,7 +24,7 @@ const LIBRARIAN_TYPOGRAPHY_PRESET_IDS: LibrarianTypographyPresetId[] = ['book', 
 export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   {
     id: 'book',
-    label: 'Book',
+    label: 'Serif',
     title: 'Source Serif, wider leading, best for longer reading',
     fontFamily: `"Source Serif 4", ${fonts.serif}`,
     headingFontFamily: `"Source Serif 4", ${fonts.serif}`,
@@ -33,7 +33,7 @@ export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   },
   {
     id: 'note',
-    label: 'Note',
+    label: 'Sans Serif',
     title: 'Source Sans, compact and clear for mixed reading and editing',
     fontFamily: `"Source Sans 3", ${fonts.sans}`,
     headingFontFamily: `"Source Sans 3", ${fonts.sans}`,
@@ -42,10 +42,10 @@ export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   },
   {
     id: 'draft',
-    label: 'Draft',
-    title: 'Monospace focus mode for raw markdown writing',
-    fontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
-    headingFontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
+    label: 'Mono',
+    title: 'Source Code Pro focus mode for raw markdown writing',
+    fontFamily: `"Source Code Pro", ${fonts.mono}`,
+    headingFontFamily: `"Source Code Pro", ${fonts.mono}`,
     lineHeight: 1.7,
     maxWidth: 'min(680px, 64ch)',
   },
