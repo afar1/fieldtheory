@@ -140,6 +140,7 @@ export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
   blur: () => void;
   refreshLayout: () => void;
+  startRenderedVisualRowSelection: (event: MouseEvent) => boolean;
   getValue: () => string;
   getSelectionRange: () => { start: number; end: number };
   getSelectionSnapshot: () => MarkdownCodeEditorSelectionSnapshot | null;
@@ -2753,15 +2754,24 @@ export function startMarkdownCodeEditorBlankSpaceSelection(
 }
 
 function getMarkdownCodeEditorVisualRowStartPosition(view: EditorView, event: MouseEvent): number | null {
-  if (!(event.target instanceof Element)) return null;
-  if (!event.target.closest(`.${MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS}`)) return null;
-
   const contentRect = view.contentDOM.getBoundingClientRect();
   const clampedX = contentRect.left + 1;
   return view.posAtCoords({ x: clampedX, y: event.clientY });
 }
 
-export function startMarkdownCodeEditorLineNumberSelection(
+function getMarkdownCodeEditorVisualRowDragPosition(view: EditorView, event: MouseEvent): number | null {
+  const rawPosition = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (rawPosition !== null) return rawPosition;
+
+  const contentRect = view.contentDOM.getBoundingClientRect();
+  const left = contentRect.left + 1;
+  const rectRight = Number.isFinite(contentRect.right) ? contentRect.right - 1 : left;
+  const right = Math.max(left, rectRight);
+  const clampedX = Math.max(left, Math.min(event.clientX, right));
+  return view.posAtCoords({ x: clampedX, y: event.clientY });
+}
+
+export function startMarkdownCodeEditorVisualRowSelection(
   view: EditorView,
   event: MouseEvent,
 ): (() => void) | null {
@@ -2781,9 +2791,7 @@ export function startMarkdownCodeEditorLineNumberSelection(
       cleanup();
       return;
     }
-    const contentRect = view.contentDOM.getBoundingClientRect();
-    const x = moveEvent.clientX < contentRect.left ? contentRect.left + 1 : moveEvent.clientX;
-    const nextHead = view.posAtCoords({ x, y: moveEvent.clientY });
+    const nextHead = getMarkdownCodeEditorVisualRowDragPosition(view, moveEvent);
     if (nextHead === null || nextHead === head) return;
     head = nextHead;
     view.dispatch({ selection: { anchor, head } });
@@ -2796,6 +2804,15 @@ export function startMarkdownCodeEditorLineNumberSelection(
   ownerDocument.addEventListener('mousemove', handleMouseMove);
   ownerDocument.addEventListener('mouseup', handleMouseUp);
   return cleanup;
+}
+
+export function startMarkdownCodeEditorLineNumberSelection(
+  view: EditorView,
+  event: MouseEvent,
+): (() => void) | null {
+  if (!(event.target instanceof Element)) return null;
+  if (!event.target.closest(`.${MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS}`)) return null;
+  return startMarkdownCodeEditorVisualRowSelection(view, event);
 }
 
 export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean): React.CSSProperties {
@@ -3865,6 +3882,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         refreshLayout: () => {
           viewRef.current?.requestMeasure();
         },
+        startRenderedVisualRowSelection: (event) => {
+          const view = viewRef.current;
+          if (!view || presentation !== 'rendered') return false;
+          const cleanup = startMarkdownCodeEditorVisualRowSelection(view, event);
+          if (!cleanup) return false;
+          blankSpaceSelectionCleanupRef.current?.();
+          blankSpaceSelectionCleanupRef.current = cleanup;
+          return true;
+        },
         getValue: () => viewRef.current?.state.doc.toString() ?? '',
         getSelectionRange: () => {
           const range = viewRef.current?.state.selection.main;
@@ -3903,7 +3929,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           return viewRef.current?.scrollDOM.clientHeight ?? 0;
         },
       }),
-      [],
+      [presentation],
     );
 
     return (
