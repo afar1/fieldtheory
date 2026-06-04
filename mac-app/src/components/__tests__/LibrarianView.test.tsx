@@ -2849,6 +2849,10 @@ describe('LibrarianView render', () => {
       mode: 'selection',
       selection: { start: 4, end: 12 },
     });
+    expect(getMaxwellToolbarRunMode({ start: 12, end: 4, text: 'selected' })).toEqual({
+      mode: 'selection',
+      selection: { start: 4, end: 12, text: 'selected' },
+    });
   });
 
   it('builds inline Gemma commands only for selected text', () => {
@@ -2859,6 +2863,11 @@ describe('LibrarianView render', () => {
       customInstruction: 'Tighten this',
       mode: 'selection',
       selection: { start: 4, end: 12 },
+    });
+    expect(getInlineGemmaLocalCommandRequest('Tighten this', { start: 12, end: 4, text: 'Lipsum' })).toEqual({
+      customInstruction: 'Tighten this',
+      mode: 'selection',
+      selection: { start: 4, end: 12, text: 'Lipsum' },
     });
   });
 
