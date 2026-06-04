@@ -2518,11 +2518,11 @@ describe('bookmarks canvas chrome activation', () => {
 });
 
 describe('librarian sidebar visibility', () => {
-  it('keeps the collapsed sidebar hover strip available for fullscreen Bookmarks', () => {
+  it('hides the sidebar for fullscreen Bookmarks like other Library surfaces', () => {
     expect(isLibrarianSidebarHidden({
       isFullScreen: true,
       selectedItemType: 'bookmarks',
-    })).toBe(false);
+    })).toBe(true);
 
     expect(isLibrarianSidebarHidden({
       isFullScreen: true,
