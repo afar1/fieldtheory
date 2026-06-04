@@ -285,7 +285,7 @@ describe('ContentToolbar', () => {
     expect(terminalButton.nextElementSibling).toBe(immersiveButton);
   });
 
-  it('hides the terminal button while the terminal is closed', () => {
+  it('shows the terminal button while the terminal is closed', () => {
     render(
       <ContentToolbar
         showCopy={false}
@@ -294,7 +294,7 @@ describe('ContentToolbar', () => {
       />
     );
 
-    expect(screen.queryByRole('button', { name: 'Open Terminal' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Terminal' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enter immersive view' })).toBeTruthy();
   });
 
