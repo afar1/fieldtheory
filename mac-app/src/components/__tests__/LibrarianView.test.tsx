@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 import LibrarianView, {
+  getInlineGemmaLocalCommandRequest,
   getMaxwellToolbarRunMode,
   getLibraryDocumentDefaultContentMode,
   getLibraryDocumentViewKind,
@@ -2065,6 +2066,11 @@ describe('LibrarianView render', () => {
     };
 
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'fieldtheory.codexTerminal.visible') return 'true';
+      if (key === 'fieldtheory.codexTerminal.dockSide') return 'right';
+      return null;
+    });
     Object.defineProperty(window, 'sharedFilesAPI', {
       configurable: true,
       value: {
@@ -2087,7 +2093,7 @@ describe('LibrarianView render', () => {
     const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
     const popOutButton = screen.getByRole('button', { name: 'Open in New Window' });
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
-    const terminalButton = screen.getByRole('button', { name: 'Open Terminal' });
+    const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
     const riverDivider = riverButton.nextElementSibling;
     expect(riverDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
@@ -2234,6 +2240,11 @@ describe('LibrarianView render', () => {
       value: { writeText: nativeWriteText },
     });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'fieldtheory.codexTerminal.visible') return 'true';
+      if (key === 'fieldtheory.codexTerminal.dockSide') return 'right';
+      return null;
+    });
 
     const { container } = render(
       <LibrarianView
@@ -2244,7 +2255,7 @@ describe('LibrarianView render', () => {
     );
 
     await screen.findByText('Benchmark body');
-    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
+    expect(screen.getByRole('button', { name: 'Close Terminal' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Copy selected text or file path (⌘C)' }));
 
     const feedback = await screen.findByRole('status');
@@ -2835,6 +2846,17 @@ describe('LibrarianView render', () => {
     expect(getMaxwellToolbarRunMode(null)).toEqual({ mode: 'document' });
     expect(getMaxwellToolbarRunMode({ start: 4, end: 4 })).toEqual({ mode: 'document' });
     expect(getMaxwellToolbarRunMode({ start: 12, end: 4 })).toEqual({
+      mode: 'selection',
+      selection: { start: 4, end: 12 },
+    });
+  });
+
+  it('builds inline Gemma commands only for selected text', () => {
+    expect(getInlineGemmaLocalCommandRequest('', { start: 4, end: 12 })).toBeNull();
+    expect(getInlineGemmaLocalCommandRequest('Tighten this', null)).toBeNull();
+    expect(getInlineGemmaLocalCommandRequest('Tighten this', { start: 4, end: 4 })).toBeNull();
+    expect(getInlineGemmaLocalCommandRequest('  Tighten this  ', { start: 12, end: 4 })).toEqual({
+      customInstruction: 'Tighten this',
       mode: 'selection',
       selection: { start: 4, end: 12 },
     });

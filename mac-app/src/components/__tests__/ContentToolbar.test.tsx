@@ -274,14 +274,28 @@ describe('ContentToolbar', () => {
       <ContentToolbar
         showCopy={false}
         onToggleTerminal={vi.fn()}
+        terminalVisible
         onToggleFullScreen={vi.fn()}
       />
     );
 
-    const terminalButton = screen.getByRole('button', { name: 'Open Terminal' });
+    const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const immersiveButton = screen.getByRole('button', { name: 'Enter immersive view' });
     expect(terminalButton.compareDocumentPosition(immersiveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(terminalButton.nextElementSibling).toBe(immersiveButton);
+  });
+
+  it('hides the terminal button while the terminal is closed', () => {
+    render(
+      <ContentToolbar
+        showCopy={false}
+        onToggleTerminal={vi.fn()}
+        onToggleFullScreen={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Open Terminal' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Enter immersive view' })).toBeTruthy();
   });
 
   it('keeps the active terminal button visible in dark mode', () => {
