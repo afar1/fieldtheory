@@ -116,6 +116,7 @@ import {
   shouldMoveCaretToDocumentEndFromClick,
   startMarkdownCodeEditorBlankSpaceSelection,
   startMarkdownCodeEditorLineNumberSelection,
+  startMarkdownCodeEditorVisualRowSelection,
   trailingLineStartSelectionExtension,
 } from '../MarkdownCodeEditor';
 
@@ -525,10 +526,61 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
 
     expect(cleanup).not.toBeNull();
     expect(view.posAtCoords).toHaveBeenNthCalledWith(1, { x: 241, y: 80 });
-    expect(view.posAtCoords).toHaveBeenNthCalledWith(2, { x: 241, y: 120 });
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(2, { x: 160, y: 120 });
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(3, { x: 241, y: 120 });
     expect(dispatches).toEqual([
       { selection: { anchor: 6, head: 6 } },
       { selection: { anchor: 6, head: 18 } },
+    ]);
+    expect(listeners.mousemove).toBeUndefined();
+  });
+
+  it('starts rendered visual row drags from lateral whitespace and extends into right margin', () => {
+    const listeners: Partial<Record<string, (event: MouseEvent) => void>> = {};
+    const dispatches: unknown[] = [];
+    const ownerDocument = {
+      addEventListener: (type: string, listener: EventListener) => {
+        listeners[type] = listener as (event: MouseEvent) => void;
+      },
+      removeEventListener: (type: string) => {
+        delete listeners[type];
+      },
+    };
+    const view = {
+      contentDOM: {
+        getBoundingClientRect: () => ({ left: 240, right: 400 }),
+      },
+      dom: { ownerDocument },
+      focus: vi.fn(),
+      posAtCoords: vi.fn(({ x, y }: { x: number; y: number }) => {
+        if (x === 241 && y === 80) return 6;
+        if (x === 399 && y === 120) return 22;
+        return null;
+      }),
+      dispatch: vi.fn((spec) => dispatches.push(spec)),
+    } as unknown as EditorView;
+    const event = new MouseEvent('mousedown', {
+      button: 0,
+      clientX: 60,
+      clientY: 80,
+    });
+    Object.defineProperty(event, 'target', { value: document.createElement('div') });
+
+    const cleanup = startMarkdownCodeEditorVisualRowSelection(view, event);
+    listeners.mousemove?.(new MouseEvent('mousemove', {
+      buttons: 1,
+      clientX: 620,
+      clientY: 120,
+    }));
+    cleanup?.();
+
+    expect(cleanup).not.toBeNull();
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(1, { x: 241, y: 80 });
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(2, { x: 620, y: 120 });
+    expect(view.posAtCoords).toHaveBeenNthCalledWith(3, { x: 399, y: 120 });
+    expect(dispatches).toEqual([
+      { selection: { anchor: 6, head: 6 } },
+      { selection: { anchor: 6, head: 22 } },
     ]);
     expect(listeners.mousemove).toBeUndefined();
   });
