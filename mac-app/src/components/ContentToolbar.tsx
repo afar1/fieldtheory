@@ -781,7 +781,7 @@ export default function ContentToolbar({
     if (id === 'share') return Boolean(showShare && onToggleShare && !isEditing);
     if (id === 'fieldtheory') return Boolean(maxwellItems.length || maxwellCanAddCurrent);
     if (id === 'agent') return Boolean(onOpenAgent);
-    if (id === 'terminal') return Boolean(onToggleTerminal);
+    if (id === 'terminal') return Boolean(onToggleTerminal && terminalVisible);
     if (id === 'meeting') return Boolean(onMeetingClick);
     if (id === 'newwindow') return Boolean(onOpenInNewWindow);
     if (id === 'folder') return Boolean(showFolder && onShowInFolder && !isEditing);
