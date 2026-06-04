@@ -40,7 +40,9 @@ import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelpe
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
 import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
+import { isActiveLibraryFileContextAllowed } from './activeLibraryFileContextPolicy';
 import {
+  getBrowserLibraryMarkdownCommandTargetClientId,
   getBrowserLibraryNativeFocusHandoff,
   shouldPromoteBrowserLibraryClientContext,
   shouldTargetBrowserLibraryNavigation,
@@ -220,7 +222,7 @@ import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
 import { readCodexTerminalPasteText } from './codexTerminalClipboard';
-import { registerShellIpc } from './shellIpc';
+import { isAllowedExternalShellUrl, registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -2229,14 +2231,12 @@ function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
 
 function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
   return Boolean(
     activeLibraryFileContext &&
     ((clipboardWindow &&
       !clipboardWindow.isDestroyed() &&
       clipboardWindow.isVisible()) ||
-      (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) ||
-      browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
+      getActiveBrowserLibraryMarkdownCommandTargetClientId())
   );
 }
 
@@ -2255,18 +2255,9 @@ function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
     return false;
   }
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
-  if (activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)) {
-    return browserHelperServer.emitNativeEventToClient(activeBrowserClientId, { type: 'librarian:insertMarkdownText', text });
-  }
-  if (
-    (browserLibraryMarkdownEditorFocused ||
-      !clipboardHistoryWindow?.getWindow() ||
-      clipboardHistoryWindow.getWindow()?.isDestroyed() ||
-      !clipboardHistoryWindow.getWindow()?.isVisible()) &&
-    browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
-  ) {
-    return browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
+  if (targetBrowserClientId) {
+    return browserHelperServer?.emitNativeEventToClient(targetBrowserClientId, { type: 'librarian:insertMarkdownText', text }) ?? false;
   }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
@@ -2294,12 +2285,7 @@ async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
 }): Promise<boolean> {
-  const activeBrowserClientId = browserLibraryClientIdFromWindowId(activeLibraryFileContextSourceId);
-  const targetBrowserClientId = activeBrowserClientId && browserHelperServer?.hasNativeEventClient(activeBrowserClientId)
-    ? activeBrowserClientId
-    : browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)
-      ? activeBrowserLibraryClientId
-      : null;
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
   if (
     input.expectedText &&
     input.replacementText &&
@@ -3117,7 +3103,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     staticDir: path.join(app.getAppPath(), 'dist'),
     nativeBridge: {
-      getAuthSession: () => authManager?.getSession() ?? null,
+      getAuthSession: () => authManager?.getSessionState() ?? null,
       getAuthCallsign: () => getCurrentUserCallsign(),
       getMetrics: () => metricsManager?.getMetrics() ?? null,
       fetchMetricsFromSupabase: () => metricsManager?.fetchFromSupabase() ?? false,
@@ -3254,8 +3240,13 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (browserLibraryMarkdownEditorFocused) {
           activeBrowserLibraryClientId = clientId ?? null;
           librarianMarkdownEditorFocused = false;
+          promoteBrowserLibraryClientContext(activeBrowserLibraryClientId);
         } else if (!clientId || activeBrowserLibraryClientId === clientId) {
           activeBrowserLibraryClientId = null;
+        }
+        if (!browserLibraryMarkdownEditorFocused && activeLibraryFileContextSourceId === browserLibraryWindowId(clientId)) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
         }
       },
       replaceSelectedMarkdownTextResult: (result) => handleBrowserLibraryReplaceSelectedTextResult(result),
@@ -3625,6 +3616,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       installUpdate: () => installAppUpdate(),
       dismissUpdate: () => dismissAppUpdate(),
       openExternal: (href) => {
+        if (!isAllowedExternalShellUrl(href)) return false;
         shell.openExternal(href);
         return true;
       },
@@ -3713,6 +3705,20 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     reportCurrentDocument: (context, clientId) => {
       const windowId = browserLibraryWindowId(clientId);
+      if (!shouldAcceptActiveLibraryFileContext(context)) {
+        if (activeLibraryFileContextSourceId === windowId) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
+        }
+        getDocumentPresenceManager().clearWindow(windowId);
+        appendCommandLauncherTrace('active-library-context-rejected', {
+          source: clientId ? 'browser-helper' : 'browser-helper-legacy',
+          windowId,
+          filePath: context.filePath,
+          rootPath: context.rootPath,
+        });
+        return;
+      }
       if (clientId) {
         browserLibraryContextByClientId.set(clientId, context);
         if (activeBrowserLibrarySurfaceClientId === clientId) {
@@ -3806,6 +3812,28 @@ function browserLibraryClientIdFromWindowId(windowId: string | null | undefined)
   return windowId?.startsWith(prefix) ? windowId.slice(prefix.length) : null;
 }
 
+function getActiveBrowserLibraryMarkdownCommandTargetClientId(): string | null {
+  const targetClientId = getBrowserLibraryMarkdownCommandTargetClientId({
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+  });
+  return targetClientId && browserHelperServer?.hasNativeEventClient(targetClientId) ? targetClientId : null;
+}
+
+function currentActiveLibraryContextRootPaths(): { libraryRootPaths: string[]; watchedDirPaths: string[] } {
+  return {
+    libraryRootPaths: librarianManager?.getLibraryRootPaths() ?? [],
+    watchedDirPaths: librarianManager?.getWatchedDirs().map((dir) => dir.path) ?? [],
+  };
+}
+
+function shouldAcceptActiveLibraryFileContext(context: ActiveLibraryFileContext | DocumentPresenceContext): boolean {
+  return isActiveLibraryFileContextAllowed({
+    context,
+    ...currentActiveLibraryContextRootPaths(),
+  });
+}
+
 function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
   const next: ActiveLibraryFileContext = {
     type: context.type,
@@ -3861,7 +3889,12 @@ function archiveActiveLibraryFileForLauncher(): { success: boolean; error?: stri
 
 function promoteBrowserLibraryClientContext(clientId: string | null | undefined): void {
   if (!clientId) return;
-  if (!shouldPromoteBrowserLibraryClientContext({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused })) return;
+  if (!shouldPromoteBrowserLibraryClientContext({
+    nativeMarkdownEditorFocused: librarianMarkdownEditorFocused,
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+    candidateClientId: clientId,
+  })) return;
   const context = browserLibraryContextByClientId.get(clientId);
   if (!context) return;
   activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
@@ -10458,7 +10491,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.signInWithPassword(email, password);
+    const result = await authManager.signInWithPassword(email, password);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:prepareForNewLogin', async () => {
@@ -10483,7 +10520,10 @@ function setupClipboardIPCHandlers(): void {
       await quotaManager.reload();
     }
 
-    return result;
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
@@ -10511,7 +10551,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.setSessionFromUrl(accessToken, refreshToken);
+    const result = await authManager.setSessionFromUrl(accessToken, refreshToken);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:signOut', async () => {
@@ -10638,7 +10682,7 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return null;
     }
-    return authManager.getSession();
+    return authManager.getSessionState();
   });
 
   ipcMain.handle('auth:isSuperAdmin', (): boolean => {
@@ -11657,7 +11701,7 @@ function setupClipboardIPCHandlers(): void {
     ) {
       return false;
     }
-    activeLibraryFileContext = {
+    const nextContext: ActiveLibraryFileContext = {
       type: context.type,
       rootPath: context.rootPath,
       relPath: context.relPath,
@@ -11671,6 +11715,21 @@ function setupClipboardIPCHandlers(): void {
           }
         : {}),
     };
+    if (!shouldAcceptActiveLibraryFileContext(nextContext)) {
+      if (!windowId || activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (windowId) getDocumentPresenceManager().clearWindow(windowId);
+      appendCommandLauncherTrace('active-library-context-rejected', {
+        source: 'native-window',
+        windowId,
+        filePath: nextContext.filePath,
+        rootPath: nextContext.rootPath,
+      });
+      return false;
+    }
+    activeLibraryFileContext = nextContext;
     activeLibraryFileContextSourceId = windowId;
     if (windowId) {
       getDocumentPresenceManager().setWindowDocument(windowId, activeLibraryFileContext, sourceWindow?.isFocused() ?? false);
@@ -14412,14 +14471,16 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Listen for session changes (login/logout, token refresh)
   authManager.on('sessionChanged', async (session) => {
+    if (!authManager) return;
+    const sessionState = authManager.getSessionState();
     logUserState(session ? 'login' : 'logout');
     taggedDocsManager?.setIdentity(session?.user?.email ?? null);
 
-    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session });
+    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session: sessionState });
 
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
-        win.webContents.send('session-changed', session);
+        win.webContents.send('session-changed', sessionState);
       }
     });
 

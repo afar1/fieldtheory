@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 
+type MainProcessAuthSession = Awaited<ReturnType<NonNullable<Window['authAPI']>['getSession']>>;
+type RendererAuthSession = Session | NonNullable<MainProcessAuthSession>;
+
 interface UseAuthSessionBridgeOptions {
   supabase: SupabaseClient | null;
   onSignedOut?: () => void;
 }
 
 interface UseAuthSessionBridgeResult {
-  session: Session | null;
-  setSession: Dispatch<SetStateAction<Session | null>>;
+  session: RendererAuthSession | null;
+  setSession: Dispatch<SetStateAction<RendererAuthSession | null>>;
   initialized: boolean;
 }
 
@@ -17,7 +20,7 @@ export function useAuthSessionBridge({
   supabase,
   onSignedOut,
 }: UseAuthSessionBridgeOptions): UseAuthSessionBridgeResult {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<RendererAuthSession | null>(null);
   const [initialized, setInitialized] = useState(false);
   const onSignedOutRef = useRef(onSignedOut);
 
@@ -37,7 +40,7 @@ export function useAuthSessionBridge({
 
     const initializeSession = async (): Promise<void> => {
       try {
-        const mainProcessSession = await window.authAPI?.getSession?.() as Session | null | undefined;
+        const mainProcessSession = await window.authAPI?.getSession?.() as RendererAuthSession | null | undefined;
         if (disposed) return;
 
         if (mainProcessSession) {
@@ -68,7 +71,7 @@ export function useAuthSessionBridge({
 
     const unsubscribeMainProcess = window.authAPI?.onSessionChanged?.((nextSession) => {
       if (nextSession) {
-        setSession(nextSession as Session);
+        setSession(nextSession as RendererAuthSession);
         setInitialized(true);
         return;
       }

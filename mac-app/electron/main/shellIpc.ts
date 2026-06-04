@@ -10,10 +10,16 @@ export const ShellIPCChannels = {
   SET_REPRESENTED_FILENAME: 'shell:setRepresentedFilename',
 } as const;
 
-const allowedExternalUrlPattern = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
-
 export function isAllowedExternalShellUrl(url: string): boolean {
-  return allowedExternalUrlPattern.test(url);
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:'
+      || parsed.protocol === 'http:'
+      || parsed.protocol === 'mailto:'
+      || parsed.protocol === 'x-apple.systempreferences:';
+  } catch {
+    return false;
+  }
 }
 
 type ShellIpcDependencies = {

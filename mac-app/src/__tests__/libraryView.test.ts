@@ -2047,6 +2047,11 @@ describe('library drag data helpers', () => {
     expect(canDropLibraryItem(
       { rootPath: '/wiki', kind: 'file', relPath: 'entries/note' },
       { rootPath: '/external', relPath: 'scratchpad', builtin: false },
+    )).toBe(true);
+
+    expect(canDropLibraryItem(
+      { rootPath: '/wiki', kind: 'dir', relPath: 'entries' },
+      { rootPath: '/external', relPath: 'scratchpad', builtin: false },
     )).toBe(false);
 
     expect(canDropLibraryItem(

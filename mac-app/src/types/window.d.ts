@@ -811,21 +811,36 @@ interface TaggedDocsAPI {
  */
 type AuthTestState = 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT';
 
+interface AuthSessionState {
+  authenticated: boolean;
+  expires_at: number | null;
+  expiresAt: number | null;
+  tier: 'free' | 'pro';
+  callsign: string | null;
+  displayName?: string;
+  user: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+  } | null;
+}
+
 interface AuthAPI {
   prepareForNewLogin: () => Promise<void>;
   requestOtp: (email: string) => Promise<{ error: string | null }>;
-  verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
+  verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   signOut: () => Promise<{ error: string | null }>;
-  getSession: () => Promise<any | null>;
+  getSession: () => Promise<AuthSessionState | null>;
   getCallsign?: () => Promise<string | null>;
-  onSessionChanged?: (callback: (session: any | null) => void) => () => void;
+  onSessionChanged?: (callback: (session: AuthSessionState | null) => void) => () => void;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
-  signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
+  signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
   updateFullName?: (fullName: string) => Promise<{ error: string | null }>;
-  setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
+  setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   deleteAccount?: () => Promise<{ error: string | null }>;
   // Auth state simulator (dev only)
   simulateState?: (state: AuthTestState, options?: { tier?: 'free' | 'pro' }) => Promise<{ success: boolean; message: string }>;
