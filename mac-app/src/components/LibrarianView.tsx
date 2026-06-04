@@ -6814,6 +6814,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [displaySourceBody, openLinkAction, wikiIndex]);
 
+  const handleRenderedContentMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    deactivateSidebarKeyboard();
+    if (!activeReading || !activeIsMarkdownDocument || contentMode !== 'rendered') return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('.cm-editor, .cm-content, button, input, textarea, select, a, [role="button"]')) return;
+    if (renderedMarkdownEditorRef.current?.startRenderedVisualRowSelection(event.nativeEvent)) {
+      event.stopPropagation();
+    }
+  }, [activeIsMarkdownDocument, activeReading, contentMode, deactivateSidebarKeyboard]);
+
   const applyRenderedTextInsertion = useCallback((
     text: string,
     options: { convertLocalImagePaths?: boolean } = {},
@@ -10658,9 +10668,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               data-ft-html-layout={activeIsHtmlDocument ? activeHtmlLayout : undefined}
               spellCheck
               tabIndex={activeReading ? 0 : undefined}
-              onMouseDown={(event) => {
-                deactivateSidebarKeyboard();
-              }}
+              onMouseDown={handleRenderedContentMouseDown}
               onClick={(e) => {
                 if (!activeReading) return;
                 if (!activeIsMarkdownDocument) return;
