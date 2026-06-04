@@ -1249,7 +1249,7 @@ describe('LibrarianView render', () => {
     vi.mocked(window.commandsAPI!.setActiveLibraryFileContext!).mockClear();
     vi.mocked(window.librarianAPI!.setSizeKey).mockClear();
     vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
-    vi.mocked(window.shellAPI!.setRepresentedFilename).mockClear();
+    vi.mocked(window.shellAPI!.setRepresentedFilename!).mockClear();
     act(() => {
       window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
     });
@@ -1458,7 +1458,7 @@ describe('LibrarianView render', () => {
     render(
       <LibrarianView
         browserLibrarySurface
-        initialOpenTarget={{ kind: 'ember', path: '' }}
+        initialOpenTarget={{ kind: 'ember', path: 'ember' }}
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
       />,

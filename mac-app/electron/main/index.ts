@@ -160,7 +160,7 @@ import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, re
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendTranscriberTrace } from './transcriberTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
-import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
+import type { LibrarianManager, LibraryBacklinkRelationDocument, LibraryBacklinkTarget, LibraryChangeEvent, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiBacklinkRelationDocument, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
 import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
@@ -349,6 +349,7 @@ startupMark('module-loaded');
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
+const SHARED_FILES_SYNC_DEBOUNCE_MS = 1500;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec, execFile: execFileCp, execFileSync } = require('child_process');
@@ -3784,6 +3785,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }
 let librarySyncService: LibrarySyncService | null = null;
+let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let sharedSyncService: SharedSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
@@ -4551,6 +4553,7 @@ function sharedFeaturesDisabledError(): string {
 
 function refreshFieldTheorySyncServices(): void {
   if (!canUseSharedFeatures()) {
+    clearPendingSharedFilesSync();
     void sharedSyncService?.dispose();
     sharedSyncService = null;
     sharedTeamService = null;
@@ -4591,14 +4594,30 @@ function refreshFieldTheorySyncServices(): void {
   }
 }
 
+function clearPendingSharedFilesSync(): void {
+  if (!sharedFilesSyncTimeout) return;
+  clearTimeout(sharedFilesSyncTimeout);
+  sharedFilesSyncTimeout = null;
+}
+
 function scheduleLibrarySyncIfAllowed(): void {
   refreshFieldTheorySyncServices();
   if (canUseFieldTheorySync()) {
     librarySyncService?.scheduleSync();
   }
   if (canUseSharedFeatures()) {
-    void syncSharedFilesAndBroadcastChanges();
+    scheduleSharedFilesSyncAndBroadcastChanges();
   }
+}
+
+function scheduleSharedFilesSyncAndBroadcastChanges(): void {
+  if (sharedFilesSyncTimeout) {
+    clearTimeout(sharedFilesSyncTimeout);
+  }
+  sharedFilesSyncTimeout = setTimeout(() => {
+    sharedFilesSyncTimeout = null;
+    void syncSharedFilesAndBroadcastChanges();
+  }, SHARED_FILES_SYNC_DEBOUNCE_MS);
 }
 
 async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
@@ -5206,10 +5225,10 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   return page;
 }
 
-function broadcastRecentChanged(): void {
-  browserHelperServer?.emitNativeEvent({ type: 'recent:changed' });
+function broadcastRecentChanged(entries?: RecentEntry[]): void {
+  browserHelperServer?.emitNativeEvent({ type: 'recent:changed', entries });
   BrowserWindow.getAllWindows().forEach((w) => {
-    if (!w.isDestroyed()) w.webContents.send('recent:changed');
+    if (!w.isDestroyed()) w.webContents.send('recent:changed', entries);
   });
 }
 
@@ -7367,6 +7386,19 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiPage(relPath);
   });
 
+  ipcMain.handle('wiki:getBacklinkRelationDocuments', (_event, relPath: string): WikiBacklinkRelationDocument[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getWikiBacklinkRelationDocuments(relPath);
+  });
+
+  ipcMain.handle('library:getBacklinkRelationDocuments', async (_event, target: LibraryBacklinkTarget): Promise<LibraryBacklinkRelationDocument[]> => {
+    if (!librarianManager) return [];
+    return librarianManager.getLibraryBacklinkRelationDocuments(
+      target,
+      (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
+    );
+  });
+
   ipcMain.handle('wiki:findPageByDocumentVersion', (_event, version: DocumentVersion, previousRelPath?: string): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.findWikiPageByDocumentVersion(version, previousRelPath);
@@ -7484,14 +7516,14 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
   ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] => {
     const next = recentManager?.visit(entry) ?? [];
-    broadcastRecentChanged();
+    broadcastRecentChanged(next);
     return next;
   });
   ipcMain.handle(
     'recent:remove',
     (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] => {
       const next = recentManager?.remove(kind, entryPath) ?? [];
-      broadcastRecentChanged();
+      broadcastRecentChanged(next);
       return next;
     },
   );
@@ -7721,16 +7753,17 @@ function setupLibrarianIPCHandlers(): void {
 
   if (librarianManager) {
     librarianManager.startWikiWatcher();
-    librarianManager.on('wiki:changed', () => {
+    librarianManager.on('wiki:changed', (event?: LibraryChangeEvent) => {
       scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-wiki-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+        changeType: event?.type ?? null,
       });
-      browserHelperServer?.emitNativeEvent({ type: 'wiki:changed' });
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:changed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
-          w.webContents.send('wiki:changed');
-          w.webContents.send('library:changed');
+          w.webContents.send('wiki:changed', event);
+          w.webContents.send('library:changed', event);
         }
       });
     });
@@ -7752,14 +7785,15 @@ function setupLibrarianIPCHandlers(): void {
         }
       });
     });
-    librarianManager.on('library:changed', () => {
+    librarianManager.on('library:changed', (_rootPath?: string, event?: LibraryChangeEvent) => {
       scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-library-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+        changeType: event?.type ?? null,
       });
-      browserHelperServer?.emitNativeEvent({ type: 'library:changed' });
+      browserHelperServer?.emitNativeEvent({ type: 'library:changed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('library:changed');
+        if (!w.isDestroyed()) w.webContents.send('library:changed', event);
       });
     });
     librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
@@ -14183,7 +14217,14 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Initialize commands manager for portable commands feature.
-  commandsManager = new CommandsManager();
+  commandsManager = new CommandsManager({
+    indexCommandContent: (filePath, content) => {
+      librarianManager?.recordLibraryIndexLinkHits(filePath, content);
+    },
+    removeCommandIndex: (filePath) => {
+      librarianManager?.removeLibraryIndexPath(filePath);
+    },
+  });
 
   // Wire up commands manager to transcriber and hot mic for command detection.
   if (transcriberManager) {
@@ -16081,6 +16122,7 @@ if (!gotTheLock) {
     libraryDocumentWindowManager?.destroy();
 
     librarySyncService?.dispose();
+    clearPendingSharedFilesSync();
     void sharedSyncService?.dispose();
     void browserHelperServer?.stop();
     browserHelperServer = null;

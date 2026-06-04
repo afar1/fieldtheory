@@ -31,6 +31,11 @@ const initialSnapshot: BookmarksSnapshot = {
   xLastSyncedAt: null,
 };
 
+function invokeNativeChanged(callback: (() => void) | null): void {
+  if (!callback) throw new Error('Expected native bookmark change callback');
+  callback();
+}
+
 describe('bookmarksCache', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -69,7 +74,7 @@ describe('bookmarksCache', () => {
     onBookmarksChanged(listener);
 
     expect(window.bookmarksAPI.onChanged).toHaveBeenCalledTimes(1);
-    (nativeChanged as (() => void) | null)?.();
+    invokeNativeChanged(nativeChanged);
 
     await vi.waitFor(() => {
       expect(listener).toHaveBeenCalledWith(updatedSnapshot);
@@ -106,7 +111,7 @@ describe('bookmarksCache', () => {
     await expect(getBookmarks()).resolves.toBe(initialSnapshot);
     expect(peekBookmarks()).toBe(initialSnapshot);
 
-    (nativeChanged as (() => void) | null)?.();
+    invokeNativeChanged(nativeChanged);
 
     await vi.waitFor(() => {
       expect(peekBookmarks()).toBe(updatedSnapshot);

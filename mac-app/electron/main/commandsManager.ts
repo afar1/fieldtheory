@@ -221,6 +221,11 @@ export interface CommandsManagerEvents {
   directoryChanged: (directoryPath: string | null) => void;
 }
 
+export interface CommandsManagerIndexHooks {
+  indexCommandContent?: (filePath: string, content: string) => void;
+  removeCommandIndex?: (filePath: string) => void;
+}
+
 /**
  * Manages portable commands from user-configured directories.
  * Scans for markdown files and provides lookup/loading functionality.
@@ -232,13 +237,16 @@ export class CommandsManager extends EventEmitter {
   private commands: Map<string, PortableCommand> = new Map();
   private watchers: Map<string, AbortController> = new Map();
   private userDataManager: UserDataManager | null = null;
+  private indexHooks: CommandsManagerIndexHooks;
+  private commandLinkIndexFreshness: Map<string, { mtimeMs: number; size: number }> = new Map();
 
   // Legacy single directory support (for migration)
   private directoryPath: string | null = null;
   private watcherAbort: AbortController | null = null;
 
-  constructor() {
+  constructor(indexHooks: CommandsManagerIndexHooks = {}) {
     super();
+    this.indexHooks = indexHooks;
 
     // Settings file path (legacy - will be updated when user logs in)
     const userDataPath = app.getPath('userData');
@@ -246,6 +254,10 @@ export class CommandsManager extends EventEmitter {
 
     // Load settings
     this.loadSettings();
+  }
+
+  setIndexHooks(indexHooks: CommandsManagerIndexHooks): void {
+    this.indexHooks = indexHooks;
   }
 
   /**
@@ -488,6 +500,7 @@ export class CommandsManager extends EventEmitter {
     }
     for (const [name, command] of this.commands) {
       if (isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(command.filePath)))) {
+        this.removeCommandIndexPath(command.filePath);
         this.commands.delete(name);
       }
     }
@@ -835,6 +848,7 @@ export class CommandsManager extends EventEmitter {
           const existing = command ? this.commands.get(command.name) : null;
           if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
             this.commands.set(command.name, command);
+            this.indexCommandFile(command.filePath);
           }
         }
       }
@@ -901,8 +915,29 @@ export class CommandsManager extends EventEmitter {
     const existing = command ? this.commands.get(command.name) : null;
     if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
       this.commands.set(command.name, command);
+      this.indexCommandFile(command.filePath);
     }
     return command;
+  }
+
+  private indexCommandFile(filePath: string): void {
+    if (!this.indexHooks.indexCommandContent) return;
+    try {
+      const normalizedPath = this.normalizePath(filePath);
+      const stats = fs.statSync(normalizedPath);
+      const cached = this.commandLinkIndexFreshness.get(normalizedPath);
+      if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return;
+      this.indexHooks.indexCommandContent(filePath, fs.readFileSync(filePath, 'utf-8'));
+      this.commandLinkIndexFreshness.set(normalizedPath, { mtimeMs: stats.mtimeMs, size: stats.size });
+    } catch (error) {
+      log.warn(`Error indexing command ${filePath}:`, error);
+    }
+  }
+
+  private removeCommandIndexPath(filePath: string): void {
+    const normalizedPath = this.normalizePath(filePath);
+    this.commandLinkIndexFreshness.delete(normalizedPath);
+    this.indexHooks.removeCommandIndex?.(normalizedPath);
   }
 
   /**
@@ -1317,6 +1352,7 @@ End of User Commands
    * Refresh the commands list by rescanning all directories.
    */
   async refresh(): Promise<void> {
+    const previousCommandPaths = new Set(Array.from(this.commands.values()).map((command) => this.normalizePath(command.filePath)));
     this.commands.clear();
 
     // Scan all watched directories
@@ -1331,6 +1367,13 @@ End of User Commands
 
     await this.scanSharedCommandSources();
     this.watchSharedCommandSources();
+
+    for (const command of this.commands.values()) {
+      previousCommandPaths.delete(this.normalizePath(command.filePath));
+    }
+    for (const removedPath of previousCommandPaths) {
+      this.removeCommandIndexPath(removedPath);
+    }
 
     this.emit('commandsChanged', this.getCommands());
   }
@@ -1482,7 +1525,8 @@ End of User Commands
 
     // Remove cached commands from this directory
     for (const [name, command] of this.commands) {
-      if (command.filePath.startsWith(normalizedPath)) {
+      if (isPathInside(normalizedPath, this.normalizePath(command.filePath))) {
+        this.removeCommandIndexPath(command.filePath);
         this.commands.delete(name);
       }
     }
@@ -1572,6 +1616,7 @@ End of User Commands
       const command = this.createCommandFromFile(filePath);
       if (command) {
         this.commands.set(command.name, command);
+        this.indexCommandFile(command.filePath);
         this.emit('commandsChanged', this.getCommands());
       }
 
@@ -1599,6 +1644,7 @@ End of User Commands
       const command = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safePath));
       if (command) {
         this.commands.delete(command.name);
+        this.removeCommandIndexPath(command.filePath);
         this.emit('commandsChanged', this.getCommands());
       }
 
@@ -1637,6 +1683,7 @@ End of User Commands
       const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));
       if (oldCommand) {
         this.commands.delete(oldCommand.name);
+        this.removeCommandIndexPath(oldCommand.filePath);
       }
       this.updateCachedCommandFromFile(newFilePath);
       this.emit('commandsChanged', this.getCommands());
