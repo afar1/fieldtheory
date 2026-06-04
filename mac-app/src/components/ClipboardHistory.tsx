@@ -516,7 +516,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
 
-  // Librarian legacy immersive mode. Kept for Bookmarks; normal Library docs use focus chrome.
+  // Librarian legacy immersive mode. Normal Library surfaces use focus chrome.
   const [librarianImmersive, setLibrarianImmersive] = useState(
     () => initialLibraryOpenTarget ? false : shouldRestoreLibrarianImmersive(localStorage)
   );

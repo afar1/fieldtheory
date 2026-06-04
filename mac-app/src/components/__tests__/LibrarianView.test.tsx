@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 import LibrarianView, {
@@ -894,6 +895,7 @@ describe('LibrarianView render', () => {
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const createButton = await screen.findByRole('button', { name: 'New file in Handoff' });
+    expect(createButton.style.opacity).toBe('');
     fireEvent.click(createButton);
     fireEvent.click(createButton);
 
@@ -915,6 +917,66 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(screen.getByText('New Page')).toBeTruthy();
     });
+  });
+
+  it('uses document-style floating sidebar behavior for Bookmarks immersive mode', async () => {
+    Object.defineProperty(window, 'bookmarksAPI', {
+      configurable: true,
+      value: {
+        getAll: vi.fn(async () => ({
+          bookmarks: [{ id: 'bookmark-1', text: 'Saved bookmark', folders: [] }],
+          folders: [],
+          xLastSyncedAt: null,
+        })),
+        onChanged: vi.fn(() => () => {}),
+        syncIfStale: vi.fn(async () => ({ status: 'fresh' })),
+      },
+    });
+
+    function BookmarksHarness() {
+      const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+      const [focusChromeEnabled, setFocusChromeEnabled] = useState(false);
+
+      return (
+        <LibrarianView
+          sidebarCollapsed={sidebarCollapsed}
+          focusChromeEnabled={focusChromeEnabled}
+          onFocusChromeEnabledChange={setFocusChromeEnabled}
+          onFocusChromeShortcut={() => {
+            setFocusChromeEnabled(true);
+            setSidebarCollapsed(true);
+          }}
+          onSwitchToClipboard={vi.fn()}
+          initialOpenTarget={{ kind: 'bookmarks', path: 'bookmarks' }}
+        />
+      );
+    }
+
+    const { container } = render(<BookmarksHarness />);
+
+    await waitFor(() => {
+      expect(window.bookmarksAPI!.getAll).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Enter immersive view' }));
+
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
+    ) as HTMLElement | null;
+
+    await waitFor(() => {
+      expect(getHoverStrip()).toBeTruthy();
+    });
+
+    fireEvent.click(getHoverStrip()!);
+    expect(getHoverStrip()).toBeNull();
+    expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
+
+    fireEvent.mouseDown(root);
+    expect(getHoverStrip()).toBeTruthy();
   });
 
   function pasteText(target: HTMLElement, text: string): void {

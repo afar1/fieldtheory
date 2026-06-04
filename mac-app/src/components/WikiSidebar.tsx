@@ -3210,9 +3210,10 @@ function WikiSidebar({
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
         <style>{`
+          .bm-new-file-btn { opacity: 0; }
           .bm-folder-header:hover .bm-new-file-btn { opacity: 0.28; }
           .bm-folder-header .bm-new-file-btn-near { opacity: 1; }
-          .bm-new-file-btn:hover { opacity: 1 !important; }
+          .bm-new-file-btn:hover { opacity: 1; }
           .bm-file-row:not(.bm-file-row-selected):hover,
           .bm-file-row-context:not(.bm-file-row-selected) {
             background-color: ${getLibrarySidebarFileHoverBg(theme.isDark)};
@@ -4013,7 +4014,6 @@ function TreeNode({
                   borderRadius: '3px',
                   color: theme.textSecondary,
                   cursor: createInFlight ? 'default' : 'pointer',
-                  opacity: 0,
                   transition: 'opacity 0.12s ease, background 0.12s ease',
                 }}
                 onMouseEnter={(e) => {
