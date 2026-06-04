@@ -1,7 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
-import { getLibraryTextDocumentKind, isPathInside, type LibraryTextDocumentKind } from './pathSafety';
+import {
+  getLibraryTextDocumentKind,
+  isPathInside,
+  libraryTextDocumentFileNameFromUserInput,
+  markdownFileNameFromUserInput,
+  normalizeUserDocumentNameInput,
+  normalizeUserDocumentRelPathInput,
+  stripMarkdownFileExtension,
+  type LibraryTextDocumentKind,
+} from './pathSafety';
+import { isHiddenWikiFileName, isHiddenWikiFolderName } from './librarianManager';
 
 export type BrowserHelperTreeNode = {
   kind: 'file' | 'dir';
@@ -327,7 +337,7 @@ export class BrowserHelperDocumentService {
     const trimmed = newName.trim();
     if (!trimmed) return null;
     const extension = path.extname(resolved.filePath) || '.md';
-    const nextFileName = markdownFileNameFromTitle(trimmed, extension);
+    const nextFileName = libraryTextFileNameFromTitle(trimmed, extension);
     if (!nextFileName) return null;
     const nextPath = path.resolve(path.dirname(resolved.filePath), nextFileName);
     if (!this.roots.some((root) => isPathInside(root.path, nextPath))) return null;
@@ -386,15 +396,13 @@ export class BrowserHelperDocumentService {
     const nodes: BrowserHelperTreeNode[] = [];
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.isDirectory() ? isHiddenWikiFolderName(entry.name) : isHiddenWikiFileName(entry.name)) continue;
       const absPath = path.join(currentPath, entry.name);
       const relPath = path.relative(rootPath, absPath).split(path.sep).join('/');
 
       if (entry.isDirectory()) {
         const children = this.readTree(rootPath, absPath);
-        if (children.length > 0) {
-          nodes.push({ kind: 'dir', name: entry.name, relPath, children });
-        }
+        nodes.push({ kind: 'dir', name: entry.name, relPath, children });
         continue;
       }
 
@@ -414,7 +422,7 @@ export class BrowserHelperDocumentService {
 
   private collectTextFiles(rootPath: string, currentPath: string, output: string[]): void {
     for (const entry of safeReadDir(currentPath)) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.isDirectory() ? isHiddenWikiFolderName(entry.name) : isHiddenWikiFileName(entry.name)) continue;
       const absPath = path.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         this.collectTextFiles(rootPath, absPath, output);
@@ -430,15 +438,13 @@ export class BrowserHelperDocumentService {
     const nodes: BrowserHelperWikiNode[] = [];
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.isDirectory() ? isHiddenWikiFolderName(entry.name) : isHiddenWikiFileName(entry.name)) continue;
       const absPath = path.join(currentPath, entry.name);
       const relPath = path.relative(rootPath, absPath).split(path.sep).join('/');
 
       if (entry.isDirectory()) {
         const children = this.readNativeTree(rootPath, absPath);
-        if (children.length > 0) {
-          nodes.push({ kind: 'dir', name: entry.name, relPath, children });
-        }
+        nodes.push({ kind: 'dir', name: entry.name, relPath, children });
         continue;
       }
 
@@ -626,13 +632,8 @@ function titleFromRelPath(relPath: string): string {
 }
 
 function normalizeLibraryRelPath(relPath: string): string | null {
-  if (typeof relPath !== 'string') return null;
-  const trimmed = relPath.trim();
-  if (trimmed.includes('\0') || path.isAbsolute(trimmed)) return null;
-  if (!trimmed) return '';
-  const parts = trimmed.split(/[\\/]+/).filter(Boolean);
-  if (parts.some((part) => part === '.' || part === '..' || part.startsWith('.'))) return null;
-  return parts.join('/');
+  if (typeof relPath !== 'string' || path.isAbsolute(relPath.trim())) return null;
+  return normalizeUserDocumentRelPathInput(relPath, { rejectHiddenSegments: true });
 }
 
 function isArtifactsRelPath(relPath: string): boolean {
@@ -640,11 +641,17 @@ function isArtifactsRelPath(relPath: string): boolean {
 }
 
 function markdownFileNameFromTitle(title: string, extension = '.md'): string | null {
-  const trimmed = title.trim();
-  if (!trimmed || trimmed.includes('\0')) return null;
-  const baseName = path.basename(trimmed).replace(/\.(md|markdown|mdx)$/i, '').trim();
-  if (!baseName || baseName === '.' || baseName === '..' || baseName.startsWith('.')) return null;
-  return `${baseName}${extension || '.md'}`;
+  const normalized = normalizeUserDocumentNameInput(title, { rejectLeadingUnderscore: true });
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return markdownFileNameFromUserInput(normalized, { rejectLeadingUnderscore: true });
+  }
+  return markdownFileNameFromUserInput(`${normalized}${extension || '.md'}`, { rejectLeadingUnderscore: true });
+}
+
+function libraryTextFileNameFromTitle(title: string, extension = '.md'): string | null {
+  return libraryTextDocumentFileNameFromUserInput(title, extension || '.md', { rejectLeadingUnderscore: true });
 }
 
 function versionsMatch(left: DocumentVersion, right: DocumentVersion): boolean {
