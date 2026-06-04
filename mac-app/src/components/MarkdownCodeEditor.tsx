@@ -3089,7 +3089,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             left: '0',
             top: '0',
             bottom: '0',
-            width: '6.5em',
+            width: '16em',
             transform: 'translateX(calc(-100% - 0.65em))',
             cursor: 'text',
             pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',

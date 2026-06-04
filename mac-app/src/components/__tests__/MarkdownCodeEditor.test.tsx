@@ -482,7 +482,7 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
     expect(listeners.mousemove).toBeUndefined();
   });
 
-  it('starts rendered line-number gutter drags at the visual row text start', () => {
+  it('starts rendered line-number gutter drags from far-left margin at the visual row text start', () => {
     const hitArea = document.createElement('div');
     hitArea.className = MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS;
     const listeners: Partial<Record<string, (event: MouseEvent) => void>> = {};
@@ -510,7 +510,7 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
     } as unknown as EditorView;
     const event = new MouseEvent('mousedown', {
       button: 0,
-      clientX: 170,
+      clientX: 20,
       clientY: 80,
     });
     Object.defineProperty(event, 'target', { value: hitArea });
