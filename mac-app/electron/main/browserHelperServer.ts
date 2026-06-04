@@ -15,6 +15,7 @@ import {
 } from './localImageProtocol';
 import { isPathInside } from './pathSafety';
 import type { RecentEntry, RecentKind } from './recentManager';
+import { isAllowedExternalShellUrl } from './shellIpc';
 
 export type BrowserHelperServerOptions = {
   service: BrowserHelperDocumentServiceLike;
@@ -268,6 +269,58 @@ export type BrowserHelperNativeBridge = {
   getActiveLibraryFileContext?: () => unknown | Promise<unknown>;
 };
 
+function sanitizeAuthSessionForBrowserHelper(session: unknown): unknown | null {
+  if (!session || typeof session !== 'object') return null;
+  const input = session as {
+    authenticated?: unknown;
+    expires_at?: unknown;
+    expiresAt?: unknown;
+    tier?: unknown;
+    callsign?: unknown;
+    displayName?: unknown;
+    user?: {
+      id?: unknown;
+      email?: unknown;
+      user_metadata?: unknown;
+      app_metadata?: unknown;
+    } | null;
+  };
+  const user = input.user && typeof input.user === 'object'
+    ? {
+        id: typeof input.user.id === 'string' ? input.user.id : '',
+        email: typeof input.user.email === 'string' ? input.user.email : undefined,
+        user_metadata: input.user.user_metadata && typeof input.user.user_metadata === 'object'
+          ? input.user.user_metadata
+          : undefined,
+        app_metadata: input.user.app_metadata && typeof input.user.app_metadata === 'object'
+          ? input.user.app_metadata
+          : undefined,
+      }
+    : null;
+  if (!user?.id) return null;
+  return {
+    authenticated: input.authenticated === false ? false : true,
+    expires_at: typeof input.expires_at === 'number' ? input.expires_at : null,
+    expiresAt: typeof input.expiresAt === 'number'
+      ? input.expiresAt
+      : typeof input.expires_at === 'number'
+        ? input.expires_at
+        : null,
+    tier: input.tier === 'pro' ? 'pro' : 'free',
+    callsign: typeof input.callsign === 'string' ? input.callsign : null,
+    displayName: typeof input.displayName === 'string' ? input.displayName : undefined,
+    user,
+  };
+}
+
+function sanitizeNativeEvent(event: BrowserHelperNativeEvent): BrowserHelperNativeEvent {
+  if (event.type !== 'auth:sessionChanged') return event;
+  return {
+    ...event,
+    session: sanitizeAuthSessionForBrowserHelper(event.session),
+  };
+}
+
 export class BrowserHelperServer {
   private readonly service: BrowserHelperDocumentServiceLike;
   private readonly reportCurrentDocument?: (context: DocumentPresenceContext, clientId?: string | null) => void;
@@ -330,7 +383,8 @@ export class BrowserHelperServer {
   }
 
   emitNativeEvent(event: BrowserHelperNativeEvent): void {
-    const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    const safeEvent = sanitizeNativeEvent(event);
+    const payload = `event: ${safeEvent.type}\ndata: ${JSON.stringify(safeEvent)}\n\n`;
     for (const client of this.eventClients.keys()) {
       client.write(payload);
     }
@@ -342,7 +396,8 @@ export class BrowserHelperServer {
 
   emitNativeEventToClient(clientId: string | null | undefined, event: BrowserHelperNativeEvent): boolean {
     if (!clientId) return false;
-    const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    const safeEvent = sanitizeNativeEvent(event);
+    const payload = `event: ${safeEvent.type}\ndata: ${JSON.stringify(safeEvent)}\n\n`;
     let sent = false;
     for (const [client, connectedClientId] of this.eventClients) {
       if (connectedClientId !== clientId) continue;
@@ -480,7 +535,7 @@ export class BrowserHelperServer {
       }
 
       if (req.method === 'GET' && parsed.pathname === '/native/auth/session') {
-        const session = await this.nativeBridge.getAuthSession?.() ?? null;
+        const session = sanitizeAuthSessionForBrowserHelper(await this.nativeBridge.getAuthSession?.() ?? null);
         writeJson(res, 200, { ok: true, session }, req.headers.origin);
         return;
       }
@@ -1597,7 +1652,9 @@ export class BrowserHelperServer {
       if (req.method === 'POST' && parsed.pathname === '/native/shell/open-external') {
         const body = await readJsonBody(req);
         const href = typeof body.href === 'string' ? body.href : '';
-        const success = href ? await this.nativeBridge.openExternal?.(href) ?? false : false;
+        const success = href && isAllowedExternalShellUrl(href)
+          ? await this.nativeBridge.openExternal?.(href) ?? false
+          : false;
         writeJson(res, 200, { ok: true, success }, req.headers.origin);
         return;
       }

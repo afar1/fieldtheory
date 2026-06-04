@@ -220,7 +220,7 @@ import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
 import { readCodexTerminalPasteText } from './codexTerminalClipboard';
-import { registerShellIpc } from './shellIpc';
+import { isAllowedExternalShellUrl, registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -3117,7 +3117,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     staticDir: path.join(app.getAppPath(), 'dist'),
     nativeBridge: {
-      getAuthSession: () => authManager?.getSession() ?? null,
+      getAuthSession: () => authManager?.getSessionState() ?? null,
       getAuthCallsign: () => getCurrentUserCallsign(),
       getMetrics: () => metricsManager?.getMetrics() ?? null,
       fetchMetricsFromSupabase: () => metricsManager?.fetchFromSupabase() ?? false,
@@ -3625,6 +3625,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       installUpdate: () => installAppUpdate(),
       dismissUpdate: () => dismissAppUpdate(),
       openExternal: (href) => {
+        if (!isAllowedExternalShellUrl(href)) return false;
         shell.openExternal(href);
         return true;
       },
@@ -10458,7 +10459,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.signInWithPassword(email, password);
+    const result = await authManager.signInWithPassword(email, password);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:prepareForNewLogin', async () => {
@@ -10483,7 +10488,10 @@ function setupClipboardIPCHandlers(): void {
       await quotaManager.reload();
     }
 
-    return result;
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
@@ -10511,7 +10519,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.setSessionFromUrl(accessToken, refreshToken);
+    const result = await authManager.setSessionFromUrl(accessToken, refreshToken);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:signOut', async () => {
@@ -10638,7 +10650,7 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return null;
     }
-    return authManager.getSession();
+    return authManager.getSessionState();
   });
 
   ipcMain.handle('auth:isSuperAdmin', (): boolean => {
@@ -14412,14 +14424,16 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Listen for session changes (login/logout, token refresh)
   authManager.on('sessionChanged', async (session) => {
+    if (!authManager) return;
+    const sessionState = authManager.getSessionState();
     logUserState(session ? 'login' : 'logout');
     taggedDocsManager?.setIdentity(session?.user?.email ?? null);
 
-    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session });
+    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session: sessionState });
 
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
-        win.webContents.send('session-changed', session);
+        win.webContents.send('session-changed', sessionState);
       }
     });
 
