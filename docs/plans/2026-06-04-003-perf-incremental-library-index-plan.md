@@ -670,7 +670,7 @@ This is the current requirement-by-requirement state before manual feel-testing:
 
 **Go / no-go for feel-test**
 
-Go. The code is ready for manual feel-testing because focused tests, Electron typecheck, production build, and package-safety guard pass.
+Done. Manual feel-testing found release-relevant freshness bugs in external file rename, move, and delete handling. The branch should not ship to public experimental until those are fixed and re-tested.
 
 **No-go for public experimental packaging from this worktree**
 
@@ -702,6 +702,30 @@ The app-side TypeScript cleanup is now complete.
 The TypeScript cleanup was mechanical: stricter optional IPC method calls, a footer ref type correction, and test helper narrowing. It does not change the indexing architecture or the user-facing fast paths.
 
 This moves the branch from "implementation likely ready" to "ready for manual feel-testing." The remaining blockers are packaging/release-process gates, not this latency branch's code path: non-symlink `node_modules`, correct `experimental` branch or explicit release override, and the Electron/dev-tooling audit decision.
+
+---
+
+## Progress Update: 2026-06-04 Manual Feel-Test Results
+
+Manual testing used the saved root checkout at `/Users/afar/dev/fieldtheory` and a fresh dev app run from `mac-app`.
+
+What worked:
+
+- `Shift+Command+K` opened Command Launcher.
+- Searching `Thursday Jun 4` returned `Thursday Jun 4th` immediately as the top result.
+- `New doc` created and immediately selected a new scratchpad note named `Thursday Jun 4th at 1:53pm`.
+- The Scratchpad count increased right away after the app-owned create.
+- The accidental launcher insert into `README: Artifacts` was undone, and the file on disk was verified clean.
+- All disposable test files and folders were removed from disk after the test.
+
+What failed:
+
+- A disposable markdown file created directly in `~/.fieldtheory/library/scratchpad` did not appear in sidebar search or `library-index.db` within the first few seconds.
+- After the app-owned disposable note was renamed on disk, the sidebar eventually showed the renamed file, but the active document did not follow the rename. The active view jumped to `Monday Jun 1st`.
+- After the renamed disposable note was moved into a disposable folder, the sidebar continued showing the file at the old top-level location after several seconds.
+- After deleting the disposable files/folder from disk, the sidebar still showed the stale disposable rows after several seconds.
+
+This is a no-go for public experimental release. The next fix should focus on watcher-driven external rename, move, and delete reconciliation for visible sidebar rows and active selection state. App-owned create looks good, but external filesystem changes are still too stale for the "recent work and file operations feel near-real-time" requirement.
 
 ---
 
