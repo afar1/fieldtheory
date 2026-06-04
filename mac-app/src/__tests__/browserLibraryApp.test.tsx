@@ -1774,14 +1774,18 @@ describe('BrowserLibraryApp', () => {
     expect(window.localStorage.setItem).not.toHaveBeenCalledWith('librarian-immersive', 'false');
   });
 
-  it('starts bookmark targets in native legacy fullscreen when requested', async () => {
+  it('starts bookmark focus-chrome targets with the sidebar collapsed instead of legacy fullscreen', async () => {
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = (props: {
+      focusChromeEnabled?: boolean;
       initialFullScreen?: boolean;
       initialOpenTarget?: { kind?: string } | null;
+      sidebarCollapsed?: boolean;
     }) => (
       <div data-testid="library-view">
         <span>{props.initialOpenTarget?.kind ?? 'no-target'}</span>
+        <span>{props.focusChromeEnabled ? 'focus-on' : 'focus-off'}</span>
+        <span>{props.sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-open'}</span>
         <span>{props.initialFullScreen ? 'initial-fullscreen' : 'initial-standard'}</span>
       </div>
     );
@@ -1797,8 +1801,9 @@ describe('BrowserLibraryApp', () => {
     );
 
     expect(await screen.findByText('bookmarks')).toBeTruthy();
-    expect(screen.getByText('initial-fullscreen')).toBeTruthy();
-    expect((document.querySelector('[data-fieldtheory-browser-library-footer="true"]') as HTMLElement).style.display).toBe('none');
+    expect(screen.getByText('focus-on')).toBeTruthy();
+    expect(screen.getByText('sidebar-collapsed')).toBeTruthy();
+    expect(screen.getByText('initial-standard')).toBeTruthy();
   });
 
   it('reports direct Commands, Bookmarks, and Ember launches as their active surfaces before child selection callbacks', async () => {

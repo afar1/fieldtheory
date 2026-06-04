@@ -768,7 +768,7 @@ export function isLibrarianSidebarHidden(input: {
   isFullScreen: boolean;
   selectedItemType: LibrarianSelectedItemType;
 }): boolean {
-  return input.isFullScreen && input.selectedItemType !== 'bookmarks';
+  return input.isFullScreen;
 }
 
 export function isTextEntryInputType(type: string | null | undefined): boolean {
@@ -3123,7 +3123,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   });
   const selectedItemIdRef = useRef<string | null>(selectedItemId);
   const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => initialSelection?.type ?? null);
-  const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
+  const canUseFocusImmersive =
+    selectedItemType === 'wiki' ||
+    selectedItemType === 'artifact' ||
+    selectedItemType === 'external' ||
+    selectedItemType === 'bookmarks';
+  const selectedItemUsesLegacyImmersive = selectedItemType === null;
   const [isFullScreen, setIsFullScreen] = useState(() => (
     initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
   ));
@@ -3761,7 +3766,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     renderedEditingActiveRef.current = true;
     setRenderedEditingActive(true);
   }, []);
-  const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && effectiveSidebarCollapsed && contentMode === 'markdown';
   const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
     active,
@@ -9943,7 +9947,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           >
             <BookmarksPane
               active={active && selectedItemType === 'bookmarks'}
-              isFullScreen={isFullScreen}
+              isFullScreen={isFullScreen || focusImmersive}
               onToggleFullScreen={toggleImmersive}
               onCanvasModeActiveChange={setBookmarksCanvasActive}
               onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}

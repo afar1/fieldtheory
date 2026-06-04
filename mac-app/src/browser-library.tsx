@@ -1571,8 +1571,7 @@ function BrowserLibrarySurface(props: {
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = React.useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = React.useState<number | null>(null);
   const [librarianImmersive, setLibrarianImmersive] = React.useState(() => (
-    normalizedInitialOpenTarget?.kind === 'bookmarks' && normalizedInitialOpenTarget.focusChrome === true
-    || window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+    window.localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
   ));
   const [focusChromeChildActive, setFocusChromeChildActive] = React.useState(false);
   const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = React.useState(
