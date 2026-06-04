@@ -4872,6 +4872,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     setInlineGemmaRunning(true);
     setInlineGemmaError(null);
+    setInlineGemmaOpen(false);
+    setInlineGemmaInstruction('');
+    setInlineGemmaSelection(null);
     void (async () => {
       restoreInlineGemmaEditorSelection(inlineGemmaSelection);
       await flushCurrentEdit();
@@ -4884,9 +4887,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         setInlineGemmaError(result.error ?? 'Local command failed.');
         return;
       }
-      setInlineGemmaOpen(false);
-      setInlineGemmaInstruction('');
-      setInlineGemmaSelection(null);
     })().catch((err) => {
       setInlineGemmaError(err instanceof Error ? err.message : 'Local command failed.');
     }).finally(() => {
