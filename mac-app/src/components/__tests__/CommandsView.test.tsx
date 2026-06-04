@@ -101,6 +101,12 @@ describe('CommandsView command naming', () => {
         }),
       },
     });
+    Object.defineProperty(window, 'libraryAPI', {
+      configurable: true,
+      value: {
+        getBacklinkRelationDocuments: vi.fn(async () => []),
+      },
+    });
     Object.defineProperty(window, 'wikiAPI', {
       configurable: true,
       value: {
@@ -565,6 +571,60 @@ describe('CommandsView command naming', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(getCommandByPath.mock.calls.map(([path]) => path)).toEqual([reviewCommand.filePath]);
+  });
+
+  it('uses indexed backlinks before delayed full relation hydration for selected commands', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 0,
+    };
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+    window.libraryAPI!.getBacklinkRelationDocuments = vi.fn(async () => []);
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(window.libraryAPI!.getBacklinkRelationDocuments).toHaveBeenCalledWith({
+        kind: 'command',
+        path: existingCommand.filePath,
+      });
+    });
+    getCommandByPath.mockClear();
+
+    fireEvent.click(screen.getAllByText('review')[0]);
+
+    expect(await screen.findByText('See [[existing]].')).toBeTruthy();
+    await waitFor(() => {
+      expect(window.libraryAPI!.getBacklinkRelationDocuments).toHaveBeenCalledWith({
+        kind: 'command',
+        path: reviewCommand.filePath,
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(getCommandByPath.mock.calls.map(([path]) => path)).toEqual([reviewCommand.filePath]);
   });
 

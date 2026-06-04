@@ -4525,6 +4525,20 @@ interface WikiPage extends WikiPageMeta {
   content: string;
   documentVersion: DocumentVersion;
 }
+interface WikiBacklinkRelationDocument {
+  target: { kind: 'wiki'; relPath: string };
+  title: string;
+  content: string;
+}
+type LibraryBacklinkTarget =
+  | { kind: 'wiki'; relPath: string }
+  | { kind: 'artifact'; path: string }
+  | { kind: 'command'; path: string };
+interface LibraryBacklinkRelationDocument {
+  target: LibraryBacklinkTarget;
+  title: string;
+  content: string;
+}
 interface WikiFolder {
   name: string;
   files: WikiPageMeta[];
@@ -4550,6 +4564,16 @@ interface LibraryRenameEvent {
   source?: 'app' | 'watcher' | 'external';
   detectedAt?: number;
   emittedAt?: number;
+}
+interface LibraryChangeEvent {
+  type: 'file-added' | 'file-changed' | 'file-deleted';
+  rootPath: string;
+  relPath: string;
+  absPath: string;
+  builtin: boolean;
+  source: 'watcher' | 'app' | 'external';
+  detectedAt: number;
+  page?: WikiPageMeta;
 }
 interface LibraryMigrationFile {
   relPath: string;
@@ -4684,10 +4708,12 @@ const libraryAPI = {
   moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
+  getBacklinkRelationDocuments: (target: LibraryBacklinkTarget): Promise<LibraryBacklinkRelationDocument[]> =>
+    ipcRenderer.invoke('library:getBacklinkRelationDocuments', target),
   openDocumentWindow: (target: LibraryDocumentWindowTarget): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('library:openDocumentWindow', target),
-  onRootsChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onRootsChanged: (callback: (event?: LibraryChangeEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: LibraryChangeEvent) => callback(payload);
     ipcRenderer.on('library:changed', handler);
     return () => ipcRenderer.removeListener('library:changed', handler);
   },
@@ -4701,6 +4727,8 @@ const libraryAPI = {
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
+  getBacklinkRelationDocuments: (relPath: string): Promise<WikiBacklinkRelationDocument[]> =>
+    ipcRenderer.invoke('wiki:getBacklinkRelationDocuments', relPath),
   findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string): Promise<WikiPage | null> =>
     ipcRenderer.invoke('wiki:findPageByDocumentVersion', version, previousRelPath),
   save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
@@ -4713,8 +4741,8 @@ const wikiAPI = {
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   rename: (relPath: string, newName: string): Promise<string | null> =>
     ipcRenderer.invoke('wiki:rename', relPath, newName),
-  onPageChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onPageChanged: (callback: (event?: LibraryChangeEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: LibraryChangeEvent) => callback(payload);
     ipcRenderer.on('wiki:changed', handler);
     return () => ipcRenderer.removeListener('wiki:changed', handler);
   },
@@ -4872,8 +4900,8 @@ const recentAPI = {
   visit: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:visit', entry),
   remove: (kind: 'wiki' | 'external', entryPath: string): Promise<RecentEntry[]> =>
     ipcRenderer.invoke('recent:remove', kind, entryPath),
-  onChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onChanged: (callback: (entries?: RecentEntry[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, entries?: RecentEntry[]) => callback(entries);
     ipcRenderer.on('recent:changed', handler);
     return () => ipcRenderer.removeListener('recent:changed', handler);
   },

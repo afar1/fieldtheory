@@ -70,12 +70,12 @@ export type BrowserHelperServerAddress = {
 export type BrowserHelperClientSurface = 'library' | 'commands' | 'bookmarks' | 'ember';
 
 export type BrowserHelperNativeEvent =
-  | { type: 'wiki:changed' }
+  | { type: 'wiki:changed'; event?: unknown }
   | { type: 'wiki:deleted'; relPath: string }
   | { type: 'wiki:renamed'; event: unknown }
   | { type: 'wiki:openPage'; relPath: string }
   | { type: 'wiki:openScratchpad'; relPath: string }
-  | { type: 'library:changed' }
+  | { type: 'library:changed'; event?: unknown }
   | { type: 'library:renamed'; event: unknown }
   | { type: 'external:openPage'; absPath: string }
   | { type: 'librarian:readingAdded'; reading: unknown }
@@ -89,7 +89,7 @@ export type BrowserHelperNativeEvent =
   | { type: 'librarian:insertMarkdownText'; text: string }
   | { type: 'librarian:insertPlainMarkdownText'; text: string }
   | { type: 'librarian:replaceSelectedMarkdownText'; request: unknown }
-  | { type: 'recent:changed' }
+  | { type: 'recent:changed'; entries?: unknown }
   | { type: 'taggedDocs:updated'; docs?: unknown }
   | { type: 'taggedDocs:scanProgress'; progress: unknown }
   | { type: 'sharedFiles:presenceChanged'; payload: unknown }

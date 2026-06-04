@@ -30,6 +30,7 @@ Examples include:
 - Supabase session file: `supabase-session.json`
 - preferences: `preferences.json`
 - clipboard database: `clipboard.db`
+- Library metadata cache: `library-index.db`
 - local metrics: `user-metrics.json`
 - Librarian settings and index files
 - command settings
@@ -37,6 +38,8 @@ Examples include:
 - generated figures
 
 Important distinction: Supabase sessions are persisted as local files, not in macOS Keychain. The app also writes `~/.fieldtheory/session.json` as a CLI-facing mirror containing user id, email, display name, and expiry, but not access or refresh tokens.
+
+`library-index.db` is a local, rebuildable cache. It stores stat-gated document metadata such as title, todo/archive state, shared-file labels, edit actor metadata, mtime, and size. It can also store parsed link metadata such as raw wiki-link targets, external hrefs, display text, and source offsets. It does not store full document bodies; deleting the cache should only make future repair scans rebuild metadata from source files.
 
 ## Clipboard data
 
