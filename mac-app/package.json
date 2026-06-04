@@ -32,6 +32,8 @@
     "guard:package-safety": "node scripts/check-package-safety.mjs",
     "guard:package-safety:experimental": "node scripts/check-package-safety.mjs electron-builder.experimental.json",
     "guard:electron-dist-requires": "node scripts/check-electron-dist-requires.mjs",
+    "verify:release": "node scripts/verify-release.mjs production",
+    "verify:release:experimental": "node scripts/verify-release.mjs experimental",
     "rebuild": "PYTHON=${PYTHON:-python3.11} electron-rebuild -f -w better-sqlite3,node-pty",
     "postinstall": "PYTHON=${PYTHON:-python3.11} electron-rebuild -f -w better-sqlite3,node-pty",
     "start": "electron .",

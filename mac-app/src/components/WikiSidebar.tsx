@@ -422,7 +422,7 @@ export function getLibraryDragData(dataTransfer: DataTransfer): LibraryDragItem 
 export function canDropLibraryItem(item: LibraryDragItem | null, target: LibraryCreateLocation): boolean {
   if (!item) return false;
   const crossRoot = item.rootPath !== target.rootPath;
-  if (crossRoot && item.kind !== 'file') return false;
+  if (crossRoot && item.kind === 'dir') return false;
   if (item.kind === 'dir') {
     if (item.relPath === target.relPath) return false;
     if (target.relPath.startsWith(`${item.relPath}/`)) return false;

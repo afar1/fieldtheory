@@ -27,6 +27,8 @@
 
 ## Build & Distribution
 
+- [ ] **Strict production verify** - Run `npm run verify:release` from `mac-app`
+- [ ] **Strict experimental verify** - Run `npm run verify:release:experimental` from `mac-app` before publishing an experimental build
 - [ ] **Production build** - Create packaged build pushed to GitHub
 - [ ] **Auto-update test** - Verify update functionality works
 - [ ] **Fresh Mac test** - Run on new Mac to experience as new user

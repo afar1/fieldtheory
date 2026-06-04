@@ -46,7 +46,7 @@ export function writeTextFileAtomically(filePath: string, content: string): void
   const dirPath = path.dirname(filePath);
   const fileName = path.basename(filePath);
   const tempPath = path.join(dirPath, `.${fileName}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  const mode = fs.statSync(filePath).mode & 0o777;
+  const mode = fs.existsSync(filePath) ? fs.statSync(filePath).mode & 0o777 : 0o600;
   let fd: number | null = null;
 
   try {

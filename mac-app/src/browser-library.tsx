@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { useTheme } from './contexts/ThemeContext';
+import type { LibrarianSelectedItemType } from './components/LibrarianView';
 import {
   LibraryFooterLocalCommandStatusControls,
   LibraryFooterLogo,
@@ -451,12 +452,13 @@ export async function syncRendererStorage(
   options: RendererStorageApplyOptions = {},
 ): Promise<void> {
   const response = await request<RendererStorageResponse>('/native/renderer-storage')
-    .catch(() => ({ available: false, values: {} }));
+    .catch((): RendererStorageResponse => ({ available: false, values: {} }));
   if (!response.available) return;
+  const values = response.values;
   const setItem = options.setItem ?? window.localStorage.setItem.bind(window.localStorage);
   const removeItem = options.removeItem ?? window.localStorage.removeItem.bind(window.localStorage);
   for (const key of RENDERER_STORAGE_SYNC_KEYS) {
-    const value = response.values[key];
+    const value = values[key];
     const currentValue = window.localStorage.getItem(key);
     if (typeof value === 'string') {
       if (options.fillMissingOnly && currentValue !== null) continue;
@@ -2283,7 +2285,7 @@ function BrowserLibrarySurface(props: {
               onFocusChromeActiveChange={handleFocusChromeActiveChange}
               onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
               onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
-              onSelectedItemTypeChange={(type) => {
+              onSelectedItemTypeChange={(type: LibrarianSelectedItemType) => {
                 if (surface !== 'library') return;
                 if (type === 'bookmarks' || type === 'ember') {
                   reportActiveSurface(type);
@@ -2466,14 +2468,14 @@ function BrowserLibraryFooter(props: {
         }
       `}</style>
       <div
-      ref={footerRef}
-      data-fieldtheory-browser-library-footer="true"
-      style={{
-        position: interactive ? 'relative' : 'absolute',
-        left: interactive ? undefined : 0,
-        right: interactive ? undefined : 0,
-        bottom: interactive ? undefined : 0,
-        zIndex: interactive ? undefined : 20,
+        ref={footerRef as React.LegacyRef<HTMLDivElement>}
+        data-fieldtheory-browser-library-footer="true"
+        style={{
+          position: interactive ? 'relative' : 'absolute',
+          left: interactive ? undefined : 0,
+          right: interactive ? undefined : 0,
+          bottom: interactive ? undefined : 0,
+          zIndex: interactive ? undefined : 20,
         boxSizing: 'border-box',
         padding: '8px 16px',
         height: 'auto',

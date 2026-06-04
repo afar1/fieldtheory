@@ -158,6 +158,7 @@ describe('BrowserHelperServer', () => {
         email: 'river@example.com',
       },
       access_token: 'token-1',
+      refresh_token: 'refresh-1',
     };
     const server = new BrowserHelperServer({
       service: new BrowserHelperDocumentService([root]),
@@ -174,7 +175,19 @@ describe('BrowserHelperServer', () => {
     const callsignResponse = await request(`http://${address.host}:${address.port}/native/auth/callsign?token=test-token`);
 
     expect(response.status).toBe(200);
-    expect(response.body.session).toEqual(session);
+    expect(response.body.session).toEqual({
+      authenticated: true,
+      callsign: null,
+      expires_at: null,
+      expiresAt: null,
+      tier: 'free',
+      user: {
+        id: 'user-1',
+        email: 'river@example.com',
+      },
+    });
+    expect(JSON.stringify(response.body.session)).not.toContain('token-1');
+    expect(JSON.stringify(response.body.session)).not.toContain('refresh-1');
     expect(callsignResponse.status).toBe(200);
     expect(callsignResponse.body.callsign).toBe('river');
   });
@@ -1963,7 +1976,12 @@ describe('BrowserHelperServer', () => {
     const open = await request(`http://${address.host}:${address.port}/native/shell/open-external`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { href: 'fieldtheory://wiki/open?path=Plan' },
+      body: { href: 'https://fieldtheory.dev' },
+    });
+    const blockedOpen = await request(`http://${address.host}:${address.port}/native/shell/open-external`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { href: 'file:///tmp/private.md' },
     });
     const pasteCodex = await request(`http://${address.host}:${address.port}/native/shell/paste-into-codex-input`, {
       method: 'POST',
@@ -1982,6 +2000,7 @@ describe('BrowserHelperServer', () => {
     expect(immersiveDismissable.status).toBe(200);
     expect(sizeKey.status).toBe(200);
     expect(open.body.success).toBe(true);
+    expect(blockedOpen.body.success).toBe(false);
     expect(pasteCodex.body.result).toEqual({ success: true, delivery: 'native-helper' });
     expect(openNative.body.result).toEqual({ success: true });
     expect(calls).toEqual([
@@ -1989,7 +2008,7 @@ describe('BrowserHelperServer', () => {
       ['replace-result', { requestId: 'request-1', success: true }],
       ['immersive-dismissable', true, 'client-one'],
       ['size-key', 'canvas', 'client-one'],
-      ['open-external', 'fieldtheory://wiki/open?path=Plan'],
+      ['open-external', 'https://fieldtheory.dev'],
       ['paste-codex', 'selected prose'],
       ['open-field-theory-native', { kind: 'wiki', path: 'Plan.md', contentMode: 'rendered' }],
     ]);

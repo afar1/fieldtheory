@@ -17,11 +17,24 @@ npm test
 Use release packaging only when preparing a signed maintainer build:
 
 ```bash
+npm run verify:release
 npm run package
+
+npm run verify:release:experimental
 npm run package:experimental
 ```
 
-The package commands run release-channel guards, package-safety checks, native/helper builds, Whisper builds, Electron/Vite builds, Electron Builder, and signing/notarization hooks. They are intentionally stricter than contributor development.
+The verify commands run typecheck, the full test suite, production dependency audit, release-channel guards, tracked-source checks, package-safety checks, Electron/Vite builds, Electron dist require checks, and strict quality budgets without producing signed release artifacts.
+
+The package commands run release-channel guards, package-safety checks, native/helper builds, Whisper builds, Electron/Vite builds, Electron Builder, and signing/notarization hooks. They assume the matching verify command has already passed from the release branch.
+
+macOS release packaging fails if Apple notarization credentials are missing. For an intentional local unsigned package test only, set `FIELD_THEORY_ALLOW_UNSIGNED_NOTARIZATION_SKIP=true`; do not use that override for public production or experimental release artifacts.
+
+## Audit Posture
+
+`npm run verify:release` and `npm run verify:release:experimental` run `npm audit --omit=dev --audit-level=high`, which is the current release gate for production dependencies.
+
+As of June 4, 2026, full `npm audit --audit-level=high` still reports Electron and developer-tooling advisories, including Electron runtime advisories that require a major Electron upgrade. Treat that as a release-risk acceptance for small experimental builds only. A broad public production release should either upgrade Electron/electron-builder/vitest or carry a dated security acceptance note with the exact audit output and mitigations.
 
 ## Release channels
 
@@ -39,7 +52,7 @@ The release-channel behavior is implemented in:
 ## Publishing a maintainer release
 
 1. Confirm the intended release channel and version.
-2. Run the public safety checks.
+2. Run the matching strict verify command from `mac-app`.
 3. Build/package from `mac-app`.
 4. Publish the generated `.dmg`, `.zip`, and updater metadata to the appropriate maintainer release feed.
 5. Verify updater behavior from an installed packaged build.
@@ -59,5 +72,3 @@ The updater is for packaged builds. It is not expected to run from normal Vite/E
 ### Experimental updater cannot read releases
 
 Experimental builds may require maintainer GitHub authentication. Do not use broad classic personal access tokens for normal development. Prefer maintainer-scoped, least-privilege credentials outside the repository.
-
-
