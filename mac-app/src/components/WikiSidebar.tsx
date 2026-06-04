@@ -360,6 +360,18 @@ export function dispatchLocalWikiRenamed(event: LibraryRenameEvent): void {
   window.dispatchEvent(new CustomEvent<LibraryRenameEvent>(LOCAL_WIKI_RENAMED_EVENT, { detail: event }));
 }
 
+function getRenamedWikiAbsPath(oldAbsPath: string, oldRelPath: string, newRelPath: string): string {
+  if (!oldAbsPath) return '';
+  const extension = oldAbsPath.match(/\.(md|markdown|mdx)$/i)?.[0] ?? '.md';
+  const oldSuffix = `${oldRelPath}${extension}`;
+  if (oldAbsPath.endsWith(oldSuffix)) {
+    return `${oldAbsPath.slice(0, -oldSuffix.length)}${newRelPath}${extension}`;
+  }
+  const slashIndex = oldAbsPath.lastIndexOf('/');
+  if (slashIndex === -1) return `${newRelPath}${extension}`;
+  return `${oldAbsPath.slice(0, slashIndex + 1)}${newRelPath.split('/').pop() ?? newRelPath}${extension}`;
+}
+
 export function dispatchLocalWikiAdded(page: WikiPage): void {
   window.dispatchEvent(new CustomEvent<WikiPage>(LOCAL_WIKI_ADDED_EVENT, { detail: page }));
 }
@@ -409,7 +421,8 @@ export function getLibraryDragData(dataTransfer: DataTransfer): LibraryDragItem 
 
 export function canDropLibraryItem(item: LibraryDragItem | null, target: LibraryCreateLocation): boolean {
   if (!item) return false;
-  if (item.rootPath !== target.rootPath) return false;
+  const crossRoot = item.rootPath !== target.rootPath;
+  if (crossRoot && item.kind !== 'file') return false;
   if (item.kind === 'dir') {
     if (item.relPath === target.relPath) return false;
     if (target.relPath.startsWith(`${item.relPath}/`)) return false;
@@ -417,6 +430,31 @@ export function canDropLibraryItem(item: LibraryDragItem | null, target: Library
   const sourceParent = item.relPath.split('/').slice(0, -1).join('/');
   if (sourceParent === target.relPath) return false;
   return true;
+}
+
+export function getMovedLibraryFileSelectionItem(
+  target: LibraryCreateLocation,
+  newRelPath: string,
+  root?: Pick<LibraryRoot, 'builtin'> | null,
+  now = Date.now(),
+): UnifiedItem {
+  const isMarkdownRelPath = !/\.(html?|css)$/i.test(newRelPath);
+  const type = root?.builtin && isMarkdownRelPath ? 'wiki' : 'external';
+  const absPath = type === 'wiki'
+    ? ''
+    : `${target.rootPath.replace(/\/+$/, '')}/${isMarkdownRelPath ? `${newRelPath}.md` : newRelPath}`;
+  const id = type === 'wiki' ? `wiki:${newRelPath}` : `external:${absPath}`;
+  const fileName = newRelPath.split('/').pop() ?? newRelPath;
+
+  return {
+    id,
+    title: fileName,
+    type,
+    absPath,
+    relPath: newRelPath,
+    rootPath: target.rootPath,
+    timestamp: now,
+  };
 }
 
 interface UnifiedFolder {
@@ -1342,6 +1380,36 @@ export function collectSidebarSiblingItems(
   return [];
 }
 
+export function getNextVisibleSidebarItemAfterRemoval(
+  navigationItems: UnifiedItem[],
+  flatItems: UnifiedItem[],
+  selectedId: string | null,
+  targetIds: ReadonlySet<string>,
+): UnifiedItem | null {
+  const findFallback = (sourceItems: UnifiedItem[]): UnifiedItem | null => {
+    if (sourceItems.length === 0) return null;
+    const targetIndexes = sourceItems
+      .map((item, index) => targetIds.has(item.id) ? index : -1)
+      .filter((index) => index >= 0);
+    const selectedIndex = sourceItems.findIndex((item) => item.id === selectedId);
+    const startIndex = targetIndexes.length > 0
+      ? Math.min(...targetIndexes)
+      : selectedIndex >= 0
+        ? selectedIndex
+        : 0;
+
+    for (let index = startIndex; index < sourceItems.length; index += 1) {
+      if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
+    }
+    for (let index = startIndex - 1; index >= 0; index -= 1) {
+      if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
+    }
+    return null;
+  };
+
+  return findFallback(navigationItems) ?? findFallback(flatItems);
+}
+
 function matchesSidebarNode(node: SidebarNode, normalizedQuery: string): boolean {
   if (node.kind === 'file') return matchesLibrarySearch(node.item, normalizedQuery);
   return node.label.toLowerCase().includes(normalizedQuery) || node.relPath.toLowerCase().includes(normalizedQuery);
@@ -1687,6 +1755,7 @@ function WikiSidebar({
   const [moveError, setMoveError] = useState<string | null>(null);
   const [creating, setCreating] = useState<CreatingState>(null);
   const [newName, setNewName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const defaultCreateInFlightRef = useRef<Set<string>>(new Set());
   const [defaultCreateInFlightKeys, setDefaultCreateInFlightKeys] = useState<Set<string>>(new Set());
@@ -2163,7 +2232,7 @@ function WikiSidebar({
 
   const moveLibraryItem = useCallback(async (item: LibraryDragItem, target: LibraryCreateLocation) => {
     if (!canDropLibraryItem(item, target)) return;
-    const newRelPath = await window.libraryAPI?.moveItem(target.rootPath, item.kind, item.relPath, target.relPath);
+    const newRelPath = await window.libraryAPI?.moveItem(item.rootPath, item.kind, item.relPath, target.relPath, target.rootPath);
     if (!newRelPath) {
       setMoveError('Could not move item. A file or folder with that name may already exist.');
       return;
@@ -2173,22 +2242,7 @@ function WikiSidebar({
     if (item.kind === 'file') {
       const root = libraryRoots.find((entry) => entry.path === target.rootPath);
       setTimeout(() => {
-        const isMarkdownRelPath = !/\.(html?|css)$/i.test(newRelPath);
-        const type = root?.builtin && isMarkdownRelPath ? 'wiki' : 'external';
-        const absPath = type === 'wiki'
-          ? ''
-          : `${target.rootPath.replace(/\/+$/, '')}/${isMarkdownRelPath ? `${newRelPath}.md` : newRelPath}`;
-        const id = type === 'wiki' ? `wiki:${newRelPath}` : `external:${absPath}`;
-        const fileName = newRelPath.split('/').pop() ?? newRelPath;
-        onSelectItem({
-          id,
-          title: fileName,
-          type,
-          absPath,
-          relPath: newRelPath,
-          rootPath: target.rootPath,
-          timestamp: Date.now(),
-        });
+        onSelectItem(getMovedLibraryFileSelectionItem(target, newRelPath, root));
       }, 0);
     }
   }, [libraryRoots, onSelectItem, reloadTreeAndExpandLocation]);
@@ -2223,6 +2277,7 @@ function WikiSidebar({
     expandCreateLocation(location);
     setCreating({ kind: 'file', location });
     setNewName('');
+    setCreateError(null);
   }, [expandCreateLocation, onCreateDefaultFile, resolveCreateTarget]);
 
   const beginCreateDir = useCallback((target?: LibraryCreateTarget) => {
@@ -2231,6 +2286,7 @@ function WikiSidebar({
     expandCreateLocation(location);
     setCreating({ kind: 'dir', location });
     setNewName('');
+    setCreateError(null);
   }, [expandCreateLocation, resolveCreateTarget]);
 
   useEffect(() => {
@@ -2246,30 +2302,50 @@ function WikiSidebar({
   const cancelCreate = useCallback(() => {
     setCreating(null);
     setNewName('');
+    setCreateError(null);
   }, []);
+
+  const updateNewName = useCallback((value: string) => {
+    setNewName(value);
+    if (createError) setCreateError(null);
+  }, [createError]);
 
   const submitCreate = useCallback(async () => {
     const name = newName.trim();
     if (!name || !creating) { cancelCreate(); return; }
-    if (creating.kind === 'file') {
-      const created = await onCreateFile(creating.location, name);
-      if (created !== false) {
-        if (creating.location.builtin) {
-          expandCreateLocation(creating.location, joinLibraryRelPath(creating.location.relPath, name));
-        } else if (created && typeof created === 'object') {
-          setLibraryRoots((prev) => addPageToLibraryRoot(prev, creating.location.rootPath, created));
-          expandCreateLocation(creating.location, created.relPath);
-        } else {
-          await reloadTreeAndExpandLocation(creating.location);
+    setCreateError(null);
+    let createdSuccessfully = false;
+    try {
+      if (creating.kind === 'file') {
+        const created = await onCreateFile(creating.location, name);
+        if (created !== false) {
+          createdSuccessfully = true;
+          if (creating.location.builtin) {
+            expandCreateLocation(creating.location, joinLibraryRelPath(creating.location.relPath, name));
+          } else if (created && typeof created === 'object') {
+            setLibraryRoots((prev) => addPageToLibraryRoot(prev, creating.location.rootPath, created));
+            expandCreateLocation(creating.location, created.relPath);
+          } else {
+            await reloadTreeAndExpandLocation(creating.location);
+          }
+        }
+      } else {
+        const dirRelPath = joinLibraryRelPath(creating.location.relPath, name);
+        const nextLocation = { ...creating.location, relPath: dirRelPath };
+        const created = await onCreateDir(nextLocation);
+        if (created !== false) {
+          createdSuccessfully = true;
+          await reloadTreeAndExpandLocation(nextLocation);
         }
       }
-    } else {
-      const dirRelPath = joinLibraryRelPath(creating.location.relPath, name);
-      const nextLocation = { ...creating.location, relPath: dirRelPath };
-      const created = await onCreateDir(nextLocation);
-      if (created !== false) {
-        await reloadTreeAndExpandLocation(nextLocation);
-      }
+    } catch (error) {
+      console.warn('Failed to create library item:', error);
+    }
+    if (!createdSuccessfully) {
+      setCreateError(creating.kind === 'file'
+        ? 'Could not create file. Check the name or whether it already exists.'
+        : 'Could not create folder. Check the name or whether it already exists.');
+      return;
     }
     setCreating(null);
     setNewName('');
@@ -2507,30 +2583,9 @@ function WikiSidebar({
     onSelectItem(item);
   }, [flatItems, onKeyboardScopeActive, onOpenItemInNewWindow, onSelectItem, selectedFileIds, selectionAnchorId, updateSelectedFileIds]);
 
-  const getNextVisibleItemAfterMove = useCallback((targetIds: ReadonlySet<string>): UnifiedItem | null => {
-    const findFallback = (sourceItems: UnifiedItem[]): UnifiedItem | null => {
-      if (sourceItems.length === 0) return null;
-      const targetIndexes = sourceItems
-        .map((item, index) => targetIds.has(item.id) ? index : -1)
-        .filter((index) => index >= 0);
-      const selectedIndex = sourceItems.findIndex((item) => item.id === selectedId);
-      const startIndex = targetIndexes.length > 0
-        ? Math.min(...targetIndexes)
-        : selectedIndex >= 0
-          ? selectedIndex
-          : 0;
-
-      for (let index = startIndex; index < sourceItems.length; index += 1) {
-        if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
-      }
-      for (let index = startIndex - 1; index >= 0; index -= 1) {
-        if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
-      }
-      return null;
-    };
-
-    return findFallback(navigationItems) ?? findFallback(flatItems);
-  }, [flatItems, navigationItems, selectedId]);
+  const getNextVisibleItemAfterMove = useCallback((targetIds: ReadonlySet<string>): UnifiedItem | null => (
+    getNextVisibleSidebarItemAfterRemoval(navigationItems, flatItems, selectedId, targetIds)
+  ), [flatItems, navigationItems, selectedId]);
 
   const toggleSidebarItemSelection = useCallback((item: UnifiedItem) => {
     if (item.type === 'bookmarks') return;
@@ -3322,12 +3377,13 @@ function WikiSidebar({
         <CreateInput
           inputRef={createInputRef}
           value={newName}
-          onChange={setNewName}
+          onChange={updateNewName}
           onSubmit={submitCreate}
           onCancel={cancelCreate}
           theme={theme}
           depth={0}
           placeholder="Untitled"
+          error={createError}
         />
       )}
 
@@ -3335,12 +3391,13 @@ function WikiSidebar({
         <CreateInput
           inputRef={createInputRef}
           value={newName}
-          onChange={setNewName}
+          onChange={updateNewName}
           onSubmit={submitCreate}
           onCancel={cancelCreate}
           theme={theme}
           depth={0}
           placeholder="New folder"
+          error={createError}
         />
       )}
 
@@ -3438,7 +3495,8 @@ function WikiSidebar({
               toggleFolder={toggleFolder}
               creating={creating}
               newName={newName}
-              setNewName={setNewName}
+              createError={createError}
+              setNewName={updateNewName}
               createInputRef={createInputRef}
               submitCreate={submitCreate}
               cancelCreate={cancelCreate}
@@ -3493,6 +3551,7 @@ function WikiSidebar({
           toggleFolder={toggleFolder}
           creating={creating}
           newName={newName}
+          createError={createError}
           setNewName={setNewName}
           createInputRef={createInputRef}
           submitCreate={submitCreate}
@@ -3698,7 +3757,7 @@ function WikiSidebar({
 
 export default memo(WikiSidebar);
 
-function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, depth, placeholder }: {
+function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, depth, placeholder, error }: {
   inputRef: MutableRefObject<HTMLInputElement | null>;
   value: string;
   onChange: (value: string) => void;
@@ -3707,6 +3766,7 @@ function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, dep
   theme: ReturnType<typeof useTheme>['theme'];
   depth: number;
   placeholder: string;
+  error?: string | null;
 }) {
   return (
     <div style={{ padding: `4px 12px 4px ${28 + depth * 12}px` }}>
@@ -3731,6 +3791,11 @@ function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, dep
           outline: 'none',
         }}
       />
+      {error && (
+        <div role="alert" style={{ marginTop: '4px', fontSize: '10px', lineHeight: 1.3, color: '#dc2626' }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -3743,6 +3808,7 @@ function TreeNode({
   toggleFolder,
   creating,
   newName,
+  createError,
   setNewName,
   createInputRef,
   submitCreate,
@@ -3781,6 +3847,7 @@ function TreeNode({
   toggleFolder: (id: string) => void;
   creating: CreatingState;
   newName: string;
+  createError: string | null;
   setNewName: (value: string) => void;
   createInputRef: MutableRefObject<HTMLInputElement | null>;
   submitCreate: () => void | Promise<void>;
@@ -4047,6 +4114,7 @@ function TreeNode({
           theme={theme}
           depth={depth}
           placeholder="Untitled"
+          error={createError}
         />
       )}
 
@@ -4060,6 +4128,7 @@ function TreeNode({
           theme={theme}
           depth={depth}
           placeholder="New folder"
+          error={createError}
         />
       )}
 
@@ -4073,6 +4142,7 @@ function TreeNode({
           toggleFolder={toggleFolder}
           creating={creating}
           newName={newName}
+          createError={createError}
           setNewName={setNewName}
           createInputRef={createInputRef}
           submitCreate={submitCreate}
@@ -4154,6 +4224,7 @@ function TreeNode({
           toggleFolder={toggleFolder}
           creating={creating}
           newName={newName}
+          createError={createError}
           setNewName={setNewName}
           createInputRef={createInputRef}
           submitCreate={submitCreate}
@@ -4566,6 +4637,7 @@ function FileItem({
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -4585,6 +4657,7 @@ function FileItem({
   const beginRename = useCallback(() => {
     if (!canRename) return;
     setDraft(item.title);
+    setRenameError(null);
     setRenaming(true);
   }, [canRename, item.title]);
 
@@ -4597,9 +4670,31 @@ function FileItem({
   const commitRename = async () => {
     if (!renaming) return;
     const trimmed = draft.trim();
+    if (!canRename || !item.relPath || !trimmed || trimmed === item.title) {
+      setRenaming(false);
+      setRenameError(null);
+      return;
+    }
+    const oldRelPath = item.relPath;
+    const newRelPath = await window.wikiAPI?.rename(oldRelPath, trimmed);
+    if (!newRelPath) {
+      setRenameError('Could not rename. Check the name or whether it already exists.');
+      setRenaming(true);
+      return;
+    }
+    setRenameError(null);
     setRenaming(false);
-    if (!canRename || !item.relPath || !trimmed || trimmed === item.title) return;
-    await window.wikiAPI?.rename(item.relPath, trimmed);
+    dispatchLocalWikiRenamed({
+      rootPath: item.rootPath ?? '',
+      oldRelPath,
+      newRelPath,
+      oldAbsPath: item.absPath ?? '',
+      newAbsPath: getRenamedWikiAbsPath(item.absPath ?? '', oldRelPath, newRelPath),
+      builtin: true,
+      source: 'app',
+      detectedAt: Date.now(),
+      emittedAt: Date.now(),
+    });
   };
 
   const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
@@ -4690,36 +4785,47 @@ function FileItem({
       <div style={{
         display: 'flex',
         alignItems: 'center',
+        flexWrap: renaming ? 'wrap' : 'nowrap',
         gap: SIDEBAR_ICON_TEXT_GAP,
         minHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
         width: '100%',
         minWidth: 0,
       }}>
         {renaming ? (
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
-              else if (e.key === 'Escape') { e.preventDefault(); setRenaming(false); }
-            }}
-            onBlur={() => { void commitRename(); }}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              padding: '1px 4px',
-              fontSize: '12px',
-              fontWeight: 500,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-              border: `1px solid ${theme.accent}`,
-              borderRadius: '3px',
-              color: theme.text,
-              outline: 'none',
-            }}
-          />
+          <>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                if (renameError) setRenameError(null);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setRenaming(false); setRenameError(null); }
+              }}
+              onBlur={() => { void commitRename(); }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: '1px 4px',
+                fontSize: '12px',
+                fontWeight: 500,
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                border: `1px solid ${theme.accent}`,
+                borderRadius: '3px',
+                color: theme.text,
+                outline: 'none',
+              }}
+            />
+            {renameError && (
+              <span role="alert" style={{ flexBasis: '100%', fontSize: '10px', lineHeight: 1.2, color: '#dc2626' }}>
+                {renameError}
+              </span>
+            )}
+          </>
         ) : (
           <>
             {showSelectionMarker ? (
