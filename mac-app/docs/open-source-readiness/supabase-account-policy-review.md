@@ -36,7 +36,7 @@ Examples:
 - `supabase/migrations/015_user_commands.sql` enables RLS for synced user commands and limits rows to the owner.
 - `supabase/migrations/016_team_documents.sql` enables RLS for River team documents and gates reads/writes through `is_team_document_scope_participant`.
 - `supabase/migrations/018_team_document_pins.sql` applies participant checks for River pins.
-- `supabase/migrations/008_team_image_storage.sql` and `011_sketch_items.sql` add storage policies scoped to user folders.
+- `supabase/migrations/008_team_image_storage.sql` and `019_sketch_items.sql` add storage policies scoped to user folders.
 
 This is enough to justify docs that explain the intended policy model. It is not enough to claim the live production database exactly matches the migrations.
 

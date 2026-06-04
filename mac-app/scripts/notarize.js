@@ -39,17 +39,20 @@ exports.default = async function notarizing(context) {
   const appleId = process.env.APPLE_ID;
   const appleIdPassword = process.env.APPLE_ID_PASSWORD || process.env.APPLE_APP_SPECIFIC_PASSWORD;
   const appleTeamId = process.env.APPLE_TEAM_ID;
+  const allowUnsignedSkip = process.env.FIELD_THEORY_ALLOW_UNSIGNED_NOTARIZATION_SKIP === 'true';
 
   if (!appleId || !appleIdPassword || !appleTeamId) {
-    console.log('Skipping notarization: missing environment variables');
-    console.log('Required: APPLE_ID, APPLE_ID_PASSWORD, APPLE_TEAM_ID');
-    console.log('');
-    console.log('To enable notarization:');
-    console.log('1. Create an app-specific password at https://appleid.apple.com');
-    console.log('2. Export APPLE_ID="your-email@example.com"');
-    console.log('3. Export APPLE_ID_PASSWORD="your-app-specific-password"');
-    console.log('4. Export APPLE_TEAM_ID="YOUR_TEAM_ID"');
-    return;
+    const message = [
+      'Notarization blocked: missing environment variables.',
+      'Required: APPLE_ID, APPLE_ID_PASSWORD or APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID.',
+      'Set FIELD_THEORY_ALLOW_UNSIGNED_NOTARIZATION_SKIP=true only for an intentional local unsigned package test.',
+    ].join('\n');
+    if (allowUnsignedSkip) {
+      console.warn(message);
+      console.warn('Skipping notarization because FIELD_THEORY_ALLOW_UNSIGNED_NOTARIZATION_SKIP=true.');
+      return;
+    }
+    throw new Error(message);
   }
 
   // Get app name from package.json
@@ -74,4 +77,3 @@ exports.default = async function notarizing(context) {
     throw error;
   }
 };
-

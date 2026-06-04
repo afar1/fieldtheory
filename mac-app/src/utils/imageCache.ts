@@ -7,22 +7,37 @@
 
 const IMAGE_CACHE_KEY = 'fieldImageCache';
 const IMAGE_CACHE_MAX_SIZE = 100; // Maximum number of images to cache.
+const IMAGE_CACHE_MAX_STORAGE_BYTES = 4 * 1024 * 1024;
 
 // In-memory cache for blob URLs (faster than localStorage for rendering).
 const blobUrlCache = new Map<string, string>();
+let metadataCache: Map<string, { timestamp: number; base64: string }> | null = null;
+
+export function clearImageCacheForTests(): void {
+  blobUrlCache.clear();
+  metadataCache = null;
+}
 
 // Load cache metadata from localStorage on init.
 function getImageCacheMetadata(): Map<string, { timestamp: number; base64: string }> {
+  if (metadataCache) return metadataCache;
   try {
     const stored = localStorage.getItem(IMAGE_CACHE_KEY);
     if (stored) {
+      if (stored.length > IMAGE_CACHE_MAX_STORAGE_BYTES) {
+        localStorage.removeItem(IMAGE_CACHE_KEY);
+        metadataCache = new Map();
+        return metadataCache;
+      }
       const parsed = JSON.parse(stored);
-      return new Map(Object.entries(parsed));
+      metadataCache = new Map(Object.entries(parsed));
+      return metadataCache;
     }
   } catch (e) {
     // Ignore parse errors.
   }
-  return new Map();
+  metadataCache = new Map();
+  return metadataCache;
 }
 
 // Save cache metadata to localStorage.
@@ -35,7 +50,14 @@ function saveImageCacheMetadata(cache: Map<string, { timestamp: number; base64: 
       const toKeep = entries.slice(-IMAGE_CACHE_MAX_SIZE);
       cache = new Map(toKeep);
     }
-    localStorage.setItem(IMAGE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+    const serialized = JSON.stringify(Object.fromEntries(cache));
+    if (serialized.length > IMAGE_CACHE_MAX_STORAGE_BYTES) {
+      localStorage.removeItem(IMAGE_CACHE_KEY);
+      metadataCache = new Map();
+      return;
+    }
+    localStorage.setItem(IMAGE_CACHE_KEY, serialized);
+    metadataCache = cache;
   } catch (e) {
     // Ignore storage errors (quota exceeded, etc.).
   }

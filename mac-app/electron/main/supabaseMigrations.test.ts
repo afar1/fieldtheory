@@ -6,7 +6,18 @@ function migrationSql(fileName: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), '..', 'supabase', 'migrations', fileName), 'utf-8');
 }
 
+function migrationFiles(): string[] {
+  return fs.readdirSync(path.resolve(process.cwd(), '..', 'supabase', 'migrations'))
+    .filter((fileName) => fileName.endsWith('.sql'))
+    .sort();
+}
+
 describe('Supabase River migrations', () => {
+  it('keeps migration numeric prefixes unique', () => {
+    const prefixes = migrationFiles().map((fileName) => fileName.split('_')[0]);
+    expect(prefixes).toHaveLength(new Set(prefixes).size);
+  });
+
   it('puts River documents and shared pins in the realtime publication', () => {
     const sql = migrationSql('018_team_document_pins.sql');
 
