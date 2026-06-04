@@ -23,6 +23,9 @@ describe('BrowserHelperDocumentService', () => {
   it('returns only supported text documents in the tree', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Notes'));
+    fs.mkdirSync(path.join(root, 'Empty'));
+    fs.mkdirSync(path.join(root, '_Hidden'));
+    fs.mkdirSync(path.join(root, 'Doc.assets'));
     fs.writeFileSync(path.join(root, 'Notes', 'Plan.md'), '# Plan\n');
     fs.writeFileSync(path.join(root, 'Notes', 'Page.html'), '<p>Hello</p>\n');
     fs.writeFileSync(path.join(root, 'Notes', 'Image.png'), 'not included');
@@ -30,6 +33,12 @@ describe('BrowserHelperDocumentService', () => {
     const service = new BrowserHelperDocumentService([root]);
 
     expect(service.getRoots()[0].tree).toEqual([
+      {
+        kind: 'dir',
+        name: 'Empty',
+        relPath: 'Empty',
+        children: [],
+      },
       {
         kind: 'dir',
         name: 'Notes',
@@ -60,6 +69,8 @@ describe('BrowserHelperDocumentService', () => {
   it('returns native-shaped library roots and extensionless wiki pages', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Notes'));
+    fs.mkdirSync(path.join(root, 'Empty'));
+    fs.mkdirSync(path.join(root, '_Drafts'));
     const filePath = path.join(root, 'Notes', 'Plan.md');
     fs.writeFileSync(filePath, '# Plan\n');
     const service = new BrowserHelperDocumentService([root]);
@@ -74,6 +85,12 @@ describe('BrowserHelperDocumentService', () => {
       writable: true,
     }));
     expect(libraryRoot.tree).toEqual([
+      {
+        kind: 'dir',
+        name: 'Empty',
+        relPath: 'Empty',
+        children: [],
+      },
       {
         kind: 'dir',
         name: 'Notes',
@@ -124,7 +141,26 @@ describe('BrowserHelperDocumentService', () => {
     expect(fs.statSync(path.join(root, 'Projects')).isDirectory()).toBe(true);
     expect(service.createWikiFile('../outside', 'Nope')).toBeNull();
     expect(service.createWikiFile('artifacts', 'Nope')).toBeNull();
+    expect(service.createWikiFile('', '_draft')).toBeNull();
     expect(service.createWikiDir('artifacts/nested')).toBe(false);
+    expect(service.createWikiDir('_drafts')).toBe(false);
+  });
+
+  it('preserves external text document extensions when renaming', () => {
+    const root = makeTempDir();
+    const cssPath = path.join(root, 'theme.css');
+    fs.writeFileSync(cssPath, 'body { color: red; }\n');
+    const service = new BrowserHelperDocumentService([root]);
+
+    const renamed = service.renameExternal(cssPath, 'brand');
+
+    expect(renamed).toEqual(expect.objectContaining({
+      path: path.join(root, 'brand.css'),
+      name: 'brand.css',
+      documentKind: 'css',
+    }));
+    expect(fs.existsSync(cssPath)).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'brand.css'), 'utf-8')).toBe('body { color: red; }\n');
   });
 
   it('rejects stale saves instead of overwriting', () => {
