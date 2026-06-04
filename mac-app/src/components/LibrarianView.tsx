@@ -836,6 +836,11 @@ const BROWSER_SELECTION_PASTE_LINE_NUMBER_GAP_MULTIPLIER = 1.5;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
   | { mode: 'selection'; selection: { start: number; end: number } };
+export type InlineGemmaLocalCommandRequest = {
+  customInstruction: string;
+  mode: 'selection';
+  selection: { start: number; end: number };
+};
 const LIVE_RENDERER_STORAGE_PREFERENCE_KEYS = new Set([
   LIBRARIAN_TEXT_SIZE_STORAGE_KEY,
   LIBRARIAN_TYPOGRAPHY_STORAGE_KEY,
@@ -975,6 +980,27 @@ export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): Ma
       end: Math.max(selection.start, selection.end),
     },
   };
+}
+
+export function getInlineGemmaLocalCommandRequest(
+  instruction: string,
+  selection: MaxwellToolbarSelection,
+): InlineGemmaLocalCommandRequest | null {
+  const trimmed = instruction.trim();
+  const runMode = getMaxwellToolbarRunMode(selection);
+  if (!trimmed || runMode.mode !== 'selection') return null;
+  return {
+    customInstruction: trimmed,
+    ...runMode,
+  };
+}
+
+function isInlineGemmaCommandShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key.toLowerCase() === 'g'
+    && event.metaKey
+    && event.shiftKey
+    && !event.altKey
+    && !event.ctrlKey;
 }
 
 export function isPasteSelectionToTerminalShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
@@ -3929,6 +3955,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
   const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
+  const [inlineGemmaOpen, setInlineGemmaOpen] = useState(false);
+  const [inlineGemmaInstruction, setInlineGemmaInstruction] = useState('');
+  const [inlineGemmaSelection, setInlineGemmaSelection] = useState<MaxwellToolbarSelection>(null);
+  const [inlineGemmaError, setInlineGemmaError] = useState<string | null>(null);
+  const [inlineGemmaRunning, setInlineGemmaRunning] = useState(false);
+  const inlineGemmaInstructionRef = useRef<HTMLTextAreaElement | null>(null);
   const [inlineDrawInsertion, setInlineDrawInsertion] = useState<InlineDrawInsertion | null>(null);
   const [inlineDrawSaving, setInlineDrawSaving] = useState(false);
   const [activeMeetingSession, setActiveMeetingSession] = useState<MeetingToolbarSession | null>(null);
@@ -4799,6 +4831,51 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!selection) return null;
     return { start: selection.start, end: selection.end };
   }, []);
+  const openInlineGemmaCommand = useCallback(() => {
+    const selection = getActiveMaxwellSelection();
+    setInlineGemmaSelection(selection);
+    setInlineGemmaInstruction('');
+    setInlineGemmaError(getMaxwellToolbarRunMode(selection).mode === 'selection' ? null : 'Select text first.');
+    setInlineGemmaOpen(true);
+    requestAnimationFrame(() => {
+      inlineGemmaInstructionRef.current?.focus();
+    });
+  }, [getActiveMaxwellSelection]);
+  const closeInlineGemmaCommand = useCallback(() => {
+    if (inlineGemmaRunning) return;
+    setInlineGemmaOpen(false);
+    setInlineGemmaInstruction('');
+    setInlineGemmaSelection(null);
+    setInlineGemmaError(null);
+  }, [inlineGemmaRunning]);
+  const submitInlineGemmaCommand = useCallback(() => {
+    const request = getInlineGemmaLocalCommandRequest(inlineGemmaInstruction, inlineGemmaSelection);
+    if (!request) {
+      setInlineGemmaError(inlineGemmaInstruction.trim() ? 'Select text first.' : 'Enter an instruction.');
+      return;
+    }
+    setInlineGemmaRunning(true);
+    setInlineGemmaError(null);
+    void (async () => {
+      await flushCurrentEdit();
+      const result = await window.commandsAPI?.runLocalCommand?.(request);
+      if (!result) {
+        setInlineGemmaError('Local commands unavailable.');
+        return;
+      }
+      if (!result.success) {
+        setInlineGemmaError(result.error ?? 'Local command failed.');
+        return;
+      }
+      setInlineGemmaOpen(false);
+      setInlineGemmaInstruction('');
+      setInlineGemmaSelection(null);
+    })().catch((err) => {
+      setInlineGemmaError(err instanceof Error ? err.message : 'Local command failed.');
+    }).finally(() => {
+      setInlineGemmaRunning(false);
+    });
+  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection]);
   const runMaxwellItem = useCallback((id: string) => {
     const item = maxwellItems.find((candidate) => candidate.id === id);
     if (!item) return;
@@ -6408,6 +6485,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
     captureRenderedDeleteSelectionScroll(event);
+    if (isInlineGemmaCommandShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openInlineGemmaCommand();
+      return true;
+    }
+
     const emojiCompletion = markdownEmojiCompletion;
     if (emojiCompletion) {
       if (event.key === 'Escape') {
@@ -6721,6 +6805,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
     navigateHistory,
+    openInlineGemmaCommand,
     restoreRenderedEditorProgrammaticUndo,
     toggleFocusChromeShortcut,
     toggleLineNumbers,
@@ -7598,6 +7683,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    if (isInlineGemmaCommandShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openInlineGemmaCommand();
+      return true;
+    }
+
     const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
     if (navigationDirection !== null) {
       event.preventDefault();
@@ -7865,6 +7957,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
     navigateHistory,
+    openInlineGemmaCommand,
     restoreMarkdownCodeEditorProgrammaticUndo,
     scheduleEditorSessionPersist,
     toggleLineNumbers,
@@ -9772,6 +9865,174 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
+  const inlineGemmaCanRun = Boolean(inlineGemmaInstruction.trim())
+    && getMaxwellToolbarRunMode(inlineGemmaSelection).mode === 'selection'
+    && !inlineGemmaRunning;
+  const inlineGemmaDialog = inlineGemmaOpen ? (
+    <div
+      role="dialog"
+      aria-label="Gemma command"
+      aria-modal="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 70,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.48)' : 'rgba(15,23,42,0.18)',
+      }}
+      onMouseDown={closeInlineGemmaCommand}
+    >
+      <div
+        style={{
+          width: 'min(560px, 100%)',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '16px',
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginBottom: '10px',
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              color: theme.text,
+              fontSize: '17px',
+              lineHeight: '24px',
+              fontWeight: 650,
+            }}
+          >
+            Gemma command
+          </h2>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={closeInlineGemmaCommand}
+            disabled={inlineGemmaRunning}
+            style={{
+              width: '30px',
+              height: '30px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bgSecondary,
+              color: theme.textSecondary,
+              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              fontSize: '18px',
+              lineHeight: '26px',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <textarea
+          ref={inlineGemmaInstructionRef}
+          aria-label="Instruction"
+          value={inlineGemmaInstruction}
+          onChange={(event) => {
+            setInlineGemmaInstruction(event.target.value);
+            if (inlineGemmaError === 'Enter an instruction.') setInlineGemmaError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              closeInlineGemmaCommand();
+            }
+            if (event.key === 'Enter' && event.metaKey) {
+              event.preventDefault();
+              submitInlineGemmaCommand();
+            }
+          }}
+          placeholder="Instruction"
+          rows={5}
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            resize: 'vertical',
+            minHeight: '126px',
+            borderRadius: '7px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.inputBg ?? theme.bg,
+            color: theme.text,
+            padding: '10px 11px',
+            fontFamily: fonts.sans,
+            fontSize: '14px',
+            lineHeight: '20px',
+            outlineColor: theme.accent,
+          }}
+        />
+        <div
+          role={inlineGemmaError ? 'alert' : undefined}
+          style={{
+            minHeight: '20px',
+            marginTop: '8px',
+            color: inlineGemmaError ? '#dc2626' : theme.textSecondary,
+            fontSize: '13px',
+            lineHeight: '20px',
+          }}
+        >
+          {inlineGemmaError ?? 'Selected text will be used as context.'}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            marginTop: '12px',
+          }}
+        >
+          <button
+            type="button"
+            onClick={closeInlineGemmaCommand}
+            disabled={inlineGemmaRunning}
+            style={{
+              height: '34px',
+              padding: '0 12px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bgSecondary,
+              color: theme.text,
+              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submitInlineGemmaCommand}
+            disabled={!inlineGemmaCanRun}
+            style={{
+              height: '34px',
+              padding: '0 14px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.accent}`,
+              backgroundColor: inlineGemmaCanRun ? theme.accent : (theme.surface2 ?? theme.bgSecondary),
+              color: inlineGemmaCanRun ? '#fff' : theme.textSecondary,
+              cursor: inlineGemmaCanRun ? 'pointer' : 'default',
+              fontSize: '13px',
+              fontWeight: 650,
+            }}
+          >
+            {inlineGemmaRunning ? 'Running...' : 'Run'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   const readerStatusFeedback = copyFeedbackLabel ? (
     <div
       role="status"
@@ -10968,6 +11229,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         />
         </div>
         {inlineDrawDialog}
+        {inlineGemmaDialog}
         {terminalPastePopover && (
           <button
             type="button"
