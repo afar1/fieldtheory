@@ -98,7 +98,9 @@ describe('shellIpc', () => {
     expect(isAllowedExternalShellUrl('x-apple.systempreferences:com.apple.preference.security')).toBe(true);
 
     expect(isAllowedExternalShellUrl('file:///tmp/test.md')).toBe(false);
+    expect(isAllowedExternalShellUrl('fieldtheory://wiki/open?path=Plan')).toBe(false);
     expect(isAllowedExternalShellUrl('javascript:alert(1)')).toBe(false);
+    expect(isAllowedExternalShellUrl('not a url')).toBe(false);
   });
 
   it('opens allowed external URLs', async () => {

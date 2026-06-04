@@ -349,7 +349,14 @@ describe('BrowserLibraryApp', () => {
     const previousEventSource = window.EventSource;
     const previousSetItem = window.localStorage.setItem;
     const previousRemoveItem = window.localStorage.removeItem;
-    const session = { user: { id: 'user-1', email: 'river@example.com' } };
+    const session = {
+      authenticated: true,
+      expires_at: 4102444800,
+      expiresAt: 4102444800,
+      tier: 'pro' as const,
+      callsign: 'river',
+      user: { id: 'user-1', email: 'river@example.com' },
+    };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const pathname = new URL(url).pathname;
@@ -890,7 +897,14 @@ describe('BrowserLibraryApp', () => {
   });
 
   it('shows native plan and metrics readout in the Browser Library footer', async () => {
-    window.authAPI!.getSession = vi.fn(async () => ({ user: { id: 'user-one' } }));
+    window.authAPI!.getSession = vi.fn(async () => ({
+      authenticated: true,
+      expires_at: 4102444800,
+      expiresAt: 4102444800,
+      tier: 'pro' as const,
+      callsign: null,
+      user: { id: 'user-one' },
+    }));
     window.metricsAPI!.getMetrics = vi.fn(async () => ({
       transcriptions: 2,
       words_transcribed: 1234,
@@ -917,8 +931,8 @@ describe('BrowserLibraryApp', () => {
       priorityMic: { used: 0, limit: Infinity, remaining: Infinity, allowed: true, percentUsed: 0 },
       autoStack: { used: 0, limit: Infinity, remaining: Infinity, allowed: true, percentUsed: 0 },
       portableCommands: { used: 0, limit: Infinity, remaining: Infinity, allowed: true, percentUsed: 0 },
-      tier: 'pro',
-      state: 'pro',
+      tier: 'pro' as const,
+      state: 'pro' as const,
       trialEndsAt: null,
       nextTrialResetAt: null,
     }));
@@ -973,7 +987,7 @@ describe('BrowserLibraryApp', () => {
   it('opens the current Browser Library page in the native Field Theory app from the floating button', async () => {
     const openFieldTheoryMarkdown = vi.fn(async () => ({ success: true }));
     window.commandsAPI!.getActiveLibraryFileContext = vi.fn(async () => ({
-      type: 'wiki',
+      type: 'wiki' as const,
       rootPath: '/Users/afar/.fieldtheory/library',
       relPath: 'briefs/Claude Pro Token Use Audit Prompt Brief.md',
       filePath: '/Users/afar/.fieldtheory/library/briefs/Claude Pro Token Use Audit Prompt Brief.md',
@@ -1829,7 +1843,7 @@ describe('BrowserLibraryApp', () => {
     });
 
     unmount();
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
 
     const bookmarksRender = render(
       <BrowserLibraryApp
@@ -1845,7 +1859,7 @@ describe('BrowserLibraryApp', () => {
     });
 
     bookmarksRender.unmount();
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
 
     render(
       <BrowserLibraryApp
@@ -1860,7 +1874,7 @@ describe('BrowserLibraryApp', () => {
       expect(window.__fieldTheoryBrowserReportActiveSurface).toHaveBeenCalledWith('ember');
     });
 
-    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface).mockClear();
+    vi.mocked(window.__fieldTheoryBrowserReportActiveSurface!).mockClear();
     act(() => {
       window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
     });
@@ -2006,7 +2020,7 @@ describe('BrowserLibraryApp', () => {
       });
     });
 
-    expect(window.wikiAPI.openScratchpadDefault).toHaveBeenCalled();
+    expect(window.wikiAPI!.openScratchpadDefault).toHaveBeenCalled();
     expect(await screen.findByTestId('library-view')).toBeTruthy();
     expect(screen.getByText('scratchpad/June 2.md')).toBeTruthy();
   });

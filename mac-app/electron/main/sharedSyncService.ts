@@ -697,6 +697,7 @@ export class SharedSyncService extends EventEmitter {
         updated_by: session.user.id,
       })
       .eq('id', sharedId)
+      .eq('revision', remoteRevision)
       .is('deleted_at', null)
       .select('*')
       .single();

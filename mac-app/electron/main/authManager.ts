@@ -16,7 +16,7 @@ import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { app } from 'electron';
+import { app, safeStorage } from 'electron';
 import { getUserDataManager, UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 
@@ -30,10 +30,12 @@ const CLI_SESSION_PATH = path.join(os.homedir(), '.fieldtheory', 'session.json')
 class FileStorage implements SupportedStorage {
   private storage: Map<string, string> = new Map();
   private filePath: string;
+  private protectedFilePath: string;
   private hasLoggedEmptySkip: boolean = false;  // Only log "skipping save" once
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, 'supabase-session.json');
+    this.protectedFilePath = path.join(userDataPath, 'supabase-session.enc');
     this.loadFromDisk();
   }
 
@@ -83,17 +85,42 @@ class FileStorage implements SupportedStorage {
 
   private loadFromDisk(): void {
     try {
+      if (fs.existsSync(this.protectedFilePath)) {
+        if (!this.canUseProtectedStorage()) {
+          log.warn('Protected session exists but safeStorage is unavailable');
+          return;
+        }
+        const encrypted = fs.readFileSync(this.protectedFilePath);
+        const decrypted = safeStorage.decryptString(encrypted);
+        const parsed = JSON.parse(decrypted);
+        this.storage = new Map(Object.entries(parsed));
+        const keys = Array.from(this.storage.keys());
+        log.debug('Loaded protected session from disk, keys present:', keys.length > 0 ? keys : '(none)');
+        return;
+      }
+
       if (fs.existsSync(this.filePath)) {
         const data = fs.readFileSync(this.filePath, 'utf-8');
         const parsed = JSON.parse(data);
         this.storage = new Map(Object.entries(parsed));
         const keys = Array.from(this.storage.keys());
-        log.debug('Loaded from disk, keys present:', keys.length > 0 ? keys : '(none)');
+        log.debug('Loaded legacy session from disk, keys present:', keys.length > 0 ? keys : '(none)');
+        if (keys.length > 0) {
+          this.saveToDisk();
+        }
       } else {
         log.debug('No session file exists yet');
       }
     } catch (err) {
       log.warn('Failed to load session from disk:', err);
+    }
+  }
+
+  private canUseProtectedStorage(): boolean {
+    try {
+      return safeStorage.isEncryptionAvailable();
+    } catch {
+      return false;
     }
   }
 
@@ -115,7 +142,19 @@ class FileStorage implements SupportedStorage {
       }
       this.hasLoggedEmptySkip = false;  // Reset flag when we have real data to save
 
-      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+      fs.mkdirSync(path.dirname(this.protectedFilePath), { recursive: true });
+      if (!this.canUseProtectedStorage()) {
+        log.warn('safeStorage unavailable; refusing to persist token-bearing session data');
+        fs.writeFileSync(this.filePath, '{}');
+        return;
+      }
+
+      const encrypted = safeStorage.encryptString(JSON.stringify(obj));
+      const tempPath = `${this.protectedFilePath}.tmp`;
+      fs.writeFileSync(tempPath, encrypted);
+      fs.chmodSync(tempPath, 0o600);
+      fs.renameSync(tempPath, this.protectedFilePath);
+      fs.writeFileSync(this.filePath, '{}');
     } catch (err) {
       log.warn('Failed to save session to disk:', err);
     }
@@ -129,6 +168,7 @@ class FileStorage implements SupportedStorage {
     this.storage.clear();
     try {
       fs.writeFileSync(this.filePath, '{}');
+      fs.rmSync(this.protectedFilePath, { force: true });
       log.info('Storage cleared (explicit sign-out)');
     } catch (err) {
       log.warn('Failed to clear storage:', err);
@@ -167,6 +207,21 @@ export interface AuthManagerEvents {
   userChanged: (callsign: string) => void;
   userLoggedOut: () => void;
   authDebug: (event: AuthDebugEvent) => void;
+}
+
+export interface AuthSessionState {
+  authenticated: boolean;
+  expires_at: number | null;
+  expiresAt: number | null;
+  tier: 'free' | 'pro';
+  callsign: string | null;
+  displayName?: string;
+  user: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+  } | null;
 }
 
 export class AuthManager extends EventEmitter {
@@ -333,6 +388,12 @@ export class AuthManager extends EventEmitter {
     return false;
   }
 
+  private isSessionStorageUsable(userDataPath: string): boolean {
+    const protectedSessionPath = path.join(userDataPath, 'supabase-session.enc');
+    if (fs.existsSync(protectedSessionPath)) return true;
+    return this.isSessionFileUsable(path.join(userDataPath, 'supabase-session.json'));
+  }
+
   /**
    * Best-effort migration for session storage when app-data directory names changed
    * across releases (e.g. field-theory -> fieldtheory-mac).
@@ -340,11 +401,11 @@ export class AuthManager extends EventEmitter {
    * This keeps users signed in after manual drag-replace installs.
    */
   private migrateLegacySessionStorageIfNeeded(targetUserDataPath: string): void {
-    const targetSessionPath = path.join(targetUserDataPath, 'supabase-session.json');
-    if (this.isSessionFileUsable(targetSessionPath)) {
+    if (this.isSessionStorageUsable(targetUserDataPath)) {
       return;
     }
 
+    const targetSessionPath = path.join(targetUserDataPath, 'supabase-session.json');
     const appDataRoot = app.getPath('appData');
     const knownAppDataNames = [
       'fieldtheory-mac',
@@ -783,34 +844,23 @@ export class AuthManager extends EventEmitter {
 
   /**
    * Attempt to recover session when SDK fires spurious SIGNED_OUT.
-   * FileStorage preserves disk data when SDK clears memory, so we read directly from disk.
+   * FileStorage preserves protected data when SDK clears memory, so recover through it.
    */
   private async attemptSessionRecovery(): Promise<boolean> {
-    const sessionPath = path.join(app.getPath('userData'), 'supabase-session.json');
     try {
-      if (!fs.existsSync(sessionPath)) {
+      const rawSession = this.fileStorage?.getRawSessionData();
+      if (!rawSession?.refresh_token) {
         this.emitDebug('RECOVERY_NO_DISK_SESSION', {
-          path: sessionPath,
+          path: path.join(app.getPath('userData'), 'supabase-session.enc'),
         }, 'info');
         return false;
       }
 
-      const diskData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-      for (const value of Object.values(diskData)) {
-        if (typeof value === 'string') {
-          const parsed = JSON.parse(value);
-          if (parsed?.refresh_token) {
-            this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
-              tokenPrefix: parsed.refresh_token.substring(0, 8) + '...',
-              user: parsed.user?.email,
-            }, 'recovery');
-            return await this.coordinatedRefresh(parsed.refresh_token, 'recovery');
-          }
-        }
-      }
-      this.emitDebug('RECOVERY_NO_TOKEN_IN_DISK_DATA', {
-        keysFound: Object.keys(diskData),
-      }, 'warn');
+      this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
+        tokenPrefix: rawSession.refresh_token.substring(0, 8) + '...',
+        user: rawSession.user?.email,
+      }, 'recovery');
+      return await this.coordinatedRefresh(rawSession.refresh_token, 'recovery');
     } catch (err) {
       this.emitDebug('RECOVERY_FAILED', {
         error: err instanceof Error ? err.message : String(err),
@@ -911,6 +961,25 @@ export class AuthManager extends EventEmitter {
    */
   getSession(): Session | null {
     return this.session;
+  }
+
+  getSessionState(): AuthSessionState | null {
+    const session = this.session;
+    if (!session?.user?.id) return null;
+    return {
+      authenticated: true,
+      expires_at: session.expires_at ?? null,
+      expiresAt: session.expires_at ?? null,
+      tier: this.cachedTier,
+      callsign: this.getCallsignFromSession(session),
+      displayName: this.getDisplayNameFromSession(session),
+      user: {
+        id: session.user.id,
+        email: session.user.email ?? undefined,
+        user_metadata: session.user.user_metadata as Record<string, unknown> | undefined,
+        app_metadata: session.user.app_metadata as Record<string, unknown> | undefined,
+      },
+    };
   }
 
   /**

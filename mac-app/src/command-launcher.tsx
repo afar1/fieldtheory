@@ -3608,9 +3608,9 @@ function CommandLauncher() {
             return;
           }
           if (action?.kind === 'paste-bookmark-text') {
-            await clipboardAPI.pasteText(text, latestContext?.targetApp?.bundleId);
+            await clipboardAPI?.pasteText?.(text, latestContext?.targetApp?.bundleId);
           } else if (action?.kind === 'copy-bookmark-for-agent') {
-            await bookmarksAPI.copyForAgent(item.bookmarkId);
+            await bookmarksAPI?.copyForAgent?.(item.bookmarkId);
           } else if (action?.kind === 'invoke-bookmark') {
             await bookmarksAPI?.invokeBookmark(item.bookmarkId);
           }

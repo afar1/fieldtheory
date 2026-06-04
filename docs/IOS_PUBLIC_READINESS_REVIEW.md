@@ -47,7 +47,7 @@ Release runbook: `docs/IOS_PUBLIC_RELEASE_RUNBOOK.md` has the copyable checklist
 - Lowered Pull-to-create scroll event cadence from 16 ms to 32 ms to reduce bridge work during list scrolling: `components/PullToCreate.tsx`.
 - Kept Library editor text local while typing, emits single-document upserts/deletes instead of stale full-list replacements, and queues Library storage saves in order: `components/LibraryView.tsx`, `App.tsx`.
 - Extracted Library parent-state merge/delete helpers and added regressions that a single document edit preserves unrelated documents synced into parent state: `services/libraryState.ts`, `mac-app/src/__tests__/mobileLibraryState.test.ts`.
-- Added mobile row soft deletes and client edit timestamps for tasks, observations, and transcripts: `services/sync.ts`, `supabase/migrations/017_mobile_row_soft_delete_timestamps.sql`.
+- Added mobile row soft deletes and client edit timestamps for tasks, observations, and transcripts: `services/sync.ts`, `supabase/migrations/021_mobile_row_soft_delete_timestamps.sql`.
 - Extracted the mobile row-delete conflict helpers into shared pure sync utilities and added regressions for pending deletes, remote soft deletes, and late server write times not beating newer offline edits: `services/syncUtils.ts`, `mac-app/src/__tests__/syncUtils.test.ts`.
 - Added storage-scope regression tests for signed-out local storage, per-user isolation, backup-first legacy migration, and row tombstone dedupe: `mac-app/src/__tests__/mobileStorage.test.ts`.
 - Pinned the Whisper model download to an immutable Hugging Face commit, validates exact size plus native MD5, deletes corrupt partial model files before retry, and surfaces model download progress in the UI: `services/modelService.ts`, `hooks/useWhisperRecording.ts`, `App.tsx`.
@@ -94,9 +94,9 @@ Verify: built app has no `PlugIns/LittleAIKeyboard.appex`; before re-enabling, r
 
 Why: the current client now reads and writes `client_updated_at_ms` and `deleted_at` on todos, observations, and transcripts. If the migration is not applied in Supabase Cloud first, sync can fail at runtime when those columns are missing.
 
-Evidence: `services/sync.ts` selects `client_updated_at_ms, deleted_at` and writes those fields; `supabase/migrations/017_mobile_row_soft_delete_timestamps.sql` adds and backfills the columns.
+Evidence: `services/sync.ts` selects `client_updated_at_ms, deleted_at` and writes those fields; `supabase/migrations/021_mobile_row_soft_delete_timestamps.sql` adds and backfills the columns.
 
-Do: apply `supabase/migrations/017_mobile_row_soft_delete_timestamps.sql` through the Supabase migration path or manually in the Supabase SQL editor.
+Do: apply `supabase/migrations/021_mobile_row_soft_delete_timestamps.sql` through the Supabase migration path or manually in the Supabase SQL editor.
 
 Verify: the cloud tables expose `client_updated_at_ms bigint not null` and `deleted_at timestamptz null`, then run a real signed-in sync.
 
@@ -155,7 +155,7 @@ Passed in this review:
 - `npm run test:mobile-regressions` -> 41 tests passed
 - `plutil -lint ios/littleai/PrivacyInfo.xcprivacy ios/littleai/Info.plist ios/LittleAIKeyboard/Info.plist`
 - `git diff --check`
-- `supabase/migrations/017_mobile_row_soft_delete_timestamps.sql` was syntax-checked against a throwaway `postgres:17-alpine` Docker container.
+- `supabase/migrations/021_mobile_row_soft_delete_timestamps.sql` was syntax-checked against a throwaway `postgres:17-alpine` Docker container.
 - `xcodebuild -workspace ios/littleai.xcworkspace -scheme littleai -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build`
 - `xcodebuild -workspace ios/littleai.xcworkspace -scheme littleai -configuration Release -destination 'generic/platform=iOS' -derivedDataPath /tmp/littleai-public-readiness-build CODE_SIGNING_ALLOWED=NO build`
 - `xcodebuild -workspace ios/littleai.xcworkspace -scheme littleai -configuration Release -destination 'generic/platform=iOS' -archivePath /tmp/littleai-public-readiness.xcarchive archive`

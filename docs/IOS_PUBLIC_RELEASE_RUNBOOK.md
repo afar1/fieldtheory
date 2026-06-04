@@ -42,7 +42,7 @@ Apply the mobile sync migration to the production Supabase project before shippi
 If using the Supabase SQL editor, paste the exact contents of:
 
 ```text
-supabase/migrations/017_mobile_row_soft_delete_timestamps.sql
+supabase/migrations/021_mobile_row_soft_delete_timestamps.sql
 ```
 
 Then verify the columns:

@@ -7,6 +7,7 @@ import {
   documentSaveResultForSharedConflict,
   documentSaveResultForUpdatedFile,
   readDocumentVersion,
+  writeTextFileAtomically,
   writeTextFileWithConflictGuard,
 } from './documentSaveGuard';
 
@@ -48,6 +49,16 @@ describe('document save guard', () => {
     const result = writeTextFileWithConflictGuard(filePath, '# Updated\n', expectedVersion);
 
     expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+  });
+
+  it('creates a new file atomically when no previous mode exists', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'downloaded.md');
+
+    writeTextFileAtomically(filePath, '# Downloaded\n');
+
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# Downloaded\n');
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
   });
 
