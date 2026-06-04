@@ -825,7 +825,7 @@ export type LibrarianMaxwellItem = {
   relPath?: string;
 };
 
-type MaxwellToolbarSelection = { start: number; end: number } | null;
+type MaxwellToolbarSelection = { start: number; end: number; text?: string } | null;
 type TerminalPastePopover = { text: string; top: number; left: number } | null;
 type SelectionPastePopoverSide = 'left' | 'right';
 const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
@@ -839,7 +839,7 @@ type MaxwellToolbarRunMode =
 export type InlineGemmaLocalCommandRequest = {
   customInstruction: string;
   mode: 'selection';
-  selection: { start: number; end: number };
+  selection: { start: number; end: number; text?: string };
 };
 const LIVE_RENDERER_STORAGE_PREFERENCE_KEYS = new Set([
   LIBRARIAN_TEXT_SIZE_STORAGE_KEY,
@@ -978,6 +978,7 @@ export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): Ma
     selection: {
       start: Math.min(selection.start, selection.end),
       end: Math.max(selection.start, selection.end),
+      ...(selection.text ? { text: selection.text } : {}),
     },
   };
 }
@@ -4830,7 +4831,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       : renderedMarkdownEditorRef.current;
     const selection = editor?.getSelectionRange() ?? null;
     if (!selection) return null;
-    return { start: selection.start, end: selection.end };
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    const text = editor?.getValue().slice(start, end) ?? '';
+    return { start, end, text };
+  }, []);
+  const restoreInlineGemmaEditorSelection = useCallback((selection: MaxwellToolbarSelection) => {
+    if (!selection || selection.start === selection.end) return;
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    editor?.setSelectionRange(selection.start, selection.end);
   }, []);
   const openInlineGemmaCommand = useCallback(() => {
     const selection = getActiveMaxwellSelection();
@@ -4839,16 +4850,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setInlineGemmaError(getMaxwellToolbarRunMode(selection).mode === 'selection' ? null : 'Select text first.');
     setInlineGemmaOpen(true);
     requestAnimationFrame(() => {
+      restoreInlineGemmaEditorSelection(selection);
       inlineGemmaInstructionRef.current?.focus();
+      requestAnimationFrame(() => {
+        restoreInlineGemmaEditorSelection(selection);
+      });
     });
-  }, [getActiveMaxwellSelection]);
+  }, [getActiveMaxwellSelection, restoreInlineGemmaEditorSelection]);
   const closeInlineGemmaCommand = useCallback(() => {
-    if (inlineGemmaRunning) return;
     setInlineGemmaOpen(false);
     setInlineGemmaInstruction('');
     setInlineGemmaSelection(null);
     setInlineGemmaError(null);
-  }, [inlineGemmaRunning]);
+  }, []);
   const submitInlineGemmaCommand = useCallback(() => {
     const request = getInlineGemmaLocalCommandRequest(inlineGemmaInstruction, inlineGemmaSelection);
     if (!request) {
@@ -4857,7 +4871,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     setInlineGemmaRunning(true);
     setInlineGemmaError(null);
+    setInlineGemmaOpen(false);
+    setInlineGemmaInstruction('');
+    setInlineGemmaSelection(null);
     void (async () => {
+      restoreInlineGemmaEditorSelection(inlineGemmaSelection);
       await flushCurrentEdit();
       const result = await window.commandsAPI?.runLocalCommand?.(request);
       if (!result) {
@@ -4868,15 +4886,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         setInlineGemmaError(result.error ?? 'Local command failed.');
         return;
       }
-      setInlineGemmaOpen(false);
-      setInlineGemmaInstruction('');
-      setInlineGemmaSelection(null);
     })().catch((err) => {
       setInlineGemmaError(err instanceof Error ? err.message : 'Local command failed.');
     }).finally(() => {
       setInlineGemmaRunning(false);
     });
-  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection]);
+  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection, restoreInlineGemmaEditorSelection]);
   const runMaxwellItem = useCallback((id: string) => {
     const item = maxwellItems.find((candidate) => candidate.id === id);
     if (!item) return;
@@ -9284,6 +9299,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      if (!inlineGemmaOpen && isInlineGemmaCommandShortcut(e)) {
+        e.preventDefault();
+        openInlineGemmaCommand();
+        return;
+      }
+
       // / focuses library search. Cmd+F remains available for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
@@ -9527,7 +9548,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath, inlineGemmaOpen, openInlineGemmaCommand]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -9935,7 +9956,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             type="button"
             aria-label="Close"
             onClick={closeInlineGemmaCommand}
-            disabled={inlineGemmaRunning}
             style={{
               width: '30px',
               height: '30px',
@@ -9943,7 +9963,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               border: `1px solid ${theme.border}`,
               backgroundColor: theme.surface2 ?? theme.bgSecondary,
               color: theme.textSecondary,
-              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              cursor: 'pointer',
               fontSize: '18px',
               lineHeight: '26px',
             }}
@@ -10010,7 +10030,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           <button
             type="button"
             onClick={closeInlineGemmaCommand}
-            disabled={inlineGemmaRunning}
             style={{
               height: '34px',
               padding: '0 12px',
@@ -10018,7 +10037,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               border: `1px solid ${theme.border}`,
               backgroundColor: theme.surface2 ?? theme.bgSecondary,
               color: theme.text,
-              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              cursor: 'pointer',
               fontSize: '13px',
               fontWeight: 600,
             }}
