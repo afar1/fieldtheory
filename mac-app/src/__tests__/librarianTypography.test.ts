@@ -16,7 +16,12 @@ import {
 
 describe('librarian typography presets', () => {
   it('keeps the font choices curated', () => {
-    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.id)).toEqual(['book', 'note', 'draft', 'literata', 'atkinson', 'plex-mono']);
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.id)).toEqual(['book', 'note', 'draft']);
+  });
+
+  it('uses Source families for Book and Note', () => {
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'book')?.fontFamily).toContain('"Source Serif 4"');
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'note')?.fontFamily).toContain('"Source Sans 3"');
   });
 
   it('restores a saved typography preset', () => {
@@ -43,6 +48,16 @@ describe('librarian typography presets', () => {
     };
 
     expect(restoreLibrarianTypographyPreset(storage)).toBe(DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET);
+  });
+
+  it('falls back to the default preset for removed values', () => {
+    for (const removedPreset of ['literata', 'atkinson', 'plex-mono']) {
+      const storage = {
+        getItem: () => removedPreset,
+      };
+
+      expect(restoreLibrarianTypographyPreset(storage)).toBe(DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET);
+    }
   });
 
   it('persists the selected preset', () => {
