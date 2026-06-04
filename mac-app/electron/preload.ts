@@ -966,7 +966,7 @@ export interface ClipboardAPI {
   startDrag: (stackId: string) => Promise<void>;
 
   // Local LLM model management
-  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string; license: string; sourceUrl: string; baseModelUrl: string }>>;
+  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string; license: string; sourceUrl: string; baseModelUrl: string; ollamaTag?: string }>>;
   getLocalLLMStatus: () => Promise<Record<string, boolean>>;
   getLocalLLMHealth: () => Promise<Record<string, { status: 'ready' | 'missing' | 'corrupt'; modelPath: string; fileSizeBytes: number | null; expectedSizeBytes: number; minValidSizeBytes: number }>>;
   getLocalLLMSelected: () => Promise<string>;

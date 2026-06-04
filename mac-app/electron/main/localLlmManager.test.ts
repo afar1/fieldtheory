@@ -56,6 +56,14 @@ describe('LocalLlmManager', () => {
       filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
       license: 'Apache-2.0',
       baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+      ollamaTag: 'gemma4:e4b',
+    }));
+    expect(models['gemma-4-12B-it-Q4_K_M']).toEqual(expect.objectContaining({
+      name: 'Gemma 4 12B Instruct Q4_K_M',
+      filename: 'gemma-4-12B-it-Q4_K_M.gguf',
+      sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF',
+      baseModelUrl: 'https://huggingface.co/google/gemma-4-12B-it',
+      ollamaTag: 'gemma4:12b',
     }));
   });
 
@@ -282,6 +290,67 @@ describe('LocalLlmManager', () => {
     expect(manager.getModelHealthMap()[DEFAULT_LOCAL_LLM_MODEL]).toEqual(expect.objectContaining({
       status: 'missing',
       modelPath: expect.stringContaining('gemma-4-E4B-it-Q4_K_M.gguf'),
+    }));
+    expect(manager.getModelHealthMap()['gemma-4-12B-it-Q4_K_M']).toEqual(expect.objectContaining({
+      status: 'missing',
+      modelPath: expect.stringContaining('gemma-4-12B-it-Q4_K_M.gguf'),
+    }));
+  });
+
+  it('uses 12B model metadata after selecting the 12B Gemma model', () => {
+    const homeDir = path.join(tempDir, 'home');
+    const manager = new LocalLlmManager({
+      userDataPath: path.join(tempDir, 'userData'),
+      resourcesPath: path.join(tempDir, 'resources'),
+      appPath: path.join(tempDir, 'app'),
+      cwd: tempDir,
+      env: { HOME: homeDir },
+    });
+
+    expect(manager.setSelectedModel('gemma-4-12B-it-Q4_K_M')).toEqual({ success: true });
+
+    const sharedModelPath = path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-12B-it-Q4_K_M', 'model.gguf');
+    const bundledModelPath = path.join(tempDir, 'resources', 'models', 'gemma-4-12B-it-Q4_K_M.gguf');
+    const candidates = manager.getModelPathCandidates();
+
+    expect(manager.getSelectedModel()).toBe('gemma-4-12B-it-Q4_K_M');
+    expect(manager.getDefaultInstallPath()).toBe(path.join(tempDir, 'userData', 'models', 'gemma-4-12B-it-Q4_K_M.gguf'));
+    expect(candidates).toContain(sharedModelPath);
+    expect(candidates.indexOf(sharedModelPath)).toBeLessThan(candidates.indexOf(bundledModelPath));
+    expect(manager.getModelHealth()).toEqual(expect.objectContaining({
+      status: 'missing',
+      expectedSizeBytes: 7_381_382_048,
+    }));
+  });
+
+  it('recognizes Ollama-downloaded Gemma models from their manifest blobs', () => {
+    const homeDir = path.join(tempDir, 'home');
+    const digest = '5cf8a1f2fc4268b3fd628743675910cf1d8137c4742d0be401c3e885f605023a';
+    const manifestPath = path.join(homeDir, '.ollama', 'models', 'manifests', 'registry.ollama.ai', 'library', 'gemma4', '12b');
+    const blobPath = path.join(homeDir, '.ollama', 'models', 'blobs', `sha256-${digest}`);
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.mkdirSync(path.dirname(blobPath), { recursive: true });
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      layers: [
+        { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${digest}`, size: 7_381_382_048 },
+      ],
+    }));
+    fs.closeSync(fs.openSync(blobPath, 'w'));
+    fs.truncateSync(blobPath, 4 * 1024 * 1024 * 1024);
+
+    const manager = new LocalLlmManager({
+      userDataPath: path.join(tempDir, 'userData'),
+      resourcesPath: path.join(tempDir, 'resources'),
+      appPath: path.join(tempDir, 'app'),
+      cwd: tempDir,
+      env: { HOME: homeDir },
+    });
+    manager.setSelectedModel('gemma-4-12B-it-Q4_K_M');
+
+    expect(manager.getModelPathCandidates()).toContain(blobPath);
+    expect(manager.getModelHealth()).toEqual(expect.objectContaining({
+      status: 'ready',
+      modelPath: blobPath,
     }));
   });
 

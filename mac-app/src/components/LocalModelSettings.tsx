@@ -17,6 +17,7 @@ type LocalModelInfo = {
   license?: string;
   sourceUrl?: string;
   baseModelUrl?: string;
+  ollamaTag?: string;
 };
 
 type LocalModelHealth = {
@@ -27,9 +28,10 @@ type LocalModelHealth = {
   minValidSizeBytes: number;
 };
 
-const DEFAULT_MODEL_ID = 'gemma-4-E4B-it-Q4_K_M';
+const FALLBACK_MODEL_ID = 'gemma-4-E4B-it-Q4_K_M';
+const FALLBACK_MODEL_FILENAME = 'gemma-4-E4B-it-Q4_K_M.gguf';
+const FALLBACK_MODEL_SOURCE_URL = 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF';
 const FIELD_THEORY_MODEL_DIR = '~/.fieldtheory/models';
-const OLLAMA_GEMMA_COMMAND = 'brew install ollama llama.cpp && ollama pull gemma4:e4b';
 
 function formatBytes(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return 'Unknown';
@@ -43,25 +45,29 @@ function abbreviateHomePath(filePath: string | undefined): string {
 }
 
 function getFieldTheoryModelPath(filename: string | undefined): string {
-  return `${FIELD_THEORY_MODEL_DIR}/${filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf'}`;
+  return `${FIELD_THEORY_MODEL_DIR}/${filename ?? FALLBACK_MODEL_FILENAME}`;
 }
 
 function getGemmaDownloadCommand(model: LocalModelInfo | undefined): string {
-  const filename = model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf';
-  const sourceUrl = model?.sourceUrl ?? 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF';
+  const filename = model?.filename ?? FALLBACK_MODEL_FILENAME;
+  const sourceUrl = model?.sourceUrl ?? FALLBACK_MODEL_SOURCE_URL;
   return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && curl -L --fail --continue-at - -o ${getFieldTheoryModelPath(filename)} "${sourceUrl}/resolve/main/${filename}?download=true"`;
 }
 
 function getGemmaLinkCommand(model: LocalModelInfo | undefined): string {
-  const filename = model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf';
+  const filename = model?.filename ?? FALLBACK_MODEL_FILENAME;
   return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && test -f "<paste-your-existing-gguf-path-here>" && ln -sf "<paste-your-existing-gguf-path-here>" ${getFieldTheoryModelPath(filename)}`;
+}
+
+function getOllamaGemmaCommand(model: LocalModelInfo | undefined): string {
+  return `brew install ollama llama.cpp && ollama pull ${model?.ollamaTag ?? 'gemma4:e4b'}`;
 }
 
 export default function LocalModelSettings() {
   const { theme } = useTheme();
   const [models, setModels] = useState<Record<string, LocalModelInfo>>({});
   const [healthByModel, setHealthByModel] = useState<Record<string, LocalModelHealth>>({});
-  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
+  const [selectedModel, setSelectedModel] = useState(FALLBACK_MODEL_ID);
   const [loading, setLoading] = useState(true);
   const [finding, setFinding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -89,7 +95,7 @@ export default function LocalModelSettings() {
         api.getMeetingSummaryPrompt?.() ?? Promise.resolve(''),
       ]);
       setModels(nextModels);
-      setSelectedModel(nextSelected || DEFAULT_MODEL_ID);
+      setSelectedModel(nextSelected || FALLBACK_MODEL_ID);
       setHealthByModel(nextHealth);
       setMeetingSummaryPrompt(nextMeetingSummaryPrompt);
       setError(null);
@@ -105,12 +111,13 @@ export default function LocalModelSettings() {
   }, [load]);
 
   const modelIds = useMemo(() => Object.keys(models), [models]);
-  const activeModelId = models[selectedModel] ? selectedModel : modelIds[0] ?? DEFAULT_MODEL_ID;
+  const activeModelId = models[selectedModel] ? selectedModel : modelIds[0] ?? FALLBACK_MODEL_ID;
   const model = models[activeModelId];
   const health = healthByModel[activeModelId];
   const ready = health?.status === 'ready';
   const statusTone = ready ? 'success' : health?.status === 'corrupt' ? 'warning' : 'neutral';
   const statusLabel = ready ? 'Ready' : health?.status === 'corrupt' ? 'Invalid file' : 'Missing';
+  const ollamaCommand = getOllamaGemmaCommand(model);
   const downloadCommand = getGemmaDownloadCommand(model);
   const linkCommand = getGemmaLinkCommand(model);
 
@@ -151,7 +158,7 @@ export default function LocalModelSettings() {
       setHealthByModel(nextHealth);
       const activeHealth = nextHealth[activeModelId];
       if (activeHealth?.status !== 'ready') {
-        setError(`Gemma was not found yet. Put ${model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf'} in ${FIELD_THEORY_MODEL_DIR}, or link an existing GGUF file there, then click Find Gemma again.`);
+        setError(`Gemma was not found yet. Put ${model?.filename ?? FALLBACK_MODEL_FILENAME} in ${FIELD_THEORY_MODEL_DIR}, or link an existing GGUF file there, then click Find Gemma again.`);
         return;
       }
 
@@ -331,9 +338,9 @@ export default function LocalModelSettings() {
           </div>
           <TerminalCommand
             label="1. Install Ollama and Gemma 4"
-            command={OLLAMA_GEMMA_COMMAND}
+            command={ollamaCommand}
             copied={copiedCommand === 'ollama'}
-            onCopy={() => void handleCopyCommand('ollama', OLLAMA_GEMMA_COMMAND)}
+            onCopy={() => void handleCopyCommand('ollama', ollamaCommand)}
             theme={theme}
           />
           <TerminalCommand

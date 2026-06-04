@@ -455,6 +455,7 @@ interface LocalLlmModelInfo {
   license: string;
   sourceUrl: string;
   baseModelUrl: string;
+  ollamaTag?: string;
 }
 
 interface LocalLlmHealth {
