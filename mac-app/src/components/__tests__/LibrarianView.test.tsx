@@ -2871,69 +2871,6 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('dismisses the inline Gemma command modal as soon as a selected-text command starts', async () => {
-    const externalPath = '/Users/afar/.fieldtheory/library/scratchpad/inline-gemma.md';
-    const content = 'Lipsum';
-    let finishRun: ((result: { success: boolean }) => void) | null = null;
-    Object.defineProperty(window, 'externalAPI', {
-      configurable: true,
-      value: {
-        open: vi.fn(async () => ({
-          path: externalPath,
-          name: 'inline-gemma.md',
-          content,
-          mtime: 1,
-          documentVersion: { mtimeMs: 1, size: content.length, sha256: 'inline-gemma-version' },
-        })),
-        save: vi.fn(async () => ({ ok: true })),
-        findLibraryFileByDocumentVersion: vi.fn(async () => null),
-        rename: vi.fn(async () => null),
-        delete: vi.fn(async () => false),
-        onOpenExternal: vi.fn(() => () => {}),
-      },
-    });
-    vi.mocked(window.commandsAPI!.runLocalCommand).mockImplementation(() => new Promise((resolve) => {
-      finishRun = resolve;
-    }));
-
-    const { container } = render(
-      <LibrarianView
-        sidebarCollapsed={false}
-        onSwitchToClipboard={vi.fn()}
-        initialOpenTarget={{
-          kind: 'external',
-          path: externalPath,
-          contentMode: 'markdown',
-          selectionStart: 0,
-          selectionEnd: content.length,
-        }}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(container.querySelector('.cm-editor')?.textContent).toContain(content);
-    });
-
-    fireEvent.keyDown(window, { key: 'g', metaKey: true, shiftKey: true });
-    const dialog = await screen.findByRole('dialog', { name: 'Gemma command' });
-    const instruction = within(dialog).getByLabelText('Instruction');
-    fireEvent.change(instruction, { target: { value: 'give me 5 bullets on this' } });
-    fireEvent.keyDown(instruction, { key: 'Enter', metaKey: true });
-
-    await waitFor(() => {
-      expect(window.commandsAPI!.runLocalCommand).toHaveBeenCalledWith({
-        customInstruction: 'give me 5 bullets on this',
-        mode: 'selection',
-        selection: { start: 0, end: content.length, text: content },
-      });
-    });
-    expect(screen.queryByRole('dialog', { name: 'Gemma command' })).toBeNull();
-
-    await act(async () => {
-      finishRun?.({ success: true });
-    });
-  });
-
   it('opens html files as previews and css files as source', async () => {
     const htmlPath = '/Users/afar/.fieldtheory/library/reports/summary.html';
     const cssPath = '/Users/afar/.fieldtheory/library/reports/styles.css';

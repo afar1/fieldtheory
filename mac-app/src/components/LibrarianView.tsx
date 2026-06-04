@@ -4858,12 +4858,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [getActiveMaxwellSelection, restoreInlineGemmaEditorSelection]);
   const closeInlineGemmaCommand = useCallback(() => {
-    if (inlineGemmaRunning) return;
     setInlineGemmaOpen(false);
     setInlineGemmaInstruction('');
     setInlineGemmaSelection(null);
     setInlineGemmaError(null);
-  }, [inlineGemmaRunning]);
+  }, []);
   const submitInlineGemmaCommand = useCallback(() => {
     const request = getInlineGemmaLocalCommandRequest(inlineGemmaInstruction, inlineGemmaSelection);
     if (!request) {
@@ -9300,6 +9299,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      if (!inlineGemmaOpen && isInlineGemmaCommandShortcut(e)) {
+        e.preventDefault();
+        openInlineGemmaCommand();
+        return;
+      }
+
       // / focuses library search. Cmd+F remains available for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
@@ -9543,7 +9548,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath, inlineGemmaOpen, openInlineGemmaCommand]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -9951,7 +9956,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             type="button"
             aria-label="Close"
             onClick={closeInlineGemmaCommand}
-            disabled={inlineGemmaRunning}
             style={{
               width: '30px',
               height: '30px',
@@ -9959,7 +9963,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               border: `1px solid ${theme.border}`,
               backgroundColor: theme.surface2 ?? theme.bgSecondary,
               color: theme.textSecondary,
-              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              cursor: 'pointer',
               fontSize: '18px',
               lineHeight: '26px',
             }}
@@ -10026,7 +10030,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           <button
             type="button"
             onClick={closeInlineGemmaCommand}
-            disabled={inlineGemmaRunning}
             style={{
               height: '34px',
               padding: '0 12px',
@@ -10034,7 +10037,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               border: `1px solid ${theme.border}`,
               backgroundColor: theme.surface2 ?? theme.bgSecondary,
               color: theme.text,
-              cursor: inlineGemmaRunning ? 'default' : 'pointer',
+              cursor: 'pointer',
               fontSize: '13px',
               fontWeight: 600,
             }}
