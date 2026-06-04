@@ -10,11 +10,32 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MAC_APP_DIR="$(dirname "$SCRIPT_DIR")"
 MODEL_DIR="$MAC_APP_DIR/resources/models"
-MODEL_FILENAME="gemma-4-E4B-it-Q4_K_M.gguf"
+MODEL_ID="${FT_GEMMA_MODEL_ID:-gemma-4-E4B-it-Q4_K_M}"
+
+case "$MODEL_ID" in
+  gemma-4-E4B-it-Q4_K_M)
+    MODEL_FILENAME="gemma-4-E4B-it-Q4_K_M.gguf"
+    DEFAULT_MODEL_URL="https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf?download=true"
+    OLLAMA_MODEL_NAME="gemma4"
+    OLLAMA_MODEL_TAG="e4b"
+    MIN_BYTES=$((4 * 1024 * 1024 * 1024))
+    ;;
+  gemma-4-12B-it-Q4_K_M)
+    MODEL_FILENAME="gemma-4-12B-it-Q4_K_M.gguf"
+    DEFAULT_MODEL_URL="https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12B-it-Q4_K_M.gguf?download=true"
+    OLLAMA_MODEL_NAME="gemma4"
+    OLLAMA_MODEL_TAG="12b"
+    MIN_BYTES=$((6 * 1024 * 1024 * 1024))
+    ;;
+  *)
+    echo "ERROR: Unsupported Gemma model: $MODEL_ID" >&2
+    exit 1
+    ;;
+esac
+
 DEFAULT_MODEL_PATH="$MODEL_DIR/$MODEL_FILENAME"
 MODEL_PATH="${FT_LOCAL_LLM_MODEL_PATH:-${FT_GEMMA_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
-MODEL_URL="${FT_GEMMA_MODEL_URL:-https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf?download=true}"
-MIN_BYTES=$((4 * 1024 * 1024 * 1024))
+MODEL_URL="${FT_GEMMA_MODEL_URL:-$DEFAULT_MODEL_URL}"
 HOME_DIR="${HOME:-}"
 
 file_size() {
@@ -30,21 +51,49 @@ same_file() {
   [[ -e "$1" && -e "$2" ]] && [[ "$1" -ef "$2" ]]
 }
 
+find_ollama_model_blob() {
+  [[ -n "$HOME_DIR" ]] || return 1
+  local manifest_path="$HOME_DIR/.ollama/models/manifests/registry.ollama.ai/library/$OLLAMA_MODEL_NAME/$OLLAMA_MODEL_TAG"
+  [[ -f "$manifest_path" ]] || return 1
+
+  local digest
+  digest="$(tr -d '\n' < "$manifest_path" | sed -n 's/.*"mediaType":"application\/vnd\.ollama\.image\.model","digest":"sha256:\([0-9a-f][0-9a-f]*\)".*/\1/p')"
+  [[ -n "$digest" ]] || return 1
+
+  local blob_path="$HOME_DIR/.ollama/models/blobs/sha256-$digest"
+  is_valid_model_file "$blob_path" || return 1
+  echo "$blob_path"
+}
+
 find_existing_model() {
   local target_path="$1"
   local candidate
+  local ollama_model_blob
   local candidates=(
     "${FT_LOCAL_LLM_MODEL_PATH:-}"
     "${FT_GEMMA_MODEL_PATH:-}"
   )
   if [[ -n "$HOME_DIR" ]]; then
-    candidates+=(
-      "$HOME_DIR/.fieldtheory/models/$MODEL_FILENAME"
-      "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/unsloth/gemma-4-E4B-it-Q4_K_M/model.gguf"
-      "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-E4B-it-Q4_K_M/model.gguf"
-      "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-E4B-it/model.gguf"
-      "$HOME_DIR/.cache/huggingface/hub/models--ggml-org--gemma-4-E4B-it-GGUF/snapshots/"*"/$MODEL_FILENAME"
-    )
+    ollama_model_blob="$(find_ollama_model_blob || true)"
+    candidates+=("$HOME_DIR/.fieldtheory/models/$MODEL_FILENAME")
+    [[ -z "$ollama_model_blob" ]] || candidates+=("$ollama_model_blob")
+    case "$MODEL_ID" in
+      gemma-4-E4B-it-Q4_K_M)
+        candidates+=(
+          "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/unsloth/gemma-4-E4B-it-Q4_K_M/model.gguf"
+          "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-E4B-it-Q4_K_M/model.gguf"
+          "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-E4B-it/model.gguf"
+          "$HOME_DIR/.cache/huggingface/hub/models--ggml-org--gemma-4-E4B-it-GGUF/snapshots/"*"/$MODEL_FILENAME"
+        )
+        ;;
+      gemma-4-12B-it-Q4_K_M)
+        candidates+=(
+          "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-12B-it-Q4_K_M/model.gguf"
+          "$HOME_DIR/Library/Application Support/Atomic Chat/data/llamacpp/models/google/gemma-4-12B-it/model.gguf"
+          "$HOME_DIR/.cache/huggingface/hub/models--ggml-org--gemma-4-12B-it-GGUF/snapshots/"*"/$MODEL_FILENAME"
+        )
+        ;;
+    esac
   fi
 
   for candidate in "${candidates[@]}"; do

@@ -5106,6 +5106,7 @@ async function installOrAccessLocalLlmModel(model: string): Promise<{ success: b
           ...process.env,
           PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH ?? ''].filter(Boolean).join(':'),
           FT_LOCAL_LLM_MODEL_PATH: installPath,
+          FT_GEMMA_MODEL_ID: modelId,
           FT_GEMMA_REUSE_EXISTING: '1',
         },
       });
