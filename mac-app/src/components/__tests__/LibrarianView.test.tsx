@@ -894,6 +894,7 @@ describe('LibrarianView render', () => {
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const createButton = await screen.findByRole('button', { name: 'New file in Handoff' });
+    expect(createButton.style.opacity).toBe('');
     fireEvent.click(createButton);
     fireEvent.click(createButton);
 
