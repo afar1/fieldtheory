@@ -21,6 +21,7 @@ vi.mock('../../contexts/ThemeContext', () => ({
 }));
 
 const modelId = 'gemma-4-E4B-it-Q4_K_M';
+const twelveBModelId = 'gemma-4-12B-it-Q4_K_M';
 const defaultMeetingSummaryPrompt = 'Preserve Notes, Transcript, speaker labels if present, links, figures, and checkboxes.';
 
 function makeModel() {
@@ -32,18 +33,32 @@ function makeModel() {
     license: 'Apache-2.0',
     sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF',
     baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+    ollamaTag: 'gemma4:e4b',
   };
 }
 
-function makeHealth(status: 'ready' | 'missing' | 'corrupt') {
+function makeTwelveBModel() {
+  return {
+    name: 'Gemma 4 12B Instruct Q4_K_M',
+    filename: 'gemma-4-12B-it-Q4_K_M.gguf',
+    sizeBytes: 7_381_382_048,
+    description: 'Offline local command model',
+    license: 'Apache-2.0',
+    sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF',
+    baseModelUrl: 'https://huggingface.co/google/gemma-4-12B-it',
+    ollamaTag: 'gemma4:12b',
+  };
+}
+
+function makeHealth(status: 'ready' | 'missing' | 'corrupt', filename = 'gemma-4-E4B-it-Q4_K_M.gguf') {
   return {
     status,
     modelPath: status === 'ready'
       ? '/Users/afar/Library/Application Support/Atomic Chat/data/llamacpp/models/unsloth/gemma-4-E4B-it-Q4_K_M/model.gguf'
-      : '/Users/afar/Library/Application Support/Field Theory/models/gemma-4-E4B-it-Q4_K_M.gguf',
+      : `/Users/afar/Library/Application Support/Field Theory/models/${filename}`,
     fileSizeBytes: status === 'ready' ? 4_977_164_416 : null,
-    expectedSizeBytes: 5_335_289_824,
-    minValidSizeBytes: 2_667_649_912,
+    expectedSizeBytes: filename.includes('12B') ? 7_381_382_048 : 5_335_289_824,
+    minValidSizeBytes: filename.includes('12B') ? 3_690_691_024 : 2_667_649_912,
   };
 }
 
@@ -120,6 +135,26 @@ describe('LocalModelSettings', () => {
     expect(screen.getByText(/curl -L --fail --continue-at - -o ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
     expect(screen.getByText(/test -f "<paste-your-existing-gguf-path-here>" && ln -sf "<paste-your-existing-gguf-path-here>" ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(3);
+  });
+
+  it('shows 12B setup commands when the 12B model is selected', async () => {
+    (window as any).clipboardAPI.getLocalLLMModels.mockResolvedValue({
+      [modelId]: makeModel(),
+      [twelveBModelId]: makeTwelveBModel(),
+    });
+    (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({
+      [modelId]: makeHealth('missing'),
+      [twelveBModelId]: makeHealth('missing', 'gemma-4-12B-it-Q4_K_M.gguf'),
+    });
+
+    render(<LocalModelSettings />);
+
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: twelveBModelId } });
+
+    expect(screen.getByText(/brew install ollama llama\.cpp && ollama pull gemma4:12b/i)).toBeTruthy();
+    expect(screen.getAllByText(/~\/\.fieldtheory\/models\/gemma-4-12B-it-Q4_K_M\.gguf/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/https:\/\/huggingface\.co\/ggml-org\/gemma-4-12B-it-GGUF\/resolve\/main\/gemma-4-12B-it-Q4_K_M\.gguf/i)).toBeTruthy();
   });
 
   it('saves a customized meeting notes prompt', async () => {

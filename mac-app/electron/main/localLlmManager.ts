@@ -9,7 +9,6 @@ const DEFAULT_CONTEXT_TOKENS = 32768;
 const PROMPT_TOKEN_HEADROOM = 512;
 const APPROX_CHARS_PER_TOKEN = 4;
 
-export type LocalLlmModelId = 'gemma-4-E4B-it-Q4_K_M';
 export type LocalLlmHarness = 'codex' | 'direct';
 export type LocalLlmProgressKind = 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
 
@@ -28,6 +27,8 @@ export interface LocalLlmModelInfo {
   license: string;
   sourceUrl: string;
   baseModelUrl: string;
+  ollamaTag?: string;
+  reusableModelPaths?: readonly string[];
 }
 
 export interface LocalLlmHealth {
@@ -83,7 +84,7 @@ export interface LocalLlmManagerOptions {
   }) => LocalLlmServer;
 }
 
-const LOCAL_LLM_MODELS: Record<LocalLlmModelId, LocalLlmModelInfo> = {
+const LOCAL_LLM_MODELS = {
   'gemma-4-E4B-it-Q4_K_M': {
     name: 'Gemma 4 E4B Instruct Q4_K_M',
     filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
@@ -92,8 +93,31 @@ const LOCAL_LLM_MODELS: Record<LocalLlmModelId, LocalLlmModelInfo> = {
     license: 'Apache-2.0',
     sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF',
     baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+    ollamaTag: 'gemma4:e4b',
+    reusableModelPaths: [
+      path.join('Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'unsloth', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf'),
+      path.join('Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf'),
+      path.join('Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-E4B-it', 'model.gguf'),
+    ],
   },
-};
+  'gemma-4-12B-it-Q4_K_M': {
+    name: 'Gemma 4 12B Instruct Q4_K_M',
+    filename: 'gemma-4-12B-it-Q4_K_M.gguf',
+    sizeBytes: 7_381_382_048,
+    description: 'Offline local command model for Field Theory markdown commands',
+    license: 'Apache-2.0',
+    sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF',
+    baseModelUrl: 'https://huggingface.co/google/gemma-4-12B-it',
+    ollamaTag: 'gemma4:12b',
+    reusableModelPaths: [
+      path.join('Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-12B-it-Q4_K_M', 'model.gguf'),
+      path.join('Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-12B-it', 'model.gguf'),
+    ],
+  },
+} as const satisfies Record<string, LocalLlmModelInfo>;
+
+export type LocalLlmModelId = keyof typeof LOCAL_LLM_MODELS;
+const LOCAL_LLM_MODEL_IDS = Object.keys(LOCAL_LLM_MODELS) as LocalLlmModelId[];
 
 export const DEFAULT_LOCAL_LLM_MODEL: LocalLlmModelId = 'gemma-4-E4B-it-Q4_K_M';
 
@@ -380,15 +404,15 @@ export class LocalLlmManager {
   }
 
   getDownloadStatus(): Record<LocalLlmModelId, boolean> {
-    return {
-      [DEFAULT_LOCAL_LLM_MODEL]: this.getModelHealth(DEFAULT_LOCAL_LLM_MODEL).status === 'ready',
-    };
+    return Object.fromEntries(
+      LOCAL_LLM_MODEL_IDS.map(model => [model, this.getModelHealth(model).status === 'ready']),
+    ) as Record<LocalLlmModelId, boolean>;
   }
 
   getModelHealthMap(): Record<LocalLlmModelId, LocalLlmHealth> {
-    return {
-      [DEFAULT_LOCAL_LLM_MODEL]: this.getModelHealth(DEFAULT_LOCAL_LLM_MODEL),
-    };
+    return Object.fromEntries(
+      LOCAL_LLM_MODEL_IDS.map(model => [model, this.getModelHealth(model)]),
+    ) as Record<LocalLlmModelId, LocalLlmHealth>;
   }
 
   getDefaultInstallPath(model: LocalLlmModelId = this.selectedModel): string {
@@ -503,14 +527,14 @@ export class LocalLlmManager {
   }
 
   getModelPathCandidates(model: LocalLlmModelId = this.selectedModel): string[] {
-    const filename = LOCAL_LLM_MODELS[model].filename;
+    const modelInfo = LOCAL_LLM_MODELS[model];
+    const filename = modelInfo.filename;
     const homeDir = this.options.env?.HOME ?? process.env.HOME;
     const reusableModelCandidates = homeDir
       ? [
           path.join(homeDir, '.fieldtheory', 'models', filename),
-          path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'unsloth', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf'),
-          path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf'),
-          path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-E4B-it', 'model.gguf'),
+          ...this.getOllamaModelPathCandidates(modelInfo, homeDir),
+          ...(modelInfo.reusableModelPaths ?? []).map(candidate => path.join(homeDir, candidate)),
         ]
       : [];
     const candidates = [
@@ -524,6 +548,31 @@ export class LocalLlmManager {
     ].filter((candidate): candidate is string => Boolean(candidate));
 
     return [...new Set(candidates.map(candidate => path.resolve(candidate)))];
+  }
+
+  private getOllamaModelPathCandidates(modelInfo: LocalLlmModelInfo, homeDir: string): string[] {
+    if (!modelInfo.ollamaTag) return [];
+
+    const [name, tag] = modelInfo.ollamaTag.split(':');
+    if (!name || !tag) return [];
+
+    const manifestPath = path.join(homeDir, '.ollama', 'models', 'manifests', 'registry.ollama.ai', 'library', name, tag);
+    if (!fs.existsSync(manifestPath)) return [];
+
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        layers?: Array<{ mediaType?: string; digest?: string }>;
+      };
+      const modelLayer = manifest.layers?.find(layer => layer.mediaType === 'application/vnd.ollama.image.model');
+      const digest = modelLayer?.digest?.startsWith('sha256:')
+        ? modelLayer.digest.slice('sha256:'.length)
+        : null;
+      return digest
+        ? [path.join(homeDir, '.ollama', 'models', 'blobs', `sha256-${digest}`)]
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   private getServer(modelPath: string): LocalLlmServer {
