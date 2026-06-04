@@ -4308,10 +4308,19 @@ function resolveLocalCommandSelection(
 ): { ok: true; start: number; end: number; text: string } | { ok: false; error: string } {
   if (!selection) return { ok: false, error: 'Select text to improve' };
   if (typeof selection.start === 'number' && typeof selection.end === 'number') {
-    const start = Math.max(0, Math.min(selection.start, targetContent.length));
-    const end = Math.max(start, Math.min(selection.end, targetContent.length));
+    const rawStart = Math.min(selection.start, selection.end);
+    const rawEnd = Math.max(selection.start, selection.end);
+    const start = Math.max(0, Math.min(rawStart, targetContent.length));
+    const end = Math.max(start, Math.min(rawEnd, targetContent.length));
     const text = targetContent.slice(start, end);
-    if (start === end || text.trim().length === 0) return { ok: false, error: 'Select text to improve' };
+    const expectedText = typeof selection.text === 'string' ? selection.text : '';
+    if (start === end || text.trim().length === 0) {
+      if (expectedText.trim().length > 0) return resolveLocalCommandSelection({ text: expectedText }, targetContent);
+      return { ok: false, error: 'Select text to improve' };
+    }
+    if (expectedText && text !== expectedText && text.trim() !== expectedText.trim()) {
+      return resolveLocalCommandSelection({ text: expectedText }, targetContent);
+    }
     return { ok: true, start, end, text };
   }
 
