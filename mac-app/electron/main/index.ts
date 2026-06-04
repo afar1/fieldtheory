@@ -40,6 +40,7 @@ import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelpe
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
 import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
+import { isActiveLibraryFileContextAllowed } from './activeLibraryFileContextPolicy';
 import {
   getBrowserLibraryMarkdownCommandTargetClientId,
   getBrowserLibraryNativeFocusHandoff,
@@ -3704,6 +3705,20 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     reportCurrentDocument: (context, clientId) => {
       const windowId = browserLibraryWindowId(clientId);
+      if (!shouldAcceptActiveLibraryFileContext(context)) {
+        if (activeLibraryFileContextSourceId === windowId) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
+        }
+        getDocumentPresenceManager().clearWindow(windowId);
+        appendCommandLauncherTrace('active-library-context-rejected', {
+          source: clientId ? 'browser-helper' : 'browser-helper-legacy',
+          windowId,
+          filePath: context.filePath,
+          rootPath: context.rootPath,
+        });
+        return;
+      }
       if (clientId) {
         browserLibraryContextByClientId.set(clientId, context);
         if (activeBrowserLibrarySurfaceClientId === clientId) {
@@ -3803,6 +3818,20 @@ function getActiveBrowserLibraryMarkdownCommandTargetClientId(): string | null {
     activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
   });
   return targetClientId && browserHelperServer?.hasNativeEventClient(targetClientId) ? targetClientId : null;
+}
+
+function currentActiveLibraryContextRootPaths(): { libraryRootPaths: string[]; watchedDirPaths: string[] } {
+  return {
+    libraryRootPaths: librarianManager?.getLibraryRootPaths() ?? [],
+    watchedDirPaths: librarianManager?.getWatchedDirs().map((dir) => dir.path) ?? [],
+  };
+}
+
+function shouldAcceptActiveLibraryFileContext(context: ActiveLibraryFileContext | DocumentPresenceContext): boolean {
+  return isActiveLibraryFileContextAllowed({
+    context,
+    ...currentActiveLibraryContextRootPaths(),
+  });
 }
 
 function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
@@ -11672,7 +11701,7 @@ function setupClipboardIPCHandlers(): void {
     ) {
       return false;
     }
-    activeLibraryFileContext = {
+    const nextContext: ActiveLibraryFileContext = {
       type: context.type,
       rootPath: context.rootPath,
       relPath: context.relPath,
@@ -11686,6 +11715,21 @@ function setupClipboardIPCHandlers(): void {
           }
         : {}),
     };
+    if (!shouldAcceptActiveLibraryFileContext(nextContext)) {
+      if (!windowId || activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (windowId) getDocumentPresenceManager().clearWindow(windowId);
+      appendCommandLauncherTrace('active-library-context-rejected', {
+        source: 'native-window',
+        windowId,
+        filePath: nextContext.filePath,
+        rootPath: nextContext.rootPath,
+      });
+      return false;
+    }
+    activeLibraryFileContext = nextContext;
     activeLibraryFileContextSourceId = windowId;
     if (windowId) {
       getDocumentPresenceManager().setWindowDocument(windowId, activeLibraryFileContext, sourceWindow?.isFocused() ?? false);
