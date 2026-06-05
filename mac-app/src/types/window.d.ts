@@ -2102,6 +2102,21 @@ declare global {
     documentVersion: DocumentVersion;
   }
 
+  interface WikiBacklinkRelationDocument {
+    target: { kind: 'wiki'; relPath: string };
+    title: string;
+    content: string;
+  }
+  type LibraryBacklinkTarget =
+    | { kind: 'wiki'; relPath: string }
+    | { kind: 'artifact'; path: string }
+    | { kind: 'command'; path: string };
+  interface LibraryBacklinkRelationDocument {
+    target: LibraryBacklinkTarget;
+    title: string;
+    content: string;
+  }
+
   interface WikiFolder {
     name: string;           // 'categories', 'domains', 'entries', 'entities'
     files: WikiPageMeta[];  // alphabetically sorted
@@ -2130,6 +2145,17 @@ declare global {
     source?: 'app' | 'watcher' | 'external';
     detectedAt?: number;
     emittedAt?: number;
+  }
+
+  interface LibraryChangeEvent {
+    type: 'file-added' | 'file-changed' | 'file-deleted';
+    rootPath: string;
+    relPath: string;
+    absPath: string;
+    builtin: boolean;
+    source: 'watcher' | 'app' | 'external';
+    detectedAt: number;
+    page?: WikiPageMeta;
   }
 
   interface LibraryMigrationFile {
@@ -2182,8 +2208,9 @@ declare global {
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
+    getBacklinkRelationDocuments: (target: LibraryBacklinkTarget) => Promise<LibraryBacklinkRelationDocument[]>;
     openDocumentWindow: (target: LibraryDocumentWindowTarget) => Promise<{ success: boolean; error?: string }>;
-    onRootsChanged: (callback: () => void) => () => void;
+    onRootsChanged: (callback: (event?: LibraryChangeEvent) => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
   }
 
@@ -2283,6 +2310,7 @@ declare global {
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
+    getBacklinkRelationDocuments: (relPath: string) => Promise<WikiBacklinkRelationDocument[]>;
     findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
@@ -2292,7 +2320,7 @@ declare global {
     createDir: (dirName: string) => Promise<boolean>;
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
-    onPageChanged: (callback: () => void) => () => void;
+    onPageChanged: (callback: (event?: LibraryChangeEvent) => void) => () => void;
     onPageDeleted: (callback: (relPath: string) => void) => () => void;
     onPageRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
@@ -2351,7 +2379,7 @@ declare global {
     list: () => Promise<RecentEntry[]>;
     visit: (entry: RecentEntry) => Promise<RecentEntry[]>;
     remove: (kind: 'wiki' | 'external', entryPath: string) => Promise<RecentEntry[]>;
-    onChanged: (callback: () => void) => () => void;
+    onChanged: (callback: (entries?: RecentEntry[]) => void) => () => void;
   }
 
   interface BookmarkImage {

@@ -3,7 +3,7 @@ import { fonts } from '../design/tokens';
 export const LIBRARIAN_TYPOGRAPHY_STORAGE_KEY = 'librarian-typography-preset';
 export const LIBRARIAN_LINE_HEIGHT_STORAGE_KEY = 'librarian-line-height';
 
-export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft' | 'literata' | 'atkinson' | 'plex-mono';
+export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft';
 export type LibrarianLineHeightId = 'tight' | 'normal' | 'loose';
 export type LibrarianTextSizeId = 'small' | 'normal' | 'large';
 
@@ -19,24 +19,24 @@ export type LibrarianTypographyPreset = {
 
 export const DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET: LibrarianTypographyPresetId = 'book';
 export const DEFAULT_LIBRARIAN_LINE_HEIGHT: LibrarianLineHeightId = 'normal';
-const LIBRARIAN_TYPOGRAPHY_PRESET_IDS: LibrarianTypographyPresetId[] = ['book', 'note', 'draft', 'literata', 'atkinson', 'plex-mono'];
+const LIBRARIAN_TYPOGRAPHY_PRESET_IDS: LibrarianTypographyPresetId[] = ['book', 'note', 'draft'];
 
 export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   {
     id: 'book',
     label: 'Book',
-    title: 'Serif, wider leading, best for longer reading',
-    fontFamily: `"New York", "Iowan Old Style", ${fonts.serif}`,
-    headingFontFamily: `"New York", "Iowan Old Style", ${fonts.serif}`,
+    title: 'Source Serif, wider leading, best for longer reading',
+    fontFamily: `"Source Serif 4", ${fonts.serif}`,
+    headingFontFamily: `"Source Serif 4", ${fonts.serif}`,
     lineHeight: 1.66,
     maxWidth: 'min(720px, 68ch)',
   },
   {
     id: 'note',
     label: 'Note',
-    title: 'System text, compact and clear for mixed reading and editing',
-    fontFamily: fonts.sans,
-    headingFontFamily: fonts.sans,
+    title: 'Source Sans, compact and clear for mixed reading and editing',
+    fontFamily: `"Source Sans 3", ${fonts.sans}`,
+    headingFontFamily: `"Source Sans 3", ${fonts.sans}`,
     lineHeight: 1.58,
     maxWidth: 'min(700px, 66ch)',
   },
@@ -46,33 +46,6 @@ export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
     title: 'Monospace focus mode for raw markdown writing',
     fontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
     headingFontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
-    lineHeight: 1.7,
-    maxWidth: 'min(680px, 64ch)',
-  },
-  {
-    id: 'literata',
-    label: 'Literata',
-    title: 'Open serif built for long-form digital reading',
-    fontFamily: `"Literata", ${fonts.serif}`,
-    headingFontFamily: `"Literata", ${fonts.serif}`,
-    lineHeight: 1.64,
-    maxWidth: 'min(720px, 68ch)',
-  },
-  {
-    id: 'atkinson',
-    label: 'Atkinson',
-    title: 'Open hyperlegible sans for clear everyday writing',
-    fontFamily: `"Atkinson Hyperlegible Next", ${fonts.sans}`,
-    headingFontFamily: `"Atkinson Hyperlegible Next", ${fonts.sans}`,
-    lineHeight: 1.58,
-    maxWidth: 'min(700px, 66ch)',
-  },
-  {
-    id: 'plex-mono',
-    label: 'Plex Mono',
-    title: 'Open monospace for markdown drafting',
-    fontFamily: `"IBM Plex Mono", ${fonts.mono}`,
-    headingFontFamily: `"IBM Plex Mono", ${fonts.mono}`,
     lineHeight: 1.7,
     maxWidth: 'min(680px, 64ch)',
   },

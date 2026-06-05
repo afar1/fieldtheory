@@ -351,6 +351,107 @@ describe('CommandsManager default internal commands', () => {
     ]);
   });
 
+  it('refreshes command link-hit index hooks on create and save', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+    });
+
+    const command = manager.createCommand(defaultDir, 'linked', 'See [[Target]].\n');
+    expect(command).not.toBeNull();
+    expect(indexCommandContent).toHaveBeenCalledWith(command!.path, expect.stringContaining('See [[Target]].'));
+
+    indexCommandContent.mockClear();
+    expect(manager.saveCommand(command!.path, 'See [[Other]].\n')).toEqual(expect.objectContaining({ ok: true }));
+    expect(indexCommandContent).toHaveBeenCalledWith(command!.path, 'See [[Other]].\n');
+  });
+
+  it('removes old command link-hit index rows on delete and rename', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const removeCommandIndex = vi.fn();
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+      removeCommandIndex,
+    });
+
+    const renameMe = manager.createCommand(defaultDir, 'rename-me', 'See [[Target]].\n');
+    expect(renameMe).not.toBeNull();
+    const renamedPath = manager.renameCommand(renameMe!.path, 'renamed');
+    expect(renamedPath).toBe(join(defaultDir, 'renamed.md'));
+    expect(removeCommandIndex).toHaveBeenCalledWith(renameMe!.path);
+    expect(indexCommandContent).toHaveBeenCalledWith(renamedPath, expect.stringContaining('See [[Target]].'));
+
+    const deleteMe = manager.createCommand(defaultDir, 'delete-me', 'Delete\n');
+    expect(deleteMe).not.toBeNull();
+    vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+    await expect(manager.deleteCommand(deleteMe!.path)).resolves.toBe(true);
+    expect(removeCommandIndex).toHaveBeenCalledWith(deleteMe!.path);
+  });
+
+  it('removes command link-hit rows for files missing after refresh', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const removeCommandIndex = vi.fn();
+    manager.setIndexHooks({
+      removeCommandIndex,
+    });
+    const command = manager.createCommand(defaultDir, 'external-delete', 'See [[Target]].\n');
+    expect(command).not.toBeNull();
+
+    rmSync(command!.path, { force: true });
+    await manager.refresh();
+
+    expect(removeCommandIndex).toHaveBeenCalledWith(command!.path);
+  });
+
+  it('does not reread unchanged command content while refreshing index hooks', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    const filePath = join(defaultDir, 'steady.md');
+    writeFileSync(filePath, 'See [[Target]].\n');
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+    });
+    await manager.addWatchedDir(defaultDir);
+    expect(indexCommandContent).toHaveBeenCalledTimes(1);
+
+    await manager.refresh();
+    expect(indexCommandContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps sibling-prefix command indexes when removing one watched directory', async () => {
+    const commandsDir = join(tempRoot, 'Commands');
+    const commandsBackupDir = join(tempRoot, 'Commands Backup');
+    mkdirSync(commandsDir, { recursive: true });
+    mkdirSync(commandsBackupDir, { recursive: true });
+    await manager.addWatchedDir(commandsDir);
+    await manager.addWatchedDir(commandsBackupDir);
+    const first = manager.createCommand(commandsDir, 'first', 'First\n');
+    const backup = manager.createCommand(commandsBackupDir, 'backup', 'Backup\n');
+    expect(first).not.toBeNull();
+    expect(backup).not.toBeNull();
+    const removeCommandIndex = vi.fn();
+    manager.setIndexHooks({
+      removeCommandIndex,
+    });
+
+    expect(manager.removeWatchedDir(commandsDir)).toBe(true);
+
+    expect(removeCommandIndex).toHaveBeenCalledWith(first!.path);
+    expect(removeCommandIndex).not.toHaveBeenCalledWith(backup!.path);
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({ filePath: backup!.path }),
+    ]);
+  });
+
   it('lists command folders from watched directories including duplicate, empty, renamed, and missing folders', async () => {
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const emptyDir = join(defaultDir, 'Empty');

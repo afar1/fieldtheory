@@ -8,7 +8,9 @@ import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { hasExistingLibraryContent } from './librarianSetupState';
+import { LibraryIndexStore, type StoredLibraryFileMetadata } from './libraryIndexStore';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import { getRawMarkdownLinkHits } from '../shared/wikiLinkParser';
 import {
   existingPathInsideRoots,
   getLibraryTextDocumentKind,
@@ -1684,6 +1686,12 @@ type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 
   contentEditedAt?: number;
 };
 
+type WikiFileMetadataCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  metadata: WikiFileMetadata;
+};
+
 export interface LibraryRoot {
   path: string;
   label: string;
@@ -1704,6 +1712,45 @@ export interface LibraryRenameEvent {
   detectedAt?: number;
   emittedAt?: number;
 }
+
+export interface LibraryChangeEvent {
+  type: 'file-added' | 'file-changed' | 'file-deleted';
+  rootPath: string;
+  relPath: string;
+  absPath: string;
+  builtin: boolean;
+  source: 'watcher' | 'app' | 'external';
+  detectedAt: number;
+  page?: WikiPageMeta;
+}
+
+export interface WikiBacklinkRelationDocument {
+  target: { kind: 'wiki'; relPath: string };
+  title: string;
+  content: string;
+}
+
+export type LibraryBacklinkTarget =
+  | { kind: 'wiki'; relPath: string }
+  | { kind: 'artifact'; path: string }
+  | { kind: 'command'; path: string };
+
+export interface LibraryBacklinkRelationDocument {
+  target: LibraryBacklinkTarget;
+  title: string;
+  content: string;
+}
+
+export interface CommandBacklinkSourceDocument {
+  filePath: string;
+  displayName?: string;
+  name?: string;
+  content: string;
+}
+
+export type CommandBacklinkSourceLoader = (
+  filePath: string,
+) => CommandBacklinkSourceDocument | null | Promise<CommandBacklinkSourceDocument | null>;
 
 export type LibraryMoveKind = 'file' | 'dir';
 
@@ -1802,6 +1849,7 @@ interface LibrarianIndex {
 export class LibrarianManager extends EventEmitter {
   private settingsPath: string;
   private indexPath: string;
+  private libraryIndexPath: string;
   private oldDbPath: string;
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
@@ -1812,6 +1860,8 @@ export class LibrarianManager extends EventEmitter {
   private userDataManager: UserDataManager | null = null;
   private wikiTreeCache: WikiNode[] | null = null;
   private libraryRootsCache: LibraryRoot[] | null = null;
+  private wikiFileMetadataCache: Map<string, WikiFileMetadataCacheEntry> = new Map();
+  private libraryIndexStore: LibraryIndexStore | null = null;
   private pendingWikiUnlinks: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private pendingLibraryUnlinks: Map<string, { rootPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
   private wikiRenameAliases: Map<string, { relPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
@@ -1823,8 +1873,10 @@ export class LibrarianManager extends EventEmitter {
     const userDataPath = app.getPath('userData');
     this.settingsPath = path.join(userDataPath, 'librarian-settings.json');
     this.indexPath = path.join(userDataPath, 'librarian-index.json');
+    this.libraryIndexPath = path.join(userDataPath, 'library-index.db');
     this.oldDbPath = path.join(userDataPath, 'librarian.db');
     this.oldLibrarianDir = path.join(userDataPath, 'librarian');
+    this.libraryIndexStore = new LibraryIndexStore(this.libraryIndexPath);
 
     // Migrate from old database if needed
     this.migrateFromDatabase();
@@ -1876,6 +1928,8 @@ export class LibrarianManager extends EventEmitter {
     if (this.userDataManager?.isLoggedIn()) {
       this.settingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
       this.indexPath = this.userDataManager.getUserDataPath('librarian-index.json');
+      this.libraryIndexPath = this.userDataManager.getUserDataPath('library-index.db');
+      this.libraryIndexStore?.setDatabasePath(this.libraryIndexPath);
     }
   }
 
@@ -2274,6 +2328,7 @@ export class LibrarianManager extends EventEmitter {
       const stats = fs.statSync(filePath);
       const content = fs.readFileSync(filePath, 'utf-8');
       const { title, context, readingTime, modelSignature, editActor } = this.parseMarkdownHeader(content);
+      this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
 
       return {
         path: filePath,
@@ -2468,6 +2523,7 @@ export class LibrarianManager extends EventEmitter {
     if (this.cache.has(normalizedPath)) {
       this.cache.delete(normalizedPath);
       this.saveIndex();
+      this.libraryIndexStore?.removePath(normalizedPath);
       this.emit('reading-removed', normalizedPath);
     }
   }
@@ -2545,7 +2601,22 @@ export class LibrarianManager extends EventEmitter {
       if (isLibraryTextDocumentPath(absPath)) this.handleLibraryRootAdd(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
     });
-    watcher.on('change', () => this.emit('library:changed', normalizedDir));
+    watcher.on('change', (absPath: string) => {
+      if (isLibraryTextDocumentPath(absPath)) {
+        this.emit('library:changed', normalizedDir, {
+          type: 'file-changed',
+          rootPath: normalizedDir,
+          relPath: this.libraryRelPathFromAbsPath(normalizedDir, absPath),
+          absPath,
+          builtin: normalizedDir === this.wikiDir,
+          source: 'watcher',
+          detectedAt: Date.now(),
+          page: this.fileNodeFromPath(normalizedDir, absPath, true) ?? undefined,
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', normalizedDir);
+      }
+    });
     watcher.on('unlink', (absPath: string) => {
       if (isLibraryTextDocumentPath(absPath)) this.scheduleLibraryRootUnlink(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
@@ -2692,15 +2763,93 @@ export class LibrarianManager extends EventEmitter {
     };
   }
 
-  private parseWikiFileMetadata(filePath: string): WikiFileMetadata {
+  private wikiFileMetadataFromStored(metadata: StoredLibraryFileMetadata): WikiFileMetadata {
+    return {
+      title: metadata.title,
+      todoState: metadata.todoState,
+      archived: metadata.archived,
+      sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+      sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+      editActor: metadata.editActor,
+      contentEditedAt: metadata.contentEditedAt,
+    };
+  }
+
+  private storedMetadataFromWikiFile(metadata: WikiFileMetadata): StoredLibraryFileMetadata {
+    return {
+      title: metadata.title,
+      todoState: metadata.todoState,
+      archived: metadata.archived,
+      sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+      sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+      editActor: metadata.editActor,
+      contentEditedAt: metadata.contentEditedAt,
+    };
+  }
+
+  private parseWikiFileMetadata(filePath: string, stats?: fs.Stats): WikiFileMetadata {
     if (!isMarkdownDocumentPath(filePath)) {
       return { title: path.basename(filePath) };
     }
+    let fileStats = stats;
+    if (!fileStats) {
+      try {
+        fileStats = fs.statSync(filePath);
+      } catch {
+        return { title: path.basename(filePath, '.md') };
+      }
+    }
+    const mtimeMs = Math.floor(fileStats.mtimeMs);
+    this.wikiFileMetadataCache ??= new Map();
+    const cached = this.wikiFileMetadataCache.get(filePath);
+    if (cached && cached.mtimeMs === mtimeMs && cached.size === fileStats.size) {
+      return cached.metadata;
+    }
+    const stored = this.libraryIndexStore?.getMetadata(filePath, mtimeMs, fileStats.size);
+    if (stored) {
+      const metadata = this.wikiFileMetadataFromStored(stored);
+      this.wikiFileMetadataCache.set(filePath, { mtimeMs, size: fileStats.size, metadata });
+      return metadata;
+    }
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      return this.parseWikiMetadata(content, filePath);
+      const metadata = this.parseWikiMetadata(content, filePath);
+      this.wikiFileMetadataCache.set(filePath, { mtimeMs, size: fileStats.size, metadata });
+      this.libraryIndexStore?.setMetadata(filePath, mtimeMs, fileStats.size, this.storedMetadataFromWikiFile(metadata));
+      this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
+      return metadata;
     } catch {}
     return { title: path.basename(filePath, '.md') };
+  }
+
+  private collectLibraryIndexFilePaths(rootPath: string, absPath: string): string[] {
+    try {
+      const stats = fs.statSync(absPath);
+      if (stats.isFile()) return isLibraryTextDocumentPath(absPath) ? [absPath] : [];
+      if (!stats.isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    return this.flattenWikiFiles(this.scanMarkdownTree(rootPath, absPath, new Set<string>(), true))
+      .map((page) => page.absPath);
+  }
+
+  private removeLibraryIndexFilePaths(filePaths: string[]): void {
+    const uniquePaths = [...new Set(filePaths)].filter(Boolean);
+    if (uniquePaths.length === 0) return;
+    for (const filePath of uniquePaths) {
+      this.wikiFileMetadataCache?.delete(filePath);
+    }
+    this.libraryIndexStore?.removePaths(uniquePaths);
+  }
+
+  recordLibraryIndexLinkHits(filePath: string, content: string): void {
+    if (!isMarkdownDocumentPath(filePath)) return;
+    this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
+  }
+
+  removeLibraryIndexPath(filePath: string): void {
+    this.removeLibraryIndexFilePaths([filePath]);
   }
 
   private toPortableRelPath(relPath: string): string {
@@ -2976,7 +3125,7 @@ export class LibrarianManager extends EventEmitter {
         ? stripMarkdownFileExtension(entry.name)
         : entry.name;
       const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, name)));
-      const metadata = this.parseWikiFileMetadata(absPath);
+      const metadata = this.parseWikiFileMetadata(absPath, stats);
       nodes.push({
         kind: 'file',
         relPath,
@@ -3039,7 +3188,7 @@ export class LibrarianManager extends EventEmitter {
         ? stripMarkdownFileExtension(path.basename(absPath))
         : path.basename(absPath);
       const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(path.dirname(absPath), name)));
-      const metadata = this.parseWikiFileMetadata(absPath);
+      const metadata = this.parseWikiFileMetadata(absPath, stats);
       return {
         kind: 'file',
         relPath,
@@ -3129,6 +3278,7 @@ export class LibrarianManager extends EventEmitter {
       changedListeners: this.listenerCount(tracedEvent.builtin ? 'wiki:changed' : 'library:changed'),
     });
     const beforePatch = Date.now();
+    this.removeLibraryIndexFilePaths([tracedEvent.oldAbsPath]);
     this.patchCachedRename(tracedEvent);
     this.rememberWikiRenameAlias(tracedEvent);
     traceRename('cache-patched', {
@@ -3185,6 +3335,7 @@ export class LibrarianManager extends EventEmitter {
     if (!oldCached && !newMeta) return null;
 
     this.cache.delete(oldPath);
+    this.libraryIndexStore?.removePath(oldPath);
     if (newMeta) this.cache.set(newPath, newMeta);
     this.saveIndex();
 
@@ -3386,6 +3537,222 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  getWikiBacklinkRelationDocuments(relPath: string): WikiBacklinkRelationDocument[] {
+    const targetPage = this.getWikiPage(relPath);
+    if (!targetPage) return [];
+
+    return this.getIndexedBacklinkRelationDocumentsSync({
+      target: { kind: 'wiki', relPath: targetPage.relPath },
+      title: targetPage.title,
+      pathKey: this.libraryRootKey(targetPage.absPath),
+      rawCandidates: [
+        targetPage.relPath,
+        `${targetPage.relPath}.md`,
+        targetPage.title,
+        stripMarkdownFileExtension(path.basename(targetPage.relPath)),
+      ],
+      hrefCandidates: [
+        `wiki://${encodeURI(targetPage.relPath)}`,
+        targetPage.title,
+      ],
+    }).filter((document): document is WikiBacklinkRelationDocument => document.target.kind === 'wiki');
+  }
+
+  async getLibraryBacklinkRelationDocuments(
+    target: LibraryBacklinkTarget,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument[]> {
+    const targetInfo = await this.getLibraryBacklinkTargetInfo(target, loadCommandByPath);
+    if (!targetInfo) return [];
+    return this.getIndexedBacklinkRelationDocuments(targetInfo, loadCommandByPath);
+  }
+
+  private async getLibraryBacklinkTargetInfo(
+    target: LibraryBacklinkTarget,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<{
+    target: LibraryBacklinkTarget;
+    title: string;
+    pathKey: string;
+    rawCandidates: string[];
+    hrefCandidates: string[];
+  } | null> {
+    if (target.kind === 'wiki') {
+      const page = this.getWikiPage(target.relPath);
+      if (!page) return null;
+      return {
+        target: { kind: 'wiki', relPath: page.relPath },
+        title: page.title,
+        pathKey: this.libraryRootKey(page.absPath),
+        rawCandidates: [
+          page.relPath,
+          `${page.relPath}.md`,
+          page.title,
+          stripMarkdownFileExtension(path.basename(page.relPath)),
+        ],
+        hrefCandidates: [
+          `wiki://${encodeURI(page.relPath)}`,
+          page.title,
+        ],
+      };
+    }
+
+    if (target.kind === 'artifact') {
+      const reading = this.getReading(target.path);
+      if (!reading) return null;
+      return {
+        target: { kind: 'artifact', path: reading.path },
+        title: reading.title,
+        pathKey: this.libraryRootKey(reading.path),
+        rawCandidates: [reading.title],
+        hrefCandidates: [
+          `artifact://${encodeURIComponent(reading.path)}`,
+          reading.title,
+        ],
+      };
+    }
+
+    const command = await loadCommandByPath?.(target.path);
+    if (!command) return null;
+    const title = command.displayName || command.name || stripMarkdownFileExtension(path.basename(command.filePath));
+    return {
+      target: { kind: 'command', path: command.filePath },
+      title,
+      pathKey: this.libraryRootKey(command.filePath),
+      rawCandidates: [title],
+      hrefCandidates: [
+        `command://${encodeURIComponent(command.filePath)}`,
+        title,
+      ],
+    };
+  }
+
+  private getIndexedBacklinkRelationDocumentsSync(
+    targetInfo: {
+      target: LibraryBacklinkTarget;
+      title: string;
+      pathKey: string;
+      rawCandidates: string[];
+      hrefCandidates: string[];
+    },
+  ): LibraryBacklinkRelationDocument[] {
+    const sourcePaths = this.getIndexedBacklinkSourcePaths(targetInfo.rawCandidates, targetInfo.hrefCandidates);
+    const documents: LibraryBacklinkRelationDocument[] = [];
+    const seenTargets = new Set<string>();
+
+    for (const sourcePath of sourcePaths) {
+      if (this.libraryRootKey(sourcePath) === targetInfo.pathKey) continue;
+      const document = this.getBacklinkRelationDocumentForSourcePathSync(sourcePath);
+      if (!document) continue;
+      const documentKey = this.libraryBacklinkTargetKey(document.target);
+      if (documentKey === this.libraryBacklinkTargetKey(targetInfo.target) || seenTargets.has(documentKey)) continue;
+      seenTargets.add(documentKey);
+      documents.push(document);
+    }
+
+    return documents.sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  private async getIndexedBacklinkRelationDocuments(
+    targetInfo: {
+      target: LibraryBacklinkTarget;
+      title: string;
+      pathKey: string;
+      rawCandidates: string[];
+      hrefCandidates: string[];
+    },
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument[]> {
+    const sourcePaths = this.getIndexedBacklinkSourcePaths(targetInfo.rawCandidates, targetInfo.hrefCandidates);
+    const documents: LibraryBacklinkRelationDocument[] = [];
+    const seenTargets = new Set<string>();
+
+    for (const sourcePath of sourcePaths) {
+      if (this.libraryRootKey(sourcePath) === targetInfo.pathKey) continue;
+      const document = await this.getBacklinkRelationDocumentForSourcePath(sourcePath, loadCommandByPath);
+      if (!document) continue;
+      const documentKey = this.libraryBacklinkTargetKey(document.target);
+      if (documentKey === this.libraryBacklinkTargetKey(targetInfo.target) || seenTargets.has(documentKey)) continue;
+      seenTargets.add(documentKey);
+      documents.push(document);
+    }
+
+    return documents.sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  private getIndexedBacklinkSourcePaths(rawCandidates: string[], hrefCandidates: string[]): string[] {
+    const sourcePaths = new Set<string>();
+
+    for (const candidate of new Set(rawCandidates.map((value) => value.trim()).filter(Boolean))) {
+      for (const row of this.libraryIndexStore?.findWikiLinkHitsByRawTarget?.(candidate) ?? []) {
+        sourcePaths.add(row.sourcePath);
+      }
+    }
+
+    for (const candidate of new Set(hrefCandidates.map((value) => value.trim()).filter(Boolean))) {
+      for (const row of this.libraryIndexStore?.findLinkHitsByHref?.(candidate) ?? []) {
+        sourcePaths.add(row.sourcePath);
+      }
+    }
+
+    return Array.from(sourcePaths);
+  }
+
+  private getBacklinkRelationDocumentForSourcePathSync(
+    sourcePath: string,
+  ): LibraryBacklinkRelationDocument | null {
+    if (this.isInsidePath(this.wikiDir, sourcePath)) {
+      const sourceRelPath = this.wikiRelPathFromAbsPath(sourcePath);
+      const page = this.getWikiPage(sourceRelPath);
+      if (page) {
+        return {
+          target: { kind: 'wiki', relPath: page.relPath },
+          title: page.title,
+          content: page.content,
+        };
+      }
+    }
+
+    const reading = this.cache ? this.getReading(sourcePath) : null;
+    if (reading) {
+      return {
+        target: { kind: 'artifact', path: reading.path },
+        title: reading.title,
+        content: reading.content,
+      };
+    }
+
+    return null;
+  }
+
+  private async getBacklinkRelationDocumentForSourcePath(
+    sourcePath: string,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument | null> {
+    const command = await loadCommandByPath?.(sourcePath);
+    if (command) {
+      const title = command.displayName || command.name || stripMarkdownFileExtension(path.basename(command.filePath));
+      return {
+        target: { kind: 'command', path: command.filePath },
+        title,
+        content: command.content,
+      };
+    }
+
+    return this.getBacklinkRelationDocumentForSourcePathSync(sourcePath);
+  }
+
+  private libraryBacklinkTargetKey(target: LibraryBacklinkTarget): string {
+    switch (target.kind) {
+      case 'wiki':
+        return `wiki:${target.relPath}`;
+      case 'artifact':
+        return `artifact:${this.normalizePath(target.path)}`;
+      case 'command':
+        return `command:${this.normalizePath(target.path)}`;
+    }
+  }
+
   findWikiPageByDocumentVersion(version: DocumentVersion, previousRelPath?: string): WikiPage | null {
     if (!fs.existsSync(this.wikiDir)) return null;
     const pages = this.flattenWikiFiles(this.scanMarkdownTree(this.wikiDir));
@@ -3419,8 +3786,9 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingWikiRename(newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, timer] of this.pendingWikiUnlinks) {
-      if (path.dirname(oldAbsPath) !== newDir) continue;
+      if (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName) continue;
       clearTimeout(timer);
       this.pendingWikiUnlinks.delete(oldAbsPath);
       return oldAbsPath;
@@ -3432,7 +3800,16 @@ export class LibrarianManager extends EventEmitter {
     const oldAbsPath = this.takePendingWikiRename(absPath);
     if (!oldAbsPath) {
       traceRename('wiki-add-unmatched', { absPath });
-      this.emit('wiki:changed');
+      this.emit('wiki:changed', {
+        type: 'file-added',
+        rootPath: this.wikiDir,
+        relPath: this.wikiRelPathFromAbsPath(absPath),
+        absPath,
+        builtin: true,
+        source: 'watcher',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return;
     }
 
@@ -3458,9 +3835,19 @@ export class LibrarianManager extends EventEmitter {
     traceRename('wiki-unlink-pending', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingWikiUnlinks.delete(absPath);
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.libraryIndexStore?.removePath(absPath);
       traceRename('wiki-unlink-unmatched', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath) });
-      this.emit('wiki:changed');
       const rel = this.wikiRelPathFromAbsPath(absPath);
+      this.emit('wiki:changed', {
+        type: 'file-deleted',
+        rootPath: this.wikiDir,
+        relPath: rel,
+        absPath,
+        builtin: true,
+        source: 'watcher',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
       if (rel && !rel.startsWith('..')) this.emit('wiki:deleted', rel);
     }, 350);
     this.pendingWikiUnlinks.set(absPath, timer);
@@ -3468,8 +3855,12 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingLibraryRename(rootPath: string, newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, pending] of this.pendingLibraryUnlinks) {
-      if (pending.rootPath !== rootPath || path.dirname(oldAbsPath) !== newDir) continue;
+      if (
+        pending.rootPath !== rootPath ||
+        (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName)
+      ) continue;
       clearTimeout(pending.timer);
       this.pendingLibraryUnlinks.delete(oldAbsPath);
       return oldAbsPath;
@@ -3481,7 +3872,16 @@ export class LibrarianManager extends EventEmitter {
     const oldAbsPath = this.takePendingLibraryRename(rootPath, absPath);
     if (!oldAbsPath) {
       traceRename('library-add-unmatched', { rootPath, absPath });
-      this.emit('library:changed', rootPath);
+      this.emit('library:changed', rootPath, {
+        type: 'file-added',
+        rootPath,
+        relPath: this.libraryRelPathFromAbsPath(rootPath, absPath),
+        absPath,
+        builtin: false,
+        source: 'watcher',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(rootPath, absPath, true) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return;
     }
 
@@ -3507,8 +3907,18 @@ export class LibrarianManager extends EventEmitter {
     traceRename('library-unlink-pending', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingLibraryUnlinks.delete(absPath);
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.libraryIndexStore?.removePath(absPath);
       traceRename('library-unlink-unmatched', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath) });
-      this.emit('library:changed', rootPath);
+      this.emit('library:changed', rootPath, {
+        type: 'file-deleted',
+        rootPath,
+        relPath: this.libraryRelPathFromAbsPath(rootPath, absPath),
+        absPath,
+        builtin: false,
+        source: 'watcher',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
     }, 350);
     this.pendingLibraryUnlinks.set(absPath, { rootPath, timer });
   }
@@ -3553,8 +3963,20 @@ export class LibrarianManager extends EventEmitter {
       else this.emit('library:changed', this.wikiDir);
     });
     this.wikiWatcher.on('change', (absPath: string) => {
-      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.emit('wiki:changed');
-      else this.emit('library:changed', this.wikiDir);
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') {
+        this.emit('wiki:changed', {
+          type: 'file-changed',
+          rootPath: this.wikiDir,
+          relPath: this.wikiRelPathFromAbsPath(absPath),
+          absPath,
+          builtin: true,
+          source: 'watcher',
+          detectedAt: Date.now(),
+          page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', this.wikiDir);
+      }
     });
     // On unlink, also emit `wiki:deleted` with the relPath so downstream
     // consumers (RecentManager) can prune stale entries when the delete
@@ -3576,7 +3998,17 @@ export class LibrarianManager extends EventEmitter {
         : content;
       const result = writeTextFileWithConflictGuard(absPath, nextContent, expectedVersion);
       if (!result.ok) return result;
-      this.emit('wiki:changed');
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.emit('wiki:changed', {
+        type: 'file-changed',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return result;
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);
@@ -3604,6 +4036,7 @@ export class LibrarianManager extends EventEmitter {
     if (existingTargetAbs && !this.isSameExistingPath(existingTargetAbs, oldAbs)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
+      this.removeLibraryIndexFilePaths([oldAbs]);
       this.emitRename({
         rootPath: this.wikiDir,
         oldRelPath: relPath,
@@ -3628,7 +4061,16 @@ export class LibrarianManager extends EventEmitter {
     if (!absPath) return false;
     try {
       await shell.trashItem(absPath);
-      this.emit('wiki:changed');
+      this.removeLibraryIndexFilePaths([absPath]);
+      this.emit('wiki:changed', {
+        type: 'file-deleted',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
       this.emit('wiki:deleted', relPath);
       return true;
     } catch (error) {
@@ -3649,9 +4091,11 @@ export class LibrarianManager extends EventEmitter {
     const deletedWikiRelPaths = root.builtin
       ? this.flattenWikiFiles(this.scanMarkdownTree(root.rootPath, dirPath)).map((page) => page.relPath)
       : [];
+    const deletedIndexFilePaths = this.collectLibraryIndexFilePaths(root.rootPath, dirPath);
 
     try {
       await shell.trashItem(dirPath);
+      this.removeLibraryIndexFilePaths(deletedIndexFilePaths);
       if (root.builtin) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
@@ -3677,17 +4121,34 @@ export class LibrarianManager extends EventEmitter {
       return false;
     }
 
-    const rootPath = [this.wikiDir, ...this.getSafeLibraryRootPaths()].find((savedRoot) => {
+    const rootMatch = [this.wikiDir, ...this.getSafeLibraryRootPaths()].map((savedRoot) => {
       const normalizedRoot = this.normalizePath(this.expandPath(savedRoot));
       const rootKey = this.libraryRootKey(normalizedRoot);
       const relative = path.relative(rootKey, canonicalPath);
-      return !!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-    });
-    if (!rootPath || !fs.existsSync(canonicalPath) || !fs.statSync(canonicalPath).isFile()) return false;
+      return {
+        normalizedRoot,
+        rootKey,
+        relative,
+      };
+    }).find(({ relative }) => !!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    if (!rootMatch || !fs.existsSync(canonicalPath) || !fs.statSync(canonicalPath).isFile()) return false;
 
     try {
       await shell.trashItem(canonicalPath);
-      this.emit('library:changed', this.normalizePath(this.expandPath(rootPath)));
+      this.removeLibraryIndexFilePaths([canonicalPath]);
+      if (isLibraryTextDocumentPath(canonicalPath)) {
+        this.emit('library:changed', rootMatch.normalizedRoot, {
+          type: 'file-deleted',
+          rootPath: rootMatch.normalizedRoot,
+          relPath: stripMarkdownFileExtension(this.toPortableRelPath(rootMatch.relative)),
+          absPath: canonicalPath,
+          builtin: rootMatch.normalizedRoot === this.wikiDir,
+          source: 'app',
+          detectedAt: Date.now(),
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', rootMatch.normalizedRoot);
+      }
       return true;
     } catch (error) {
       log.error(`Error trashing external library file ${canonicalPath}:`, error);
@@ -3747,10 +4208,24 @@ export class LibrarianManager extends EventEmitter {
         ? [sourceRel]
         : this.flattenWikiFiles(this.scanMarkdownTree(sourceRoot.rootPath, sourceAbs)).map((page) => page.relPath)
       : [];
+    const sourceIndexFilePaths = this.collectLibraryIndexFilePaths(sourceRoot.rootPath, sourceAbs);
 
     try {
       this.moveLibraryPathSync(sourceAbs, targetAbs, kind);
+      this.removeLibraryIndexFilePaths(sourceIndexFilePaths);
       const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(targetRoot.rootPath, targetAbs)));
+      if (!crossRoot) {
+        this.emitRename({
+          rootPath: sourceRoot.rootPath,
+          oldRelPath: sourceRel,
+          newRelPath,
+          oldAbsPath: sourceAbs,
+          newAbsPath: targetAbs,
+          builtin: sourceRoot.builtin,
+          source: 'app',
+          detectedAt: Date.now(),
+        });
+      }
       if (sourceIsWikiMove) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
@@ -3790,11 +4265,21 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
+      const page = { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
       // Emit synchronously — chokidar can lag
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
-      this.emit('wiki:changed');
-      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      this.emit('wiki:changed', {
+        type: 'file-added',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+        page,
+      } satisfies LibraryChangeEvent);
+      return page;
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
@@ -3868,8 +4353,18 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
-      this.emit('library:changed', root.rootPath);
-      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      const page = { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      this.emit('library:changed', root.rootPath, {
+        type: 'file-added',
+        rootPath: root.rootPath,
+        relPath,
+        absPath,
+        builtin: false,
+        source: 'app',
+        detectedAt: Date.now(),
+        page,
+      } satisfies LibraryChangeEvent);
+      return page;
     } catch (error) {
       log.error(`Error creating library file ${relPath}:`, error);
       return null;
@@ -3952,6 +4447,7 @@ export class LibrarianManager extends EventEmitter {
       // Remove from cache
       this.cache.delete(normalizedPath);
       this.saveIndex();
+      this.libraryIndexStore?.removePath(normalizedPath);
 
       // Emit removal event so UI can refresh
       this.emit('reading-removed', normalizedPath);
@@ -7292,6 +7788,7 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     await Promise.allSettled(Array.from(this.libraryRootWatchers.values(), (watcher) => watcher.close()));
     this.libraryRootWatchers.clear();
     this.clearPendingRenameTimers();
+    this.libraryIndexStore?.close();
   }
 
   // ===========================================================================
