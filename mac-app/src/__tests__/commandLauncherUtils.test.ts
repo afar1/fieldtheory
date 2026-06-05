@@ -2114,11 +2114,11 @@ describe('getLauncherAreaActionIdForQuery', () => {
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('archive')).toBe('archive-current-library-file');
-    expect(getLauncherAreaActionIdForQuery('meeting')).toBe('start-meeting-here');
   });
 
   it('does not route partial area words', () => {
     expect(getLauncherAreaActionIdForQuery('command')).toBeNull();
+    expect(getLauncherAreaActionIdForQuery('meeting')).toBeNull();
     expect(getLauncherAreaActionIdForQuery('library notes')).toBeNull();
   });
 });
@@ -2162,8 +2162,7 @@ describe('SQUARES_ACTION_DEFS', () => {
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'archive-current-library-file', 'undo-library-move', 'toggle-theme',
-      'toggle-line-numbers',
-      'new-meeting-note', 'start-meeting-here', 'stop-meeting', 'summarize-meeting'];
+      'toggle-line-numbers'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -2276,42 +2275,14 @@ describe('buildBuiltInLauncherActions', () => {
     }));
   });
 
-  it('includes meeting actions', () => {
+  it('hides meeting actions from the command launcher', () => {
     const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const actionIds = actions.map((action) => action.actionId);
 
-    expect(actions.find((action) => action.actionId === 'new-meeting-note')).toEqual(expect.objectContaining({
-      name: 'new meeting',
-      displayName: 'New Meeting Note',
-      keywords: expect.arrayContaining(['meeting note']),
-    }));
-    expect(actions.find((action) => action.actionId === 'start-meeting-here')).toEqual(expect.objectContaining({
-      name: 'start meeting',
-      displayName: 'Start Meeting Here',
-    }));
-    expect(actions.find((action) => action.actionId === 'stop-meeting')).toEqual(expect.objectContaining({
-      name: 'stop meeting',
-      displayName: 'Stop Meeting',
-    }));
-    expect(actions.find((action) => action.actionId === 'summarize-meeting')).toEqual(expect.objectContaining({
-      name: 'summarize meeting',
-      displayName: 'Summarize Meeting',
-    }));
-  });
-
-  it('ranks the new meeting action before the local instruction fallback is allowed', () => {
-    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
-    const results = filterLauncherNormalModeItems(actions, 'new meeting');
-
-    expect(results[0]).toEqual(expect.objectContaining({
-      actionId: 'new-meeting-note',
-      displayName: 'New Meeting Note',
-    }));
-    expect(shouldOfferLocalInstructionFallback({
-      query: 'new meeting',
-      resultCount: results.length,
-      fieldTheoryActive: true,
-      hasActiveLibraryFileContext: true,
-    })).toBe(false);
+    expect(actionIds).not.toContain('new-meeting-note');
+    expect(actionIds).not.toContain('start-meeting-here');
+    expect(actionIds).not.toContain('stop-meeting');
+    expect(actionIds).not.toContain('summarize-meeting');
   });
 
   it('prioritizes action second words in normal launcher results', () => {
