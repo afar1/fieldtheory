@@ -56,7 +56,6 @@ vi.mock('../AgentKickoffModal', () => ({
 
 describe('LibrarianView render', () => {
   type EditorSelectionSnapshot = Parameters<typeof shouldPreserveEditorSelectionPastePopover>[0]['latestEditorSnapshot'];
-  type TestMeetingSession = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveMeeting']>>>>;
   const testLibraryRootPath = '/Users/afar/.fieldtheory/library';
   const expandedScratchpadFolders = JSON.stringify([
     `root:${testLibraryRootPath}`,
@@ -2716,7 +2715,7 @@ describe('LibrarianView render', () => {
     expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-  it('starts and stops a meeting recording from the active file toolbar', async () => {
+  it('hides the meeting recording button from the active file toolbar', async () => {
     const relPath = 'scratchpad/meeting-toolbar';
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
     const page: WikiPage = {
@@ -2728,56 +2727,20 @@ describe('LibrarianView render', () => {
       content: 'Meeting toolbar',
       documentVersion: { mtimeMs: 1, size: 15, sha256: 'meeting-toolbar-version' },
     };
-    const recordingSession: TestMeetingSession = {
-      meetingId: 'meeting-toolbar-session',
-      title: 'meeting-toolbar',
-      type: 'wiki',
-      filePath: absPath,
-      relPath,
-      status: 'recording',
-      startedAt: '2026-05-14T20:00:00.000Z',
-      endedAt: null,
-      audioPath: null,
-      transcriptPath: null,
-      rawTranscriptPath: null,
-      speakerDiarizationSupported: false,
-    };
-    const doneSession: TestMeetingSession = {
-      ...recordingSession,
-      status: 'done',
-      endedAt: '2026-05-14T20:01:00.000Z',
-    };
 
     mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.commandsAPI!.startMeetingHere!).mockResolvedValue({
-      success: true,
-      session: recordingSession,
-    });
-    vi.mocked(window.commandsAPI!.stopMeeting!).mockResolvedValue({
-      success: true,
-      session: doneSession,
-    });
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
-    const startButton = await screen.findByRole('button', { name: 'Start meeting recording' });
-    fireEvent.click(startButton);
-
     await waitFor(() => {
-      expect(window.commandsAPI!.startMeetingHere).toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Stop meeting recording' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Field Theory' })).toBeTruthy();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Stop meeting recording' }));
-
-    await waitFor(() => {
-      expect(window.commandsAPI!.stopMeeting).toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Start meeting recording' })).toBeTruthy();
-    });
+    expect(screen.queryByRole('button', { name: 'Start meeting recording' })).toBeNull();
+    expect(window.commandsAPI!.startMeetingHere).not.toHaveBeenCalled();
   });
 
-  it('places Field Theory commands to the right of the meeting button and before the view mode toggle', async () => {
+  it('places Field Theory commands before the view mode toggle', async () => {
     const relPath = 'scratchpad/maxwell-toolbar-order';
     const page: WikiPage = {
       relPath,
@@ -2794,13 +2757,11 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
-    const meetingButton = await screen.findByRole('button', { name: 'Start meeting recording' });
-    const maxwellButton = screen.getByRole('button', { name: 'Field Theory' });
+    const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
 
-    expect(Boolean(meetingButton.compareDocumentPosition(maxwellButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(Boolean(maxwellButton.compareDocumentPosition(modeToggle) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    expect(meetingButton.style.borderStyle).toBe('none');
+    expect(screen.queryByRole('button', { name: 'Start meeting recording' })).toBeNull();
   });
 
   it('adds the active wiki page to Field Theory commands and runs its content from the toolbar', async () => {

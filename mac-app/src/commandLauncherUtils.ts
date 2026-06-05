@@ -1706,8 +1706,6 @@ export function getLauncherAreaActionIdForQuery(query: string): string | null {
       return 'open-library';
     case 'archive':
       return 'archive-current-library-file';
-    case 'meeting':
-      return 'start-meeting-here';
     default:
       return null;
   }
@@ -1767,38 +1765,6 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.transcription,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.transcription),
       actionId: 'start-recording',
-    },
-    {
-      id: 'action-new-meeting-note',
-      type: 'action',
-      name: 'new meeting',
-      displayName: 'New Meeting Note',
-      keywords: ['meeting', 'meetings', 'new meeting', 'meeting note', 'notes'],
-      actionId: 'new-meeting-note',
-    },
-    {
-      id: 'action-start-meeting-here',
-      type: 'action',
-      name: 'start meeting',
-      displayName: 'Start Meeting Here',
-      keywords: ['meeting', 'meetings', 'start meeting', 'record meeting', 'transcribe meeting'],
-      actionId: 'start-meeting-here',
-    },
-    {
-      id: 'action-stop-meeting',
-      type: 'action',
-      name: 'stop meeting',
-      displayName: 'Stop Meeting',
-      keywords: ['meeting', 'meetings', 'stop meeting', 'finish meeting', 'meeting transcript'],
-      actionId: 'stop-meeting',
-    },
-    {
-      id: 'action-summarize-meeting',
-      type: 'action',
-      name: 'summarize meeting',
-      displayName: 'Summarize Meeting',
-      keywords: ['meeting', 'meetings', 'summarize meeting', 'meeting summary', 'meeting notes'],
-      actionId: 'summarize-meeting',
     },
     {
       id: 'action-superpaste',
