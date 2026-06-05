@@ -22,6 +22,11 @@ describe('librarian typography presets', () => {
   it('uses Source families for Book and Note', () => {
     expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'book')?.fontFamily).toContain('"Source Serif 4"');
     expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'note')?.fontFamily).toContain('"Source Sans 3"');
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'draft')?.fontFamily).toContain('"Source Code Pro"');
+  });
+
+  it('labels font choices by type category', () => {
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.label)).toEqual(['Serif', 'Sans Serif', 'Mono']);
   });
 
   it('restores a saved typography preset', () => {
