@@ -5289,10 +5289,14 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openScratchpad', relPath: page.relPath }, { broadcastFallback: false })) {
     return page;
   }
+  const existingClipboardHistoryWindow = clipboardHistoryWindow?.getWindow();
+  const hasExistingClipboardHistoryWindow = Boolean(
+    existingClipboardHistoryWindow && !existingClipboardHistoryWindow.isDestroyed()
+  );
   if (!clipboardHistoryWindow) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
-  const boundsToUse = restoreClipboardHistoryBounds('library');
+  const boundsToUse = hasExistingClipboardHistoryWindow ? undefined : restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
   clipboardHistoryWindow.showLibrary(boundsToUse);
   clipboardHistoryWindow.openScratchpad({
