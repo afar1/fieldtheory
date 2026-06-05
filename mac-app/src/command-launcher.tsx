@@ -304,6 +304,47 @@ function buildLocalInstructionFallbackItem(instruction: string): LauncherItem {
   };
 }
 
+function normalizeLauncherFilePath(value: string | undefined): string {
+  return (value ?? '').replace(/\\/g, '/');
+}
+
+function launcherBaseNameWithoutMarkdownExtension(value: string): string {
+  const normalized = normalizeLauncherFilePath(value);
+  const baseName = normalized.split('/').filter(Boolean).pop() ?? normalized;
+  return baseName.replace(/\.(?:md|markdown|mdx)$/i, '');
+}
+
+function libraryChangeMatchesLauncherMarkdownItem(item: LauncherItem, event: LibraryChangeEvent): boolean {
+  if (event.builtin) return item.type === 'wiki-page' && item.relPath === event.relPath;
+  return item.type === 'markdown-file' && normalizeLauncherFilePath(item.filePath) === normalizeLauncherFilePath(event.absPath);
+}
+
+function libraryRenameMatchesLauncherMarkdownItem(item: LauncherItem, event: LibraryRenameEvent): boolean {
+  if (event.builtin) return item.type === 'wiki-page' && item.relPath === event.oldRelPath;
+  return item.type === 'markdown-file' && normalizeLauncherFilePath(item.filePath) === normalizeLauncherFilePath(event.oldAbsPath);
+}
+
+function renameLauncherMarkdownItem(item: LauncherItem, event: LibraryRenameEvent): LauncherItem {
+  const nextName = launcherBaseNameWithoutMarkdownExtension(event.newRelPath || event.newAbsPath);
+  const nextItem = {
+    ...item,
+    id: `${item.type}-${event.rootPath}-${event.newRelPath}`,
+    name: nextName,
+    filePath: event.newAbsPath,
+    relPath: event.builtin ? event.newRelPath : item.relPath,
+    keywords: [
+      ...item.keywords.filter((keyword) => keyword !== event.oldRelPath && keyword !== event.oldAbsPath),
+      nextName,
+      event.newRelPath,
+      event.newAbsPath,
+    ].filter(Boolean),
+  };
+  if (item.displayName === item.name || item.displayName === launcherBaseNameWithoutMarkdownExtension(event.oldRelPath)) {
+    nextItem.displayName = nextName;
+  }
+  return nextItem;
+}
+
 const LAUNCHER_USAGE_STORAGE_KEY = 'launcherItemUsage.v1';
 const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
 
@@ -452,6 +493,12 @@ interface LauncherLibraryAPI {
   getRoots: () => Promise<LauncherLibraryRoot[]>;
   moveItem?: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
   onRootsChanged?: (callback: (event?: LibraryChangeEvent) => void) => () => void;
+  onItemRenamed?: (callback: (event: LibraryRenameEvent) => void) => () => void;
+}
+
+interface LauncherWikiAPI {
+  onPageChanged?: (callback: (event?: LibraryChangeEvent) => void) => () => void;
+  onPageRenamed?: (callback: (event: LibraryRenameEvent) => void) => () => void;
 }
 
 interface LauncherBookmarksAPI {
@@ -486,6 +533,7 @@ const transcribeAPI = window.transcribeAPI as unknown as LauncherTranscribeAPI;
 const themeAPI = window.themeAPI as unknown as LauncherThemeAPI;
 const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
 const libraryAPI = window.libraryAPI as unknown as LauncherLibraryAPI | undefined;
+const wikiAPI = window.wikiAPI as unknown as LauncherWikiAPI | undefined;
 const bookmarksAPI = window.bookmarksAPI as unknown as LauncherBookmarksAPI | undefined;
 const recentAPI = window.recentAPI as unknown as LauncherRecentAPI | undefined;
 const launcherBenchmarkWindow = window as Window & {
@@ -620,6 +668,7 @@ const LAUNCHER_LIST_ITEM_HEIGHT = 30;
 const LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT = 34;
 const LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS = 5;
 const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
+const LAUNCHER_BACKGROUND_REFRESH_MAX_INPUT_DEFERS = 2;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE = 400;
@@ -943,6 +992,7 @@ function CommandLauncher() {
   const [bookmarkPosts, setBookmarkPosts] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
+  const [libraryMarkdownLoading, setLibraryMarkdownLoading] = useState(true);
   const [launcherSessionReady, setLauncherSessionReady] = useState(false);
   const [clipboardOpenReloadKey, setClipboardOpenReloadKey] = useState(0);
   const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
@@ -1178,6 +1228,7 @@ function CommandLauncher() {
   const loadLibraryMarkdown = useCallback(async () => {
     const startedAt = performance.now();
     const requestId = ++launcherLibraryMarkdownRequestRef.current;
+    setLibraryMarkdownLoading(true);
     try {
       const roots = await libraryAPI?.getRoots();
       if (requestId !== launcherLibraryMarkdownRequestRef.current) {
@@ -1208,6 +1259,10 @@ function CommandLauncher() {
     } catch {
       if (requestId !== launcherLibraryMarkdownRequestRef.current) return;
       traceLauncherLoad('load-library-markdown', startedAt, { success: false });
+    } finally {
+      if (requestId === launcherLibraryMarkdownRequestRef.current) {
+        setLibraryMarkdownLoading(false);
+      }
     }
   }, []);
 
@@ -1222,6 +1277,17 @@ function CommandLauncher() {
   }, []);
 
   const applyLibraryChangeEvent = useCallback((event: LibraryChangeEvent): boolean => {
+    if (event.type === 'file-deleted') {
+      setLibraryMarkdownItems((prev) => prev.filter((item) => !libraryChangeMatchesLauncherMarkdownItem(item, event)));
+      traceLauncher('library-change-patched', {
+        type: event.type,
+        relPath: event.relPath,
+        builtin: event.builtin,
+        source: event.source,
+      });
+      return true;
+    }
+
     if ((event.type === 'file-added' || event.type === 'file-changed') && event.page) {
       const root = getLauncherLibraryRootSummary(event);
       const page = { kind: 'file' as const, ...event.page };
@@ -1240,11 +1306,31 @@ function CommandLauncher() {
         ...nextDirectoryItems,
         ...prev.filter((item) => item.type !== 'directory' || !directoryItemIds.has(item.id)),
       ]);
+      traceLauncher('library-change-patched', {
+        type: event.type,
+        relPath: event.relPath,
+        builtin: event.builtin,
+        source: event.source,
+        markdownItemCount: markdownItems.length,
+        directoryItemCount: nextDirectoryItems.length,
+      });
       return true;
     }
 
     return false;
   }, [getLauncherLibraryRootSummary]);
+
+  const applyLibraryRenameEvent = useCallback((event: LibraryRenameEvent): void => {
+    setLibraryMarkdownItems((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        if (!libraryRenameMatchesLauncherMarkdownItem(item, event)) return item;
+        changed = true;
+        return renameLauncherMarkdownItem(item, event);
+      });
+      return changed ? next.sort(compareLauncherItemsByRecency) : prev;
+    });
+  }, []);
 
   const loadArtifacts = useCallback(async () => {
     const startedAt = performance.now();
@@ -1517,10 +1603,13 @@ function CommandLauncher() {
       launcherBackgroundRefreshIdleRef.current = null;
     }
 
+    let inputDeferCount = 0;
     const runBackgroundRefresh = () => {
-      if ((inputRef.current?.value ?? '').trim()) {
+      if ((inputRef.current?.value ?? '').trim() && inputDeferCount < LAUNCHER_BACKGROUND_REFRESH_MAX_INPUT_DEFERS) {
+        inputDeferCount += 1;
         traceLauncher('background-refresh-deferred-for-input', {
           delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+          deferCount: inputDeferCount,
         });
         launcherBackgroundRefreshTimeoutRef.current = window.setTimeout(
           runBackgroundRefresh,
@@ -1707,6 +1796,18 @@ function CommandLauncher() {
       if (event && applyLibraryChangeEvent(event)) return;
       void loadLibraryMarkdown();
     });
+    const unsubscribeLibraryRenamed = libraryAPI?.onItemRenamed?.((event) => {
+      applyLibraryRenameEvent(event);
+      void loadLibraryMarkdown();
+    });
+    const unsubscribeWikiChanged = wikiAPI?.onPageChanged?.((event) => {
+      if (event && applyLibraryChangeEvent(event)) return;
+      void loadLibraryMarkdown();
+    });
+    const unsubscribeWikiRenamed = wikiAPI?.onPageRenamed?.((event) => {
+      applyLibraryRenameEvent(event);
+      void loadLibraryMarkdown();
+    });
     const unsubscribeRecent = recentAPI?.onChanged?.((entries) => {
       if (entries) {
         applyRecentEntries(entries);
@@ -1730,9 +1831,12 @@ function CommandLauncher() {
       unsubscribeBookmarks?.();
       unsubscribeCommands?.();
       unsubscribeLibraryRoots?.();
+      unsubscribeLibraryRenamed?.();
+      unsubscribeWikiChanged?.();
+      unsubscribeWikiRenamed?.();
       unsubscribeRecent?.();
     };
-  }, [applyLibraryChangeEvent, applyRecentEntries, applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
+  }, [applyLibraryChangeEvent, applyLibraryRenameEvent, applyRecentEntries, applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {
@@ -2609,7 +2713,7 @@ function CommandLauncher() {
     }
 
     if (allItems.length === 0 && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
-      const waitingForResults = launcherDataLoading && query.trim() !== '';
+      const waitingForResults = (launcherDataLoading || libraryMarkdownLoading) && query.trim() !== '';
       const fallback = waitingForResults ? null : localInstructionFallbackForQuery(query, 0, isHelpQuery);
       const results = fallback ? [fallback] : [];
       applyFilteredResults(results);
@@ -2815,7 +2919,8 @@ function CommandLauncher() {
     }
 
     const balancedMatches = getNormalModeMatches(q);
-    const fallback = localInstructionFallbackForQuery(query, balancedMatches.length);
+    const waitingForLibraryMarkdown = libraryMarkdownLoading && q !== '';
+    const fallback = waitingForLibraryMarkdown ? null : localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
     applyFilteredResults(results);
@@ -2849,7 +2954,7 @@ function CommandLauncher() {
         : getLauncherElapsedMs(launcherFirstInputAtRef.current),
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
+  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -3407,6 +3512,14 @@ function CommandLauncher() {
           selectedItem: describeLauncherItem(selectedItem),
           hasExplicitSelection: hasExplicitSelectionRef.current,
         });
+        if (selectedItem?.type === 'local-instruction' && libraryMarkdownLoading && rawQuery) {
+          traceLauncher('enter-key-deferred-local-fallback', {
+            queryLength: rawQuery.length,
+            launcherDataLoading,
+            libraryMarkdownLoading,
+          });
+          return;
+        }
         if (selectedItem?.type === 'local-instruction' && !inScopedMode) {
           const normalMatch = getNormalModeMatches(rawQuery)[0];
           if (normalMatch) {
@@ -3445,6 +3558,14 @@ function CommandLauncher() {
       }
       const fallback = localInstructionFallbackForQuery(rawQuery, 0, inScopedMode);
       if (fallback) {
+        if (libraryMarkdownLoading && rawQuery) {
+          traceLauncher('enter-key-deferred-local-fallback', {
+            queryLength: rawQuery.length,
+            launcherDataLoading,
+            libraryMarkdownLoading,
+          });
+          return;
+        }
         invokeItem(fallback);
       }
     }

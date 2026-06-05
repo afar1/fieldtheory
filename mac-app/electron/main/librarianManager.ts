@@ -3786,8 +3786,9 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingWikiRename(newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, timer] of this.pendingWikiUnlinks) {
-      if (path.dirname(oldAbsPath) !== newDir) continue;
+      if (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName) continue;
       clearTimeout(timer);
       this.pendingWikiUnlinks.delete(oldAbsPath);
       return oldAbsPath;
@@ -3854,8 +3855,12 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingLibraryRename(rootPath: string, newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, pending] of this.pendingLibraryUnlinks) {
-      if (pending.rootPath !== rootPath || path.dirname(oldAbsPath) !== newDir) continue;
+      if (
+        pending.rootPath !== rootPath ||
+        (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName)
+      ) continue;
       clearTimeout(pending.timer);
       this.pendingLibraryUnlinks.delete(oldAbsPath);
       return oldAbsPath;

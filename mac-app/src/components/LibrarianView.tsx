@@ -5032,6 +5032,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return selection ? { ...context, ...selection } : context;
   }, [getActiveLibraryFileSelectionContext]);
 
+  const inferWikiRootPathForContext = useCallback((filePath: string, relPath: string): string => {
+    const normalizedFilePath = filePath.replace(/\\/g, '/');
+    const normalizedRelPath = relPath.replace(/\\/g, '/').replace(/\.md$/i, '');
+    const suffix = `/${normalizedRelPath}.md`;
+    return normalizedFilePath.endsWith(suffix) ? normalizedFilePath.slice(0, -suffix.length) : '';
+  }, []);
+
   const reportActiveLibraryFileContext = useCallback(() => {
     if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')) {
       void window.commandsAPI?.setActiveLibraryFileContext?.(null);
@@ -5045,7 +5052,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (selectedItemType === 'wiki' && wikiSelectedRelPath && activeReading.path) {
         void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
           type: 'wiki',
-          rootPath: '',
+          rootPath: inferWikiRootPathForContext(activeReading.path, wikiSelectedRelPath),
           relPath: wikiSelectedRelPath,
           filePath: activeReading.path,
           title: activeReading.title,
@@ -5083,7 +5090,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
     }));
-  }, [active, activeIsMarkdownDocument, activeReading, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
+  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
 
   useEffect(() => {
     reportActiveLibraryFileContext();
@@ -5198,7 +5205,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
 
         dispatchLocalWikiRenamed({
-          rootPath: '',
+          rootPath: inferWikiRootPathForContext(activeReading.path, oldRelPath),
           oldRelPath,
           newRelPath: nextRelPath,
           oldAbsPath: activeReading.path,
@@ -5258,6 +5265,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeTitlePath,
     focusActiveDocumentBody,
     flushCurrentEdit,
+    inferWikiRootPathForContext,
     selectedItemType,
     titleDraft,
     wikiSelectedRelPath,
@@ -9022,6 +9030,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
       if (cancelled) return;
+      dispatchLocalWikiDeleted(wikiSelectedRelPath);
       setWikiSelectedRelPath(null);
       setWikiSelectedPage(null);
       setSelectedItemId(null);
@@ -9032,6 +9041,54 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       unsubscribe?.();
     };
   }, [applyLiveDiskDocumentState, contentMode, editContent, wikiSelectedRelPath]);
+
+  useEffect(() => {
+    if (selectedItemType !== 'wiki' || !wikiSelectedRelPath) return;
+    let cancelled = false;
+
+    const reconcileSelectedWikiPage = async () => {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (cancelled || page) return;
+
+      const previousVersion = lastSavedVersionRef.current;
+      const renamedPage = previousVersion
+        ? await window.wikiAPI?.findPageByDocumentVersion(previousVersion, wikiSelectedRelPath)
+        : null;
+      if (cancelled) return;
+      if (renamedPage) {
+        const reading = readingFromWikiPage(renamedPage);
+        const hasUnsavedEdit = contentMode === 'markdown' && editContent !== lastSavedContentRef.current;
+        if (hasUnsavedEdit) reading.content = editContent;
+        const from = { itemType: 'wiki' as const, itemPath: wikiSelectedRelPath };
+        const to = { itemType: 'wiki' as const, itemPath: renamedPage.relPath };
+        historyNavigationTargetRef.current = to;
+        setNavigationHistory((prev) => replaceLibrarianNavigationEntry(prev, from, to));
+        lastSeededPathRef.current = reading.path;
+        setWikiSelectedRelPath(renamedPage.relPath);
+        setSelectedItemId(`wiki:${renamedPage.relPath}`);
+        setSelectedItemType('wiki');
+        setWikiSelectedPage(reading);
+        lastSavedContentRef.current = renamedPage.content;
+        lastSavedVersionRef.current = renamedPage.documentVersion;
+        return;
+      }
+
+      dispatchLocalWikiDeleted(wikiSelectedRelPath);
+      setWikiSelectedRelPath(null);
+      setWikiSelectedPage(null);
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+    };
+
+    const interval = window.setInterval(() => {
+      void reconcileSelectedWikiPage();
+    }, 750);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [contentMode, editContent, selectedItemType, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (selectedItemType !== 'external' || !externalOpenFile?.path) return;

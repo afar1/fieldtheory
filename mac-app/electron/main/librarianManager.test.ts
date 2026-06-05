@@ -47,6 +47,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1366,6 +1367,52 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Client Notes/note');
   });
 
+  it('coalesces external wiki file moves across folders from watcher events', () => {
+    vi.useFakeTimers();
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'scratchpad', 'Moved.md');
+    const newPath = path.join(root, 'archive', 'Moved.md');
+    fs.mkdirSync(path.dirname(oldPath), { recursive: true });
+    fs.mkdirSync(path.dirname(newPath), { recursive: true });
+    fs.writeFileSync(newPath, '# Moved\n');
+
+    const emit = vi.fn();
+    const removePath = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      pendingWikiUnlinks: Map<string, ReturnType<typeof setTimeout>>;
+      wikiFileMetadataCache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      scheduleWikiUnlink: (absPath: string) => void;
+      handleWikiAdd: (absPath: string) => void;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.pendingWikiUnlinks = new Map();
+    manager.wikiFileMetadataCache = new Map();
+    manager.libraryIndexStore = makeLibraryIndexStoreMock();
+    manager.libraryIndexStore.removePath = removePath;
+    manager.emit = emit;
+
+    manager.scheduleWikiUnlink(oldPath);
+    manager.handleWikiAdd(newPath);
+    vi.advanceTimersByTime(400);
+
+    expect(emit).toHaveBeenCalledWith('wiki:renamed', expect.objectContaining({
+      oldRelPath: 'scratchpad/Moved',
+      newRelPath: 'archive/Moved',
+      oldAbsPath: oldPath,
+      newAbsPath: newPath,
+      builtin: true,
+      source: 'watcher',
+    }));
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'scratchpad/Moved');
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-deleted',
+      relPath: 'scratchpad/Moved',
+    }));
+    expect(removePath).not.toHaveBeenCalledWith(oldPath);
+  });
+
   it('removes child link-index rows when a wiki folder is deleted', async () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Client Notes', 'Nested'), { recursive: true });
@@ -1483,6 +1530,55 @@ describe('recursive wiki tree scan', () => {
       source: 'app',
     }));
     expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('coalesces external library file moves across folders from watcher events', () => {
+    vi.useFakeTimers();
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'Projects', 'Moved.md');
+    const newPath = path.join(root, 'Archive', 'Moved.md');
+    fs.mkdirSync(path.dirname(oldPath), { recursive: true });
+    fs.mkdirSync(path.dirname(newPath), { recursive: true });
+    fs.writeFileSync(newPath, '# Moved\n');
+
+    const emit = vi.fn();
+    const removePath = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      pendingLibraryUnlinks: Map<string, { rootPath: string; timer: ReturnType<typeof setTimeout> }>;
+      wikiFileMetadataCache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      scheduleLibraryRootUnlink: (rootPath: string, absPath: string) => void;
+      handleLibraryRootAdd: (rootPath: string, absPath: string) => void;
+      recordWatchedReadingRename: (oldPath: string, newPath: string) => void;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.pendingLibraryUnlinks = new Map();
+    manager.wikiFileMetadataCache = new Map();
+    manager.libraryIndexStore = makeLibraryIndexStoreMock();
+    manager.libraryIndexStore.removePath = removePath;
+    manager.recordWatchedReadingRename = vi.fn();
+    manager.emit = emit;
+
+    manager.scheduleLibraryRootUnlink(root, oldPath);
+    manager.handleLibraryRootAdd(root, newPath);
+    vi.advanceTimersByTime(400);
+
+    expect(emit).toHaveBeenCalledWith('library:renamed', expect.objectContaining({
+      rootPath: root,
+      oldRelPath: 'Projects/Moved',
+      newRelPath: 'Archive/Moved',
+      oldAbsPath: oldPath,
+      newAbsPath: newPath,
+      builtin: false,
+      source: 'watcher',
+    }));
+    expect(emit).not.toHaveBeenCalledWith('library:changed', root, expect.objectContaining({
+      type: 'file-deleted',
+      relPath: 'Projects/Moved',
+    }));
+    expect(removePath).not.toHaveBeenCalledWith(oldPath);
+    expect(manager.recordWatchedReadingRename).toHaveBeenCalledWith(oldPath, newPath);
   });
 
   it('does not delete external files outside registered library roots', async () => {

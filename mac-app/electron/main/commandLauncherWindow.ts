@@ -870,6 +870,11 @@ export class CommandLauncherWindow {
     return await this.window.webContents.executeJavaScript(script, true) as T;
   }
 
+  send(channel: string, ...args: unknown[]): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send(channel, ...args);
+  }
+
   private recordResizeRequest(requestedHeight: number): void {
     const now = Date.now();
     const idleThresholdMs = 300;
