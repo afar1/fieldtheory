@@ -1358,6 +1358,42 @@ describe('BrowserHelperServer', () => {
     expect(removeRoot.status).toBe(200);
   });
 
+  it('notifies native listeners when a wiki page is deleted through the browser helper', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const changedEvents: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        notifyWikiPageChanged: (event) => {
+          changedEvents.push(event);
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const deleteWiki = await request(`http://${address.host}:${address.port}/native/wiki/page`, {
+      method: 'DELETE',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { relPath: 'Plan' },
+    });
+
+    expect(deleteWiki.status).toBe(200);
+    expect(fs.existsSync(path.join(root, 'Plan.md'))).toBe(false);
+    expect(changedEvents).toEqual([
+      expect.objectContaining({
+        type: 'file-deleted',
+        rootPath: root,
+        relPath: 'Plan',
+        absPath: path.join(root, 'Plan.md'),
+        builtin: true,
+        source: 'app',
+      }),
+    ]);
+  });
+
   it('supports document-version lookup and external rename/delete routes', async () => {
     const { address, root } = await startServer();
     const extraRoot = makeTempDir();

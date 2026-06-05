@@ -142,6 +142,14 @@ const BROWSER_HELPER_COALESCED_REFRESH_EVENT_TYPES = new Set(BROWSER_HELPER_RECO
 const BROWSER_HELPER_REFRESH_COALESCE_MS = 75;
 const BROWSER_HELPER_REQUEST_TIMING_LIMIT = 120;
 
+export function mergeBrowserHelperRefreshDetail(type: string, previous: any, detail: any, sources: string[]): any {
+  const nextDetail = { ...previous, ...detail, sources };
+  if (type === 'recent:changed' && !Object.prototype.hasOwnProperty.call(detail ?? {}, 'entries')) {
+    delete nextDetail.entries;
+  }
+  return nextDetail;
+}
+
 export function getBrowserLibraryInitialOpenTarget(location: Pick<Location, 'search'>): any | null {
   return browserLibraryTargetFromSearchParams(new URLSearchParams(location.search));
 }
@@ -303,7 +311,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
         detail?.reconnect ? 'reconnect' : type,
       ]),
     ];
-    coalescedRefreshDetails.set(type, { ...previous, ...detail, sources });
+    coalescedRefreshDetails.set(type, mergeBrowserHelperRefreshDetail(type, previous, detail, sources));
     if (coalescedRefreshTimers.has(type)) return;
     const timer = window.setTimeout(() => {
       coalescedRefreshTimers.delete(type);
@@ -749,7 +757,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
         json: target,
       })
     ).result,
-    onRootsChanged: (callback: () => void) => events.on('library:changed', callback),
+    onRootsChanged: (callback: (event?: unknown) => void) => events.on('library:changed', (detail) => callback(detail?.event)),
     onItemRenamed: (callback: (event: unknown) => void) => events.on('library:renamed', (detail) => callback(detail.event)),
   } as any;
 
@@ -807,7 +815,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
         json: { relPath },
       })
     ).ok,
-    onPageChanged: (callback: () => void) => events.on('wiki:changed', callback),
+    onPageChanged: (callback: (event?: unknown) => void) => events.on('wiki:changed', (detail) => callback(detail?.event)),
     onPageDeleted: (callback: (relPath: string) => void) => events.on('wiki:deleted', (detail) => callback(detail.relPath)),
     onPageRenamed: (callback: (event: unknown) => void) => events.on('wiki:renamed', (detail) => callback(detail.event)),
     onOpenWikiPage: (callback: (relPath: string) => void) => events.on('wiki:openPage', (detail) => callback(detail.relPath)),
@@ -1049,7 +1057,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
         json: { kind, path },
       })
     ).entries,
-    onChanged: (callback: () => void) => events.on('recent:changed', callback),
+    onChanged: (callback: (entries?: unknown[]) => void) => events.on('recent:changed', (detail) => callback(detail?.entries)),
   } as any;
 
   window.taggedDocsAPI = {
@@ -1599,7 +1607,7 @@ function BrowserLibrarySurface(props: {
   const appNavigationSurfaceRef = React.useRef<AppNavigationSurface>('librarian');
   const [navigationAvailability, setNavigationAvailability] = React.useState({ back: false, forward: false });
   const shellRef = React.useRef<HTMLDivElement | null>(null);
-  const footerRef = React.useRef<HTMLDivElement | null>(null);
+  const footerRef = React.useRef<HTMLDivElement>(null);
   const [shellWidth, setShellWidth] = React.useState(() => Math.round(window.innerWidth));
   const focusChromeSurfaceEnabled = focusChromeChildActive || focusChromeGlobalEnabled;
   const librarianSurfaceVisible = surface === 'library';
@@ -2367,7 +2375,7 @@ function BrowserLibrarySurface(props: {
 }
 
 function BrowserLibraryFooter(props: {
-  footerRef: React.RefObject<HTMLDivElement | null>;
+  footerRef: React.RefObject<HTMLDivElement>;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   hidden: boolean;

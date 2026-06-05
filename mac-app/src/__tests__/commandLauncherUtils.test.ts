@@ -4,6 +4,7 @@ import {
   DEFAULT_LAUNCHER_HOTKEYS,
   flattenBookmarkTaxonomyRootsForLauncher,
   flattenLibraryDirectoriesForLauncher,
+  flattenLibraryPageDeltaForLauncher,
   formatHotkeyDisplay,
   formatTimeAgo,
   filterLauncherDirectoryNamespaceItems,
@@ -12,6 +13,7 @@ import {
   filterLauncherNormalModeItems,
   flattenLibraryRootsForLauncher,
   balanceLauncherNormalModeMatches,
+  canPatchLibraryPageDeltaForLauncher,
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
@@ -782,6 +784,54 @@ describe('shouldIncludeLauncherLibraryMarkdownItem', () => {
 });
 
 describe('flattenLibraryRootsForLauncher', () => {
+  it('only patches launcher page deltas that do not require secondary indexes', () => {
+    expect(canPatchLibraryPageDeltaForLauncher(
+      { path: '/wiki', label: 'Wiki', builtin: true },
+      { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 1 },
+    )).toBe(true);
+    expect(canPatchLibraryPageDeltaForLauncher(
+      { path: '/external', label: 'External', builtin: false },
+      { kind: 'file', relPath: 'bookmarks-from-x/categories/commerce', absPath: '/external/bookmarks-from-x/categories/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+    )).toBe(true);
+    expect(canPatchLibraryPageDeltaForLauncher(
+      { path: '/wiki', label: 'Wiki', builtin: true },
+      { kind: 'file', relPath: 'bookmarks-from-x/categories/commerce', absPath: '/wiki/bookmarks-from-x/categories/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+    )).toBe(false);
+  });
+
+  it('builds launcher rows for a single wiki page delta', () => {
+    const result = flattenLibraryPageDeltaForLauncher(
+      { path: '/wiki', label: 'Wiki', builtin: true },
+      { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 10 },
+    );
+
+    expect(result.markdownItems).toHaveLength(1);
+    expect(result.markdownItems[0]).toMatchObject({
+      id: 'wiki-page-/wiki-entries/note',
+      type: 'wiki-page',
+      displayName: 'Note',
+      relPath: 'entries/note',
+      filePath: '/wiki/entries/note.md',
+    });
+    expect(result.directoryItems.map((item) => item.directoryRelPath)).toEqual(['entries']);
+  });
+
+  it('builds launcher rows for a single external markdown delta', () => {
+    const result = flattenLibraryPageDeltaForLauncher(
+      { path: '/projects/docs', label: 'docs', builtin: false },
+      { kind: 'file', relPath: 'plans/roadmap', absPath: '/projects/docs/plans/roadmap.md', name: 'roadmap', title: 'Roadmap', lastUpdated: 20 },
+    );
+
+    expect(result.markdownItems).toHaveLength(1);
+    expect(result.markdownItems[0]).toMatchObject({
+      id: 'markdown-file-/projects/docs-plans/roadmap',
+      type: 'markdown-file',
+      displayName: 'Roadmap — docs',
+      filePath: '/projects/docs/plans/roadmap.md',
+    });
+    expect(result.directoryItems.map((item) => item.directoryRelPath)).toEqual(['', 'plans']);
+  });
+
   it('indexes builtin wiki pages and external library markdown files', () => {
     const items = flattenLibraryRootsForLauncher([
       {

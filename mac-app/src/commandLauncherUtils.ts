@@ -170,6 +170,8 @@ export interface LauncherLibraryRoot {
   tree: LauncherLibraryNode[];
 }
 
+export type LauncherLibraryRootSummary = Pick<LauncherLibraryRoot, 'path' | 'label' | 'builtin'>;
+
 export interface LauncherLibraryMarkdownItem {
   id: string;
   type: 'wiki-page' | 'markdown-file';
@@ -378,6 +380,13 @@ function shouldIndexLibraryNodeForLauncher(root: LauncherLibraryRoot, node: Laun
   if (node.kind !== 'file') return false;
   if (!root.builtin) return true;
   return !isGeneratedBookmarkTaxonomyPath(node.relPath);
+}
+
+export function canPatchLibraryPageDeltaForLauncher(
+  root: LauncherLibraryRootSummary,
+  page: Extract<LauncherLibraryNode, { kind: 'file' }>,
+): boolean {
+  return shouldIndexLibraryNodeForLauncher({ ...root, tree: [] }, page);
 }
 
 export interface LauncherSearchableItem {
@@ -1032,6 +1041,20 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
   }
 
   return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export function flattenLibraryPageDeltaForLauncher(
+  root: LauncherLibraryRootSummary,
+  page: Extract<LauncherLibraryNode, { kind: 'file' }>,
+): { markdownItems: LauncherLibraryMarkdownItem[]; directoryItems: LauncherDirectoryItem[] } {
+  const singlePageRoot: LauncherLibraryRoot = {
+    ...root,
+    tree: [page],
+  };
+  return {
+    markdownItems: flattenLibraryRootsForLauncher([singlePageRoot]),
+    directoryItems: flattenLibraryDirectoriesForLauncher([singlePageRoot]),
+  };
 }
 
 export function buildCommandDirectoriesForLauncher(directories: LauncherCommandDirectorySource[]): LauncherDirectoryItem[] {

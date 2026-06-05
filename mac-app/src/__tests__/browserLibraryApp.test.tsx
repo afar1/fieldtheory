@@ -1878,7 +1878,7 @@ describe('BrowserLibraryApp', () => {
     act(() => {
       window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
     });
-    expect(window.__fieldTheoryBrowserReportActiveSurface).toHaveBeenCalledWith('ember');
+    expect(window.__fieldTheoryBrowserReportActiveSurface!).toHaveBeenCalledWith('ember');
   });
 
   it('seeds launch-time focus chrome and sidebar collapse before the first Library render', async () => {
