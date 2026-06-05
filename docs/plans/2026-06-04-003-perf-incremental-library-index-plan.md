@@ -37,10 +37,17 @@ Build an incremental Library indexing path that keeps backlinks, tree state, sea
 - `WikiSidebar` now ignores the duplicate built-in `library:changed` compatibility payload after handling the corresponding `wiki:changed` delta, avoiding a second patch or repair check for one user-visible wiki save/add/delete.
 - Command Launcher now applies `recent:changed` payloads directly when the main process includes the updated recent list, avoiding an extra `recent:list` IPC after recent visits/removals while preserving the old list fallback for payload-less events.
 - Command Launcher now patches Library markdown and directory rows from typed file add/change deltas when page metadata is present, avoiding a full `library:getRoots` reload for simple file updates. File deletes, generated bookmark taxonomy files, payload-less events, and ambiguous root changes stay on the full repair path so directory rows and bookmark facet rows cannot go stale.
+- Command Launcher now also patches typed Library/wiki delete and rename/move deltas, and browser-helper create/rename/move/delete routes notify the launcher directly. This keeps recent-work and file search current for app-owned operations even when the launcher window is not part of the normal BrowserWindow broadcast set.
+- Command Launcher now suppresses the local-instruction fallback while Library markdown rows are still loading. This prevents a fast `Cmd+Enter` after searching a just-created note from running a local command before the real markdown result arrives.
+- Active wiki documents now run a narrow existence guard against the currently displayed relPath. If the selected page disappears and document-version rename recovery cannot find a replacement, the reader clears to empty state and dispatches the existing local wiki-delete event so the sidebar prunes the stale row. This is a one-document check, not a whole-Library scan.
+- Active wiki context reporting now infers the wiki root path from the active file path and relPath, so helper-driven rename/move notifications can keep the native active document context aligned after app-owned moves.
+- Same-filename cross-folder moves are now coalesced into rename/move events for both built-in wiki files and external Library markdown roots, avoiding delete/add ambiguity in the common "move this note to another folder" path.
 - Browser-helper event coalescing now drops stale recent-entry payloads when the latest coalesced `recent:changed` event is payload-less, so browser/launcher surfaces fall back to a fresh recent list instead of applying old entries.
 - Librarian linked-document computation now reads from an identity-checked 180ms debounced content snapshot. Typing and rendered editing update editor/save state immediately, while the expensive backlinks/outbound-link relation scan runs after the short debounce; document switches fall back to the new document content immediately so prior-file links cannot flash under the new selection.
 - Shared-file sync scheduling is now debounced from Library change events, matching the existing Library sync debounce posture so edit bursts coalesce into background sync work.
-- Verification: `npm test -- --run src/__tests__/browserLibraryUtils.test.ts electron/shared/wikiLinkParser.test.ts src/__tests__/wikiLinks.test.ts electron/main/libraryIndexStore.test.ts src/components/__tests__/WikiSidebar.test.ts electron/main/librarianManager.test.ts electron/main/browserHelperServer.test.ts src/__tests__/commandLauncherUtils.test.ts` passes with 441 tests. `tsc -p tsconfig.electron.json --noEmit` passes. Full `npm run typecheck` remains red on the current `origin/experimental` baseline in unrelated files; no new `WikiSidebar`, Command Launcher, or Electron type errors remain.
+- Manual feel-test evidence: `Shift+Cmd+K` opens the Command Launcher. A newly created scratchpad markdown file appeared in launcher search as a real markdown result within about one second. A fast `Cmd+Enter` while markdown rows were still loading no longer invoked the local-instruction fallback; once the markdown result appeared, `Cmd+Enter` opened the file. Deleting the open disposable wiki file cleared the reader and pruned the sidebar row within about 1.5 seconds.
+- Residual UX note: rename-by-filesystem converged through background markdown refresh after roughly 1.8 seconds in the manual pass because background refresh deferred twice while the user was typing. App-owned helper rename/move routes now send direct deltas; pure external filesystem rename can still feel closer to "quick repair" than "instant."
+- Verification: `npm test -- --run src/__tests__/browserLibraryUtils.test.ts electron/shared/wikiLinkParser.test.ts src/__tests__/wikiLinks.test.ts electron/main/libraryIndexStore.test.ts src/components/__tests__/WikiSidebar.test.ts electron/main/librarianManager.test.ts electron/main/browserHelperServer.test.ts src/__tests__/commandLauncherUtils.test.ts` passes with 441 tests. Focused current pass: `npm run test -- electron/main/browserHelperServer.test.ts electron/main/librarianManager.test.ts src/__tests__/commandLauncherUtils.test.ts` passes with 330 tests, and `npm run typecheck` passes.
 
 ---
 
@@ -655,7 +662,7 @@ This is the current requirement-by-requirement state before manual feel-testing:
 
 | Requirement | Status | Evidence | Remaining proof |
 | --- | --- | --- | --- |
-| R1. File add/change/delete/rename updates affected tree/search/link state on the fast path | Mostly proven | Delta tests cover sidebar patching, launcher row patching, wiki/artifact/command link-hit freshness, and stale index cleanup. | Cross-root move still intentionally uses repair path. Manual create/move/rename feel-test should confirm no visible lag. |
+| R1. File add/change/delete/rename updates affected tree/search/link state on the fast path | Mostly proven | Delta tests cover sidebar patching, launcher row patching, wiki/artifact/command link-hit freshness, stale index cleanup, and same-filename cross-folder watcher moves. | Cross-root move still intentionally uses repair path. |
 | R2. Active backlinks/outbound links stay visibly current, including unsaved edits after debounce | Partly proven | Unit tests cover metadata-only outbound links, hydrated replacement, indexed wiki/artifact/command backlinks, command selected-document fast path, and saved-document upserts. | Unsaved-edit visual freshness needs runtime feel-test in the real editor. |
 | R3. Full scans remain available as repair reconciliation | Proven by structure and tests | Full relation fallback remains delayed, not removed. Tree and metadata repair reload tests still pass. Build passes. | None for this branch; broader repair scheduling remains existing behavior. |
 | R4. Missed watcher events converge without blocking hot UI paths | Partly proven | Stat-gated metadata reuse and persisted metadata tests pass. Broad repair paths remain. | Sleep/wake or missed-watcher runtime scenario is not simulated here. |
@@ -663,14 +670,14 @@ This is the current requirement-by-requirement state before manual feel-testing:
 | R6. Sidebar and launcher do not snap back from stale async completions | Proven for covered paths | Sidebar stale tree/recent tests, launcher helper tests, browser coalescing tests, and command request guards pass. | Manual navigation through recent work is still useful. |
 | R7. Search warming prioritizes likely next actions | Partly proven | Launcher tests cover recent ordering, command priority, recent-only caps, and patchable deltas. | Full hot-slice warming strategy remains future tuning, not a complete search-engine rewrite. |
 | R8. App-owned writes do not produce duplicate visible refreshes | Mostly proven | Duplicate built-in library change suppression and typed save/change deltas are tested. | Watcher duplicate timing should be watched during runtime testing. |
-| R13. Recent work, create, move, rename, and delete feel near-real-time | Partly proven | Selection-before-repair, recent payloads, sidebar file deltas, launcher move/open behavior, and delete deltas are covered by tests. | This is primarily a feel-test requirement. |
+| R13. Recent work, create, move, rename, and delete feel near-real-time | Mostly proven | Selection-before-repair, recent payloads, sidebar file deltas, launcher move/open behavior, delete deltas, watcher move coalescing, and launcher delete/rename cache patches are covered by tests. A fresh disposable create/move/delete pass on June 4 showed `library-index.db` following the file path and Command Launcher dropping the deleted result. | Broader human feel testing across real recent-work flows is still useful before public release. |
 | R9/R10. Main process owns durable index freshness; React consumes snapshots/deltas | Mostly proven | `library-index.db`, `LibrarianManager`, command index hooks, and IPC-backed backlink fetches now own durable freshness. Renderer keeps UI caches and delayed repair. | A future full resolved graph would make this cleaner, but current work follows the boundary. |
 | R11. Persistent index stores rebuildable metadata/link edges, not full bodies | Proven | Store schema and privacy docs show metadata and raw link hits only. No full document bodies are persisted in `library-index.db`. |
 | R12. New persisted storage is documented | Proven | Local data and privacy docs include `library-index.db`, storage location, rebuildable role, and no-body policy. |
 
 **Go / no-go for feel-test**
 
-Done. Manual feel-testing found release-relevant freshness bugs in external file rename, move, and delete handling. The branch should not ship to public experimental until those are fixed and re-tested.
+Fixed and re-tested for the stale external file path found in the first manual pass. Same-filename watcher moves across folders now coalesce into rename/move events, and Command Launcher patches cached markdown rows for delete and rename/move events. A fresh disposable pass with `Codex Latency Check 2026-06-04 1442` verified external create indexed within about 1 second, move left only the nested target path in `library-index.db`, delete removed the disk file/folder and index row, and Command Launcher returned `No matches found` for the deleted file.
 
 **No-go for public experimental packaging from this worktree**
 
@@ -725,7 +732,26 @@ What failed:
 - After the renamed disposable note was moved into a disposable folder, the sidebar continued showing the file at the old top-level location after several seconds.
 - After deleting the disposable files/folder from disk, the sidebar still showed the stale disposable rows after several seconds.
 
-This is a no-go for public experimental release. The next fix should focus on watcher-driven external rename, move, and delete reconciliation for visible sidebar rows and active selection state. App-owned create looks good, but external filesystem changes are still too stale for the "recent work and file operations feel near-real-time" requirement.
+Initial conclusion: no-go until watcher-driven external rename, move, and delete reconciliation improved for visible rows and active selection state.
+
+Follow-up fix and retest:
+
+- Watcher unlink/add pairs now treat same-filename cross-folder changes as move/rename events instead of unrelated add/delete events.
+- Command Launcher now removes cached markdown rows for file-delete deltas and rewrites cached rows for rename/move events.
+- `npm run typecheck` passes.
+- `npm run test -- electron/main/librarianManager.test.ts src/__tests__/commandLauncherUtils.test.ts` passes: 2 files, 265 tests.
+- Fresh disposable runtime pass used `Codex Latency Check 2026-06-04 1442`. External create appeared in the user-scoped `library-index.db` within about 1 second. External move left only the nested target path in the index. External delete removed the disk file/folder and matching index row. Command Launcher then showed `No matches found` for the deleted file.
+
+Current conclusion: the specific stale external create/move/delete path found in the first feel-test is fixed enough for another human feel pass. Public experimental packaging still depends on the separate release-process and audit gates above.
+
+Follow-up monitoring continuation:
+
+- A second live pass confirmed `Shift+Command+K` opens Command Launcher when Electron is frontmost, and `scratchpad` search returns folder and recent scratchpad rows immediately.
+- Pressing plain Enter on a wiki result while the editor is active inserted a wiki link into `README: Artifacts` instead of opening the page. The insertion was immediately undone, and `/Users/afar/.fieldtheory/librarian/artifacts/README.md` was verified clean on disk. This looks like a Command Launcher invocation-mode paper cut, not an index freshness bug.
+- Creating `Codex Live UI 2026-06-04 1506` through the running app's browser-helper wiki API wrote the file and updated `library-index.db` immediately. Closing and reopening Command Launcher then found the page.
+- Creating `Codex Live UI 2026-06-04 1514` while Command Launcher was already open did not update the existing launcher result list before reset. A direct wiki-event subscription was added to the launcher, but the live retest remained ambiguous because focus drifted to the neighboring browser/Codex window. This needs a cleaner full-screen manual run before claiming the already-open launcher case is solved.
+- Rename through the browser-helper wiki API updated disk and `library-index.db` to only the renamed path. The later launcher screenshot was not strong evidence because focus had drifted, so it is not counted as a pass.
+- All disposable `Codex Live UI` files and matching `library-index.db` rows were removed after the pass.
 
 ---
 

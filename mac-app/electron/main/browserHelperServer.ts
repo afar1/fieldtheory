@@ -135,6 +135,10 @@ export type BrowserHelperNativeBridge = {
   setFolderHidden?: (folderId: string, hidden: boolean) => string[];
   recordRecentWikiPage?: (page: unknown) => void | Promise<void>;
   recordRecentCreatedLibraryPage?: (page: unknown, rootPath: string) => void | Promise<void>;
+  notifyWikiPageChanged?: (event: unknown) => void | Promise<void>;
+  notifyWikiPageRenamed?: (event: unknown) => void | Promise<void>;
+  notifyLibraryPageChanged?: (event: unknown) => void | Promise<void>;
+  notifyLibraryItemRenamed?: (event: unknown) => void | Promise<void>;
   getReadings?: () => unknown[] | Promise<unknown[]>;
   getReading?: (filePath: string) => unknown | Promise<unknown>;
   saveReading?: (filePath: string, content: string, expectedVersion?: unknown) => unknown | Promise<unknown>;
@@ -429,6 +433,75 @@ export class BrowserHelperServer {
     };
   }
 
+  private pageChangeEvent(
+    type: 'file-added' | 'file-changed' | 'file-deleted',
+    page: unknown,
+    builtin: boolean,
+    fallbackRootPath?: string,
+  ): unknown {
+    const pageObject = page && typeof page === 'object' ? page as Record<string, unknown> : {};
+    const relPath = typeof pageObject.relPath === 'string' ? pageObject.relPath : '';
+    const absPath = typeof pageObject.absPath === 'string'
+      ? pageObject.absPath
+      : typeof pageObject.path === 'string'
+        ? pageObject.path
+        : '';
+    const rootPath = typeof pageObject.rootPath === 'string' ? pageObject.rootPath : fallbackRootPath ?? '';
+    return {
+      type,
+      rootPath,
+      relPath,
+      absPath,
+      builtin,
+      source: 'app',
+      detectedAt: Date.now(),
+      page,
+    };
+  }
+
+  private deletedWikiPageChangeEvent(relPath: string): unknown {
+    const rootPath = this.builtinWikiRootPath();
+    return {
+      type: 'file-deleted',
+      rootPath,
+      relPath,
+      absPath: rootPath ? path.resolve(rootPath, `${relPath}.md`) : '',
+      builtin: true,
+      source: 'app',
+      detectedAt: Date.now(),
+    };
+  }
+
+  private builtinWikiRootPath(): string {
+    const roots = this.service.getLibraryRoots();
+    const root = roots.find((candidate) => (
+      candidate
+      && typeof candidate === 'object'
+      && (candidate as { builtin?: unknown }).builtin === true
+    )) ?? roots[0];
+    return root && typeof root === 'object' && typeof (root as { path?: unknown }).path === 'string'
+      ? (root as { path: string }).path
+      : '';
+  }
+
+  private wikiRenameEvent(oldRelPath: string, newRelPath: string): unknown {
+    const rootPath = this.builtinWikiRootPath();
+    return this.libraryRenameEvent(rootPath, oldRelPath, newRelPath, true);
+  }
+
+  private libraryRenameEvent(rootPath: string, oldRelPath: string, newRelPath: string, builtin: boolean, newRootPath = rootPath): unknown {
+    return {
+      rootPath: newRootPath,
+      oldRelPath,
+      newRelPath,
+      oldAbsPath: rootPath ? path.resolve(rootPath, `${oldRelPath}.md`) : '',
+      newAbsPath: newRootPath ? path.resolve(newRootPath, `${newRelPath}.md`) : '',
+      builtin,
+      source: 'app',
+      detectedAt: Date.now(),
+    };
+  }
+
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const parsed = new URL(req.url ?? '/', `http://${req.headers.host ?? `${this.host}:${this.port}`}`);
 
@@ -672,7 +745,10 @@ export class BrowserHelperServer {
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const fileName = typeof body.fileName === 'string' ? body.fileName : '';
         const page = this.service.createWikiFile(folderRelPath, fileName);
-        if (page) await this.nativeBridge.recordRecentWikiPage?.(page);
+        if (page) {
+          await this.nativeBridge.recordRecentWikiPage?.(page);
+          await this.nativeBridge.notifyWikiPageChanged?.(this.pageChangeEvent('file-added', page, true));
+        }
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -681,7 +757,10 @@ export class BrowserHelperServer {
         const body = await readJsonBody(req);
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const page = this.service.createWikiFileWithDefaultTitle(folderRelPath);
-        if (page) await this.nativeBridge.recordRecentWikiPage?.(page);
+        if (page) {
+          await this.nativeBridge.recordRecentWikiPage?.(page);
+          await this.nativeBridge.notifyWikiPageChanged?.(this.pageChangeEvent('file-added', page, true));
+        }
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -710,6 +789,9 @@ export class BrowserHelperServer {
         const body = await readJsonBody(req);
         const relPath = typeof body.relPath === 'string' ? body.relPath : '';
         const success = relPath ? await this.service.deleteWikiPage(relPath) : false;
+        if (success) {
+          await this.nativeBridge.notifyWikiPageChanged?.(this.deletedWikiPageChangeEvent(relPath));
+        }
         writeJson(res, success ? 200 : 400, { ok: success }, req.headers.origin);
         return;
       }
@@ -719,6 +801,7 @@ export class BrowserHelperServer {
         const relPath = typeof body.relPath === 'string' ? body.relPath : '';
         const newName = typeof body.newName === 'string' ? body.newName : '';
         const newRelPath = this.service.renameWikiPage(relPath, newName);
+        if (newRelPath) await this.nativeBridge.notifyWikiPageRenamed?.(this.wikiRenameEvent(relPath, newRelPath));
         writeJson(res, newRelPath ? 200 : 400, { ok: Boolean(newRelPath), newRelPath }, req.headers.origin);
         return;
       }
@@ -739,7 +822,10 @@ export class BrowserHelperServer {
         const folderRelPath = typeof body.folderRelPath === 'string' ? body.folderRelPath : '';
         const fileName = typeof body.fileName === 'string' ? body.fileName : '';
         const page = this.service.createLibraryFile(rootPath, folderRelPath, fileName);
-        if (page) await this.nativeBridge.recordRecentCreatedLibraryPage?.(page, rootPath);
+        if (page) {
+          await this.nativeBridge.recordRecentCreatedLibraryPage?.(page, rootPath);
+          await this.nativeBridge.notifyLibraryPageChanged?.(this.pageChangeEvent('file-added', page, false, rootPath));
+        }
         writeJson(res, page ? 200 : 400, { ok: Boolean(page), page }, req.headers.origin);
         return;
       }
@@ -770,6 +856,12 @@ export class BrowserHelperServer {
         const kind = body.kind === 'dir' ? 'dir' : 'file';
         const targetRootPath = typeof body.targetRootPath === 'string' ? body.targetRootPath : undefined;
         const newRelPath = rootPath && sourceRelPath ? this.service.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath) : null;
+        if (newRelPath && kind === 'file') {
+          const builtin = rootPath === this.builtinWikiRootPath();
+          const event = this.libraryRenameEvent(rootPath, sourceRelPath, newRelPath, builtin, targetRootPath ?? rootPath);
+          if (builtin) await this.nativeBridge.notifyWikiPageRenamed?.(event);
+          else await this.nativeBridge.notifyLibraryItemRenamed?.(event);
+        }
         writeJson(res, newRelPath ? 200 : 400, { ok: Boolean(newRelPath), newRelPath }, req.headers.origin);
         return;
       }
