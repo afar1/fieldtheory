@@ -450,9 +450,9 @@ describe('ContentToolbar', () => {
       />
     );
 
-    const icon = container.querySelector('img[src="/field-theory-icon-black.png"]') as HTMLImageElement | null;
+    const icon = container.querySelector('img[src="/fieldtheory-icon.png"]') as HTMLImageElement | null;
     expect(icon?.style.opacity).toBe('0.88');
-    expect(icon?.style.filter).toBe('invert(1) brightness(1.35) contrast(1.08)');
+    expect(icon?.style.filter).toBe('none');
 
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     expect(icon?.style.opacity).toBe('1');
