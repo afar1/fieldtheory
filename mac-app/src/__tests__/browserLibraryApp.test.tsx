@@ -1002,14 +1002,19 @@ describe('BrowserLibraryApp', () => {
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = (props: {
       onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
+      onSelectedItemTypeChange?: (type: 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null) => void;
     }) => {
+      const reportedRef = React.useRef(false);
       React.useEffect(() => {
+        if (reportedRef.current) return;
+        reportedRef.current = true;
+        props.onSelectedItemTypeChange?.('bookmarks');
         props.onActiveFileUpdatedChange?.({
           path: '/Users/afar/.fieldtheory/library/briefs/Claude Pro Token Use Audit Prompt Brief.md',
           title: 'Claude Pro Token Use Audit Prompt Brief',
           mtime: 1,
         });
-      }, [props.onActiveFileUpdatedChange]);
+      }, [props.onActiveFileUpdatedChange, props.onSelectedItemTypeChange]);
       return <div data-testid="library-view">Library</div>;
     };
     const CommandsView = () => <div data-testid="commands-view">Commands</div>;

@@ -852,7 +852,6 @@ const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
 const TERMINAL_PASTE_POPOVER_GAP_PX = 8;
 const TERMINAL_PASTE_POPOVER_SIDE_GAP_PX = 14;
 const TERMINAL_PASTE_POPOVER_EDGE_PX = 12;
-const BROWSER_SELECTION_PASTE_LINE_NUMBER_GAP_MULTIPLIER = 1.5;
 type MaxwellToolbarRunMode =
   | { mode: 'document' }
   | { mode: 'selection'; selection: { start: number; end: number } };
@@ -1046,35 +1045,6 @@ export function getTerminalPastePopoverPosition(
     top: Math.max(
       TERMINAL_PASTE_POPOVER_GAP_PX,
       Math.min(maxTop, rect.top + rect.height / 2 - TERMINAL_PASTE_POPOVER_SIZE_PX / 2),
-    ),
-    left: Math.max(
-      TERMINAL_PASTE_POPOVER_EDGE_PX,
-      Math.min(maxLeft, preferredLeft),
-    ),
-  };
-}
-
-export function getBrowserSelectionPastePopoverPosition(
-  selectionRect: Pick<DOMRect, 'height' | 'left' | 'right' | 'top'>,
-  viewport: { width: number; height: number },
-  lineNumberRect: Pick<DOMRect, 'left' | 'right'> | null,
-): { top: number; left: number } {
-  if (!lineNumberRect) {
-    return getTerminalPastePopoverPosition(selectionRect, viewport, 'left');
-  }
-  const maxLeft = viewport.width - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_EDGE_PX;
-  const maxTop = viewport.height - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_GAP_PX;
-  const textToNumberGap = Math.max(
-    TERMINAL_PASTE_POPOVER_GAP_PX,
-    selectionRect.left - lineNumberRect.right,
-  );
-  const preferredLeft = lineNumberRect.left
-    - textToNumberGap * BROWSER_SELECTION_PASTE_LINE_NUMBER_GAP_MULTIPLIER
-    - TERMINAL_PASTE_POPOVER_SIZE_PX;
-  return {
-    top: Math.max(
-      TERMINAL_PASTE_POPOVER_GAP_PX,
-      Math.min(maxTop, selectionRect.top + selectionRect.height / 2 - TERMINAL_PASTE_POPOVER_SIZE_PX / 2),
     ),
     left: Math.max(
       TERMINAL_PASTE_POPOVER_EDGE_PX,
@@ -3411,7 +3381,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const effectiveCodexTerminalVisible = codexTerminalAvailable
     && codexTerminalVisible
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
-  const selectionPastePopoverAvailable = browserLibrarySurface || effectiveCodexTerminalVisible;
+  const selectionPastePopoverAvailable = effectiveCodexTerminalVisible;
   const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
     responsivePanelState,
     userResizing: userResizingPanel,
@@ -6366,24 +6336,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setCodexTerminalFocusRequestKey((key) => key + 1);
   }, [captureTerminalReturnEditorSelection, handleCodexTerminalVisibleChange]);
 
-  const pasteTextToCodexHostInput = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setTerminalPastePopover(null);
-    const result = await window.shellAPI?.pasteIntoCodexInput?.(text);
-    if (result?.success) {
-      if (browserLibrarySurface) {
-        onActionFeedback?.('Selection sent to Codex');
-      } else {
-        flashCopyFeedback('Selection sent to Codex');
-      }
-      return;
-    }
-    try {
-      await writeTextToClipboard(text);
-    } catch {}
-  }, [browserLibrarySurface, flashCopyFeedback, onActionFeedback, writeTextToClipboard]);
-
   const getNativeTerminalPasteContentRect = useCallback((): Pick<DOMRect, 'right'> | null => (
     renderedContentRef.current?.getBoundingClientRect()
     ?? (contentScrollRef.current?.firstElementChild instanceof HTMLElement
@@ -6413,22 +6365,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setTerminalPastePopover(null);
       return;
     }
-    const lineNumberRect = browserLibrarySurface
-      ? (readerPane.querySelector('.cm-ft-lineNumberOverlayNumber.cm-ft-selectedLineNumber, .cm-ft-lineNumberOverlayNumber') as HTMLElement | null)?.getBoundingClientRect() ?? null
-      : null;
     setTerminalPastePopover({
       text: selectedText,
-      ...(browserLibrarySurface
-        ? getBrowserSelectionPastePopoverPosition(rect, {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        }, lineNumberRect)
-        : getNativeTerminalPastePopoverPosition(rect, {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        }, getNativeTerminalPasteContentRect())),
+      ...getNativeTerminalPastePopoverPosition(rect, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }, getNativeTerminalPasteContentRect()),
     });
-  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, selectionPastePopoverAvailable]);
+  }, [getNativeTerminalPasteContentRect, selectionPastePopoverAvailable]);
 
   useEffect(() => {
     if (!selectionPastePopoverAvailable) setTerminalPastePopover(null);
@@ -6471,20 +6415,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         setTerminalPastePopover(null);
         return;
       }
-      const lineNumberRect = browserLibrarySurface
-        ? (readerPane.querySelector('.cm-ft-lineNumberOverlayNumber.cm-ft-selectedLineNumber, .cm-ft-lineNumberOverlayNumber') as HTMLElement | null)?.getBoundingClientRect() ?? null
-        : null;
       setTerminalPastePopover({
         text: pasteText,
-        ...(browserLibrarySurface
-          ? getBrowserSelectionPastePopoverPosition(rect, {
-            width: window.innerWidth,
-            height: window.innerHeight,
-          }, lineNumberRect)
-          : getNativeTerminalPastePopoverPosition(rect, {
-            width: window.innerWidth,
-            height: window.innerHeight,
-          }, getNativeTerminalPasteContentRect())),
+        ...getNativeTerminalPastePopoverPosition(rect, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }, getNativeTerminalPasteContentRect()),
       });
     };
 
@@ -6500,7 +6436,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener('scroll', updateSelectionPopover, true);
       window.removeEventListener('resize', updateSelectionPopover);
     };
-  }, [browserLibrarySurface, getNativeTerminalPasteContentRect, selectionPastePopoverAvailable, showSelectionPastePopoverFromEditorSnapshot]);
+  }, [getNativeTerminalPasteContentRect, selectionPastePopoverAvailable, showSelectionPastePopoverFromEditorSnapshot]);
 
   useEffect(() => {
     const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
@@ -6509,11 +6445,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!text.trim()) return;
       event.preventDefault();
       event.stopPropagation();
-      void (browserLibrarySurface ? pasteTextToCodexHostInput(text) : pasteTextToCodexTerminal(text));
+      void pasteTextToCodexTerminal(text);
     };
     window.addEventListener('keydown', handleSelectionTerminalHotkey, true);
     return () => window.removeEventListener('keydown', handleSelectionTerminalHotkey, true);
-  }, [browserLibrarySurface, pasteTextToCodexHostInput, pasteTextToCodexTerminal, terminalPastePopover?.text]);
+  }, [pasteTextToCodexTerminal, terminalPastePopover?.text]);
 
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
@@ -10569,19 +10505,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 gap: '8px',
               }}
             >
-              {/* Nav: back (only visible in fullscreen). Copy-path moved to
-                  the right of the immersive toggle inside ContentToolbar. */}
-              {isFullScreen && !focusChromeActive && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
-                  <button
-                    onClick={() => setIsFullScreen(false)}
-                    style={{ padding: '3px 6px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                    title="Back to standard view"
-                  >←</button>
-                </div>
-              )}
               {activeReadingToolbarIdentityVisible && activeReading && (
                 <div
                   style={{
@@ -11488,15 +11411,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {selectionPastePopoverAvailable && terminalPastePopover && (
           <button
             type="button"
-            aria-label={browserLibrarySurface ? 'Paste selection to Codex input' : 'Paste selection to terminal'}
-            title={browserLibrarySurface ? 'Paste selection to Codex input (⌘⌥T)' : 'Paste selection to terminal (⌘⌥T)'}
+            aria-label="Paste selection to terminal"
+            title="Paste selection to terminal (⌘⌥T)"
             onMouseDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
             }}
-            onClick={() => void (browserLibrarySurface
-              ? pasteTextToCodexHostInput(terminalPastePopover.text)
-              : pasteTextToCodexTerminal(terminalPastePopover.text))}
+            onClick={() => void pasteTextToCodexTerminal(terminalPastePopover.text)}
             style={{
               position: 'fixed',
               top: `${terminalPastePopover.top}px`,
@@ -11518,18 +11439,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               WebkitAppRegion: 'no-drag',
             }}
           >
-            {browserLibrarySurface ? (
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
-                <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" opacity="0.82" />
-                <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" opacity="0.38" />
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
-                <path d="m5.15 6.05 1.8 1.95-1.8 1.95M8.15 10.1h2.55" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
+              <path d="m5.15 6.05 1.8 1.95-1.8 1.95M8.15 10.1h2.55" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
         )}
         </div>
