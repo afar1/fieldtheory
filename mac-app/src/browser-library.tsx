@@ -2162,22 +2162,12 @@ function BrowserLibrarySurface(props: {
       showActionFeedback(result?.success ? 'Opened in Field Theory' : result?.error ?? 'Could not open Field Theory');
     })();
   }, [resolveFieldTheoryNativeOpenTarget, showActionFeedback]);
-  const exitBrowserImmersive = React.useCallback(() => {
-    setLibrarianImmersive(false);
-    disableGlobalFocusChrome();
-    setFocusChromeChildActive(false);
-    setFocusChromeGroupOpacity(0);
-    window.dispatchEvent(new CustomEvent(BROWSER_LIBRARY_SET_FULLSCREEN_EVENT, {
-      detail: { fullscreen: false },
-    }));
-  }, [disableGlobalFocusChrome]);
   const fieldTheoryButtonVisible = (
     surface === 'commands'
     || activeClientSurface === 'bookmarks'
     || activeClientSurface === 'ember'
     || Boolean(activeLibraryFile)
   ) && !browserTextSelected;
-  const immersiveExitVisible = librarianSurfaceVisible && (librarianImmersive || focusChromeSurfaceEnabled);
 
   return (
     <div
@@ -2200,38 +2190,6 @@ function BrowserLibrarySurface(props: {
           opacity={FOCUS_CHROME_ICON_OPACITY}
           size={focusChromeIconSize}
         />
-      ) : null}
-      {immersiveExitVisible ? (
-        <button
-          type="button"
-          data-fieldtheory-browser-exit-immersive-button="true"
-          aria-label="Exit immersive view"
-          title="Exit immersive view"
-          onClick={exitBrowserImmersive}
-          style={{
-            position: 'absolute',
-            top: '8px',
-            right: '12px',
-            zIndex: 28,
-            width: '28px',
-            height: '28px',
-            padding: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '6px',
-            backgroundColor: theme.isDark ? 'rgba(20, 20, 22, 0.78)' : 'rgba(255, 255, 255, 0.88)',
-            color: theme.textSecondary,
-            boxShadow: theme.isDark ? '0 8px 22px rgba(0,0,0,0.28)' : '0 8px 22px rgba(0,0,0,0.1)',
-            cursor: 'pointer',
-          }}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M4.5 4.5 11.5 11.5" />
-            <path d="M11.5 4.5 4.5 11.5" />
-          </svg>
-        </button>
       ) : null}
       {actionFeedback ? (
         <span

@@ -1738,13 +1738,8 @@ describe('BrowserLibraryApp', () => {
     expect(focusIconImage.getAttribute('src')).toBe('/field-theory-icon-black.png');
     expect(focusIcon.style.height).not.toBe('32px');
 
-    const exitButton = screen.getByRole('button', { name: 'Exit immersive view' });
-    expect(exitButton).toBeTruthy();
-    fireEvent.click(exitButton);
-    expect(window.localStorage.setItem).toHaveBeenCalledWith('librarian-immersive', 'false');
-    await waitFor(() => {
-      expect(document.querySelector('[data-fieldtheory-browser-exit-immersive-button="true"]')).toBeNull();
-    });
+    expect(screen.queryByRole('button', { name: 'Exit immersive view' })).toBeNull();
+    expect(document.querySelector('[data-fieldtheory-browser-exit-immersive-button="true"]')).toBeNull();
   });
 
   it('starts with the native Library immersive preference in Browser mode', async () => {
