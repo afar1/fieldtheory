@@ -212,17 +212,10 @@ type InlineDrawInsertion = {
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
 type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
-type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
-type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
-const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
 const CODEX_TERMINAL_DOCK_STORAGE_KEY = 'fieldtheory.codexTerminal.dockSide';
-
-function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
-  return !!session && MEETING_TOOLBAR_ACTIVE_STATUSES.has(session.status);
-}
 
 export type LibraryDocumentViewKind = 'markdown' | 'html' | 'css';
 type SharedFileType = 'document' | 'command' | 'plan';
@@ -3970,8 +3963,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const inlineGemmaInstructionRef = useRef<HTMLTextAreaElement | null>(null);
   const [inlineDrawInsertion, setInlineDrawInsertion] = useState<InlineDrawInsertion | null>(null);
   const [inlineDrawSaving, setInlineDrawSaving] = useState(false);
-  const [activeMeetingSession, setActiveMeetingSession] = useState<MeetingToolbarSession | null>(null);
-  const [meetingToolbarBusy, setMeetingToolbarBusy] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
@@ -4926,45 +4917,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingToolbarHasBreadcrumb = !focusChromeActive
     && (selectedItemType === 'wiki' || selectedItemType === 'external')
     && Boolean(activeReadingPath);
-  const meetingToolbarStatus = activeMeetingSession?.status ?? 'idle';
-  const meetingToolbarRecording = meetingToolbarStatus === 'recording';
-  const meetingToolbarFinalizing = meetingToolbarStatus === 'starting'
-    || meetingToolbarStatus === 'transcribing'
-    || meetingToolbarStatus === 'summarizing';
-  const meetingToolbarVisible = focusToolbarControlsVisible
-    && activeIsMarkdownDocument
-    && Boolean(activeReadingPath)
-    && (selectedItemType === 'wiki' || selectedItemType === 'external');
-  const meetingToolbarDisabled = meetingToolbarBusy || meetingToolbarFinalizing;
-  const meetingToolbarTitle = meetingToolbarFinalizing
-    ? 'Meeting recording is finalizing'
-    : meetingToolbarRecording ? 'Stop meeting recording' : 'Start meeting recording';
   const showActiveReadingInFolder = () => {
     if (activeReadingPath) {
       window.shellAPI?.showItemInFolder(activeReadingPath);
     }
   };
-  const handleMeetingToolbarClick = useCallback(async () => {
-    setMeetingToolbarBusy(true);
-    try {
-      const result = meetingToolbarRecording
-        ? await window.commandsAPI?.stopMeeting?.()
-        : await window.commandsAPI?.startMeetingHere?.();
-      if (!result) {
-        console.warn('[Librarian] Meeting toolbar action is unavailable');
-        return;
-      }
-      if (!result.success) {
-        console.warn('[Librarian] Meeting toolbar action failed:', result.error ?? result.summaryError);
-        return;
-      }
-      setActiveMeetingSession(isMeetingToolbarActiveSession(result.session) ? result.session : null);
-    } catch (err) {
-      console.warn('[Librarian] Meeting toolbar action failed:', err);
-    } finally {
-      setMeetingToolbarBusy(false);
-    }
-  }, [meetingToolbarRecording]);
   activeReadingPathRef.current = activeReadingPath;
   const liveRenderedReadingContent = contentMode === 'rendered'
     && renderedEditingActive
@@ -5106,29 +5063,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentContext);
     };
   }, [active, reportActiveLibraryFileContext]);
-
-  useEffect(() => {
-    if (!active) {
-      setActiveMeetingSession(null);
-      return;
-    }
-
-    let cancelled = false;
-    const updateActiveMeetingSession = (session: MeetingToolbarSession | null | undefined) => {
-      if (!cancelled) {
-        setActiveMeetingSession(isMeetingToolbarActiveSession(session) ? session : null);
-      }
-    };
-
-    void window.commandsAPI?.getActiveMeeting?.().then(updateActiveMeetingSession).catch((err) => {
-      console.warn('[Librarian] Failed to read active meeting session:', err);
-    });
-    const unsubscribe = window.commandsAPI?.onMeetingStatus?.(updateActiveMeetingSession);
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, [active]);
 
   useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
@@ -10780,10 +10714,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   htmlLayoutActive={activeHtmlLayout === 'full'}
                   onToggleTerminal={browserLibrarySurface ? undefined : () => toggleCodexTerminalPanel()}
                   terminalVisible={codexTerminalAvailable && codexTerminalVisible}
-                  meetingTitle={meetingToolbarTitle}
-                  meetingRecording={meetingToolbarRecording}
-                  meetingDisabled={meetingToolbarDisabled}
-                  onMeetingClick={meetingToolbarVisible ? handleMeetingToolbarClick : undefined}
                   maxwellItems={maxwellToolbarItems}
                   maxwellCanAddCurrent={!!activeMaxwellItem}
                   maxwellCurrentItemId={activeMaxwellItem?.id ?? null}

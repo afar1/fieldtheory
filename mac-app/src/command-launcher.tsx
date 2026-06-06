@@ -3619,26 +3619,6 @@ function CommandLauncher() {
       setFiltered([]);
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     };
-    const openMeetingResult = async (
-      result: LauncherMeetingActionResult,
-      errorEvent: string,
-      fallback: string,
-    ): Promise<boolean> => {
-      if (!result.success) {
-        showInvocationError(errorEvent, result.error ?? result.summaryError, fallback);
-        return false;
-      }
-      if (result.openTarget) {
-        const openResult = await commandsAPI.openFieldTheoryMarkdown(result.openTarget);
-        if (!openResult.success) {
-          showInvocationError(`${errorEvent}-open`, openResult.error, 'Open meeting failed');
-          return false;
-        }
-        return true;
-      }
-      closeForInvocation({ skipActivation: true });
-      return true;
-    };
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, hasActiveLibraryFileContext: false, targetApp: null }));
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
@@ -3902,48 +3882,6 @@ function CommandLauncher() {
         case 'start-recording':
           transcribeAPI.toggleRecording?.();
           break;
-        case 'new-meeting-note': {
-          if (!commandsAPI.createMeetingNote) {
-            showLauncherMessage('Meetings are unavailable');
-            return;
-          }
-          const result = await commandsAPI.createMeetingNote();
-          await openMeetingResult(result, 'new-meeting-note-error', 'Could not create meeting note');
-          return;
-        }
-        case 'start-meeting-here': {
-          if (!commandsAPI.startMeetingHere) {
-            showLauncherMessage('Meetings are unavailable');
-            return;
-          }
-          const result = await commandsAPI.startMeetingHere();
-          await openMeetingResult(result, 'start-meeting-error', 'Could not start meeting');
-          return;
-        }
-        case 'stop-meeting': {
-          if (!commandsAPI.stopMeeting) {
-            showLauncherMessage('Meetings are unavailable');
-            return;
-          }
-          setQuery('Finalizing meeting...');
-          setFiltered([]);
-          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
-          const result = await commandsAPI.stopMeeting();
-          await openMeetingResult(result, 'stop-meeting-error', 'Could not stop meeting');
-          return;
-        }
-        case 'summarize-meeting': {
-          if (!commandsAPI.summarizeCurrentMeeting) {
-            showLauncherMessage('Meetings are unavailable');
-            return;
-          }
-          setQuery('Summarizing meeting...');
-          setFiltered([]);
-          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
-          const result = await commandsAPI.summarizeCurrentMeeting();
-          await openMeetingResult(result, 'summarize-meeting-error', 'Could not summarize meeting');
-          return;
-        }
         case 'toggle-theme':
           // Toggle dark/light mode
           (async () => {

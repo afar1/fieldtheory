@@ -21,19 +21,19 @@ const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 
 type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
 
-const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'meeting', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
+const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
 const DEFAULT_PINNED_TOOLBAR_ACTIONS: ToolbarActionId[] = PINNED_TOOLBAR_ACTION_ORDER;
 const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: ToolbarActionId[] }> = [
   { id: 'format', label: 'Format', actions: ['textstyle', 'contentmode', 'htmllayout'] },
   { id: 'copy', label: 'Copy', actions: ['copypath', 'copy', 'share'] },
   { id: 'field', label: 'Field Theory', actions: ['fieldtheory', 'agent'] },
-  { id: 'tools', label: 'Tools', actions: ['terminal', 'meeting'] },
+  { id: 'tools', label: 'Tools', actions: ['terminal'] },
   { id: 'view', label: 'View', actions: ['newwindow', 'immersive'] },
   { id: 'file', label: 'File', actions: ['folder', 'rename', 'edit'] },
 ];
 const VISIBLE_TOOLBAR_ACTION_GROUPS: Array<{ id: string; actions: ToolbarActionId[] }> = [
   { id: 'document', actions: ['textstyle', 'copypath'] },
-  { id: 'field', actions: ['meeting', 'fieldtheory', 'agent', 'share'] },
+  { id: 'field', actions: ['fieldtheory', 'agent', 'share'] },
   { id: 'view', actions: ['newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive'] },
   { id: 'file', actions: ['copy', 'folder', 'rename', 'edit'] },
 ];
