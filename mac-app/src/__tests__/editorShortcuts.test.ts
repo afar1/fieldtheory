@@ -11,6 +11,7 @@ import {
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isCopyFilePathShortcut,
   isHotkeyEvent,
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
@@ -49,6 +50,16 @@ function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
 afterEach(() => {
   document.body.innerHTML = '';
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+});
+
+describe('isCopyFilePathShortcut', () => {
+  it('accepts shifted Cmd+C as an uppercase key event', () => {
+    expect(isCopyFilePathShortcut(mkKey({ key: 'C', code: 'KeyC', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects plain Cmd+C so normal copy can keep working', () => {
+    expect(isCopyFilePathShortcut(mkKey({ key: 'c', code: 'KeyC', metaKey: true }))).toBe(false);
+  });
 });
 
 describe('isSearchFocusShortcut', () => {
