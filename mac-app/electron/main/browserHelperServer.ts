@@ -515,6 +515,11 @@ export class BrowserHelperServer {
       return;
     }
 
+    if (req.method === 'GET' && parsed.pathname === '/panel') {
+      this.writePanelRedirect(parsed, res, req.headers.origin);
+      return;
+    }
+
     if (!this.isAuthorized(req, parsed)) {
       writeJson(res, 401, { ok: false, error: 'Unauthorized' }, req.headers.origin);
       return;
@@ -1907,6 +1912,24 @@ export class BrowserHelperServer {
     } catch {
       return false;
     }
+  }
+
+  private writePanelRedirect(parsed: URL, res: http.ServerResponse, origin?: string): void {
+    const address = this.address();
+    const apiUrl = `http://${this.host}:${address.port}`;
+    const destination = new URL(`${apiUrl}/browser-library.html`);
+    destination.searchParams.set('api', apiUrl);
+    destination.searchParams.set('token', this.token);
+    for (const [key, value] of parsed.searchParams.entries()) {
+      if (key === 'api' || key === 'token') continue;
+      destination.searchParams.append(key, value);
+    }
+    res.writeHead(302, {
+      ...corsHeaders(origin),
+      Location: destination.toString(),
+      'Cache-Control': 'no-store',
+    });
+    res.end();
   }
 
   private writeStaticAsset(pathname: string, res: http.ServerResponse, origin?: string): boolean {
