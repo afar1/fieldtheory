@@ -37,6 +37,86 @@ DEFAULT_MODEL_PATH="$MODEL_DIR/$MODEL_FILENAME"
 MODEL_PATH="${FT_LOCAL_LLM_MODEL_PATH:-${FT_GEMMA_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
 MODEL_URL="${FT_GEMMA_MODEL_URL:-$DEFAULT_MODEL_URL}"
 HOME_DIR="${HOME:-}"
+CODEX_PROFILE_PATH="${FT_GEMMA_CODEX_PROFILE_PATH:-${HOME_DIR:+$HOME_DIR/.codex/gemma.config.toml}}"
+
+ensure_codex_gemma_profile() {
+  [[ "${FT_GEMMA_INSTALL_CODEX_PROFILE:-1}" != "0" ]] || return 0
+  [[ -n "$CODEX_PROFILE_PATH" ]] || return 0
+
+  mkdir -p "$(dirname "$CODEX_PROFILE_PATH")"
+  if [[ -f "$CODEX_PROFILE_PATH" ]] && ! grep -q 'Field Theory managed Gemma profile' "$CODEX_PROFILE_PATH"; then
+    echo "Codex Gemma profile already exists:"
+    echo "  $CODEX_PROFILE_PATH"
+    return 0
+  fi
+
+  cat > "$CODEX_PROFILE_PATH" <<'EOF'
+# Field Theory managed Gemma profile.
+# Use with: codex -p gemma
+
+[features]
+multi_agent = false
+memories = false
+goals = false
+js_repl = false
+
+[plugins."github@openai-curated"]
+enabled = false
+
+[plugins."documents@openai-primary-runtime"]
+enabled = false
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = false
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = false
+
+[plugins."gmail@openai-curated"]
+enabled = false
+
+[plugins."slack@openai-curated"]
+enabled = false
+
+[plugins."google-calendar@openai-curated"]
+enabled = false
+
+[plugins."figma@openai-curated"]
+enabled = false
+
+[plugins."vercel@openai-curated"]
+enabled = false
+
+[plugins."build-ios-apps@openai-curated"]
+enabled = false
+
+[plugins."linear@openai-curated"]
+enabled = false
+
+[plugins."openai-developers@openai-curated"]
+enabled = false
+
+[plugins."google-drive@openai-curated"]
+enabled = false
+
+[plugins."field-theory@personal"]
+enabled = true
+
+[plugins."compound-engineering@compound-engineering-plugin"]
+enabled = false
+
+[plugins."browser@openai-bundled"]
+enabled = false
+
+[plugins."chrome@openai-bundled"]
+enabled = false
+EOF
+
+  echo "Codex Gemma profile ready:"
+  echo "  $CODEX_PROFILE_PATH"
+}
+
+ensure_codex_gemma_profile
 
 file_size() {
   stat -L -f%z "$1" 2>/dev/null || stat -Lc%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo 0
