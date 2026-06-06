@@ -47,6 +47,22 @@ export interface CodexTerminalPageContext {
   contentMode: string;
   content: string;
   selectionText?: string;
+  lineMapping?: CodexTerminalLineMapping;
+}
+
+export interface CodexTerminalLineMappingLine {
+  visibleLine: number;
+  sourceLine: number;
+  rowInSourceLine?: number;
+  rowsInSourceLine?: number;
+  text: string;
+}
+
+export interface CodexTerminalLineMapping {
+  activeLineKind: 'source' | 'renderedVisual';
+  contentMode: string;
+  visibleRowsOnly?: boolean;
+  lines: CodexTerminalLineMappingLine[];
 }
 
 export interface CodexTerminalAttachedContext {
@@ -222,6 +238,7 @@ function writePageContextBundle(contextDirPath: string, sessionId: string, conte
       contentMode: context.contentMode || 'unknown',
       contentHash: crypto.createHash('sha256').update(context.content || '').digest('hex'),
       contentPath: activePath,
+      lineMapping: context.lineMapping ?? null,
     },
     selection: selectionText
       ? {

@@ -477,6 +477,27 @@ export function getRenderedDisplayReadingContent(input: {
   return input.activeReadingContent;
 }
 
+type CodexTerminalLineMapping = NonNullable<CodexTerminalPageContextInput['lineMapping']>;
+
+export function buildSourceLineMapping(content: string, options: {
+  contentMode: MarkdownContentMode;
+  sourceLineOffset?: number;
+  maxLines?: number;
+}): CodexTerminalLineMapping {
+  const sourceLineOffset = options.sourceLineOffset ?? 0;
+  const lines = content.split('\n').slice(0, options.maxLines ?? 400).map((text, index) => ({
+    visibleLine: index + 1,
+    sourceLine: sourceLineOffset + index + 1,
+    text,
+  }));
+  return {
+    activeLineKind: 'source',
+    contentMode: options.contentMode,
+    visibleRowsOnly: false,
+    lines,
+  };
+}
+
 export function getVerifiedMarkdownSelectionReplacement(
   value: string,
   selectionStart: number,
@@ -3356,6 +3377,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
   const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
+  const [codexTerminalLineMapRevision, setCodexTerminalLineMapRevision] = useState(0);
   const [terminalPastePopover, setTerminalPastePopover] = useState<TerminalPastePopover>(null);
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -3367,6 +3389,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
   const userResizingPanel = isResizing || codexTerminalResizing;
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
+  const codexTerminalLineMapRefreshFrameRef = useRef<number | null>(null);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
     containerWidth: responsivePanelSize.width,
@@ -3943,6 +3966,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const updateRenderedDocumentTopFade = useCallback((scrollEl: Pick<HTMLDivElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'> | null) => {
     const next = !!scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight > 1 && scrollEl.scrollTop > 1;
     setRenderedDocumentTopFade((current) => current === next ? current : next);
+  }, []);
+  const scheduleCodexTerminalLineMapRefresh = useCallback(() => {
+    if (!codexTerminalVisible || codexTerminalLineMapRefreshFrameRef.current !== null) return;
+    codexTerminalLineMapRefreshFrameRef.current = window.requestAnimationFrame(() => {
+      codexTerminalLineMapRefreshFrameRef.current = null;
+      setCodexTerminalLineMapRevision((revision) => revision + 1);
+    });
+  }, [codexTerminalVisible]);
+  useEffect(() => () => {
+    if (codexTerminalLineMapRefreshFrameRef.current !== null) {
+      window.cancelAnimationFrame(codexTerminalLineMapRefreshFrameRef.current);
+      codexTerminalLineMapRefreshFrameRef.current = null;
+    }
   }, []);
 
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
@@ -4697,22 +4733,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
-  const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
-    if (!activeReading) return null;
-    const kind: CodexTerminalPageContextInput['kind'] =
-      selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external'
-        ? selectedItemType
-        : 'unknown';
-    const selectionText = window.getSelection()?.toString().trim() || undefined;
-    return {
-      title: activeReading.title,
-      path: activeReading.path,
-      kind,
-      contentMode,
-      content: contentMode === 'markdown' ? editContent : activeReadingContent ?? activeReading.content,
-      selectionText,
-    };
-  }, [activeReading, activeReadingContent, contentMode, editContent, selectedItemType]);
   useLayoutEffect(() => {
     pendingScrollRatioRef.current = null;
     if (contentScrollRef.current) {
@@ -5633,6 +5653,48 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
+  const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
+    if (!activeReading) return null;
+    const kind: CodexTerminalPageContextInput['kind'] =
+      selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external'
+        ? selectedItemType
+        : 'unknown';
+    const selectionText = window.getSelection()?.toString().trim() || undefined;
+    const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(activeReading.content);
+    const renderedVisualRows = renderedMarkdownEditorRef.current?.getVisualLineMap() ?? [];
+    const renderedLineMapping: CodexTerminalLineMapping = renderedVisualRows.length > 0
+      ? {
+          activeLineKind: 'renderedVisual',
+          contentMode,
+          visibleRowsOnly: true,
+          lines: renderedVisualRows.slice(0, 400).map((line) => ({
+            visibleLine: line.visualLine,
+            sourceLine: bodyStartLineIndex + line.sourceLine,
+            rowInSourceLine: line.rowInSourceLine,
+            rowsInSourceLine: line.rowsInSourceLine,
+            text: line.sourceLineText,
+          })),
+        }
+      : {
+          ...buildSourceLineMapping(displaySourceBody, {
+            contentMode,
+            sourceLineOffset: bodyStartLineIndex,
+          }),
+          activeLineKind: 'renderedVisual',
+          visibleRowsOnly: false,
+        };
+    return {
+      title: activeReading.title,
+      path: activeReading.path,
+      kind,
+      contentMode,
+      content: contentMode === 'markdown' ? editContent : displaySourceBody,
+      selectionText,
+      lineMapping: contentMode === 'markdown'
+        ? buildSourceLineMapping(editContent, { contentMode })
+        : renderedLineMapping,
+    };
+  }, [activeReading, codexTerminalLineMapRevision, contentMode, displaySourceBody, editContent, selectedItemType]);
   const shouldLoadMarkdownLinkRelationDocuments = (
     active
     && !!activeReading
@@ -10883,7 +10945,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           data-ft-librarian-content-scroll="true"
           data-ft-quality-scroll={contentMode === 'markdown' ? undefined : 'rendered'}
           onScroll={(e) => {
-            if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
+            if (contentMode !== 'markdown') {
+              updateRenderedDocumentTopFade(e.currentTarget);
+              scheduleCodexTerminalLineMapRefresh();
+            }
           }}
           style={{
             flex: activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
