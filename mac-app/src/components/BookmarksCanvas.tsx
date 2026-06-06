@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '../utils/bookmarkMedia';
 import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
 import { formatLongBookmarkDate, formatShortBookmarkDate } from '../utils/bookmarkDate';
-import { copyBookmarkContent, sendBookmarkToCodex } from '../utils/bookmarkCopy';
+import { copyBookmarkContent } from '../utils/bookmarkCopy';
 
 const CONFIG = {
   MIN_COLS: 2,
@@ -201,7 +201,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const copyBtnRef = useRef<HTMLButtonElement | null>(null);
   const openBtnRef = useRef<HTMLButtonElement | null>(null);
-  const codexBtnRef = useRef<HTMLButtonElement | null>(null);
   const agentCopyBtnRef = useRef<HTMLButtonElement | null>(null);
   const controllerRef = useRef<Controller | null>(null);
 
@@ -218,9 +217,8 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     const closeBtn = closeBtnRef.current;
     const copyBtn = copyBtnRef.current;
     const openBtn = openBtnRef.current;
-    const codexBtn = codexBtnRef.current;
     const agentCopyBtn = agentCopyBtnRef.current;
-    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !dateEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn || !codexBtn || !agentCopyBtn) return;
+    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !dateEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn || !agentCopyBtn) return;
 
     const openExternalUrl = (url: string) => {
       // Always route through shell.openExternal so URLs open in the user's
@@ -414,50 +412,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         const dateBadgeEl = document.createElement('div');
         dateBadgeEl.className = 'bm-date-badge';
         el.appendChild(dateBadgeEl);
-
-        const cardCodexBtn = document.createElement('button');
-        cardCodexBtn.className = 'bm-card-action-button bm-card-codex-button';
-        cardCodexBtn.type = 'button';
-        cardCodexBtn.setAttribute('aria-label', 'Send bookmark to Codex');
-        cardCodexBtn.title = 'Send bookmark to Codex';
-        cardCodexBtn.innerHTML = `
-          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
-            <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" opacity="0.82"></path>
-            <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" stroke-width="0.75" stroke-linecap="round" opacity="0.38"></path>
-          </svg>
-        `;
-        const onCardCodexMouseDown = (event: MouseEvent) => {
-          event.preventDefault();
-          event.stopPropagation();
-        };
-        const onCardCodexMouseUp = (event: MouseEvent) => {
-          event.preventDefault();
-          event.stopPropagation();
-        };
-        const onCardCodexClick = (event: MouseEvent) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const bookmark = elToBookmark.get(el);
-          if (!bookmark) return;
-          void sendBookmarkToCodex(bookmark.id).then((success) => {
-            if (!success) return;
-            cardCodexBtn.dataset.copied = '1';
-            onActionFeedback?.('Bookmark sent to Codex');
-            window.setTimeout(() => {
-              delete cardCodexBtn.dataset.copied;
-            }, 1200);
-          });
-        };
-        cardCodexBtn.addEventListener('mousedown', onCardCodexMouseDown);
-        cardCodexBtn.addEventListener('mouseup', onCardCodexMouseUp);
-        cardCodexBtn.addEventListener('click', onCardCodexClick);
-        cardCopyButtonCleanups.push(() => {
-          cardCodexBtn.removeEventListener('mousedown', onCardCodexMouseDown);
-          cardCodexBtn.removeEventListener('mouseup', onCardCodexMouseUp);
-          cardCodexBtn.removeEventListener('click', onCardCodexClick);
-        });
-        el.appendChild(cardCodexBtn);
 
         const cardCopyBtn = document.createElement('button');
         cardCopyBtn.className = 'bm-card-action-button bm-card-copy-button';
@@ -683,7 +637,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       el.style.visibility = 'hidden';
 
       const clone = el.cloneNode(true) as HTMLDivElement;
-      clone.querySelector('.bm-card-codex-button')?.remove();
       clone.querySelector('.bm-card-copy-button')?.remove();
       clone.style.position = 'fixed';
       clone.style.top = '0';
@@ -1077,21 +1030,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       }
     };
 
-    const onCodexClick = async (e: MouseEvent) => {
-      e.stopPropagation();
-      const bm = state.lightbox?.bookmark;
-      if (!bm) return;
-      try {
-        const success = await sendBookmarkToCodex(bm.id);
-        if (!success) throw new Error('Send failed');
-        codexBtn.dataset.copied = '1';
-        onActionFeedback?.('Bookmark sent to Codex');
-        scheduleCopyReset(() => { delete codexBtn.dataset.copied; });
-      } catch (err) {
-        console.error('[BookmarksCanvas] send to Codex failed', err);
-      }
-    };
-
     let rafId: number | null = null;
     const loop = () => {
       rafId = requestAnimationFrame(loop);
@@ -1132,7 +1070,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     overlay.addEventListener('click', onOverlayClick);
     closeBtn.addEventListener('click', onCloseClick);
     copyBtn.addEventListener('click', onCopyClick);
-    codexBtn.addEventListener('click', onCodexClick);
     agentCopyBtn.addEventListener('click', onAgentCopyClick);
     openBtn.addEventListener('click', onOpenClick);
     linkEl.addEventListener('click', onLinkClick);
@@ -1178,7 +1115,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         overlay.removeEventListener('click', onOverlayClick);
         closeBtn.removeEventListener('click', onCloseClick);
         copyBtn.removeEventListener('click', onCopyClick);
-        codexBtn.removeEventListener('click', onCodexClick);
         agentCopyBtn.removeEventListener('click', onAgentCopyClick);
         openBtn.removeEventListener('click', onOpenClick);
         linkEl.removeEventListener('click', onLinkClick);
@@ -1274,9 +1210,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         .bm-card-copy-button {
           right: 10px;
         }
-        .bm-card-codex-button {
-          right: 46px;
-        }
         .bm-grid-item:hover .bm-card-action-button,
         .bm-card-action-button[data-copied="1"] {
           opacity: 1;
@@ -1312,9 +1245,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         .bm-agent-copied-label { display: none; }
         button[data-copied="1"] .bm-agent-copy-label { display: none; }
         button[data-copied="1"] .bm-agent-copied-label { display: inline; }
-        .bm-codex-sent-label { display: none; }
-        button[data-copied="1"] .bm-codex-send-label { display: none; }
-        button[data-copied="1"] .bm-codex-sent-label { display: inline; }
         .bm-date-badge {
           position: absolute;
           right: 10px;
@@ -1546,37 +1476,6 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
             }}
           />
           <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              ref={codexBtnRef}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                minWidth: '136px',
-                justifyContent: 'center',
-                padding: '8px 16px',
-                borderRadius: '100px',
-                backgroundColor: closeBtnBg,
-                border: `1px solid ${closeBtnBorder}`,
-                color: theme.text,
-                fontSize: '13px',
-                fontWeight: 500,
-                fontFamily: 'inherit',
-                cursor: 'pointer',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                transition: 'background 0.2s ease',
-              }}
-              aria-label="Paste bookmark to Codex"
-            >
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M10 1.8 16.95 5.8v8L10 17.8l-6.95-4v-8L10 1.8Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
-                <path d="M10 1.8v7.95m0 8.05V9.75M3.05 5.8 10 9.75l6.95-3.95M3.05 13.8 10 9.75l6.95 4.05" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" opacity="0.82" />
-                <path d="M6.65 4.05 13.4 15.6M13.35 4.05 6.6 15.6" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" opacity="0.38" />
-              </svg>
-              <span className="bm-codex-send-label">Paste to Codex</span>
-              <span className="bm-codex-sent-label">Sent!</span>
-            </button>
             <button
               ref={agentCopyBtnRef}
               style={{
