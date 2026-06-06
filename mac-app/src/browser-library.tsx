@@ -2144,8 +2144,6 @@ function BrowserLibrarySurface(props: {
 
   const resolveFieldTheoryNativeOpenTarget = React.useCallback(async (): Promise<FieldTheoryMarkdownTarget> => {
     if (surface === 'commands') return { kind: 'commands', path: 'commands' };
-    if (activeClientSurface === 'bookmarks') return { kind: 'bookmarks', path: 'bookmarks' };
-    if (activeClientSurface === 'ember') return { kind: 'ember', path: 'ember' };
     const context = await window.commandsAPI?.getActiveLibraryFileContext?.().catch(() => null);
     if (context?.type === 'wiki' && context.relPath) {
       return { kind: 'wiki', path: context.relPath, contentMode: 'rendered' };
@@ -2153,6 +2151,8 @@ function BrowserLibrarySurface(props: {
     if (context?.filePath) {
       return { kind: 'external', path: context.filePath, contentMode: 'rendered' };
     }
+    if (activeClientSurface === 'bookmarks') return { kind: 'bookmarks', path: 'bookmarks' };
+    if (activeClientSurface === 'ember') return { kind: 'ember', path: 'ember' };
     return { kind: 'library', path: 'library' };
   }, [activeClientSurface, surface]);
   const openCurrentTargetInFieldTheory = React.useCallback(() => {

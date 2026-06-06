@@ -11,7 +11,8 @@ import { SidebarMarkdownIcon, SidebarRiverIcon } from './SidebarIcons';
 const ICON_SIZE = 16; // ~22% larger than 13px
 const ICON_SIZE_SMALL = 13; // Standard size for less prominent icons
 const COPY_PATH_FEEDBACK_MS = 1600;
-const FIELD_THEORY_ICON_URL = `${import.meta.env.BASE_URL}field-theory-icon-black.png`;
+const FIELD_THEORY_ICON_DARK_URL = `${import.meta.env.BASE_URL}fieldtheory-icon.png`;
+const FIELD_THEORY_ICON_LIGHT_URL = `${import.meta.env.BASE_URL}field-theory-icon-black.png`;
 const CONTENT_TOOLBAR_PINNED_ACTIONS_STORAGE_KEY = 'fieldtheory.contentToolbar.pinnedActions.v2';
 const CONTENT_TOOLBAR_SCALE = 0.88;
 const CONTENT_TOOLBAR_RESTING_OPACITY = 0.6;
@@ -380,6 +381,7 @@ export function ContentToolbarMaxwellButton({
   const menuDivider = theme.border;
   const sortedItems = [...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
   const currentItemSaved = Boolean(currentItemId && items.some((item) => item.id === currentItemId));
+  const fieldTheoryIconUrl = theme.isDark ? FIELD_THEORY_ICON_DARK_URL : FIELD_THEORY_ICON_LIGHT_URL;
 
   useEffect(() => {
     onMenuOpenChange?.(maxwellMenuOpen);
@@ -426,7 +428,7 @@ export function ContentToolbarMaxwellButton({
         }}
       >
         <img
-          src={FIELD_THEORY_ICON_URL}
+          src={fieldTheoryIconUrl}
           alt=""
           aria-hidden="true"
           draggable={false}
@@ -436,7 +438,7 @@ export function ContentToolbarMaxwellButton({
             display: 'block',
             objectFit: 'contain',
             opacity: theme.isDark ? (maxwellMenuOpen ? 1 : 0.88) : (maxwellMenuOpen ? 0.94 : 0.72),
-            filter: theme.isDark ? 'invert(1) brightness(1.35) contrast(1.08)' : 'none',
+            filter: 'none',
           }}
         />
       </button>
@@ -839,6 +841,7 @@ export default function ContentToolbar({
   const toolbarIconMuted = theme.textSecondary;
   const toolbarIconPrimary = theme.textSecondary;
   const toolbarIconStrong = theme.text;
+  const fieldTheoryIconUrl = theme.isDark ? FIELD_THEORY_ICON_DARK_URL : FIELD_THEORY_ICON_LIGHT_URL;
   const toolbarHover = theme.isDark ? theme.surface3 : theme.surface2;
   const toolbarActiveBackground = theme.isDark ? theme.surface3 : theme.surface2;
   const toolbarDropdownOpen = typographyMenuOpen || customizeMenuOpen || maxwellMenuOpen;
@@ -1174,11 +1177,11 @@ export default function ContentToolbar({
                                 <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                                   {id === 'fieldtheory' ? (
                                     <img
-                                      src={FIELD_THEORY_ICON_URL}
+                                      src={fieldTheoryIconUrl}
                                       alt=""
                                       aria-hidden="true"
                                       draggable={false}
-                                      style={{ width: '14px', height: '14px', display: 'block', objectFit: 'contain', opacity: theme.isDark ? 0.88 : 0.72, filter: theme.isDark ? 'invert(1) brightness(1.35) contrast(1.08)' : 'none' }}
+                                      style={{ width: '14px', height: '14px', display: 'block', objectFit: 'contain', opacity: theme.isDark ? 0.88 : 0.72, filter: 'none' }}
                                     />
                                   ) : renderToolbarIcon(id)}
                                 </span>

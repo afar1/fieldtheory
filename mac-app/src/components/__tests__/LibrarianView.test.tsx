@@ -14,7 +14,6 @@ import LibrarianView, {
   restoreLibrarianHtmlLayoutByPath,
   resolveCurrentWikiCreateFolder,
   getFocusChromeContentCenterX,
-  getBrowserSelectionPastePopoverPosition,
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
@@ -63,15 +62,7 @@ describe('LibrarianView render', () => {
   ]);
   let toggleLineNumbersFromLauncher: (() => void) | null = null;
 
-  it('places the Browser selection paste button to the left of line numbers', () => {
-    expect(getBrowserSelectionPastePopoverPosition(
-      { top: 100, height: 24, left: 280, right: 520 },
-      { width: 900, height: 700 },
-      { left: 220, right: 240 },
-    )).toEqual({ top: 97, left: 130 });
-  });
-
-  it('keeps the Browser paste button alive for CodeMirror editor selections', () => {
+  it('keeps the selection paste popover alive for CodeMirror editor selections', () => {
     const editor = document.createElement('div');
     editor.className = 'cm-editor';
     const content = document.createElement('div');
@@ -2149,7 +2140,7 @@ describe('LibrarianView render', () => {
     expect(readerPane?.style.overflow).toBe('hidden');
   });
 
-  it('pastes selected rendered text to the Codex host input in Browser mode', async () => {
+  it('does not show the selected-text Codex paste button in Browser mode', async () => {
     const relPath = 'scratchpad/browser-library-codex-selection-test';
     const page: WikiPage = {
       relPath,
@@ -2160,17 +2151,13 @@ describe('LibrarianView render', () => {
       content: 'Selected body for Codex',
       documentVersion: { mtimeMs: 1, size: 23, sha256: 'browser-codex-selection' },
     };
-    const onActionFeedback = vi.fn();
-
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.shellAPI!.pasteIntoCodexInput!).mockResolvedValue({ success: true });
 
     render(
       <LibrarianView
         browserLibrarySurface
         sidebarCollapsed={false}
         onSwitchToClipboard={vi.fn()}
-        onActionFeedback={onActionFeedback}
         initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
       />
     );
@@ -2205,15 +2192,8 @@ describe('LibrarianView render', () => {
       fireEvent.mouseUp(window);
     });
 
-    const pasteButton = await screen.findByRole('button', { name: 'Paste selection to Codex input' });
-    await act(async () => {
-      fireEvent.click(pasteButton);
-    });
-
-    await waitFor(() => {
-      expect(window.shellAPI!.pasteIntoCodexInput).toHaveBeenCalledWith('Selected body for Codex');
-    });
-    expect(onActionFeedback).toHaveBeenCalledWith('Selection sent to Codex');
+    expect(screen.queryByRole('button', { name: 'Paste selection to Codex input' })).toBeNull();
+    expect(window.shellAPI!.pasteIntoCodexInput).not.toHaveBeenCalled();
   });
 
   it('centers copy feedback over the reader content instead of the terminal', async () => {
