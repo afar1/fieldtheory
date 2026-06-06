@@ -57,6 +57,7 @@ import {
   getMarkdownListShortcutKind,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isCopyFilePathShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
   isLineNumbersToggleShortcut,
@@ -9468,7 +9469,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      if (e.key === 'c' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && activeReading?.path) {
+      if (isCopyFilePathShortcut(e) && activeReading?.path) {
         e.preventDefault();
         void copyActiveReadingPath();
         return;
