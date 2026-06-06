@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
+import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 
 const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
@@ -9,6 +10,9 @@ const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Applicati
 describe('FieldTheoryProse', () => {
   afterEach(() => {
     delete window.fieldTheoryLocalImageAPI;
+    delete window.fieldTheoryBookmarkMediaAPI;
+    delete window.bookmarksAPI;
+    resetBookmarksCacheForTests();
   });
 
   it('renders GFM tables, task lists, and line breaks', () => {
@@ -135,6 +139,45 @@ describe('FieldTheoryProse', () => {
 
   it('routes file image URLs through the Field Theory local-file protocol', () => {
     expect(localFileUrlToFieldTheoryUrl(LOCAL_SCREENSHOT_URL)).toBe(LOCAL_SCREENSHOT_RENDER_URL);
+  });
+
+  it('renders bookmark image markdown as a native bookmark card', async () => {
+    window.fieldTheoryBookmarkMediaAPI = {
+      mediaUrl: (filename) => `/native/bookmarks/media/${filename}`,
+    };
+    window.bookmarksAPI = {
+      getAll: vi.fn(async () => ({
+        bookmarks: [{
+          id: 'bookmark-1',
+          sourceType: 'x',
+          text: 'Bookmark text with native media.',
+          url: 'https://x.com/afar/status/1',
+          authorHandle: 'afar',
+          authorName: 'Afar',
+          authorAvatar: '',
+          postedAt: '2026-01-01T00:00:00Z',
+          images: [{ url: '', localFilename: 'media-1.jpg', width: 640, height: 360, type: 'photo' }],
+          mediaCount: 1,
+          likeCount: 0,
+          repostCount: 0,
+          bookmarkCount: 0,
+          folders: [],
+        }],
+        folders: [],
+        xLastSyncedAt: null,
+      })),
+      onChanged: vi.fn(() => () => {}),
+    } as unknown as Window['bookmarksAPI'];
+
+    render(
+      <FieldTheoryProse>
+        {'![Saved post](bookmark://bookmark-1)'}
+      </FieldTheoryProse>
+    );
+
+    await waitFor(() => expect(screen.getByText('Bookmark text with native media.')).toBeTruthy());
+    expect(screen.getByText('Afar')).toBeTruthy();
+    expect(document.querySelector('img[src="/native/bookmarks/media/media-1.jpg"]')).toBeTruthy();
   });
 
   it('keeps unsafe image URLs stripped', () => {
