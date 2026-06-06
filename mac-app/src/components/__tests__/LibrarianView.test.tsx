@@ -2193,6 +2193,7 @@ describe('LibrarianView render', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Paste selection to Codex input' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Paste selection to terminal' })).toBeNull();
     expect(window.shellAPI!.pasteIntoCodexInput).not.toHaveBeenCalled();
   });
 
