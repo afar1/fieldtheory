@@ -1040,6 +1040,37 @@ describe('BrowserLibraryApp', () => {
     expect(await screen.findByText('Opened in Field Theory')).toBeTruthy();
   });
 
+  it('opens the Library root in the native Field Theory app from the floating button', async () => {
+    const openFieldTheoryMarkdown = vi.fn(async () => ({ success: true }));
+    window.commandsAPI!.getActiveLibraryFileContext = vi.fn(async () => null);
+    Object.defineProperty(window, 'shellAPI', {
+      configurable: true,
+      value: {
+        openFieldTheoryMarkdown,
+      },
+    });
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = () => <div data-testid="library-view">Library</div>;
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    const button = await screen.findByLabelText('Open app');
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(openFieldTheoryMarkdown).toHaveBeenCalledWith({
+      kind: 'library',
+      path: 'library',
+    }));
+  });
+
   it('keeps the native Field Theory escape hatch while Library immersive reading is active', async () => {
     const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
     const LibrarianView = (props: {
