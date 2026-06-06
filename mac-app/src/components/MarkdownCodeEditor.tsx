@@ -144,6 +144,7 @@ export interface MarkdownCodeEditorHandle {
   getValue: () => string;
   getSelectionRange: () => { start: number; end: number };
   getSelectionSnapshot: () => MarkdownCodeEditorSelectionSnapshot | null;
+  getVisualLineMap: () => MarkdownCodeEditorVisualLine[];
   setSelectionRange: (start: number, end: number) => void;
   scrollTop: number;
   scrollHeight: number;
@@ -159,6 +160,14 @@ export interface MarkdownCodeEditorSourcePosition {
   lineLength: number;
   before: string;
   after: string;
+}
+
+export interface MarkdownCodeEditorVisualLine {
+  visualLine: number;
+  sourceLine: number;
+  rowInSourceLine: number;
+  rowsInSourceLine: number;
+  sourceLineText: string;
 }
 
 export interface MarkdownCodeEditorSelectionSnapshot {
@@ -531,6 +540,36 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
     rows,
     signature: signatureParts.join('|'),
   };
+}
+
+export function getMarkdownCodeEditorVisualLineMap(view: EditorView): MarkdownCodeEditorVisualLine[] {
+  const lineHeight = getMeasuredEditorLineHeight(view);
+  const blocks = view.viewportLineBlocks;
+  const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
+  let visualLineNumber = blocks.length > 0 ? view.state.doc.lineAt(blocks[0].from).number : 1;
+  const rows: MarkdownCodeEditorVisualLine[] = [];
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    const line = view.state.doc.lineAt(block.from);
+    const lineElement = getLineElementForBlock(view, line, lineElements[index]);
+    const rangeTops = lineElement ? getVisualLineRowTopsFromElement(lineElement, lineHeight) : [];
+    const fallbackTop = view.documentTop + block.top;
+    const rowTops = rangeTops.length > 0 ? rangeTops : (line.text.trim() === '' ? [fallbackTop] : []);
+    if (rowTops.length === 0) continue;
+    for (let rowIndex = 0; rowIndex < rowTops.length; rowIndex += 1) {
+      rows.push({
+        visualLine: visualLineNumber,
+        sourceLine: line.number,
+        rowInSourceLine: rowIndex + 1,
+        rowsInSourceLine: rowTops.length,
+        sourceLineText: line.text,
+      });
+      visualLineNumber += 1;
+    }
+  }
+
+  return rows;
 }
 
 export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
@@ -3902,6 +3941,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         getSelectionSnapshot: () => {
           const view = viewRef.current;
           return view ? getMarkdownCodeEditorSelectionSnapshot(view) : null;
+        },
+        getVisualLineMap: () => {
+          const view = viewRef.current;
+          return view ? getMarkdownCodeEditorVisualLineMap(view) : [];
         },
         setSelectionRange: (start, end) => {
           const view = viewRef.current;
