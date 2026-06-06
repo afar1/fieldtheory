@@ -47,7 +47,7 @@ import {
   shouldPromoteBrowserLibraryClientContext,
   shouldTargetBrowserLibraryNavigation,
 } from './browserLibraryActiveContext';
-import { buildBrowserLibraryUrl } from './browserLibraryUrl';
+import { buildBrowserLibraryUrl, buildBrowserPanelRedirectUrl } from './browserLibraryUrl';
 import {
   LibraryDocumentWindowManager,
   persistableLibraryDocumentWindowBounds,
@@ -3857,7 +3857,8 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   const address = await browserHelperServer.start();
   const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
   const browserUrl = buildBrowserLibraryUrl({ address, devServer });
-  writeBrowserHelperState({ address, browserUrl });
+  const panelUrl = devServer ? undefined : buildBrowserPanelRedirectUrl(address);
+  writeBrowserHelperState({ address, browserUrl, panelUrl });
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }
 let librarySyncService: LibrarySyncService | null = null;
