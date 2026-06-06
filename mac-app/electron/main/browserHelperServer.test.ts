@@ -292,6 +292,21 @@ describe('BrowserHelperServer', () => {
     expect(traversal.status).toBe(404);
   });
 
+  it('redirects clean panel links to the current authenticated browser UI', async () => {
+    const { address } = await startServer();
+
+    const response = await request(`http://${address.host}:${address.port}/panel?target=${encodeURIComponent(JSON.stringify({ kind: 'library' }))}`);
+
+    expect(response.status).toBe(302);
+    const location = String(response.headers.location ?? '');
+    const redirected = new URL(location);
+    expect(redirected.origin).toBe(`http://${address.host}:${address.port}`);
+    expect(redirected.pathname).toBe('/browser-library.html');
+    expect(redirected.searchParams.get('api')).toBe(`http://${address.host}:${address.port}`);
+    expect(redirected.searchParams.get('token')).toBe('test-token');
+    expect(redirected.searchParams.get('target')).toBe('{"kind":"library"}');
+  });
+
   it('allows built browser assets to load with the helper auth cookie set by html', async () => {
     const { address } = await startServer();
 

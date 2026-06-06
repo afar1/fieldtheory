@@ -9,6 +9,7 @@ export type BrowserHelperState = {
   port: number;
   token: string;
   browserUrl: string;
+  panelUrl?: string;
   pid: number;
   startedAt: string;
 };
@@ -21,6 +22,7 @@ export function browserHelperStatePath(): string {
 export function writeBrowserHelperState(input: {
   address: BrowserHelperServerAddress;
   browserUrl: string;
+  panelUrl?: string;
   now?: Date;
 }): void {
   const filePath = browserHelperStatePath();
@@ -31,6 +33,7 @@ export function writeBrowserHelperState(input: {
     port: input.address.port,
     token: input.address.token,
     browserUrl: input.browserUrl,
+    ...(input.panelUrl ? { panelUrl: input.panelUrl } : {}),
     pid: process.pid,
     startedAt: (input.now ?? new Date()).toISOString(),
   };

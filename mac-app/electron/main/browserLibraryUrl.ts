@@ -46,3 +46,8 @@ export function buildBrowserLibraryUrl(input: {
   appendBrowserLibraryTargetParams(url, input.target);
   return url.toString();
 }
+
+export function buildBrowserPanelRedirectUrl(address: BrowserHelperServerAddress): string {
+  const url = new URL(`http://${address.host}:${address.port}/panel`);
+  return url.toString();
+}

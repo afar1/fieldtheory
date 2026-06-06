@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBrowserLibraryUrl } from './browserLibraryUrl';
+import { buildBrowserLibraryUrl, buildBrowserPanelRedirectUrl } from './browserLibraryUrl';
 
 const address = {
   host: '127.0.0.1',
@@ -48,5 +48,13 @@ describe('buildBrowserLibraryUrl', () => {
     expect(url.searchParams.get('token')).toBe('test-token');
     expect(url.searchParams.get('target')).toBeNull();
     expect(url.searchParams.get('kind')).toBe('bookmarks');
+  });
+
+  it('builds clean helper panel redirect URLs without helper tokens', () => {
+    const url = new URL(buildBrowserPanelRedirectUrl(address));
+
+    expect(url.origin).toBe('http://127.0.0.1:59971');
+    expect(url.pathname).toBe('/panel');
+    expect(url.search).toBe('');
   });
 });
