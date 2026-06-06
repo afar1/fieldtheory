@@ -22,6 +22,10 @@ export function isCommandFindShortcut(e: KeyboardEvent | React.KeyboardEvent): b
   return e.key === 'f' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function isCopyFilePathShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return (e.key.toLowerCase() === 'c' || e.code === 'KeyC') && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
 export function isImmersiveToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return (e.key === '/' || e.code === 'Slash') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
