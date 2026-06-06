@@ -173,4 +173,67 @@ describe('TeamSettings', () => {
     });
     expect(onLeaveTeam).toHaveBeenCalledTimes(1);
   });
+
+  it('locks all team actions when disabled', async () => {
+    const onInviteMember = vi.fn();
+    const onRespondToInvite = vi.fn();
+    const onRemoveMember = vi.fn();
+    const onLeaveTeam = vi.fn();
+
+    const { unmount } = renderTeamSettings({
+      currentUserRole: 'owner',
+      members: [ownerMember, teammate],
+      pendingInvites: [{
+        contactId: 'incoming-andrew',
+        email: 'andrew@example.com',
+        direction: 'incoming',
+        invitedByName: 'Andrew',
+      }],
+    }, {
+      disabled: true,
+      onInviteMember,
+      onRespondToInvite,
+      onRemoveMember,
+      onLeaveTeam,
+    });
+
+    expect(screen.getByText('Team is temporarily locked.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Decline' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('textbox', { name: 'Teammate email' }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Invite teammate' }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Decline' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Invite teammate' }));
+    });
+
+    expect(onInviteMember).not.toHaveBeenCalled();
+    expect(onRespondToInvite).not.toHaveBeenCalled();
+    expect(onRemoveMember).not.toHaveBeenCalled();
+
+    unmount();
+
+    renderTeamSettings({
+      currentUserRole: 'member',
+      members: [
+        { ...ownerMember, isCurrentUser: false },
+        { ...teammate, isCurrentUser: true },
+      ],
+      pendingInvites: [],
+    }, {
+      disabled: true,
+      onLeaveTeam,
+    });
+
+    expect((screen.getByRole('button', { name: 'Leave Andrew' }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Leave Andrew' }));
+    });
+
+    expect(onLeaveTeam).not.toHaveBeenCalled();
+  });
 });
