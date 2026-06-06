@@ -3381,7 +3381,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const effectiveCodexTerminalVisible = codexTerminalAvailable
     && codexTerminalVisible
     && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
-  const selectionPastePopoverAvailable = effectiveCodexTerminalVisible;
+  const selectionPastePopoverAvailable = false;
   const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
     responsivePanelState,
     userResizing: userResizingPanel,
