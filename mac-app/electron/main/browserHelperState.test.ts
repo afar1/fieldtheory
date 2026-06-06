@@ -25,6 +25,7 @@ describe('browserHelperState', () => {
         url: 'http://127.0.0.1:59971/?token=test-token',
       },
       browserUrl: 'http://127.0.0.1:59971/browser-library.html?api=http%3A%2F%2F127.0.0.1%3A59971&token=test-token',
+      panelUrl: 'http://127.0.0.1:59971/panel',
       now: new Date('2026-06-02T12:00:00.000Z'),
     });
 
@@ -38,6 +39,7 @@ describe('browserHelperState', () => {
       startedAt: '2026-06-02T12:00:00.000Z',
     });
     expect(state.browserUrl).toContain('/browser-library.html');
+    expect(state.panelUrl).toBe('http://127.0.0.1:59971/panel');
     expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
 
     clearBrowserHelperState();
