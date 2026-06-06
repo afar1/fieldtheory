@@ -3778,7 +3778,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       setRendererStorage: (key, value) => setBrowserLibraryRendererStorage(key, value),
       appendRenderedEditorDebug: (entry) => writeRenderedEditorDebugLog(entry),
       clearRenderedEditorDebugLog: () => clearRenderedEditorDebugLog(),
-      getActiveLibraryFileContext: () => activeLibraryFileContext,
+      getActiveLibraryFileContext: () => getActiveBrowserLibraryPanelContext() ?? activeLibraryFileContext,
     },
     reportCurrentDocument: (context, clientId) => {
       const windowId = browserLibraryWindowId(clientId);
@@ -3928,6 +3928,13 @@ function activeLibraryFileContextFromPresence(context: DocumentPresenceContext):
     }
   }
   return next;
+}
+
+function getActiveBrowserLibraryPanelContext(): ActiveLibraryFileContext | null {
+  if (activeBrowserLibrarySurfaceKind !== 'library' || !activeBrowserLibrarySurfaceClientId) return null;
+  const context = browserLibraryContextByClientId.get(activeBrowserLibrarySurfaceClientId);
+  if (!context || !shouldAcceptActiveLibraryFileContext(context)) return null;
+  return activeLibraryFileContextFromPresence(context);
 }
 
 function archiveActiveLibraryFileForLauncher(): { success: boolean; error?: string } {
