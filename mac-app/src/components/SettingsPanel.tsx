@@ -2348,6 +2348,7 @@ export default function SettingsPanel({
       <div style={styles.sectionStack}>
         <TeamSettings
           state={teamSettingsState}
+          disabled
           onInviteMember={(email) => handleTeamMutation(() => window.teamAPI?.inviteMember(email))}
           onRespondToInvite={(contactId, accept) => handleTeamMutation(() => window.teamAPI?.respondToInvite(contactId, accept))}
           onRemoveMember={(contactId) => handleTeamMutation(() => window.teamAPI?.removeMember(contactId))}
