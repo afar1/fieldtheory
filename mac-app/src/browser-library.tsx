@@ -2164,6 +2164,7 @@ function BrowserLibrarySurface(props: {
   }, [resolveFieldTheoryNativeOpenTarget, showActionFeedback]);
   const fieldTheoryButtonVisible = (
     surface === 'commands'
+    || surface === 'library'
     || activeClientSurface === 'bookmarks'
     || activeClientSurface === 'ember'
     || Boolean(activeLibraryFile)
