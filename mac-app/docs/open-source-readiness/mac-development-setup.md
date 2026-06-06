@@ -106,6 +106,8 @@ Gemma/local model setup is separate:
 npm run build:gemma
 ```
 
+This also creates `~/.codex/gemma.config.toml`, a thin Codex profile for local Gemma runs that keeps Field Theory available but disables unrelated plugin skill catalogs. Use it with `codex -p gemma` or a local Gemma wrapper that passes `-p gemma`.
+
 Model binaries are not tracked in the repository. Public docs should distinguish the source code license from model licenses and provider terms.
 
 ## Known setup gaps before public release
