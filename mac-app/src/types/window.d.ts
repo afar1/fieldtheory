@@ -2895,6 +2895,18 @@ interface CodexTerminalPageContext {
   contentMode: string;
   content: string;
   selectionText?: string;
+  lineMapping?: {
+    activeLineKind: 'source' | 'renderedVisual';
+    contentMode: string;
+    visibleRowsOnly?: boolean;
+    lines: Array<{
+      visibleLine: number;
+      sourceLine: number;
+      rowInSourceLine?: number;
+      rowsInSourceLine?: number;
+      text: string;
+    }>;
+  };
 }
 
 interface CodexTerminalAttachResult {

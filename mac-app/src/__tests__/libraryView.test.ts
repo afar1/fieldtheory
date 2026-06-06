@@ -18,6 +18,7 @@ import {
   getRenderedMarkdownEnterEdit,
   getRenderedMarkdownPasteTextEdit,
   getRenderedDisplayReadingContent,
+  buildSourceLineMapping,
   getRenderedMarkdownShortcutEdit,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
@@ -1102,6 +1103,28 @@ describe('getRenderedDisplayReadingContent', () => {
       renderedDisplayContent: { path: '/notes/b.md', content: 'other file' },
       activeReadingContent: 'current file',
     })).toBe('current file');
+  });
+});
+
+describe('buildSourceLineMapping', () => {
+  it('maps visible lines directly to source lines in markdown mode', () => {
+    expect(buildSourceLineMapping('one\ntwo', { contentMode: 'markdown' })).toEqual({
+      activeLineKind: 'source',
+      contentMode: 'markdown',
+      visibleRowsOnly: false,
+      lines: [
+        { visibleLine: 1, sourceLine: 1, text: 'one' },
+        { visibleLine: 2, sourceLine: 2, text: 'two' },
+      ],
+    });
+  });
+
+  it('can offset body lines back to their source document lines', () => {
+    expect(buildSourceLineMapping('body', { contentMode: 'rendered', sourceLineOffset: 14 }).lines[0]).toEqual({
+      visibleLine: 1,
+      sourceLine: 15,
+      text: 'body',
+    });
   });
 });
 

@@ -527,6 +527,7 @@ describe('CodexTerminalManager', () => {
           kind: 'external',
           contentMode: 'rendered',
           contentPath: join(contextDirPath, 'sessions', session.id, 'active.md'),
+          lineMapping: null,
         },
         selection: null,
         recent: [],
@@ -554,6 +555,53 @@ describe('CodexTerminalManager', () => {
       expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(ptys[0].written).toHaveLength(1);
+    } finally {
+      rmSync(contextDirPath, { recursive: true, force: true });
+    }
+  });
+
+  it('writes active document line mapping into the context manifest', () => {
+    const contextDirPath = mkdtempSync(join(tmpdir(), 'codex-terminal-context-lines-'));
+    const { manager } = createManager(1024, {
+      contextDirPath,
+    });
+    const session = manager.createSession();
+
+    try {
+      const result = manager.attachPageContext(session.id, {
+        title: 'Visible lines',
+        path: '/tmp/lines.md',
+        kind: 'external',
+        contentMode: 'rendered',
+        content: 'first\nsecond',
+        lineMapping: {
+          activeLineKind: 'renderedVisual',
+          contentMode: 'rendered',
+          visibleRowsOnly: true,
+          lines: [{
+            visibleLine: 20,
+            sourceLine: 15,
+            rowInSourceLine: 1,
+            rowsInSourceLine: 3,
+            text: 'The phrase "Ego sum" is Latin for "I am."',
+          }],
+        },
+      }, { notifyTerminal: false });
+      const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
+
+      expect(result.ok).toBe(true);
+      expect(manifest.activeDocument.lineMapping).toEqual({
+        activeLineKind: 'renderedVisual',
+        contentMode: 'rendered',
+        visibleRowsOnly: true,
+        lines: [{
+          visibleLine: 20,
+          sourceLine: 15,
+          rowInSourceLine: 1,
+          rowsInSourceLine: 3,
+          text: 'The phrase "Ego sum" is Latin for "I am."',
+        }],
+      });
     } finally {
       rmSync(contextDirPath, { recursive: true, force: true });
     }
