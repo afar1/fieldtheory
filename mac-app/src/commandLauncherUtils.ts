@@ -146,7 +146,7 @@ export function getLauncherDefaultBookmarkEnterAction(input: {
   canCopyForAgent: boolean;
 }): LauncherDefaultBookmarkEnterAction | null {
   if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
-  if (input.fieldTheoryActive && input.hasActiveLibraryFileContext && input.canInsertMarkdown) {
+  if (input.hasActiveLibraryFileContext && input.canInsertMarkdown) {
     const markdown = formatLauncherBookmarkEmbedMarkdown(input);
     return markdown ? { kind: 'insert-bookmark-embed', markdown } : null;
   }
