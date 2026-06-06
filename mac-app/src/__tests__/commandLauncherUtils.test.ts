@@ -1418,6 +1418,24 @@ describe('bookmark embed launcher helpers', () => {
       canCopyForAgent: true,
     })).toBeNull();
   });
+
+  it('inserts bookmark embeds when a Browser Library document context is active', () => {
+    expect(getLauncherDefaultBookmarkEnterAction({
+      itemType: 'bookmark',
+      bookmarkId: 'bookmark-1',
+      displayName: 'Bookmark',
+      name: 'bookmark',
+      fieldTheoryActive: false,
+      hasActiveLibraryFileContext: true,
+      canInsertMarkdown: true,
+      hasBookmarkPasteText: true,
+      canPasteText: true,
+      canCopyForAgent: true,
+    })).toEqual({
+      kind: 'insert-bookmark-embed',
+      markdown: '![Bookmark](bookmark://bookmark-1)',
+    });
+  });
 });
 
 describe('filterLauncherNamespaceItems', () => {
