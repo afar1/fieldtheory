@@ -37,6 +37,7 @@ export interface TeamSettingsState {
 
 interface TeamSettingsProps {
   state: TeamSettingsState;
+  disabled?: boolean;
   onInviteMember?: (email: string) => Promise<boolean | void> | boolean | void;
   onRespondToInvite?: (contactId: string, accept: boolean) => Promise<boolean | void> | boolean | void;
   onRemoveMember?: (contactId: string) => Promise<boolean | void> | boolean | void;
@@ -160,6 +161,16 @@ function getStyles(theme: Theme) {
       lineHeight: 1.5,
       margin: 0,
     },
+    lockedNotice: {
+      fontSize: '12px',
+      color: theme.textSecondary,
+      lineHeight: 1.5,
+      margin: 0,
+      padding: '10px 12px',
+      borderRadius: '6px',
+      border: `1px solid ${theme.border}`,
+      backgroundColor: theme.surface2,
+    },
   };
 }
 
@@ -175,6 +186,7 @@ function disabledStyle(disabled: boolean, styles: ReturnType<typeof getStyles>) 
 
 export default function TeamSettings({
   state,
+  disabled = false,
   onInviteMember,
   onRespondToInvite,
   onRemoveMember,
@@ -193,10 +205,11 @@ export default function TeamSettings({
   const outgoingInvites = state.pendingInvites.filter((invite) => invite.direction === 'outgoing');
   const incomingInvites = state.pendingInvites.filter((invite) => invite.direction === 'incoming');
   const trimmedEmail = email.trim();
-  const isBusy = pendingAction !== null || !!state.loading;
+  const isBusy = disabled || pendingAction !== null || !!state.loading;
   const inviteDisabled = !onInviteMember || !trimmedEmail || isBusy;
 
   const runAction = async (action: PendingAction, callback: () => Promise<boolean | void> | boolean | void) => {
+    if (disabled) return;
     if (!action) return;
     setPendingAction(action);
     try {
@@ -253,6 +266,8 @@ export default function TeamSettings({
       />
 
       <div style={styles.stack}>
+        {disabled && <p style={styles.lockedNotice}>Team is temporarily locked.</p>}
+
         {state.loading ? (
           <p style={styles.muted}>Loading team...</p>
         ) : (
