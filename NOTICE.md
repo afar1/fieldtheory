@@ -6,7 +6,7 @@ The root `LICENSE` file controls Field Theory-owned code unless a file or direct
 
 ## Public History Attribution
 
-The public-candidate history intentionally collapses the inherited upstream `whisper.cpp` commit graph into one credited import commit:
+The public-facing history intentionally collapses the inherited upstream `whisper.cpp` commit graph into one credited import commit:
 
 ```text
 Import whisper.cpp foundation
