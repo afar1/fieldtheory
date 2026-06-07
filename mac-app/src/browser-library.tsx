@@ -129,6 +129,8 @@ type BrowserHelperRequestTimingEntry = {
 
 export const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
 export const BROWSER_HELPER_REQUEST_TIMING_EVENT = 'fieldtheory:browser-helper-request-timing';
+export const BROWSER_HELPER_STALE_EVENT = 'fieldtheory:browser-helper-stale';
+const BROWSER_PANEL_LAUNCHER_URL = 'http://127.0.0.1:47392/panel';
 
 type BrowserLibrarySurfaceName = 'library' | 'commands';
 type BrowserHelperClientSurfaceName = BrowserLibrarySurfaceName | 'bookmarks' | 'ember';
@@ -251,6 +253,15 @@ export function createBrowserHelperClient(config: BrowserHelperConfig) {
         startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
+      if (status === null) {
+        window.dispatchEvent(new CustomEvent(BROWSER_HELPER_STALE_EVENT, {
+          detail: {
+            api: config.api,
+            path,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      }
       throw error;
     }
   };
@@ -330,6 +341,11 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       for (const type of BROWSER_HELPER_RECONNECT_REFRESH_EVENT_TYPES) {
         notifyChangedListeners(type, { reconnect: true });
       }
+    };
+    eventSource.onerror = () => {
+      window.dispatchEvent(new CustomEvent(BROWSER_HELPER_STALE_EVENT, {
+        detail: { api: config.api, path: '/native/events' },
+      }));
     };
     for (const type of [
       'wiki:changed',
@@ -415,6 +431,19 @@ function parseBrowserEventDetail(event: Event): any {
   } catch {
     return {};
   }
+}
+
+export function buildBrowserHelperReconnectUrl(location: Pick<Location, 'search'>): string {
+  const currentParams = new URLSearchParams(location.search);
+  const url = new URL(BROWSER_PANEL_LAUNCHER_URL);
+  url.searchParams.set('target', currentParams.get('target') ?? JSON.stringify({ kind: 'library' }));
+  return url.toString();
+}
+
+function hasStaleBrowserHelperTiming(): boolean {
+  return (window.__fieldTheoryBrowserLibraryRequestTimings ?? []).some((entry) => (
+    entry.status === null && entry.ok === false
+  ));
 }
 
 export function applyRendererStorageChangeFromNative(
@@ -1593,6 +1622,7 @@ function BrowserLibrarySurface(props: {
   const [fieldTheoryButtonProximity, setFieldTheoryButtonProximity] = React.useState(0);
   const [fieldTheoryButtonHovered, setFieldTheoryButtonHovered] = React.useState(false);
   const [browserTextSelected, setBrowserTextSelected] = React.useState(false);
+  const [browserHelperStale, setBrowserHelperStale] = React.useState(hasStaleBrowserHelperTiming);
   const [actionFeedback, setActionFeedback] = React.useState<string | null>(null);
   const focusChromeGlobalEnabledRef = React.useRef(normalizedInitialOpenTarget?.focusChrome === true);
   const focusChromePreviousSidebarCollapsedRef = React.useRef<boolean | null>(
@@ -1676,6 +1706,16 @@ function BrowserLibrarySurface(props: {
   React.useEffect(() => {
     reportActiveSurface(initialClientSurface);
   }, [initialClientSurface, reportActiveSurface]);
+  React.useEffect(() => {
+    const markStale = () => setBrowserHelperStale(true);
+    const markConnected = () => setBrowserHelperStale(false);
+    window.addEventListener(BROWSER_HELPER_STALE_EVENT, markStale);
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, markConnected);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_STALE_EVENT, markStale);
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, markConnected);
+    };
+  }, []);
   React.useEffect(() => {
     const reportCurrentSurface = () => {
       reportActiveSurface(activeClientSurfaceRef.current);
@@ -2208,6 +2248,48 @@ function BrowserLibrarySurface(props: {
         >
           {actionFeedback}
         </span>
+      ) : null}
+      {browserHelperStale ? (
+        <div
+          data-fieldtheory-browser-helper-stale="true"
+          style={{
+            position: 'absolute',
+            top: '12px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 32,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 10px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '8px',
+            backgroundColor: theme.bg,
+            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.12)',
+            color: theme.text,
+            fontSize: '12px',
+          }}
+        >
+          <span style={{ color: theme.textSecondary }}>Panel connection expired.</span>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = buildBrowserHelperReconnectUrl(window.location);
+            }}
+            style={{
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              backgroundColor: theme.bgSecondary,
+              color: theme.text,
+              fontSize: '12px',
+              fontWeight: 600,
+              padding: '4px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            Reconnect
+          </button>
+        </div>
       ) : null}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {surface === 'commands' ? (
