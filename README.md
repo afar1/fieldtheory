@@ -2,13 +2,30 @@
 
 Field Theory is a local-first macOS application for writing, voice, clipboard, Library, command, and local AI workflows.
 
-This repository is being prepared for open source. The current codebase is the source of truth for the public documentation work; older README, privacy, architecture, and release notes may be stale and should be verified against code before being treated as product truth.
+This repository is being prepared as the clean public-source staging repo for Field Theory.
+
+It is private until the final release checks, license decision, and public visibility approval are complete.
 
 ## Project Status
 
-Open-source preparation is in progress.
+Open-source preparation is in progress. This repo is the private `afar1/fieldtheory` staging repo, seeded from a cleaned Oscar history.
 
 The repository is not yet under a final open-source license. Until the license decision is made and the root [LICENSE](LICENSE) file is replaced, the existing proprietary license remains the governing license.
+
+No repository visibility change is implied by this README.
+
+## Repository Family
+
+Field Theory is split across sibling repositories:
+
+- `afar1/oscar`: private historical/source repo during the transition.
+- `afar1/fieldtheory`: private clean app-source staging repo; intended to become public after approval.
+- `afar1/fieldtheory-labs`: private full-history archive and sensitive experiments repo.
+- `afar1/fieldtheory-cli`: public CLI repo.
+- `afar1/fieldtheory-plugin`: private plugin ecosystem repo for now.
+- `afar1/field-releases`: public binary release feed.
+
+This repo is the public-source candidate. It is not the full private history archive.
 
 ## History And Attribution
 
@@ -17,6 +34,24 @@ This public-candidate history preserves the Field Theory/Oscar development arc w
 That shape keeps the project history honest: Field Theory's commits remain visible, and upstream `whisper.cpp` work is attributed without presenting thousands of upstream commits as Field Theory-authored history.
 
 See [NOTICE.md](NOTICE.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and third-party notice tracking.
+
+## Public Source Boundary
+
+This repo is intended to contain app source, local development docs, public governance docs, and public-facing architecture material.
+
+It intentionally excludes production backend internals:
+
+- production Supabase schema;
+- Supabase migrations;
+- Supabase edge functions;
+- billing and service internals;
+- production Cloud configuration;
+- private operational runbooks;
+- hosted website/API route internals.
+
+Field Theory Cloud remains the official hosted service operated by Field Theory.
+
+This source release is not a self-hostable Field Theory Cloud backend.
 
 ## Where to Start
 
@@ -68,8 +103,20 @@ Core Mac app workflows can run without login. The app also has account-backed su
 
 Do not describe Field Theory as cloud-only or as purely local. The accurate public story is: local-first core, optional account-backed features, and explicit internal/experimental gates.
 
+Source and development builds should not silently connect to production Field Theory Cloud. Official Cloud-backed features require explicit official configuration and account/session behavior.
+
 ## License
 
 License decision pending.
 
 The current [LICENSE](LICENSE) is proprietary and remains in effect until it is intentionally replaced.
+
+The final license decision should clearly separate:
+
+- Field Theory-owned source code;
+- docs;
+- app assets and generated sounds;
+- bundled third-party source such as `whisper.cpp` / `ggml`;
+- downloaded model artifacts and provider terms.
+
+Preserving the upstream MIT notice for `whisper.cpp` / `ggml` does not require all Field Theory-owned code to be MIT. It means those upstream portions keep their original license notice.
