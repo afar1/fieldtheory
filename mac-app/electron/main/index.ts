@@ -36,6 +36,7 @@ import {
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
+import { BrowserPanelLauncherServer } from './browserPanelLauncherServer';
 import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelperState';
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
@@ -2598,6 +2599,7 @@ let accountStatusManager: AccountStatusManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let browserHelperServer: BrowserHelperServer | null = null;
+let browserPanelLauncherServer: BrowserPanelLauncherServer | null = null;
 let markdownAssetsConsolidated = false;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
@@ -3857,7 +3859,20 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   const address = await browserHelperServer.start();
   const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
   const browserUrl = buildBrowserLibraryUrl({ address, devServer });
-  const panelUrl = devServer ? undefined : buildBrowserPanelRedirectUrl(address);
+  let panelUrl = devServer ? undefined : buildBrowserPanelRedirectUrl(address);
+  if (!devServer) {
+    browserPanelLauncherServer = new BrowserPanelLauncherServer({
+      getBrowserHelperAddress: () => browserHelperServer?.address() ?? address,
+    });
+    try {
+      const launcherAddress = await browserPanelLauncherServer.start();
+      panelUrl = buildBrowserPanelRedirectUrl(address, launcherAddress);
+      log.info('Field Theory browser panel launcher listening at %s', panelUrl);
+    } catch (error) {
+      browserPanelLauncherServer = null;
+      log.warn('Field Theory browser panel launcher unavailable; using helper panel URL: %s', error);
+    }
+  }
   writeBrowserHelperState({ address, browserUrl, panelUrl });
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }

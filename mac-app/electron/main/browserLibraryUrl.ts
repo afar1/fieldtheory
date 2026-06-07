@@ -1,5 +1,12 @@
 import type { BrowserHelperServerAddress } from './browserHelperServer';
 
+export const DEFAULT_BROWSER_PANEL_LAUNCHER_PORT = 47392;
+
+export type BrowserPanelLauncherAddress = {
+  host: string;
+  port: number;
+};
+
 export type BrowserLibraryUrlTarget = Record<string, unknown> & {
   kind?: unknown;
   path?: unknown;
@@ -47,7 +54,11 @@ export function buildBrowserLibraryUrl(input: {
   return url.toString();
 }
 
-export function buildBrowserPanelRedirectUrl(address: BrowserHelperServerAddress): string {
-  const url = new URL(`http://${address.host}:${address.port}/panel`);
+export function buildBrowserPanelRedirectUrl(
+  address: BrowserHelperServerAddress,
+  launcherAddress?: BrowserPanelLauncherAddress | null,
+): string {
+  const panelAddress = launcherAddress ?? address;
+  const url = new URL(`http://${panelAddress.host}:${panelAddress.port}/panel`);
   return url.toString();
 }
