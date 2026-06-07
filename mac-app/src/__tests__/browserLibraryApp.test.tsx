@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT,
+  BROWSER_HELPER_STALE_EVENT,
   BrowserLibraryApp,
   applyRendererStorageChangeFromNative,
+  buildBrowserHelperReconnectUrl,
   browserArchiveActiveLibraryFile,
   createBrowserHelperClient,
   installBrowserLibraryHost,
@@ -894,6 +896,59 @@ describe('BrowserLibraryApp', () => {
       openMarkdownListener?.({ kind: 'ember' });
     });
     await waitFor(() => expect(screen.getAllByText('ember').length).toBeGreaterThan(0));
+  });
+
+  it('shows a reconnect button when the browser helper goes stale', () => {
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = () => <div data-testid="library-view">Library</div>;
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event(BROWSER_HELPER_STALE_EVENT));
+    });
+
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    act(() => {
+      window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
+    });
+
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+  });
+
+  it('shows the reconnect button when helper failure happened before React mounted', () => {
+    window.__fieldTheoryBrowserLibraryRequestTimings = [{
+      path: '/native/renderer-storage',
+      method: 'GET',
+      status: null,
+      ok: false,
+      durationMs: 1,
+      startedAt: 0,
+      error: 'Failed to fetch',
+    }];
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = () => <div data-testid="library-view">Library</div>;
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
   });
 
   it('shows native plan and metrics readout in the Browser Library footer', async () => {
@@ -2373,5 +2428,42 @@ describe('BrowserLibraryApp', () => {
     await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
 
     cleanup();
+  });
+
+  it('builds stable reconnect URLs and preserves explicit targets', () => {
+    expect(buildBrowserHelperReconnectUrl({
+      search: '?api=http%3A%2F%2F127.0.0.1%3A55906&token=old&target=%7B%22kind%22%3A%22wiki%22%7D',
+    } as Location)).toBe('http://127.0.0.1:47392/panel?target=%7B%22kind%22%3A%22wiki%22%7D');
+
+    expect(buildBrowserHelperReconnectUrl({ search: '' } as Location)).toBe(
+      'http://127.0.0.1:47392/panel?target=%7B%22kind%22%3A%22library%22%7D',
+    );
+  });
+
+  it('emits a stale-helper event when helper requests cannot connect', async () => {
+    const originalFetch = global.fetch;
+    const staleListener = vi.fn();
+    global.fetch = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }) as any;
+    window.addEventListener(BROWSER_HELPER_STALE_EVENT, staleListener);
+
+    try {
+      const request = createBrowserHelperClient({
+        api: 'http://127.0.0.1:55906',
+        token: 'old-token',
+        clientId: 'test-client',
+      });
+
+      await expect(request('/native/library/roots')).rejects.toThrow('Failed to fetch');
+      expect(staleListener).toHaveBeenCalledTimes(1);
+      expect(staleListener.mock.calls[0][0].detail).toMatchObject({
+        api: 'http://127.0.0.1:55906',
+        path: '/native/library/roots',
+      });
+    } finally {
+      window.removeEventListener(BROWSER_HELPER_STALE_EVENT, staleListener);
+      global.fetch = originalFetch;
+    }
   });
 });
