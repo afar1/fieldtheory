@@ -4,8 +4,8 @@ This map is written for open-source readiness. It names the areas a contributor 
 
 ## Repository root
 
-- `README.md`: refreshed during the open-source readiness pass. It describes the repository as an open-source candidate, points to the current readiness docs, and keeps the deferred license decision explicit.
-- `LICENSE`: currently proprietary. A public release needs an explicit license decision before this file can become public-facing truth.
+- `README.md`: refreshed during the open-source readiness pass. It describes the repository as an AGPL open-source candidate and points to the current readiness docs.
+- `LICENSE`: AGPL-3.0-or-later for Field Theory-owned app/source code unless a file or directory says otherwise.
 - `arch.md`: useful context, but this pass still treats code as the source of truth.
 - `mac-app/`: the active Electron/Vite/React Mac application.
 - `scripts/`, `supabase/`, and other root-level directories: supporting project infrastructure. These need a separate public-readiness pass if they are included in the public repository.

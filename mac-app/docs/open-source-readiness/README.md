@@ -31,7 +31,7 @@ The immediate purpose is to make the app legible before making Tier 1 public dec
 
 Field Theory Mac is local-first, but not local-only. The core Library, editor, clipboard history, command launcher, transcription, bookmarks, and many settings operate on local files and local app data. Login unlocks account-backed features such as feedback, account status, quota or usage checks, public sharing, River shared documents, and any internally enabled sync features.
 
-The main remaining public documentation problem is not that the app lacks code. It is that the final license story is still deferred. The root README and Mac docs now describe the repository as an open-source candidate, but the root `LICENSE` remains proprietary until a human license decision is made. Maintainer packaging docs are separate from contributor setup because releases still depend on signing, notarization, updater feeds, and private maintainer credentials.
+The main remaining public documentation problem is not that the app lacks code. It is making the public boundary and runtime checks unmistakable before visibility changes. The root README and Mac docs now describe the repository as an AGPL open-source candidate, while Field Theory Cloud, production Supabase internals, billing, deployment config, service secrets, and hosted-service infrastructure remain private. Maintainer packaging docs are separate from contributor setup because releases still depend on signing, notarization, updater feeds, and private maintainer credentials.
 
 ## Success criteria for this pass
 

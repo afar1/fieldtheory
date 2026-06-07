@@ -6,7 +6,7 @@ This list is for preparing Field Theory Mac for open source. It is not an aesthe
 
 ### Replace contradictory public docs
 
-Problem: root `README.md`, root `LICENSE`, `mac-app/README.md`, `mac-app/PRIVACY_POLICY.md`, `mac-app/docs/ARCHITECTURE.md`, and release docs tell conflicting stories about whether the project is proprietary, open source, local-only, iOS-sync-only, private-source, or public.
+Problem: root `README.md`, root `LICENSE`, `mac-app/README.md`, `mac-app/PRIVACY_POLICY.md`, `mac-app/docs/ARCHITECTURE.md`, and release docs need to tell one consistent story about the AGPL app source, hosted Cloud boundary, local-first behavior, and private release infrastructure.
 
 Decision: write clean replacements from the current code map. Do not patch the stale docs line by line.
 
@@ -14,11 +14,11 @@ Verification: a fresh reader can answer what the app is, how to run it, what dat
 
 ### Choose and apply a license model
 
-Problem: the repository currently has a proprietary license while some app docs already say open source.
+Problem: the repository license decision needs to be reflected consistently across app docs, contribution docs, notices, assets, examples, and protocol material.
 
-Decision: choose the license for source, docs, assets, bundled resources, and any separately licensed models or media. The app code license may not automatically cover sounds, images, icons, reference voices, or downloaded models.
+Decision: Field Theory-owned app/source code is AGPL-3.0-or-later. CLI and plugin repos are MIT. Examples and protocol docs default to MIT unless they are tightly app-coupled. Brand assets remain trademark protected. Third-party code, models, and media keep their own terms.
 
-Verification: root license and notices match the actual intended public terms.
+Verification: root license, contribution docs, trademark docs, and notices match the intended public terms.
 
 ### Add `.env.example`
 

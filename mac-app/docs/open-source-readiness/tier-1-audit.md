@@ -8,7 +8,7 @@ This note records the current Tier 1 open-source readiness state after the publi
 
 ### Public entry docs rewritten
 
-The root `README.md` and `mac-app/README.md` now describe the repository as an open-source candidate, explain that the current proprietary license remains active until replaced, point readers to the current readiness docs, and separate local development from maintainer packaging.
+The root `README.md` and `mac-app/README.md` now describe the repository as an open-source candidate, explain the AGPL app-source license decision, point readers to the current readiness docs, and separate local development from maintainer packaging.
 
 ### Environment example added
 
@@ -50,16 +50,19 @@ The package lock omitted license fields for `agentmail@0.4.9` and `spawn-command
 
 ## Still open before public release
 
-### License decision
+### License terms
 
-The repository is still governed by the proprietary root `LICENSE`. This pass did not choose a license. A human project decision is required before the repo can honestly be called open source.
+The repository is now governed by the AGPL-3.0-or-later root `LICENSE` for Field Theory-owned app/source code unless a file or directory says otherwise.
 
-Required decision:
+Terms to keep explicit:
 
-- source license;
-- docs license;
-- asset/media license;
-- whether bundled resources, reference voice assets, generated binaries, and model-related files use separate terms.
+- app/source license: AGPL-3.0-or-later;
+- CLI/plugin repo license: MIT;
+- examples and protocol docs: MIT unless app-coupled;
+- asset/media terms;
+- bundled third-party notices;
+- downloaded model terms;
+- trademark and brand terms.
 
 ### Full third-party notices
 
