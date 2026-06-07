@@ -2463,9 +2463,8 @@ function getOptionalEnvValue(key: string): string | undefined {
   return undefined;
 }
 
-// Load environment variables from .env.local for Supabase credentials.
-// In development, the file is in the mac-app directory.
-// In production, we use the bundled values or fall back to hardcoded ones.
+// Load environment variables for Supabase public config.
+// Source/dev builds must not silently fall back to production Cloud.
 function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string } {
   const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
   const supabasePublishableKey = getOptionalEnvValue('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY')
@@ -2478,12 +2477,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string 
     };
   }
 
-  // Production fallback: this publishable key is public app config. RLS and the
-  // user's auth session decide what data the app can read or write.
-  return {
-    supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
-    supabasePublishableKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
-  };
+  return {};
 }
 
 // Register the ftmedia:// scheme as privileged so the renderer can load
