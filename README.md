@@ -1,31 +1,30 @@
 # Field Theory
 
-Field Theory is a local-first macOS application for writing, voice, clipboard, Library, command, and local AI workflows.
+Field Theory is a local-first macOS application for human and agentic reading and writing. It is designed to make context management fast, local, and portable between model providers, with local voice transcription, clipboard management, portable Markdown commands and skills, and extraction, storage, and local retrieval of X bookmarks.
+
+The Mac app DMG can be downloaded and used for free at [fieldtheory.dev](https://fieldtheory.dev). All accounts are free.
 
 ## Project Status
 
-This is the Field Theory app source repository, seeded from the cleaned Field Theory/Oscar development history.
+This is the Field Theory app source repository, seeded from the cleaned Field Theory development history and developed by Andrew Farah (`afar1`).
 
-Field Theory-owned app/source code in this repository is licensed under AGPL-3.0-or-later unless a file or directory says otherwise.
+The Field Theory repository family uses AGPL-3.0-or-later and MIT licenses unless a file or directory says otherwise.
+
+- AGPL: open source, including for commercial purposes. You may use, run, fork, modify, and redistribute the code, including commercially, under the license terms. If you modify Field Theory and offer it as a network service, AGPL requires you to provide the corresponding source for those modifications to users of that service.
+- MIT: permissive open source.
 
 ## Repository Family
 
 Field Theory is split across sibling repositories:
 
-- `afar1/oscar`: private historical/source repo during the transition.
-- `afar1/fieldtheory`: app source repository.
-- `afar1/fieldtheory-labs`: private full-history archive and sensitive experiments repo.
-- `afar1/fieldtheory-cli`: public CLI repo.
-- `afar1/fieldtheory-plugin`: plugin ecosystem repo.
+- `afar1/fieldtheory`: Mac app source repository, licensed under AGPL-3.0-or-later.
+- `afar1/fieldtheory-cli`: public CLI repo, licensed under MIT.
+- `afar1/fieldtheory-plugin`: plugin ecosystem repo, licensed under MIT.
 - `afar1/field-releases`: public binary release feed.
 
 This repo is the public-facing app source repository. It is not the full private history archive.
 
 ## History And Attribution
-
-This public-facing history preserves the Field Theory/Oscar development arc while collapsing the inherited upstream `whisper.cpp` history into one credited import commit.
-
-That shape keeps the project history honest: Field Theory's commits remain visible, and upstream `whisper.cpp` work is attributed without presenting thousands of upstream commits as Field Theory-authored history.
 
 See [NOTICE.md](NOTICE.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and third-party notice tracking.
 
@@ -43,11 +42,9 @@ It intentionally excludes production backend internals:
 - private operational runbooks;
 - hosted website/API route internals.
 
-Field Theory Cloud remains the official hosted service operated by Field Theory.
-
 People can read, run, fork, modify, and self-host Field Theory under the AGPL terms.
 
-This source release does not include the production Field Theory Cloud backend, Supabase production internals, billing infrastructure, deployment configuration, or service secrets.
+This source release does not include the production Field Theory Cloud backend, Supabase production internals, billing infrastructure, deployment configuration, or service secrets. Field Theory Cloud remains the official hosted service operated by Field Theory.
 
 ## Where to Start
 
