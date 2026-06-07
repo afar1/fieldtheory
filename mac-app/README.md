@@ -105,7 +105,7 @@ FT_REGISTER_FIELD_THEORY_PROTOCOL=true npm run dev
 ## More Documentation
 
 - [Open-source readiness](docs/open-source-readiness/README.md)
-- [Privacy policy draft](PRIVACY_POLICY.md)
+- [Privacy policy](PRIVACY_POLICY.md)
 - [Mac development setup](docs/open-source-readiness/mac-development-setup.md)
 - [Architecture overview](docs/open-source-readiness/architecture-overview.md)
 - [Contributor versus maintainer workflows](docs/open-source-readiness/contributor-maintainer-workflows.md)

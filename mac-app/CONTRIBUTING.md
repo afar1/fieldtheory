@@ -1,6 +1,6 @@
 # Contributing to Field Theory Mac
 
-Field Theory Mac is being prepared for open source. This guide covers ordinary local development. It does not grant release access, signing access, production Supabase access, or private updater access.
+This guide covers ordinary Field Theory Mac local development. It does not grant release access, signing access, production Supabase access, or private updater access.
 
 ## Local Setup
 
