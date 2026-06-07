@@ -19,11 +19,11 @@ Field Theory is split across sibling repositories:
 - `afar1/fieldtheory-plugin`: plugin ecosystem repo.
 - `afar1/field-releases`: public binary release feed.
 
-This repo is the public-source candidate. It is not the full private history archive.
+This repo is the public-facing app source repository. It is not the full private history archive.
 
 ## History And Attribution
 
-This public-candidate history preserves the Field Theory/Oscar development arc while collapsing the inherited upstream `whisper.cpp` history into one credited import commit.
+This public-facing history preserves the Field Theory/Oscar development arc while collapsing the inherited upstream `whisper.cpp` history into one credited import commit.
 
 That shape keeps the project history honest: Field Theory's commits remain visible, and upstream `whisper.cpp` work is attributed without presenting thousands of upstream commits as Field Theory-authored history.
 
