@@ -49,7 +49,8 @@ This source release does not include the production Field Theory Cloud backend, 
 ## Where to Start
 
 - [Mac app README](mac-app/README.md): local development setup for the active Mac app.
-- [Project notes](mac-app/docs/open-source-readiness/README.md): current code-derived map of the app, data flows, release boundaries, and release-readiness notes.
+- [Mac app architecture](mac-app/docs/ARCHITECTURE.md): code-oriented map of the Electron app.
+- [Mac release workflow](mac-app/docs/RELEASE_WORKFLOW.md): maintainer packaging and release process.
 - [Privacy policy](mac-app/PRIVACY_POLICY.md): current Mac data-flow policy.
 - [Security policy](SECURITY.md): security reporting and sensitive-surface guidance.
 - [Third-party notices](THIRD_PARTY_NOTICES.md): dependency, model, and asset notice tracking.
@@ -66,7 +67,6 @@ Important Mac app areas:
 - `mac-app/electron/main`: privileged main-process code, IPC handlers, local data access, auth, sync, River, updater, and OS integration.
 - `mac-app/scripts`: development, build, native setup, packaging, and release helper scripts.
 - `mac-app/resources` and `mac-app/public`: packaged resources and static assets.
-- `mac-app/docs/open-source-readiness`: project notes written from code inspection.
 
 Other top-level trees may contain mobile work, adjacent apps, runtime code, or project infrastructure. Start there only when the task clearly points there.
 

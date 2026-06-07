@@ -31,7 +31,7 @@ White's turn
 [(l)isten/(p)ause/(q)uit]: 
 ```
 
-## TODO
+## Future Improvements
 
 - Fix bugs in the chess moves logic
 - Improve web-browser audio capture - sometimes it does not record the voice properly

@@ -1,6 +1,6 @@
 # Field Theory Repo Map
 
-Start in `mac-app/` unless the task clearly says `ios/`, `md/`, `townsquare/`, `www/`, or the repo-root Expo app.
+Start in `mac-app/` unless the task clearly says `ios/`, `md/`, or the repo-root Expo app.
 
 The product intent is a local-first personal operating surface: capture, think, write, organize, and trigger agents from macOS using markdown and local files as durable artifacts. The author keeps pushing toward non-destructive behavior, editable command files, and filesystem truth over opaque app state. Auth, sync, and cloud features exist, but they are layered on top and often gated; do not treat the server as the default source of truth for core behavior.
 
@@ -65,8 +65,6 @@ The product intent is a local-first personal operating surface: capture, think, 
   Swift rewrite scaffold. Directionally important, but not feature-parity truth.
 - `md/`
   Separate Atomic knowledge-base app/codebase inside this repo. Do not confuse its architecture or editor stack with Field Theory's.
-- `townsquare/`, `www/`, `og-service/`
-  Adjacent web properties and support services, not the main desktop app.
 - `src/`, `ggml/`, `include/`, `examples/`, `bindings/`, `models/`, `tests/`
   Upstream/runtime-heavy code and build artifacts that support local model work. Important when touching transcription/runtime plumbing, but usually not where product behavior changes start.
 

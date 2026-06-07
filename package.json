@@ -1,6 +1,13 @@
 {
   "name": "fieldtheory",
   "version": "1.0.0",
+  "description": "Field Theory app source workspace.",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/afar1/fieldtheory.git"
+  },
   "main": "index.js",
   "scripts": {
     "start": "expo start",
@@ -48,6 +55,5 @@
     "@xmldom/xmldom": "0.8.13",
     "postcss": "8.5.14",
     "tar": "7.5.15"
-  },
-  "private": true
+  }
 }

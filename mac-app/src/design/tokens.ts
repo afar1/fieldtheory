@@ -1,6 +1,6 @@
 // =============================================================================
 // Design Tokens - Unified design system for Field Theory
-// Extracted from www/styles.css to ensure consistency across platforms.
+// Shared palette values for the Field Theory app surfaces.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
