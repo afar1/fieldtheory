@@ -10,7 +10,7 @@ It is private until the final release checks, license decision, and public visib
 
 Open-source preparation is in progress. This repo is the private `afar1/fieldtheory` staging repo, seeded from a cleaned Oscar history.
 
-The repository is not yet under a final open-source license. Until the license decision is made and the root [LICENSE](LICENSE) file is replaced, the existing proprietary license remains the governing license.
+Field Theory-owned app/source code in this repository is licensed under AGPL-3.0-or-later unless a file or directory says otherwise.
 
 No repository visibility change is implied by this README.
 
@@ -51,7 +51,9 @@ It intentionally excludes production backend internals:
 
 Field Theory Cloud remains the official hosted service operated by Field Theory.
 
-This source release is not a self-hostable Field Theory Cloud backend.
+People can read, run, fork, modify, and self-host Field Theory under the AGPL terms.
+
+This source release does not include the production Field Theory Cloud backend, Supabase production internals, billing infrastructure, deployment configuration, or service secrets.
 
 ## Where to Start
 
@@ -107,16 +109,18 @@ Source and development builds should not silently connect to production Field Th
 
 ## License
 
-License decision pending.
+Field Theory-owned app/source code in this repository is licensed under [AGPL-3.0-or-later](LICENSE).
 
-The current [LICENSE](LICENSE) is proprietary and remains in effect until it is intentionally replaced.
+That means people can use, run, fork, modify, and redistribute the code, including commercially, under the license terms. If someone modifies Field Theory and offers it as a network service, the AGPL requires them to provide the corresponding source for those modifications to users of that service.
 
-The final license decision should clearly separate:
+The repo family uses a split-license model:
 
-- Field Theory-owned source code;
-- docs;
-- app assets and generated sounds;
-- bundled third-party source such as `whisper.cpp` / `ggml`;
-- downloaded model artifacts and provider terms.
+- `afar1/fieldtheory`: AGPL-3.0-or-later for Field Theory-owned app/source code.
+- `afar1/fieldtheory-cli`: MIT.
+- `afar1/fieldtheory-plugin`: MIT.
+- Examples and protocol docs: MIT unless they are tightly app-coupled.
+- Brand assets: trademark protected.
 
 Preserving the upstream MIT notice for `whisper.cpp` / `ggml` does not require all Field Theory-owned code to be MIT. It means those upstream portions keep their original license notice.
+
+The code license does not grant rights to the Field Theory name, logo, icon, brand, official Cloud service identity, or other trademarks. See [TRADEMARKS.md](TRADEMARKS.md).

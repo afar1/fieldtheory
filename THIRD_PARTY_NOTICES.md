@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This file records third-party notices and provenance boundaries for the current Field Theory Mac open-source candidate. It does not choose the repository license. The root `LICENSE` remains authoritative until the license decision is made.
+This file records third-party notices and provenance boundaries for the current Field Theory Mac open-source candidate. The root `LICENSE` covers Field Theory-owned app/source code unless a file or directory says otherwise. Third-party components keep their own license terms and notices.
 
 ## NPM Dependencies
 
