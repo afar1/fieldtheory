@@ -8,7 +8,7 @@ This directory contains macOS menu bar and packaged app icon assets for Field Th
 - `fieldtheory-iconTemplate@2x.png`
 - `icon.icns`
 
-Legacy `littleone-*` tray icons were removed during open-source readiness cleanup because the current tray code uses the Field Theory template icon for all tray states.
+Legacy `littleone-*` tray icons were removed because the current tray code uses the Field Theory template icon for all tray states.
 
 ## Template Image Requirements
 
@@ -22,6 +22,6 @@ Requirements:
 - Standard size is 16x16 pixels.
 - Retina size is 32x32 pixels as `*Template@2x.png`.
 
-## Public Release Note
+## Asset Provenance
 
-Before public release, record the source and license/provenance for each icon asset in the third-party notices or asset provenance inventory.
+Record the source and license/provenance for each icon asset in the third-party notices or asset provenance inventory.
