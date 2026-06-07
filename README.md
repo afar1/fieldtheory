@@ -17,10 +17,10 @@ The Field Theory repository family uses AGPL-3.0-or-later and MIT licenses unles
 
 Field Theory is split across sibling repositories:
 
-- `afar1/fieldtheory`: Mac app source repository, licensed under AGPL-3.0-or-later.
-- `afar1/fieldtheory-cli`: public CLI repo, licensed under MIT.
-- `afar1/fieldtheory-plugin`: plugin ecosystem repo, licensed under MIT.
-- `afar1/field-releases`: public binary release feed.
+- [`afar1/fieldtheory`](https://github.com/afar1/fieldtheory): Mac app source repository, licensed under AGPL-3.0-or-later.
+- [`afar1/fieldtheory-cli`](https://github.com/afar1/fieldtheory-cli): public CLI repo, licensed under MIT.
+- [`afar1/fieldtheory-plugin`](https://github.com/afar1/fieldtheory-plugin): plugin ecosystem repo, licensed under MIT.
+- [`afar1/field-releases`](https://github.com/afar1/field-releases): public binary release feed.
 
 This repo is the public-facing app source repository. It is not the full private history archive.
 
@@ -106,9 +106,9 @@ That means people can use, run, fork, modify, and redistribute the code, includi
 
 The repo family uses a split-license model:
 
-- `afar1/fieldtheory`: AGPL-3.0-or-later for Field Theory-owned app/source code.
-- `afar1/fieldtheory-cli`: MIT.
-- `afar1/fieldtheory-plugin`: MIT.
+- [`afar1/fieldtheory`](https://github.com/afar1/fieldtheory): AGPL-3.0-or-later for Field Theory-owned app/source code.
+- [`afar1/fieldtheory-cli`](https://github.com/afar1/fieldtheory-cli): MIT.
+- [`afar1/fieldtheory-plugin`](https://github.com/afar1/fieldtheory-plugin): MIT.
 - Examples and protocol docs: MIT unless they are tightly app-coupled.
 - Brand assets: trademark protected.
 
