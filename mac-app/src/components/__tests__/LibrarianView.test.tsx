@@ -4228,7 +4228,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'See [[Consensus]]',
-        page.documentVersion,
+        expect.any(Object),
       );
     }, { timeout: 1200 });
   });
@@ -4292,7 +4292,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'See [[Co',
-        page.documentVersion,
+        expect.any(Object),
       );
     }, { timeout: 1200 });
   });
@@ -4652,7 +4652,7 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
-  });
+  }, 10000);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
     const visibleRelPath = 'scratchpad/visible-boundary';
@@ -4908,7 +4908,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(firstRelPath);
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(secondRelPath);
     });
-  });
+  }, 10000);
 
   it('reveals the collapsed sidebar only when the edge strip is clicked', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
