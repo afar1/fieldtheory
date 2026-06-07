@@ -2,27 +2,21 @@
 
 Field Theory is a local-first macOS application for writing, voice, clipboard, Library, command, and local AI workflows.
 
-This repository is being prepared as the clean public-source staging repo for Field Theory.
-
-It is private until the final release checks, license decision, and public visibility approval are complete.
-
 ## Project Status
 
-Open-source preparation is in progress. This repo is the private `afar1/fieldtheory` staging repo, seeded from a cleaned Oscar history.
+This is the Field Theory app source repository, seeded from the cleaned Field Theory/Oscar development history.
 
 Field Theory-owned app/source code in this repository is licensed under AGPL-3.0-or-later unless a file or directory says otherwise.
-
-No repository visibility change is implied by this README.
 
 ## Repository Family
 
 Field Theory is split across sibling repositories:
 
 - `afar1/oscar`: private historical/source repo during the transition.
-- `afar1/fieldtheory`: private clean app-source staging repo; intended to become public after approval.
+- `afar1/fieldtheory`: app source repository.
 - `afar1/fieldtheory-labs`: private full-history archive and sensitive experiments repo.
 - `afar1/fieldtheory-cli`: public CLI repo.
-- `afar1/fieldtheory-plugin`: private plugin ecosystem repo for now.
+- `afar1/fieldtheory-plugin`: plugin ecosystem repo.
 - `afar1/field-releases`: public binary release feed.
 
 This repo is the public-source candidate. It is not the full private history archive.
@@ -59,9 +53,9 @@ This source release does not include the production Field Theory Cloud backend, 
 
 - [Mac app README](mac-app/README.md): local development setup for the active Mac app.
 - [Open-source readiness docs](mac-app/docs/open-source-readiness/README.md): current code-derived map of the app, data flows, release boundaries, and pre-publication cleanup.
-- [Privacy policy draft](mac-app/PRIVACY_POLICY.md): current Mac data-flow policy draft.
-- [Security policy draft](SECURITY.md): current security reporting and sensitive-surface guidance.
-- [Third-party notices draft](THIRD_PARTY_NOTICES.md): dependency, model, and asset notice work needed before publication.
+- [Privacy policy](mac-app/PRIVACY_POLICY.md): current Mac data-flow policy.
+- [Security policy](SECURITY.md): security reporting and sensitive-surface guidance.
+- [Third-party notices](THIRD_PARTY_NOTICES.md): dependency, model, and asset notice tracking.
 - [Architecture sketch](arch.md): useful historical map, but verify against code when accuracy matters.
 
 ## Repository Shape

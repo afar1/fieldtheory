@@ -1,6 +1,6 @@
 # Contributing
 
-Field Theory is preparing for a public source release under AGPL-3.0-or-later for Field Theory-owned app/source code.
+Field Theory-owned app/source code is licensed under AGPL-3.0-or-later.
 
 By contributing to this repository, you agree that your contribution is licensed under the same license that covers the part of the repository you are changing.
 

@@ -1,14 +1,12 @@
-# Security Policy Draft
+# Security Policy
 
-This repository is being prepared for open source. Until publication details are final, treat this file as the current security working policy.
+This policy covers the Field Theory app source repository.
 
 ## Reporting Vulnerabilities
 
 Do not open a public issue for suspected vulnerabilities, exposed credentials, auth bypasses, updater problems, private data exposure, or code execution issues.
 
-Use private maintainer contact until a public security advisory process is configured.
-
-Before public release, this section must be updated with the final security contact address and supported disclosure path.
+Contact the maintainer privately with a minimal description first, then share technical details only after a private disclosure path is agreed.
 
 ## Sensitive Areas
 
@@ -58,9 +56,9 @@ Development runs can mutate real local Field Theory data. Be careful when testin
 
 Prefer temporary test paths or dedicated accounts when exercising destructive or sync-related behavior.
 
-## Pre-Publication Security Gates
+## Security Review Expectations
 
-Before public release:
+Before release changes are shipped:
 
 - run a tracked-file secret scan;
 - run a history-aware secret scan;
