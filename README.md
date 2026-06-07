@@ -10,6 +10,14 @@ Open-source preparation is in progress.
 
 The repository is not yet under a final open-source license. Until the license decision is made and the root [LICENSE](LICENSE) file is replaced, the existing proprietary license remains the governing license.
 
+## History And Attribution
+
+This public-candidate history preserves the Field Theory/Oscar development arc while collapsing the inherited upstream `whisper.cpp` history into one credited import commit.
+
+That shape keeps the project history honest: Field Theory's commits remain visible, and upstream `whisper.cpp` work is attributed without presenting thousands of upstream commits as Field Theory-authored history.
+
+See [NOTICE.md](NOTICE.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and third-party notice tracking.
+
 ## Where to Start
 
 - [Mac app README](mac-app/README.md): local development setup for the active Mac app.
