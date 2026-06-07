@@ -39,7 +39,7 @@ Copyright (c) 2016 Daniel Pirch
 
 License terms in the bundled notice permit redistribution and use in source and binary forms, with or without modification, provided the notice and conditions are retained for source distributions and reproduced in documentation or other materials for binary distributions. The notice also prohibits using Google or contributor names to endorse derived products without prior written permission and includes the standard warranty/liability disclaimer.
 
-Before publication, verify whether the full text from `mac-app/electron/native/Sources/WebRTCVad/LICENSE` should be copied into release documentation, app acknowledgements, or packaged notices.
+Release documentation, app acknowledgements, and packaged notices should preserve the applicable WebRTC VAD license text from `mac-app/electron/native/Sources/WebRTCVad/LICENSE`.
 
 ## Native Helper
 
@@ -62,7 +62,7 @@ Current model URLs:
 
 Packaging can include Whisper binaries built by `mac-app/scripts/build-whisper.sh`, such as `whisper-cli` and `whisper-server`, when present in the expected build output.
 
-Model files are not tracked in the repository. Public docs should treat them as externally downloaded model artifacts governed by their upstream model terms.
+Model files are not tracked in the repository. Docs should treat them as externally downloaded model artifacts governed by their upstream model terms.
 
 ## Gemma And Local LLM Resources
 
@@ -78,7 +78,7 @@ Current local model metadata:
 
 `mac-app/scripts/setup-gemma.sh` downloads or links the model. Model binaries are ignored by `mac-app/resources/models/.gitignore` and should not be committed.
 
-Before publication, verify the model provider terms and decide whether the setup script, not the repository, is the correct distribution boundary.
+Model setup scripts should preserve provider terms and avoid committing downloaded model weights unless the relevant license explicitly permits redistribution.
 
 ## MLX Whisper
 
@@ -104,13 +104,11 @@ The model is downloaded automatically on first use and cached locally. It is not
 
 ## Generated Sounds
 
-The remaining files under `mac-app/public/sounds` are generated WAV tones created during the open-source readiness pass. They are project-generated assets and should be covered by the eventual asset license decision.
-
-See `mac-app/docs/open-source-readiness/asset-provenance-inventory.md` for file hashes.
+The remaining files under `mac-app/public/sounds` are generated WAV tones. They are project-generated assets covered by this repository's license unless a more specific file-level notice says otherwise.
 
 ## Brand And Icon Assets
 
-The following files still require project ownership confirmation, replacement, or removal before publication:
+The following Field Theory brand and icon assets are project assets. They are trademark-protected and are not licensed for reuse as a separate brand identity by the code license:
 
 - `mac-app/electron/assets/fieldtheory-iconTemplate.png`
 - `mac-app/electron/assets/fieldtheory-iconTemplate@2x.png`
@@ -122,8 +120,8 @@ The following files still require project ownership confirmation, replacement, o
 
 ## Removed Unknown-Provenance Assets
 
-Unknown-provenance onboarding images, legacy tray icons, legacy sound files, and reference voice audio files were removed during open-source readiness cleanup. If any are reintroduced, they need explicit source, consent, attribution, license, and redistribution notes before publication.
+Unknown-provenance onboarding images, legacy tray icons, legacy sound files, and reference voice audio files were removed during source-readiness cleanup. If any are reintroduced, they need explicit source, consent, attribution, license, and redistribution notes.
 
 ## Release Artifacts
 
-Production and experimental packages can include generated binaries, static assets, scripts, model setup scripts, and updater metadata. Before publication, verify the notices against the actual packaged contents, not only the source tree.
+Production and experimental packages can include generated binaries, static assets, scripts, model setup scripts, and updater metadata. Verify notices against the actual packaged contents, not only the source tree.
