@@ -3859,19 +3859,17 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   const address = await browserHelperServer.start();
   const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
   const browserUrl = buildBrowserLibraryUrl({ address, devServer });
-  let panelUrl = devServer ? undefined : buildBrowserPanelRedirectUrl(address);
-  if (!devServer) {
-    browserPanelLauncherServer = new BrowserPanelLauncherServer({
-      getBrowserHelperAddress: () => browserHelperServer?.address() ?? address,
-    });
-    try {
-      const launcherAddress = await browserPanelLauncherServer.start();
-      panelUrl = buildBrowserPanelRedirectUrl(address, launcherAddress);
-      log.info('Field Theory browser panel launcher listening at %s', panelUrl);
-    } catch (error) {
-      browserPanelLauncherServer = null;
-      log.warn('Field Theory browser panel launcher unavailable; using helper panel URL: %s', error);
-    }
+  let panelUrl = buildBrowserPanelRedirectUrl(address);
+  browserPanelLauncherServer = new BrowserPanelLauncherServer({
+    getBrowserHelperAddress: () => browserHelperServer?.address() ?? address,
+  });
+  try {
+    const launcherAddress = await browserPanelLauncherServer.start();
+    panelUrl = buildBrowserPanelRedirectUrl(address, launcherAddress);
+    log.info('Field Theory browser panel launcher listening at %s', panelUrl);
+  } catch (error) {
+    browserPanelLauncherServer = null;
+    log.warn('Field Theory browser panel launcher unavailable; using helper panel URL: %s', error);
   }
   writeBrowserHelperState({ address, browserUrl, panelUrl });
   log.info('Field Theory browser helper listening at %s', browserUrl);
