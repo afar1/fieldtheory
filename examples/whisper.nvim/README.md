@@ -58,7 +58,7 @@ https://user-images.githubusercontent.com/1991296/198382564-784e9663-2037-4d04-9
   
 You are now ready to use speech-to-text in Neovim!
 
-## TODO
+## Future Improvements
 
 There are a lot of ways to improve this idea and I don't have much experience with Vim plugin programming, so contributions are welcome! 
 

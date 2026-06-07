@@ -1,8 +1,8 @@
-# Field Theory Privacy Policy Draft
+# Field Theory Privacy Policy
 
 Last updated: May 31, 2026
 
-This is a current Mac-app privacy draft written from code inspection. It should be reviewed before publication, especially after the license, account model, Supabase deployment model, and release model are final.
+This document describes the current Mac-app privacy model from code inspection. Keep it current when account-backed features, Supabase deployment behavior, or release behavior changes.
 
 ## Short Version
 
@@ -81,7 +81,7 @@ Full Library sync and command mobile sync are internally gated. The main gate is
 
 When Library sync is enabled, markdown content from `~/.fieldtheory/library` and `~/.fieldtheory/librarian/artifacts` can be uploaded to Supabase `library_documents`, while River/shared paths are skipped. Deletes can become remote tombstones, and remote deletes can move local files to `~/.Trash`.
 
-Until the public product decision is final, these should be documented as internal or experimental rather than default public behavior.
+These features should be documented as internal or experimental unless they are enabled as default user-facing behavior.
 
 ## Metrics
 
@@ -96,7 +96,7 @@ If an account is used, Field Theory can sync visible feature usage counts and ac
 | Apple | macOS permissions, signing, notarization, distribution, and system integrations | Standard Apple/macOS platform data |
 | Local model and transcription providers | Optional local model/transcription setup | Depends on the selected local engine and downloaded model terms |
 
-If a feature sends data to another third-party API, that feature needs its own current privacy note before public release.
+If a feature sends data to another third-party API, that feature needs its own current privacy note.
 
 ## Account Deletion
 
@@ -130,4 +130,4 @@ See the root `SECURITY.md` before reporting or working on security-sensitive beh
 
 Security issues should not be filed publicly. Use the process in `SECURITY.md`.
 
-General privacy contact details should be finalized before publication.
+For general privacy questions, use the contact path published at [fieldtheory.dev](https://fieldtheory.dev).

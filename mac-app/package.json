@@ -1,7 +1,14 @@
 {
   "name": "fieldtheory-mac",
   "version": "0.2.9",
+  "description": "Field Theory local-first macOS app.",
   "private": true,
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/afar1/fieldtheory.git",
+    "directory": "mac-app"
+  },
   "main": "electron-dist/main/index.js",
   "scripts": {
     "dev": "npm run dev:quiet",

@@ -52,7 +52,7 @@ npm run guard:electron-dist-requires
 - `scripts`: local setup, native/model/transcription setup, package guards, and maintainer release helpers.
 - `resources`: bundled resources and model-related files.
 - `public`: static renderer assets.
-- `docs/open-source-readiness`: current project notes, release boundaries, and decision list.
+- `docs`: architecture notes, feature notes, and maintainer release workflow.
 
 ## Local Data
 
@@ -104,8 +104,7 @@ FT_REGISTER_FIELD_THEORY_PROTOCOL=true npm run dev
 
 ## More Documentation
 
-- [Project notes](docs/open-source-readiness/README.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Privacy policy](PRIVACY_POLICY.md)
-- [Mac development setup](docs/open-source-readiness/mac-development-setup.md)
-- [Architecture overview](docs/open-source-readiness/architecture-overview.md)
-- [Contributor versus maintainer workflows](docs/open-source-readiness/contributor-maintainer-workflows.md)
+- [Release workflow](docs/RELEASE_WORKFLOW.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
