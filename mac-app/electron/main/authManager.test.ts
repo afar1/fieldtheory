@@ -1,9 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@supabase/supabase-js';
 
 import { AuthManager } from './authManager';
 
 describe('AuthManager renderer session state', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('stays unauthenticated when Supabase public config is unavailable', async () => {
+    vi.stubEnv('VITE_SUPABASE_URL', '');
+    vi.stubEnv('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY', '');
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', '');
+
+    const manager = new AuthManager();
+
+    await expect(manager.init()).resolves.toBeUndefined();
+    expect(manager.getSessionState()).toBeNull();
+    expect(manager.getSupabaseClient()).toBeNull();
+  });
+
   it('omits access and refresh tokens from the public session state', () => {
     const manager = new AuthManager();
     const session = {
