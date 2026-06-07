@@ -19,7 +19,7 @@ Summary of changes discussed on 2026-02-03 for future reference.
 
 ---
 
-## Not Yet Implemented
+## Future Work
 
 ### Dead Code Removal
 **Status**: Identified, not removed

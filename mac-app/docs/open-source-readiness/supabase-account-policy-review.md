@@ -62,7 +62,7 @@ Public language should continue to distinguish remote account deletion from loca
 - Whether the live Supabase project has exactly these migrations and policies applied.
 - Whether production Edge Function secrets are configured correctly.
 - Whether public contributors should use production Supabase, a separate hosted dev project, local Supabase, or local-only mode.
-- Whether the renderer still needs full Supabase session objects for realtime, or whether main can eventually pass narrower realtime credentials or account metadata.
+- Whether renderer realtime should keep using full Supabase session objects, or whether main should pass narrower realtime credentials or account metadata.
 
 **Documentation decision**
 

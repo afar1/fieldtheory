@@ -77,13 +77,13 @@ None of those should be required for normal local development.
 
 Current code configures production publishing to GitHub `afar1/field-releases`.
 
-Experimental release configuration points at maintainer-only updater infrastructure. That makes sense for maintainers, but it must be marked private/internal in public docs.
+Experimental release configuration points at maintainer-only updater infrastructure. That makes sense for maintainers, but it must be marked private/internal in contributor docs.
 
 The current release workflow docs have been rewritten as maintainer packaging docs. Keep that boundary intact: release feeds can be visible infrastructure, but credentials and release publication are not contributor setup.
 
 ## Asset and dependency notices
 
-Public release needs a clear notices path for:
+Release review needs a clear notices path for:
 
 - npm dependencies and any dependencies with missing license metadata;
 - WebRTC VAD notices;
@@ -97,10 +97,10 @@ Public release needs a clear notices path for:
 
 This is not optional polish. It affects whether the repo can be responsibly published.
 
-## Public contributor policy decisions still needed
+## Contributor Policy Decisions
 
-- Should public contributors use production Supabase, a separate dev Supabase project, local Supabase, or local-only mode?
-- Which account-backed features should be expected to work in public local development?
-- Should experimental updater code remain in the public tree as maintainer-only code, or be more clearly separated?
+- Should contributors use production Supabase, a separate dev Supabase project, local Supabase, or local-only mode?
+- Which account-backed features should be expected to work in local development?
+- Should experimental updater code remain in the source tree as maintainer-only code, or be more clearly separated?
 - Should release docs document artifact publishing in this repo, a release-only repo, or both?
 - Which license will govern app code, docs, assets, and bundled resources?

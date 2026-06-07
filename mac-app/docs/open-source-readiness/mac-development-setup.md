@@ -108,10 +108,10 @@ npm run build:gemma
 
 This also creates `~/.codex/gemma.config.toml`, a thin Codex profile for local Gemma runs that keeps Field Theory available but disables unrelated plugin skill catalogs. Use it with `codex -p gemma` or a local Gemma wrapper that passes `-p gemma`.
 
-Model binaries are not tracked in the repository. Public docs should distinguish the source code license from model licenses and provider terms.
+Model binaries are not tracked in the repository. Docs should distinguish the source code license from model licenses and provider terms.
 
-## Known setup gaps before public release
+## Known Setup Gaps
 
-- Decide whether public contributors should use real Supabase development infrastructure, local Supabase, or local-only mode by default.
+- Decide whether contributors should use real Supabase development infrastructure, local Supabase, or local-only mode by default.
 - Add a first-class contributor-safe dev profile that redirects both Electron `userData` and Field Theory home paths.
 - Finalize third-party notices after the license and asset terms are chosen.

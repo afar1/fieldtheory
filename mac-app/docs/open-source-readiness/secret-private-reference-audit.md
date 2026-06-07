@@ -2,7 +2,7 @@
 
 Date: May 31, 2026
 
-This audit records current working-tree and git-history findings for open-source readiness. It is not a substitute for a dedicated secret scanner.
+This audit records current working-tree and git-history findings for release readiness. It is not a substitute for a dedicated secret scanner.
 
 ## Current working-tree results
 
@@ -19,7 +19,7 @@ Findings:
 - No tracked `.env`, `.env.local`, `.pem`, `.p8`, `.p12`, or `.mobileprovision` file additions were found by the targeted history command.
 - History contains the now-removed `mac-app/resources/chatterbox/reference-voice.wav` and `.m4a` files in older commits. Those files are not present in the current tree and should not be reintroduced without source, consent, attribution, license, and redistribution notes.
 - History contains expected hits for environment variable names such as `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GH_TOKEN`, `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`, and `APPLE_APP_SPECIFIC_PASSWORD`.
-- The current tree uses those names in server-side environment reads, package/release docs, tests, and open-source readiness audit notes. The pass did not intentionally print or preserve secret values in this document.
+- The current tree uses those names in server-side environment reads, package/release docs, tests, and release-readiness audit notes. The pass did not intentionally print or preserve secret values in this document.
 - History contains the removed maintainer-local env path in older Electron main code and docs. The current working tree no longer uses that path as a runtime fallback.
 - History contains upstream `whisper.cpp` example hits for private-key-related regexes in dependency/example code. Those are not Field Theory credentials.
 
@@ -27,7 +27,7 @@ This is meaningful evidence that obvious tracked credential files were not found
 
 ## Fixed in this readiness pass
 
-- Rewrote `mac-app/docs/RELEASE_WORKFLOW.md` so it no longer describes a private-source/public-release split.
+- Rewrote `mac-app/docs/RELEASE_WORKFLOW.md` so it no longer describes a split between source and release artifacts.
 - Removed obviously private Cursor operational command docs for unrelated deploy, droplet, environment, dashboard, and release workflows.
 - Cleaned remaining Cursor, Claude, and older iOS doc examples that referenced maintainer-local paths or unrelated projects.
 - Replaced the contributor-facing release credential path in `CLAUDE.md` with maintainer-controlled credential language.
@@ -44,13 +44,13 @@ Current tracked-file searches still find intentional references to:
 - absolute `~/.fieldtheory` examples in tests and docs;
 - experimental updater configuration in `mac-app/electron-builder.experimental.json`;
 - maintainer release channel constants in `mac-app/electron/main/buildChannel.ts`;
-- open-source readiness audit docs that intentionally include search patterns.
+- release-readiness audit docs that intentionally include search patterns.
 
 The experimental updater configuration may remain public if it is clearly documented as maintainer-only and contains no secrets. The release token itself must never be committed.
 
 ## Dedicated scanner still required
 
-Before publication, run a dedicated history-aware scanner from the final public candidate:
+Run a dedicated history-aware scanner from the release candidate:
 
 ```bash
 gitleaks detect --source . --redact --no-banner
@@ -60,7 +60,7 @@ git log --all -G'(ghp_|github_pat_|sk-[A-Za-z0-9_-]{20,}|BEGIN .*PRIVATE KEY|/Us
 git log --all --name-only -- .env .env.local '*.pem' '*.p8' '*.p12' '*.mobileprovision'
 ```
 
-If any real credentials appear in history, rotate them before publication. Do not rely on deletion from the current tree as sufficient remediation.
+If any real credentials appear in history, rotate them. Do not rely on deletion from the current tree as sufficient remediation.
 
 ## Commands used
 

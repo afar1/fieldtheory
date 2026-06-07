@@ -2,11 +2,11 @@
 
 Date: May 31, 2026
 
-This inventory records bundled Mac app assets that need provenance and license confirmation before public release. It does not claim that unknown assets are safe to redistribute. Unknown means the file is tracked and packaged or public, but this pass did not find a source/license record in the repository.
+This inventory records bundled Mac app assets that need provenance and license confirmation. It does not claim that unknown assets are safe to redistribute. Unknown means the file is tracked and packaged or served by the app, but this pass did not find a source/license record in the repository.
 
 ## Release Rule
 
-Do not publish a public release until every bundled non-code asset is classified as one of:
+Do not ship a release until every bundled non-code asset is classified as one of:
 
 - project-owned and approved for the chosen public license;
 - third-party with recorded source, license, attribution, and redistribution permission;
@@ -74,7 +74,7 @@ Removed files:
 
 ## Code-like Public Files
 
-These files are source or public HTML rather than media assets. They still need normal source-license coverage:
+These files are source or renderer-served HTML rather than media assets. They need normal source-license coverage:
 
 - `mac-app/public/changelog.html`
 - `mac-app/public/reset-password.html`
@@ -85,4 +85,4 @@ These files are source or public HTML rather than media assets. They still need 
 
 ## Current Conclusion
 
-The high-risk reference voice assets and unknown onboarding/sound assets have been removed. The remaining unknowns are brand/icon assets. They still need owner confirmation, replacement, or removal before public release.
+The high-risk reference voice assets and unknown onboarding/sound assets have been removed. The remaining unknowns are brand/icon assets. They need owner confirmation, replacement, or removal.

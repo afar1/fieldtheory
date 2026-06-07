@@ -1,6 +1,6 @@
 # Tier 2 Audit
 
-Tier 2 is the architecture and boundary pass. Its job is to make the current Mac app understandable enough that Tier 1 public docs can be honest. It does not require rewriting the app before open source.
+Tier 2 is the architecture and boundary pass. Its job is to make the current Mac app understandable enough that the project docs can be honest. It does not require rewriting the app.
 
 ## Completed in this pass
 
@@ -12,7 +12,7 @@ Tier 2 is the architecture and boundary pass. Its job is to make the current Mac
 - Documented local process and terminal surfaces as advanced behavior rather than required contributor setup.
 - Documented disabled mobile transcript sync and shared clipboard behavior as intentionally inert, not broken setup.
 - Documented the experimental updater and packaging paths as maintainer-only.
-- Added dependency license summary automation during the public-readiness pass with `npm run license:summary`.
+- Added dependency license summary automation during the release-readiness pass with `npm run license:summary`.
 - Extracted the shell IPC handler family into `mac-app/electron/main/shellIpc.ts` with focused coverage for all three public `shell:*` channels.
 - Extracted the account status IPC handler family into `mac-app/electron/main/accountIpc.ts` with focused coverage for both public `account:*` invoke channels.
 - Extracted the Field Theory sync IPC handler family into `mac-app/electron/main/fieldTheorySyncIpc.ts` with focused coverage for both public `fieldTheorySync:*` invoke channels.
@@ -21,13 +21,13 @@ Tier 2 is the architecture and boundary pass. Its job is to make the current Mac
 
 ## Code observations
 
-`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a public-release blocker, but it is the main contributor comprehension problem. The shell, account, Field Theory sync, metrics, and quota handler families have moved out, but a new contributor still has to scan one very large integration file to find auth, River, commands, clipboard settings, updater behavior, and agent surfaces.
+`mac-app/electron/main/index.ts` still owns too many unrelated IPC registrations. That is not automatically a release blocker, but it is the main contributor comprehension problem. The shell, account, Field Theory sync, metrics, and quota handler families have moved out, but a new contributor still has to scan one very large integration file to find auth, River, commands, clipboard settings, updater behavior, and agent surfaces.
 
 `mac-app/electron/preload.ts` is the real public capability surface. It is large, but it is also useful because it gives one place to see what the renderer can request. The new IPC map should be treated as a bridge between current code and a future generated contract.
 
 `releaseSyncPolicy.ts` is a good pattern. It gives internal sync a named policy boundary instead of hiding the decision in UI code. Other internal, experimental, disabled, and maintainer-only features should move toward this style.
 
-`auth:getSession` returns the current Supabase session to renderer code. That may be required today, but it is exactly the kind of boundary public docs should call out. Future code should prefer smaller account metadata APIs when full token-bearing session data is not needed.
+`auth:getSession` returns the current Supabase session to renderer code. That may be required today, but it is exactly the kind of boundary project docs should call out. Future code should prefer smaller account metadata APIs when full token-bearing session data is not needed.
 
 `clipboard:getSyncSession` still appears in `mac-app/electron/main/types/clipboard.ts`, but no active `ipcMain.handle('clipboard:getSyncSession', ...)` handler was found in `mac-app/electron/main/index.ts`. The active preload mobile transcript sync methods return inert values. The type definition should be cleaned up or marked legacy in a later code pass.
 
@@ -77,7 +77,7 @@ Then move the higher-complexity owners:
 
 ## Success condition
 
-Tier 2 is successful when a public contributor can answer three questions without reading the whole app:
+Tier 2 is successful when a contributor can answer three questions without reading the whole app:
 
 What can renderer code ask main to do?
 

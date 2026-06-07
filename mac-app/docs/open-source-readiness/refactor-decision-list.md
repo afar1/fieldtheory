@@ -1,8 +1,8 @@
 # Refactor Decision List
 
-This list is for preparing Field Theory Mac for open source. It is not an aesthetic cleanup list. Each item should protect public comprehension, safety, contributor experience, privacy accuracy, or release reliability while keeping the app working.
+This list tracks Field Theory Mac refactors that protect developer comprehension, safety, contributor experience, privacy accuracy, or release reliability while keeping the app working. It is not an aesthetic cleanup list.
 
-## Tier 1: should do before public release
+## Tier 1: release-readiness work
 
 ### Replace contradictory public docs
 
@@ -38,7 +38,7 @@ Verification: every claim in public privacy/security docs maps to current code o
 
 ### Audit secrets and public credentials
 
-Problem: public release requires more than checking current tracked files. History, release scripts, docs, and config need a secret review.
+Problem: responsible release work requires more than checking current tracked files. History, release scripts, docs, and config need a secret review.
 
 Decision: run a tracked-file and history-aware secret audit before publishing. Treat Supabase publishable keys as public config, but verify no service role keys, Apple credentials, GitHub tokens, private updater tokens, signing materials, or personal secrets are present.
 
@@ -54,7 +54,7 @@ Verification: public setup docs do not imply that internal or disabled features 
 
 ### Third-party notices and asset provenance
 
-Problem: assets and dependencies do not yet have a public notices story.
+Problem: assets and dependencies need a complete notices story.
 
 Decision: create third-party notices for npm dependencies, WebRTC VAD, native/helper dependencies, model terms, sounds, images, icons, logos, and reference voice assets.
 
@@ -64,11 +64,11 @@ Verification: every bundled non-original or separately licensed asset has a sour
 
 Problem: `npm audit --omit=dev --audit-level=high` currently reports high and critical findings.
 
-Decision: triage and fix or document each production audit finding before public release.
+Decision: triage and fix or document each production audit finding as part of release review.
 
 Verification: audit passes or there is an explicit accepted-risk note with rationale and mitigation.
 
-## Tier 2: should do to make the public codebase understandable
+## Tier 2: developer-comprehension work
 
 ### Split the main-process integration boundary
 
@@ -124,13 +124,13 @@ Verification: package failures on feature branches are understood as release gua
 
 ### Add dependency/license automation
 
-Problem: public readiness needs repeatable notice generation, not manual memory.
+Problem: release readiness needs repeatable notice generation, not manual memory.
 
 Decision: add a command or documented process that produces dependency license output and flags missing license metadata.
 
-Verification: notices can be refreshed before each public release.
+Verification: notices can be refreshed during release review.
 
-## Tier 3: nice to have after the public baseline is honest
+## Tier 3: nice to have after the baseline is honest
 
 ### Break down the largest renderer components
 

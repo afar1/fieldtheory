@@ -2,7 +2,7 @@
 
 Date: May 31, 2026
 
-This note explains release and updater infrastructure for a public reader without making it part of normal contributor setup.
+This note explains release and updater infrastructure without making it part of normal contributor setup.
 
 **Main point**
 
@@ -25,13 +25,13 @@ These commands do not publish artifacts and should not require private credentia
 
 They run release-channel guards, package-safety checks, native/helper builds, Whisper builds, Electron/Vite builds, Electron Builder, signing hooks, notarization hooks, and updater metadata preparation.
 
-If those commands fail on a feature branch, that is expected release protection. It is not a public setup failure.
+If those commands fail on a feature branch, that is expected release protection. It is not a contributor setup failure.
 
 **Production updater**
 
 Production release metadata is configured for GitHub `afar1/field-releases`.
 
-That repository is release infrastructure. A public source repository can still use a separate release feed for packaged app artifacts. Public contributors do not need write access to it.
+That repository is release infrastructure. A source repository can still use a separate release feed for packaged app artifacts. Contributors do not need write access to it.
 
 **Experimental updater**
 
@@ -41,11 +41,11 @@ The experimental feed is marked private in packaging config and can require main
 
 **Why `private: true` in package.json is okay**
 
-`mac-app/package.json` has `"private": true` because the Mac app package is not intended to be published to npm. That field does not mean the repository cannot be open source.
+`mac-app/package.json` has `"private": true` because the Mac app package is not intended to be published to npm.
 
 **What remains a release gate**
 
-Before publication, maintainers should still verify:
+During release review, maintainers should verify:
 
 - package configs contain no credentials;
 - release scripts read secrets only from environment variables or external credential stores;

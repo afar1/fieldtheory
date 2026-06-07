@@ -24,15 +24,15 @@ Renderer callers found in the current code:
 
 **Safer paths already exist**
 
-`accountAPI` now uses `accountIpc.ts` for account status and capability mode. That is a safer public account metadata path than asking the renderer for the full Supabase session.
+`accountAPI` now uses `accountIpc.ts` for account status and capability mode. That is a safer account metadata path than asking the renderer for the full Supabase session.
 
 The CLI-facing session mirror at `~/.fieldtheory/session.json` is also narrower. `authManager.ts` writes user id, email, display name, and expiry, but not access or refresh tokens.
 
 **Why this is not narrowed in this pass**
 
-Narrowing `authAPI.getSession` would touch active login, onboarding, settings, realtime, River, and profile behavior. That is too risky for an open-source readability pass unless it is paired with product-level auth testing.
+Narrowing `authAPI.getSession` would touch active login, onboarding, settings, realtime, River, and profile behavior. That is too risky for a readability pass unless it is paired with product-level auth testing.
 
-The better public-readiness move for now is to document the boundary clearly, keep account metadata on narrower APIs where possible, and avoid introducing new full-session renderer callers.
+The better move for now is to document the boundary clearly, keep account metadata on narrower APIs where possible, and avoid introducing new full-session renderer callers.
 
 **Follow-up refactor**
 
@@ -43,4 +43,4 @@ Replace broad session reads with narrower APIs where each caller only gets what 
 - event payloads that send account metadata for UI updates instead of full sessions;
 - tests that prove login, sign-out, onboarding resume, profile update, River realtime, and account status still work.
 
-Until that exists, public security docs should treat `auth:getSession` and `auth:sessionChanged` as token-bearing IPC boundaries.
+Until that exists, security docs should treat `auth:getSession` and `auth:sessionChanged` as token-bearing IPC boundaries.

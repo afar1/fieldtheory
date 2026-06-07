@@ -2,7 +2,7 @@
 
 This map describes what the renderer can ask the Electron main process to do through `mac-app/electron/preload.ts`. Treat each exposed global as a capability object. The renderer owns UI state. Main owns files, OS APIs, child processes, auth clients, cloud clients, and updater behavior.
 
-This is a documentation map, not yet a generated contract. The next useful refactor is to move this information into typed channel definitions that can generate the public map automatically.
+This is a documentation map, not a generated contract. The next useful refactor is to move this information into typed channel definitions that can generate the map automatically.
 
 ## How to read this map
 
@@ -47,14 +47,14 @@ Capability classes:
 | `agentKickoffAPI` | experimental/dev surface | process-execution | `agent:*` handlers | Starts or cancels local agent kickoff flows. Useful for power users, but should be documented as advanced/local process behavior. |
 | `agentImproveAPI` | public or advanced app surface | process-execution, local-read, local-write | `agent-improve:*` handler | Launches local agent-assisted improvement flows against selected context. Needs careful process and file-boundary documentation. |
 | `agentHooksAPI` | advanced/dev surface | local-write, process-execution | `agent-hooks:*` handlers | Installs/uninstalls Claude/Codex hooks. Contributor docs should treat this as an advanced integration, not required setup. |
-| `codexTerminalAPI` | advanced/dev surface | process-execution, os-integration, local-read, local-write | `codexTerminal:*`, `codexTerminalManager.ts` | Creates PTY sessions, sends input, reads buffers/history previews, attaches page context, and reads/writes clipboard text. High-comprehension value before public release. |
+| `codexTerminalAPI` | advanced/dev surface | process-execution, os-integration, local-read, local-write | `codexTerminal:*`, `codexTerminalManager.ts` | Creates PTY sessions, sends input, reads buffers/history previews, attaches page context, and reads/writes clipboard text. High-comprehension value for developer docs. |
 | `claudeAPI` | advanced/dev surface | process-execution | Claude integration handlers | Local agent/tooling integration. Should remain outside basic setup docs. |
 | `cursorAPI` | advanced/dev surface | process-execution, os-integration | Cursor integration handlers | Local editor/agent integration. Should remain outside basic setup docs. |
 | `codexReadPermissionAPI` | advanced/dev surface | local-read, local-write | Codex permission handlers | Controls read permission state for Codex-related workflows. |
 | `shellAPI` | public app surface with checks | os-integration | `shellIpc.ts`, `shell:*` handlers | `shell:openExternal` permits `http:`, `https:`, `mailto:`, and `x-apple.systempreferences:` URLs. Other shell methods should remain explicit about what they open or reveal. |
 | `diagnosticsAPI` | dev-internal surface | local-read, local-write | diagnostics handlers | Reads diagnostics and writes rendered-editor debug logs. Good for contributors, but privacy-sensitive if copied into issues. |
 | `audioAPI` | public app surface | os-integration, local-read, local-write | audio manager channels | Audio device state and priority device behavior. |
-| `gazeAPI` | experimental surface | os-integration, local-read, local-write | gaze handlers and gaze overlay preload files | Gaze windows and overlays are present but should be described as experimental until there is a public readiness note. |
+| `gazeAPI` | experimental surface | os-integration, local-read, local-write | gaze handlers and gaze overlay preload files | Gaze windows and overlays are present but should be described as experimental until there is a dedicated readiness note. |
 | `hotkeyAPI` | public app surface | os-integration, local-read, local-write | hotkey handlers | Global hotkey state and registration. |
 | `transcribeAPI` | public app surface | os-integration, process-execution, local-read, local-write | transcription handlers | Microphone, local transcription engines, setup checks, and model installation paths. |
 | `permissionsAPI` | public app surface | os-integration | permission handlers | Accessibility, microphone, and screen recording permission state/events. |
@@ -108,7 +108,7 @@ The app also has specialized preload files for auxiliary windows:
 
 ## Refactor recommendation
 
-The public codebase does not need a full IPC rewrite before release. It does need a stable owner map.
+The codebase does not need a full IPC rewrite before release. It does need a stable owner map.
 
 The smallest useful next code step is to create feature-owned IPC registration modules while leaving existing handler behavior intact:
 
@@ -123,4 +123,4 @@ The smallest useful next code step is to create feature-owned IPC registration m
 - `registerUpdaterIpc`
 - `registerShellIpc`
 
-The first extracted modules are `registerShellIpc` in `mac-app/electron/main/shellIpc.ts`, `registerAccountIpc` in `mac-app/electron/main/accountIpc.ts`, `registerFieldTheorySyncIpc` in `mac-app/electron/main/fieldTheorySyncIpc.ts`, `registerMetricsIpc` in `mac-app/electron/main/metricsIpc.ts`, and `registerQuotaIpc` in `mac-app/electron/main/quotaIpc.ts`. Each future move should keep the public channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.
+The first extracted modules are `registerShellIpc` in `mac-app/electron/main/shellIpc.ts`, `registerAccountIpc` in `mac-app/electron/main/accountIpc.ts`, `registerFieldTheorySyncIpc` in `mac-app/electron/main/fieldTheorySyncIpc.ts`, `registerMetricsIpc` in `mac-app/electron/main/metricsIpc.ts`, and `registerQuotaIpc` in `mac-app/electron/main/quotaIpc.ts`. Each future move should keep channel names unchanged and should have either existing test coverage or a focused test for the moved handler. The goal is findability, not redesign.

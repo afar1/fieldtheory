@@ -2,13 +2,13 @@
 
 Date: May 31, 2026
 
-This note records the current Tier 1 open-source readiness state after the public documentation and dependency-audit pass.
+This note records the current Tier 1 release-readiness state after the documentation and dependency-audit pass.
 
 ## Completed in this pass
 
 ### Public entry docs rewritten
 
-The root `README.md` and `mac-app/README.md` now describe the repository as an open-source candidate, explain the AGPL app-source license decision, point readers to the current readiness docs, and separate local development from maintainer packaging.
+The root `README.md` and `mac-app/README.md` describe the repository, explain the AGPL app-source license decision, point readers to the current readiness docs, and separate local development from maintainer packaging.
 
 ### Environment example added
 
@@ -18,7 +18,7 @@ The root `README.md` and `mac-app/README.md` now describe the repository as an o
 
 `mac-app/PRIVACY_POLICY.md` is now a current privacy draft. It documents local data, Electron `userData`, file-backed Supabase sessions, clipboard history, Supabase-backed features, River, internal sync gates, metrics, account deletion scope, and privileged Electron capabilities.
 
-`SECURITY.md` now documents sensitive areas, private vulnerability reporting expectations, local data cautions, secret rules, and pre-publication security gates.
+`SECURITY.md` documents sensitive areas, private vulnerability reporting expectations, local data cautions, secret rules, and release security gates.
 
 ### Contributor guide added
 
@@ -26,7 +26,7 @@ The root `README.md` and `mac-app/README.md` now describe the repository as an o
 
 ### Third-party notice work started
 
-`THIRD_PARTY_NOTICES.md` now records the notice categories that must be resolved before publication: npm dependencies, native/transcription components, local models, public assets, icons, sounds, reference voice assets, and packaged release artifacts.
+`THIRD_PARTY_NOTICES.md` records the notice categories that must be resolved for release review: npm dependencies, native/transcription components, local models, public assets, icons, sounds, reference voice assets, and packaged release artifacts.
 
 `mac-app/docs/open-source-readiness/asset-provenance-inventory.md` records the current bundled media/icon files with SHA-256 hashes and release status.
 
@@ -48,7 +48,7 @@ The package lock omitted license fields for `agentmail@0.4.9` and `spawn-command
 
 `npm run build` passes after that change.
 
-## Still open before public release
+## Still Open
 
 ### License terms
 
@@ -66,14 +66,14 @@ Terms to keep explicit:
 
 ### Full third-party notices
 
-The notice file and asset inventory are drafts. They still need source/provenance review for:
+The notice file and asset inventory are drafts. They need source/provenance review for:
 
 - icons and logos;
 - `mac-app/electron/assets/*`;
 - native/transcription artifacts;
 - model downloads and model terms.
 
-The dependency license summary now resolves the missing lockfile license metadata for `agentmail` and `spawn-command` through documented overrides. Future dependency changes should rerun `npm run license:summary` and review any new missing metadata before publication.
+The dependency license summary resolves the missing lockfile license metadata for `agentmail` and `spawn-command` through documented overrides. Future dependency changes should rerun `npm run license:summary` and review any new missing metadata during release review.
 
 ### Dev/build toolchain audit
 
@@ -90,15 +90,15 @@ Those should be handled as a separate compatibility pass because they affect run
 
 A tracked-file grep pass found no obvious committed private key material, but it did find expected placeholder and code references to secret names in docs, scripts, tests, and Supabase Edge Function code.
 
-This is not a full publication-grade audit. Before public release, run a history-aware secret scan and rotate anything that has ever been committed accidentally.
+This is not a full release-grade audit. Run a history-aware secret scan and rotate anything that has ever been committed accidentally.
 
 ### Supabase policy review
 
-The docs now correctly say Supabase publishable keys are public client config. Before public release, the Supabase RLS policies, Edge Functions, account deletion behavior, and production/dev project split still need a dedicated review.
+The docs correctly say Supabase publishable keys are public client config. Supabase RLS policies, Edge Functions, account deletion behavior, and production/dev project split need dedicated review.
 
 ### Account deletion wording
 
-The privacy draft does not claim local data is deleted on account deletion. The actual local/remote deletion behavior should be product-reviewed before publication.
+The privacy draft does not claim local data is deleted on account deletion. The actual local/remote deletion behavior should be product-reviewed.
 
 ## Verification run
 

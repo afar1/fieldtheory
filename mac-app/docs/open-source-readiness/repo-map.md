@@ -1,14 +1,14 @@
 # Repo Map
 
-This map is written for open-source readiness. It names the areas a contributor needs first and calls out areas that should not be treated as polished public documentation yet.
+This map names the areas a contributor needs first and calls out areas that need extra care.
 
 ## Repository root
 
-- `README.md`: refreshed during the open-source readiness pass. It describes the repository as an AGPL open-source candidate and points to the current readiness docs.
+- `README.md`: describes the repository and points to the current project notes.
 - `LICENSE`: AGPL-3.0-or-later for Field Theory-owned app/source code unless a file or directory says otherwise.
 - `arch.md`: useful context, but this pass still treats code as the source of truth.
 - `mac-app/`: the active Electron/Vite/React Mac application.
-- `scripts/`, `supabase/`, and other root-level directories: supporting project infrastructure. These need a separate public-readiness pass if they are included in the public repository.
+- `scripts/`, `supabase/`, and other root-level directories: supporting project infrastructure. Review these carefully when changing contributor-facing setup or release behavior.
 
 ## Mac app
 
@@ -41,11 +41,11 @@ This map is written for open-source readiness. It names the areas a contributor 
 - `mac-app/docs/RELEASE_CHECKLIST.md`: version-specific and stale relative to the current package version.
 - `mac-app/CHANGELOG.md`: stops before the current app version.
 
-## Public-readiness caution zones
+## Caution Zones
 
 - Release and updater docs still assume private maintainer infrastructure.
 - Remaining audio/image/icon assets need provenance and license review. Reference voice audio was removed during readiness cleanup and should not be reintroduced without consent and redistribution notes.
 - Native helper, Whisper, Gemma, and local model paths need clear contributor setup expectations.
 - Account-backed Supabase behavior needs fresh privacy language.
 - Internal or disabled sync surfaces need to be named so contributors do not treat them as broken default features.
-- Large files such as `electron/main/index.ts`, `electron/preload.ts`, `src/components/LibrarianView.tsx`, `src/components/ClipboardHistory.tsx`, and `electron/main/librarianManager.ts` are functional but hard for a public contributor to navigate.
+- Large files such as `electron/main/index.ts`, `electron/preload.ts`, `src/components/LibrarianView.tsx`, `src/components/ClipboardHistory.tsx`, and `electron/main/librarianManager.ts` are functional but hard for a contributor to navigate.

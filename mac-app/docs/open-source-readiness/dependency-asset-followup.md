@@ -2,7 +2,7 @@
 
 Date: May 31, 2026
 
-This note records dependency and asset provenance work that remains after the first public-readiness cleanup. License choice is deferred, so this document does not choose license terms.
+This note records dependency and asset provenance work that remains after the first release-readiness cleanup. License choice is deferred, so this document does not choose license terms.
 
 ## Current state
 
@@ -13,13 +13,13 @@ High-risk unknown-provenance media was removed earlier in this readiness pass:
 - unknown sound files;
 - tracked reference voice audio files.
 
-The remaining generated sound files are project-generated WAV tones. They still need to be covered by the eventual asset license decision.
+The remaining generated sound files are project-generated WAV tones. They should be covered by the eventual asset license decision.
 
 ## Remaining provenance blockers
 
 **Brand and icon assets**
 
-The asset inventory still marks app icons, tray icons, and logo PNGs as unknown provenance. These files are still packaged or publicly served. Before publication, confirm project ownership, replace them, or remove them:
+The asset inventory marks app icons, tray icons, and logo PNGs as unknown provenance. These files are packaged or served by the app. Confirm project ownership, replace them, or remove them:
 
 - `mac-app/electron/assets/fieldtheory-iconTemplate.png`
 - `mac-app/electron/assets/fieldtheory-iconTemplate@2x.png`
@@ -31,7 +31,7 @@ The asset inventory still marks app icons, tray icons, and logo PNGs as unknown 
 
 **Native helper and WebRTC VAD**
 
-`FieldTheoryHelper` depends on WebRTC VAD through `mac-app/electron/native/Package.swift`. The BSD-style notice is present at `mac-app/electron/native/Sources/WebRTCVad/LICENSE`, but top-level notices still need to include or reference it before publication.
+`FieldTheoryHelper` depends on WebRTC VAD through `mac-app/electron/native/Package.swift`. The BSD-style notice is present at `mac-app/electron/native/Sources/WebRTCVad/LICENSE`; top-level notices should include or reference it.
 
 **Transcription and model resources**
 

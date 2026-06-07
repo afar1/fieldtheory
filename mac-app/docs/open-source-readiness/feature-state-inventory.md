@@ -12,7 +12,7 @@ The most important rule is simple: do not call something broken just because it 
 | Account-backed public | Product surface that can exist in public code, but requires Supabase auth or public account configuration to be useful. |
 | Internal-gated | Code exists, but is gated by an internal flag, maintainer policy, or account/server behavior. It should not be promised as a default public feature. |
 | Disabled/stubbed | Exposed for compatibility or UI shape, but intentionally returns inert values. |
-| Experimental | Present in code and possibly useful, but not ready to explain as a stable public feature. |
+| Experimental | Present in code and possibly useful, but not presented as a stable feature. |
 | Maintainer-only | Release, signing, updater, or packaging flow that public contributors do not need for normal development. |
 | Dev-only | Debug, simulator, scenario, or diagnostics flow that should not be described as product behavior. |
 
@@ -42,7 +42,7 @@ The most important rule is simple: do not call something broken just because it 
 | Feedback and social feedback | Account-backed public | `socialAPI`, Supabase feedback behavior | Cloud-backed. Keep privacy language explicit. |
 | River shared documents | Account-backed public | `sharedFilesAPI`, `teamAPI`, `sharedSyncService.ts`, `sharedTeamService.ts` | Current public collaboration feature. Do not conflate with full private Library sync. |
 | Full Library sync | Internal-gated | `fieldTheorySyncAPI`, `fieldTheorySyncIpc.ts`, `releaseSyncPolicy.ts`, `preferences.ts` | Code exists but should not be promised as default public behavior. Gate names include `FIELD_THEORY_INTERNAL_SYNC_ENABLED` and `FIELD_THEORY_INTERNAL_SYNC`. |
-| Command/mobile sync | Internal-gated | command sync handlers, `releaseSyncPolicy.ts` | Treat as internal until public policy and docs exist. |
+| Command/mobile sync | Internal-gated | command sync handlers, `releaseSyncPolicy.ts` | Treat as internal until policy and docs exist. |
 | Tasks tab and todos | Experimental/internal | `todoAPI`, `preferences.ts`, preload comments | The Tasks tab is hidden by default and marked experimental. Do not present as stable public setup. |
 | Mobile transcript sync into clipboard history | Disabled/stubbed | `clipboardAPI` sync methods in `preload.ts` | Preload methods intentionally return inert values. `clipboard:getSyncSession` remains in old type definitions but no active handler was found in `main/index.ts`. |
 | Shared clipboard | Disabled/stubbed | `sharedClipboardAPI` in `preload.ts` | Team clipboard item sync is hard-disabled and returns empty/null values. Do not document as available. |
@@ -53,7 +53,7 @@ The most important rule is simple: do not call something broken just because it 
 | Claude and Cursor integrations | Dev/advanced | `claudeAPI`, `cursorAPI` | Local tooling integrations. Not required for normal app setup. |
 | Hot Mic for Codex terminals | Experimental/advanced | `hotMicAPI` | Continuous voice input for Codex terminal workflows. |
 | Gaze surfaces | Experimental | `gazeAPI`, gaze preload files | Present in code. Needs a separate readiness note before being advertised. |
-| Squares | Experimental | `squaresAPI` | Present in preload. Product status should be clarified before public release. |
+| Squares | Experimental | `squaresAPI` | Present in preload. Product status should be clarified before being advertised. |
 | Scenario and auth simulator | Dev-only | `scenarioAPI`, `authAPI.simulateState`, `authAPI.resetSimulator` | Useful for testing and demos. Do not describe as user-facing product behavior. |
 | Diagnostics and debug logs | Dev-only with privacy caution | `diagnosticsAPI` | Good contributor support surface. Warn contributors not to paste logs containing local paths or document contents into public issues. |
 | Production updater | Maintainer-only in packaged builds | `updaterAPI`, `buildChannel.ts`, `electron-updater` setup | Local development does not require updater behavior. |
@@ -77,7 +77,7 @@ Supabase publishable keys and Stripe links are public client configuration. They
 
 **Disabled/stubbed APIs should be honest**
 
-The public repository can keep inert APIs for renderer compatibility, but the docs should say they are intentionally disabled. Otherwise contributors will waste time trying to repair behavior that is deliberately off.
+The repository can keep inert APIs for renderer compatibility, but the docs should say they are intentionally disabled. Otherwise contributors will waste time trying to repair behavior that is deliberately off.
 
 ## Refactor recommendation
 

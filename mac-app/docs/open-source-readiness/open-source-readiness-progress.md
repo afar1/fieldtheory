@@ -1,6 +1,6 @@
-# Open Source Readiness Progress
+# Release Readiness Progress
 
-This page tracks the active push to finish Field Theory Mac open-source readiness work that has not been deferred.
+This page tracks Field Theory Mac release-readiness work that has not been deferred.
 
 **Deferred**
 
@@ -10,11 +10,11 @@ This page tracks the active push to finish Field Theory Mac open-source readines
 
 The root checkout `/Users/afar/dev/fieldtheory` is the local staging bench on `experimental`. The current shipped review branch is `codex/mac-oss-root-stabilization`, opened as PR 317 against `experimental`. The root still has preexisting `md` submodule dirt that this work should not touch.
 
-The non-license readiness pass is complete as far as this worktree can take it without human publication decisions or external secret-scanner tooling. Public docs now describe the current Mac app from code inspection. The shell, account, Field Theory sync, metrics, and quota IPC families have focused modules and tests. Remaining publication decisions are documented instead of guessed.
+The non-license readiness pass is complete as far as this worktree can take it without human release decisions or external secret-scanner tooling. Docs now describe the current Mac app from code inspection. The shell, account, Field Theory sync, metrics, and quota IPC families have focused modules and tests. Remaining release decisions are documented instead of guessed.
 
-**Tier 1 public-readiness work**
+**Tier 1 release-readiness work**
 
-- [x] Rewrite public entry docs from the current codebase instead of stale README truth.
+- [x] Rewrite entry docs from the current codebase instead of stale README truth.
 - [x] Add `mac-app/.env.example` with non-secret optional account-backed configuration.
 - [x] Rewrite privacy and security docs from current local/cloud data flow.
 - [x] Add contributor-facing setup and maintainer-only release separation.
@@ -23,12 +23,12 @@ The non-license readiness pass is complete as far as this worktree can take it w
 - [x] Remove unknown-provenance unused sounds, onboarding images, legacy tray icons, and reference voice assets.
 - [x] Add a current tracked-file secret/private-reference audit note.
 - [x] Run a history-aware git-log secret/private-reference audit.
-- [x] Document the dedicated history-aware scanner gate that must run before publication.
+- [x] Document the dedicated history-aware scanner gate that must run during release review.
 - [x] Add dependency and asset follow-up note for remaining unknowns.
 - [x] Replace third-party notices draft with a current notice/provenance index.
 - [x] Resolve missing npm license metadata with documented overrides.
 - [x] Document brand/icon asset provenance as a remaining human confirmation, replacement, or removal decision.
-- [x] Rewrite Mac release workflow docs so they no longer describe a private-source/public-release split.
+- [x] Rewrite Mac release workflow docs so they no longer describe a split between source and release artifacts.
 - [x] Remove obviously private Cursor operational command docs for unrelated deploy/droplet/env/release workflows.
 - [x] Finish a broader pass over remaining Cursor, Claude, and iOS docs for private paths or maintainer-only assumptions.
 - [x] Review Supabase policy/account-backed wording as far as repo code allows without changing production infrastructure.
@@ -46,14 +46,14 @@ The non-license readiness pass is complete as far as this worktree can take it w
 - [x] Review auth/session renderer boundary and document token-bearing paths that are not safe to narrow in this pass.
 - [x] Make contributor-safe local data paths clearer in docs.
 - [x] Document first-class dev/test local data overrides as a future code pass, not part of this readiness slice.
-- [x] Reduce public confusion around release infrastructure.
+- [x] Reduce contributor confusion around release infrastructure.
 - [x] Keep docs updated as code ownership changes in this pass.
 
 **Tier 3 useful polish after the baseline is honest**
 
 - [x] Add architecture diagrams after the text docs stabilized.
 - [x] Document local-only fixture/dev-profile work as a future decision instead of inventing a partial fixture.
-- [x] Add public issue/contribution path notes without pretending the license is decided.
+- [x] Add issue/contribution path notes without pretending the license is decided.
 
 **Verification log**
 
@@ -82,4 +82,4 @@ The non-license readiness pass is complete as far as this worktree can take it w
 - [x] `npm audit --omit=dev --audit-level=high` passed with zero vulnerabilities after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety` passed after the metrics IPC extraction and audit documentation updates.
 - [x] `npm run guard:package-safety:experimental` passed after the metrics IPC extraction and audit documentation updates.
-- [x] Record checks and gates that cannot be fully completed in this shell or without human publication decisions.
+- [x] Record checks and gates that cannot be fully completed in this shell or without human release decisions.
