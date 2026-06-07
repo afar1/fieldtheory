@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBrowserLibraryUrl, buildBrowserPanelRedirectUrl } from './browserLibraryUrl';
+import { buildBrowserLibraryUrl, buildBrowserPanelRedirectUrl, DEFAULT_BROWSER_PANEL_LAUNCHER_PORT } from './browserLibraryUrl';
 
 const address = {
   host: '127.0.0.1',
@@ -54,6 +54,17 @@ describe('buildBrowserLibraryUrl', () => {
     const url = new URL(buildBrowserPanelRedirectUrl(address));
 
     expect(url.origin).toBe('http://127.0.0.1:59971');
+    expect(url.pathname).toBe('/panel');
+    expect(url.search).toBe('');
+  });
+
+  it('builds clean fixed launcher panel URLs without helper tokens', () => {
+    const url = new URL(buildBrowserPanelRedirectUrl(address, {
+      host: '127.0.0.1',
+      port: DEFAULT_BROWSER_PANEL_LAUNCHER_PORT,
+    }));
+
+    expect(url.origin).toBe(`http://127.0.0.1:${DEFAULT_BROWSER_PANEL_LAUNCHER_PORT}`);
     expect(url.pathname).toBe('/panel');
     expect(url.search).toBe('');
   });
