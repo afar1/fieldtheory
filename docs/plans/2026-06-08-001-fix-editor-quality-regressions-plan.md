@@ -24,6 +24,7 @@ The work should be executed characterization-first. Most failures already have n
 - [x] 2026-06-08: Focused verification passed: targeted heading-delete `LibrarianView` test, `MarkdownCodeEditor.test.tsx`, and `npm run typecheck`.
 - [x] 2026-06-08: U4 sidebar persistence fix landed: popped-out document windows read shared sidebar preferences but no longer write transient expansion state back to shared storage.
 - [x] 2026-06-08: Focused verification passed: popped-out `LibrarianView` tests and `npm run typecheck`.
+- [x] 2026-06-08: Saved locally to the root staging checkout for manual testing.
 - [ ] U4 cursor/window restart hydration remains open.
 
 ---
