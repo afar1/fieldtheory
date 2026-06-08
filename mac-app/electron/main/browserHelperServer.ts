@@ -29,6 +29,7 @@ export type BrowserHelperServerOptions = {
   host?: string;
   port?: number;
   staticDir?: string;
+  browserLibraryBaseUrl?: string | null;
 };
 
 export type BrowserHelperDocumentServiceLike = {
@@ -337,6 +338,7 @@ export class BrowserHelperServer {
   private readonly host: string;
   private readonly port: number;
   private readonly staticDir: string | null;
+  private readonly browserLibraryBaseUrl: string | null;
   private server: http.Server | null = null;
   private readonly eventClients = new Map<http.ServerResponse, string | null>();
 
@@ -352,6 +354,7 @@ export class BrowserHelperServer {
     this.host = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.staticDir = options.staticDir ? path.resolve(options.staticDir) : null;
+    this.browserLibraryBaseUrl = options.browserLibraryBaseUrl?.replace(/\/$/, '') ?? null;
   }
 
   async start(): Promise<BrowserHelperServerAddress> {
@@ -1917,7 +1920,8 @@ export class BrowserHelperServer {
   private writePanelRedirect(parsed: URL, res: http.ServerResponse, origin?: string): void {
     const address = this.address();
     const apiUrl = `http://${this.host}:${address.port}`;
-    const destination = new URL(`${apiUrl}/browser-library.html`);
+    const browserLibraryBaseUrl = this.browserLibraryBaseUrl ?? apiUrl;
+    const destination = new URL('/browser-library.html', browserLibraryBaseUrl);
     destination.searchParams.set('api', apiUrl);
     destination.searchParams.set('token', this.token);
     for (const [key, value] of parsed.searchParams.entries()) {
