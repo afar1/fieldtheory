@@ -544,6 +544,7 @@ export interface WikiArchiveController {
 interface WikiSidebarProps {
   active?: boolean;
   canHideSidebarDefaultFolders?: boolean;
+  persistPreferences?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
   onOpenItemInNewWindow?: (item: UnifiedItem, options?: { sidebarCollapsed?: boolean }) => void;
   selectedId: string | null;
@@ -1777,6 +1778,7 @@ function isLatestSidebarRequest(ref: MutableRefObject<number>, requestId: number
 function WikiSidebar({
   active = true,
   canHideSidebarDefaultFolders = true,
+  persistPreferences = true,
   onSelectItem,
   onOpenItemInNewWindow,
   selectedId,
@@ -2162,32 +2164,39 @@ function WikiSidebar({
   }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, pruneDeletedWikiPage]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
-  }, [expandedFolders]);
+  }, [expandedFolders, persistPreferences]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem('library-sort-mode', sortMode);
-  }, [sortMode]);
+  }, [persistPreferences, sortMode]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem('wiki-recent-collapsed', recentCollapsed ? '1' : '0');
-  }, [recentCollapsed]);
+  }, [persistPreferences, recentCollapsed]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY, JSON.stringify([...pinnedItemIds]));
-  }, [pinnedItemIds]);
+  }, [persistPreferences, pinnedItemIds]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem(LIBRARY_ICON_COLOR_STORAGE_KEY, JSON.stringify(iconColorIndices));
-  }, [iconColorIndices]);
+  }, [iconColorIndices, persistPreferences]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     localStorage.setItem(LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY, JSON.stringify(iconColorOrder));
-  }, [iconColorOrder]);
+  }, [iconColorOrder, persistPreferences]);
 
   useEffect(() => {
+    if (!persistPreferences) return;
     if (newDocLocationKey) localStorage.setItem(LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY, newDocLocationKey);
-  }, [newDocLocationKey]);
+  }, [newDocLocationKey, persistPreferences]);
 
   useEffect(() => {
     const applyStoredSidebarPreferences = () => {
