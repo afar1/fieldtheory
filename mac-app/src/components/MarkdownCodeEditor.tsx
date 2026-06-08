@@ -28,6 +28,7 @@ import {
   RangeSetBuilder,
   Text,
   Transaction,
+  type ChangeDesc,
   type Range,
 } from '@codemirror/state';
 import {
@@ -2505,11 +2506,53 @@ export function getRenderedMarkdownImageLineRanges(state: EditorState): Rendered
   const ranges: RenderedMarkdownEditorRange[] = [];
   for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
     const line = state.doc.line(lineNumber);
-    if (/!\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]*)\)/.test(line.text)) {
+    if (RENDERED_MARKDOWN_IMAGE_MARKDOWN_PATTERN.test(line.text)) {
       ranges.push({ from: line.from, to: line.to });
     }
   }
   return ranges;
+}
+
+const RENDERED_MARKDOWN_IMAGE_MARKDOWN_PATTERN = /!\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]*)\)/;
+
+function renderedMarkdownEditorRangeContainsImageLine(
+  state: EditorState,
+  from: number,
+  to: number,
+): boolean {
+  const docLength = state.doc.length;
+  const startLine = state.doc.lineAt(Math.max(0, Math.min(from, docLength)));
+  const endLine = state.doc.lineAt(Math.max(0, Math.min(to, docLength)));
+  for (let lineNumber = startLine.number; lineNumber <= endLine.number; lineNumber += 1) {
+    if (RENDERED_MARKDOWN_IMAGE_MARKDOWN_PATTERN.test(state.doc.line(lineNumber).text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function renderedMarkdownEditorChangesMayAffectImageRanges(update: ViewUpdate): boolean {
+  let mayAffectImageRanges = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (mayAffectImageRanges) return;
+    mayAffectImageRanges = (
+      renderedMarkdownEditorRangeContainsImageLine(update.startState, fromA, toA)
+      || renderedMarkdownEditorRangeContainsImageLine(update.state, fromB, toB)
+    );
+  });
+  return mayAffectImageRanges;
+}
+
+function mapRenderedMarkdownEditorRanges(
+  changes: ChangeDesc,
+  ranges: readonly RenderedMarkdownEditorRange[],
+): RenderedMarkdownEditorRange[] {
+  return ranges
+    .map((range) => ({
+      from: changes.mapPos(range.from),
+      to: changes.mapPos(range.to),
+    }))
+    .filter((range) => range.from <= range.to);
 }
 
 function countRenderedMarkdownEditorRangeLines(
@@ -2557,7 +2600,15 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
         ) {
           const activeDocumentPath = documentPath ?? update.state.facet(renderedMarkdownDocumentPathFacet);
           const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
-          if (update.docChanged) this.stableImageRanges = getRenderedMarkdownImageLineRanges(update.state);
+          let imageRangesRecomputed = false;
+          if (update.docChanged) {
+            if (renderedMarkdownEditorChangesMayAffectImageRanges(update)) {
+              this.stableImageRanges = getRenderedMarkdownImageLineRanges(update.state);
+              imageRangesRecomputed = true;
+            } else {
+              this.stableImageRanges = mapRenderedMarkdownEditorRanges(update.changes, this.stableImageRanges);
+            }
+          }
           this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(
             update.state,
             update.view.visibleRanges,
@@ -2571,6 +2622,7 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
               docChanged: update.docChanged,
               selectionSet: update.selectionSet,
               viewportChanged: update.viewportChanged,
+              imageRangesRecomputed,
               lines: countRenderedMarkdownEditorRangeLines(update.state, update.view.visibleRanges),
               visibleRanges: update.view.visibleRanges.length,
               docLength: update.state.doc.length,
