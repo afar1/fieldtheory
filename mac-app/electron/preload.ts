@@ -274,6 +274,7 @@ const OnboardingIPCChannels = {
   GET_ONBOARDING_STATE: 'onboarding:getState',
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
+  COMPLETE_LOCAL_SETUP: 'onboarding:completeLocalSetup',
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
@@ -2196,6 +2197,11 @@ const onboardingAPI = {
   // Mark onboarding as complete and open main window.
   complete: async (): Promise<boolean> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.COMPLETE_ONBOARDING);
+  },
+
+  // Mark local-only setup as complete without requiring account sign-in.
+  completeLocalSetup: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.COMPLETE_LOCAL_SETUP);
   },
 
   // Skip onboarding (set up later).
