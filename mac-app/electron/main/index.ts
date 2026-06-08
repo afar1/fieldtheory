@@ -2919,7 +2919,9 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       documentKind: page.documentKind ?? 'markdown',
     }
     : null;
+  const browserLibraryDevServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '') ?? null;
   browserHelperServer = new BrowserHelperServer({
+    browserLibraryBaseUrl: browserLibraryDevServer,
     service: {
       getRoots: () => createFallbackDocumentService().getRoots(),
       getLibraryRoots: () => manager.getLibraryRoots(),
@@ -3851,8 +3853,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
   });
   const address = await browserHelperServer.start();
-  const devServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '');
-  const browserUrl = buildBrowserLibraryUrl({ address, devServer });
+  const browserUrl = buildBrowserLibraryUrl({ address, devServer: browserLibraryDevServer });
   let panelUrl = buildBrowserPanelRedirectUrl(address);
   browserPanelLauncherServer = new BrowserPanelLauncherServer({
     getBrowserHelperAddress: () => browserHelperServer?.address() ?? address,

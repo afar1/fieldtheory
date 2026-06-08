@@ -307,6 +307,28 @@ describe('BrowserHelperServer', () => {
     expect(redirected.searchParams.get('target')).toBe('{"kind":"library"}');
   });
 
+  it('redirects panel links to the dev browser library host when configured', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      browserLibraryBaseUrl: 'http://localhost:5173/',
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/panel?kind=library`);
+
+    expect(response.status).toBe(302);
+    const redirected = new URL(String(response.headers.location ?? ''));
+    expect(redirected.origin).toBe('http://localhost:5173');
+    expect(redirected.pathname).toBe('/browser-library.html');
+    expect(redirected.searchParams.get('api')).toBe(`http://${address.host}:${address.port}`);
+    expect(redirected.searchParams.get('token')).toBe('test-token');
+    expect(redirected.searchParams.get('kind')).toBe('library');
+  });
+
   it('allows built browser assets to load with the helper auth cookie set by html', async () => {
     const { address } = await startServer();
 
