@@ -1154,6 +1154,7 @@ describe('LibrarianView render', () => {
     Object.defineProperty(window, 'markdownImagesAPI', {
       configurable: true,
       value: {
+        copyImageForDocument: vi.fn(async () => null),
         copyImageDataUrlForDocument: vi.fn(async () => null),
         makeImagesPortable: vi.fn(async (_documentPath: string, content: string) => ({
           content,
