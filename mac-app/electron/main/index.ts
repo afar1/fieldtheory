@@ -125,7 +125,7 @@ import { parseSharedFileFrontmatter } from './sharedFiles';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
-import { resolveStartupReadiness } from './startupReadinessPolicy';
+import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
 import {
   CommandsIPCChannels,
@@ -13047,6 +13047,29 @@ function setupOnboardingIPCHandlers(): void {
     return true;
   });
 
+  // Complete onboarding for local-only use. This intentionally does not touch
+  // Supabase/auth state; account-backed features can prompt separately.
+  ipcMain.handle(OnboardingIPCChannels.COMPLETE_LOCAL_SETUP, async () => {
+    if (!preferencesManager) return false;
+    await preferencesManager.save({
+      onboardingComplete: true,
+      onboardingStep: undefined,
+      localSetupComplete: true,
+    });
+
+    registerHotkeysAfterOnboarding();
+
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+
+    if (onboardingWindow) {
+      onboardingWindow.close();
+    }
+    showClipboardHistoryOnActivate();
+    return true;
+  });
+
   // Skip onboarding (set up later).
   ipcMain.handle(OnboardingIPCChannels.SKIP_ONBOARDING, async () => {
     if (!preferencesManager) return false;
@@ -15963,7 +15986,8 @@ if (!gotTheLock) {
     const canUseLocalAccount =
       isAuthenticated ||
       (authManager?.hasEverBeenAuthenticated() ?? false) ||
-      (userDataManager?.isLoggedIn() ?? false);
+      (userDataManager?.isLoggedIn() ?? false) ||
+      prefs?.localSetupComplete === true;
 
     const hasAllPermissions =
       micStatus === 'granted' &&
@@ -16054,7 +16078,8 @@ if (!gotTheLock) {
       const canUseLocalAccountNow =
         authenticated ||
         hasEverAuthenticated ||
-        (userDataManager?.isLoggedIn() ?? false);
+        (userDataManager?.isLoggedIn() ?? false) ||
+        currentPrefs.localSetupComplete === true;
 
       // Check if permissions are revoked. Returning users keep the app surface;
       // permission-dependent features can prompt from inside the app.
@@ -16091,7 +16116,11 @@ if (!gotTheLock) {
       // IMPORTANT: Only force onboarding for truly new users who have never authenticated.
       // Existing users who temporarily lose auth (network issues, token expired) should
       // continue using local features. AuthManager will retry token refresh automatically.
-      if (!authenticated && !hasEverAuthenticated) {
+      if (shouldForceAccountOnboarding({
+        authenticated,
+        hasEverAuthenticated,
+        canUseLocalAccount: canUseLocalAccountNow,
+      })) {
         // Unregister all hotkeys - app requires login for new users
         getHotkeyManager().unregisterAll();
 

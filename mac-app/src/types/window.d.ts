@@ -710,6 +710,7 @@ interface OnboardingAPI {
   getState: () => Promise<OnboardingState>;
   setStep: (step: number) => Promise<boolean>;
   complete: () => Promise<boolean>;
+  completeLocalSetup: () => Promise<boolean>;
   skip: () => Promise<boolean>;
   reset: () => Promise<boolean>;
   checkModelStatus: () => Promise<{ downloaded: boolean }>;
