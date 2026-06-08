@@ -1869,6 +1869,9 @@ function hasUnclosedStandaloneAsterisk(prefix: string): boolean {
 }
 
 function isRenderedMarkdownOpeningBoundary(value: string, offset: number): boolean {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const blockBodyStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
+  if (blockBodyStart !== null && offset === blockBodyStart) return true;
   const prefix = linePrefixAt(value, offset);
   const suffix = lineSuffixAt(value, offset);
   if (/^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s+\[(?: |x|X)\]\s*|\[(?: |x|X)?\]\s*)$/.test(prefix)) {
@@ -3226,6 +3229,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const editorCursorSettleTimerRef = useRef<number | null>(null);
   const pendingRenderedEditorSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const pendingRenderedDeleteScrollRestoreRef = useRef<{ path: string | null; scrollTop: number } | null>(null);
+  const scheduleEditorSessionPersistRef = useRef<(() => void) | null>(null);
   const terminalReturnEditorSelectionRef = useRef<{ mode: MarkdownContentMode; start: number; end: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
@@ -6526,6 +6530,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       selectionEnd: selection?.end ?? null,
       preserveUndo: true,
     });
+    scheduleEditorSessionPersistRef.current?.();
     if (startedAt > 0) {
       recordRenderedEditorDebug('handle-rendered-editor-change', {
         durationMs: performance.now() - startedAt,
@@ -7003,6 +7008,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     reportActiveLibraryFileContext();
     showSelectionPastePopoverFromEditorSnapshot(snapshot);
     updateRenderedEditorWikiLinkCompletion(snapshot);
+    scheduleEditorSessionPersistRef.current?.();
   }, [reportActiveLibraryFileContext, showSelectionPastePopoverFromEditorSnapshot, updateRenderedEditorWikiLinkCompletion]);
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
@@ -7251,12 +7257,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const captureContentScrollRatio = useCallback(() => {
     const scrollEl = contentMode === 'markdown' ? markdownCodeEditorRef.current : contentScrollRef.current;
     if (!scrollEl) return;
-    pendingScrollRatioRef.current = getScrollRatio(
+    const ratio = getScrollRatio(
       scrollEl.scrollTop,
       scrollEl.scrollHeight,
       scrollEl.clientHeight,
     );
-  }, [contentMode]);
+    pendingScrollRatioRef.current = ratio;
+    recordRenderedEditorDebug('scroll-ratio-captured', {
+      contentMode,
+      ratio,
+      scrollTop: scrollEl.scrollTop,
+      scrollHeight: scrollEl.scrollHeight,
+      clientHeight: scrollEl.clientHeight,
+    });
+  }, [contentMode, recordRenderedEditorDebug]);
 
   const exitEditMode = useCallback(async () => {
     captureContentScrollRatio();
@@ -7288,11 +7302,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [contentMode, getEditorSessionTarget]);
 
   const persistEditorSession = useCallback(() => {
-    if (browserLibrarySurface) return;
+    if (browserLibrarySurface) {
+      recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'browser-library-surface' });
+      return;
+    }
     const session = captureEditorSession();
-    if (!session) return;
+    if (!session) {
+      recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'no-session-target' });
+      return;
+    }
     persistLibrarianEditorSession(localStorage, session);
-  }, [browserLibrarySurface, captureEditorSession]);
+    recordRenderedEditorDebug('editor-session-persisted', {
+      itemType: session.itemType,
+      itemPath: session.itemPath,
+      contentMode: session.contentMode,
+      selectionStart: session.selectionStart,
+      selectionEnd: session.selectionEnd,
+      scrollTop: session.scrollTop,
+    });
+  }, [browserLibrarySurface, captureEditorSession, recordRenderedEditorDebug]);
 
   useEffect(() => {
     persistEditorSession();
@@ -7302,19 +7330,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (editorSessionPersistTimerRef.current !== null) {
       window.clearTimeout(editorSessionPersistTimerRef.current);
     }
+    recordRenderedEditorDebug('editor-session-persist-scheduled', { delayMs: 160 });
     editorSessionPersistTimerRef.current = window.setTimeout(() => {
       editorSessionPersistTimerRef.current = null;
+      recordRenderedEditorDebug('editor-session-persist-timer-fired');
       persistEditorSession();
     }, 160);
-  }, [persistEditorSession]);
+  }, [persistEditorSession, recordRenderedEditorDebug]);
+  scheduleEditorSessionPersistRef.current = scheduleEditorSessionPersist;
 
   const flushEditorSessionPersist = useCallback(() => {
     if (editorSessionPersistTimerRef.current !== null) {
       window.clearTimeout(editorSessionPersistTimerRef.current);
       editorSessionPersistTimerRef.current = null;
     }
+    recordRenderedEditorDebug('editor-session-persist-flushed');
     persistEditorSession();
-  }, [persistEditorSession]);
+  }, [persistEditorSession, recordRenderedEditorDebug]);
 
   const applyMarkdownCodeEditorTextEdit = useCallback((
     edit: MarkdownTextEdit,
@@ -8121,10 +8153,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const selectionEnd = Math.min(session.selectionEnd, length);
       editor.setSelectionRange(selectionStart, selectionEnd);
       editor.scrollTop = session.scrollTop;
+      recordRenderedEditorDebug('editor-session-restored', {
+        contentMode,
+        selectionStart,
+        selectionEnd,
+        scrollTop: session.scrollTop,
+      });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, editorSessionMatchesCurrent]);
+  }, [contentMode, editorSessionMatchesCurrent, recordRenderedEditorDebug]);
 
   useEffect(() => {
     const ratio = pendingScrollRatioRef.current;
@@ -8139,6 +8177,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         scrollEl.clientHeight,
         ratio,
       );
+      recordRenderedEditorDebug('scroll-ratio-restored', {
+        contentMode,
+        ratio,
+        scrollTop: scrollEl.scrollTop,
+        scrollHeight: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      });
       if (contentMode === 'markdown') {
         updateMarkdownEditorFades(scrollEl);
       } else {
@@ -10333,6 +10378,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           <WikiSidebar
             active={active}
             canHideSidebarDefaultFolders={!browserLibrarySurface}
+            persistPreferences={!hadInitialOpenTargetRef.current}
             selectedId={selectedItemId}
             selectedKeyboardActive={sidebarKeyboardActive}
             todoStateOverrides={sidebarTodoStateOverrides}

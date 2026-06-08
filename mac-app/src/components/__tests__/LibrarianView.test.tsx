@@ -17,6 +17,7 @@ import LibrarianView, {
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
+  shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldAnimateResponsiveSidebar,
   isLiveLibrarianRendererStoragePreferenceKey,
   restoreLibrarianLineNumbersMode,
@@ -150,6 +151,12 @@ describe('LibrarianView render', () => {
       selectionEnd: blockStart,
     });
     expect(blockEnd).toBeGreaterThan(blockStart);
+  });
+
+  it('keeps Backspace at rendered heading and quote starts from deleting hidden syntax', () => {
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('## Heading', 3, 3, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('> Quoted', 2, 2, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('Plain text', 5, 5, 'Backspace')).toBe(false);
   });
 
   function mockStoredWikiSelection(relPath: string, options: { expandScratchpad?: boolean } = {}): void {
@@ -1507,6 +1514,53 @@ describe('LibrarianView render', () => {
     const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
     expect(sidebarPane?.style.width).toBe('0px');
     expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeTruthy();
+  });
+
+  it('does not let popped-out document windows overwrite shared sidebar expansion state', async () => {
+    const relPath = 'scratchpad/popped-out-preserve-expanded';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'popped-out-preserve-expanded',
+          title: 'Popped Out Preserve Expanded',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'popped-out-preserve-expanded',
+      title: 'Popped Out Preserve Expanded',
+      lastUpdated: 1,
+      content: 'Popped out body',
+      documentVersion: { mtimeMs: 1, size: 15, sha256: 'popped-out-preserve-expanded' },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    expect(await screen.findByText('Popped out body')).toBeTruthy();
+    const expandedFolderWrites = vi.mocked(window.localStorage.setItem).mock.calls
+      .filter(([key]) => key === 'wiki-expanded-folders');
+    expect(expandedFolderWrites).toEqual([]);
   });
 
   it('shows pinned recent docs only in Recents and without pin buttons', async () => {
@@ -3210,6 +3264,8 @@ describe('LibrarianView render', () => {
       const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
       expect(stages).toContain('apply-rendered-editor-body');
       expect(stages).toContain('local-content-state-scheduled');
+      expect(stages).toContain('editor-session-persist-scheduled');
+      expect(stages).toContain('save-scheduled');
     }, { timeout: 1200 });
 
     const timingEntries = appendRenderedEditorDebug.mock.calls
@@ -3218,9 +3274,17 @@ describe('LibrarianView render', () => {
         entry.stage === 'apply-rendered-editor-body'
         || entry.stage === 'local-content-state-scheduled'
         || entry.stage === 'handle-rendered-editor-change'
+        || entry.stage === 'editor-session-persist-scheduled'
+        || entry.stage === 'save-scheduled'
       ));
     expect(timingEntries.length).toBeGreaterThan(0);
-    expect(timingEntries.every((entry) => typeof entry.details?.durationMs === 'number')).toBe(true);
+    expect(timingEntries.filter((entry) => (
+      entry.stage === 'apply-rendered-editor-body'
+      || entry.stage === 'local-content-state-scheduled'
+      || entry.stage === 'handle-rendered-editor-change'
+    )).every((entry) => typeof entry.details?.durationMs === 'number')).toBe(true);
+    expect(timingEntries.find((entry) => entry.stage === 'editor-session-persist-scheduled')?.details?.delayMs).toBe(160);
+    expect(timingEntries.find((entry) => entry.stage === 'save-scheduled')?.details?.delayMs).toBeGreaterThan(0);
   });
 
   it('waits for a quiet rendered typing window before autosaving', async () => {
