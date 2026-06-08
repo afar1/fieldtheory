@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveStartupReadiness } from './startupReadinessPolicy';
+import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
 
 describe('startup readiness policy', () => {
   it('shows the app for a fully ready user', () => {
@@ -52,5 +52,23 @@ describe('startup readiness policy', () => {
       fullyReady: false,
       returningLocalUser: false,
     });
+  });
+});
+
+describe('account onboarding monitor policy', () => {
+  it('does not force onboarding for a restored local user without active auth', () => {
+    expect(shouldForceAccountOnboarding({
+      authenticated: false,
+      hasEverAuthenticated: false,
+      canUseLocalAccount: true,
+    })).toBe(false);
+  });
+
+  it('forces account onboarding for a new user without auth or local account state', () => {
+    expect(shouldForceAccountOnboarding({
+      authenticated: false,
+      hasEverAuthenticated: false,
+      canUseLocalAccount: false,
+    })).toBe(true);
   });
 });

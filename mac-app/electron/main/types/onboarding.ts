@@ -13,6 +13,7 @@ export const OnboardingIPCChannels = {
   GET_ONBOARDING_STATE: 'onboarding:getState',
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
+  COMPLETE_LOCAL_SETUP: 'onboarding:completeLocalSetup',
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
 
@@ -47,4 +48,3 @@ export interface OnboardingState {
   permissions: PermissionStatus;
   modelDownloaded: boolean;
 }
-

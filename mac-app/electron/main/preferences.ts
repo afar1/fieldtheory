@@ -259,6 +259,10 @@ interface Preferences {
   // Add a Supabase allowlist before enabling this outside dev.
   fieldTheoryInternalSyncEnabled?: boolean;
 
+  // User chose the local-only setup path and does not need an account to use
+  // local Field Theory surfaces.
+  localSetupComplete?: boolean;
+
   // Launch at login - start Field Theory automatically when macOS starts.
   launchAtLogin?: boolean;
 
@@ -423,6 +427,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Field Theory cloud sync is internal-only for this release.
   fieldTheoryInternalSyncEnabled: false,
+
+  // Local-only setup is opt-in from onboarding.
+  localSetupComplete: false,
 
   // Word substitutions - empty by default.
   wordSubstitutions: [],

@@ -21,42 +21,6 @@ import {
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 
-type ModelInfo = {
-  name: string;
-  url: string;
-  sizeBytes: number;
-  description: string;
-};
-
-const DEFAULT_WHISPER_MODELS: Record<string, ModelInfo> = {
-  small: {
-    name: 'ggml-small.en.bin',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
-    sizeBytes: 466 * 1024 * 1024,
-    description: 'Small English transcription model',
-  },
-  'small-tdrz': {
-    name: 'ggml-small.en-tdrz.bin',
-    url: 'https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin',
-    sizeBytes: 465 * 1024 * 1024,
-    description: 'Small English model with experimental speaker-turn labels for meetings',
-  },
-};
-
-const MEETING_DIARIZATION_MODEL_ID = 'small-tdrz';
-
-function formatModelSize(bytes: number | undefined): string {
-  if (!bytes || bytes <= 0) return '';
-  return `${Math.round(bytes / (1024 * 1024))} MB`;
-}
-
-function withDefaultWhisperModels(models: Record<string, ModelInfo>): Record<string, ModelInfo> {
-  return {
-    ...DEFAULT_WHISPER_MODELS,
-    ...models,
-  };
-}
-
 function getParakeetVerifiedBadge(isSelected: boolean): {
   label: 'Selected' | 'Installed';
   muted: boolean;
@@ -81,12 +45,7 @@ export default function TranscriptionSettings() {
   const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
   const [isCapturingHotMicHotkey, setIsCapturingHotMicHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
-  const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>(DEFAULT_WHISPER_MODELS);
   const [selectedModel, setSelectedModel] = useState<string>('small');
-  const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
-  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
-  const [deletingModel, setDeletingModel] = useState<string | null>(null);
-  const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
   const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio'>('microphone');
 
@@ -130,36 +89,24 @@ export default function TranscriptionSettings() {
           currentStatus,
           currentModelStatus,
           currentHotkey,
-          models,
           currentSelectedModel,
           currentRecordingSource,
-          downloadStatus,
-          downloadingModels,
           currentAbandonHotkey,
           currentHotMicHotkey,
         ] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
-          window.transcribeAPI!.getAvailableModels(),
           window.transcribeAPI!.getSelectedModel(),
           window.transcribeAPI!.getRecordingSource?.() ?? 'microphone',
-          window.transcribeAPI!.getModelDownloadStatus(),
-          window.transcribeAPI!.getDownloadingModels?.() ?? [],
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.hotMicAPI?.getHotkey?.() ?? null,
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
         setHotkey(currentHotkey);
-        setAvailableModels(withDefaultWhisperModels(models));
         setSelectedModel(currentSelectedModel);
         setRecordingSource(currentRecordingSource as 'microphone' | 'system-audio');
-        setModelDownloadStatus(downloadStatus);
-        // If a download is in progress, restore that state.
-        if (downloadingModels.length > 0) {
-          setDownloadingModel(downloadingModels[0]);
-        }
         setAbandonHotkey(currentAbandonHotkey);
         setHotMicHotkey(currentHotMicHotkey);
 
@@ -192,17 +139,7 @@ export default function TranscriptionSettings() {
       console.error('Transcription error:', errorMsg);
     });
 
-    const unsubscribeProgress = window.transcribeAPI!.onModelDownloadProgress((downloaded, total) => {
-      setModelDownloadProgress(prev => {
-        if (downloadingModel) {
-          return {
-            ...prev,
-            [downloadingModel]: { downloaded, total },
-          };
-        }
-        return prev;
-      });
-    });
+    const unsubscribeProgress = window.transcribeAPI!.onModelDownloadProgress(() => {});
 
     const unsubscribeParakeetProgress = window.transcribeAPI!.onParakeetSetupProgress?.((progress) => {
       setParakeetSetupProgress(progress);
@@ -220,56 +157,7 @@ export default function TranscriptionSettings() {
       unsubscribeParakeetProgress();
       unsubscribeHotkey();
     };
-  }, [isMacOS, downloadingModel, mockMode, refreshParakeetStatus]);
-
-  const handleDownloadModelForSize = useCallback(async (modelSize: string) => {
-    if (!window.transcribeAPI || downloadingModel) return;
-
-    setDownloadingModel(modelSize);
-    setError(null);
-
-    try {
-      await window.transcribeAPI.downloadModel(modelSize);
-      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-      setModelDownloadStatus(downloadStatus);
-      setModelDownloadProgress(prev => {
-        const next = { ...prev };
-        delete next[modelSize];
-        return next;
-      });
-      
-      // Auto-select the downloaded model if no valid model is currently selected.
-      // This prevents the confusing case where user downloads a model but can't use it
-      // because another (non-downloaded) model is still selected.
-      const currentSelected = await window.transcribeAPI.getSelectedModel();
-      if (!downloadStatus[currentSelected]) {
-        setSelectedModel(modelSize);
-        await window.transcribeAPI.setSelectedModel(modelSize);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to download ${modelSize} model`);
-      console.error(`Failed to download ${modelSize} model:`, err);
-    } finally {
-      setDownloadingModel(null);
-    }
-  }, [downloadingModel]);
-
-  const handleModelChange = useCallback(async (newModel: string) => {
-    if (!window.transcribeAPI || downloadingModel) return;
-    
-    setSelectedModel(newModel);
-    setError(null);
-    try {
-      await window.transcribeAPI.setSelectedModel(newModel);
-      const newModelStatus = await window.transcribeAPI.getModelStatus();
-      setModelStatus(newModelStatus);
-      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-      setModelDownloadStatus(downloadStatus);
-    } catch (err) {
-      console.error('Failed to change model:', err);
-      setError(err instanceof Error ? err.message : 'Failed to change model');
-    }
-  }, [downloadingModel]);
+  }, [isMacOS, mockMode, refreshParakeetStatus]);
 
   const handleEngineChange = useCallback(async (engine: VisibleTranscriptionEngine) => {
     if (!window.transcribeAPI) return;
@@ -397,38 +285,6 @@ export default function TranscriptionSettings() {
   const selectedParakeetErrorDetail = selectedParakeetSetupActive
     ? null
     : selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
-
-  const handleDeleteModel = useCallback(async (modelSize: string) => {
-    if (!window.transcribeAPI || deletingModel) return;
-
-    setDeletingModel(modelSize);
-    setError(null);
-
-    try {
-      await window.transcribeAPI.deleteModel(modelSize);
-      const newDownloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-      setModelDownloadStatus(newDownloadStatus);
-
-      // If we deleted the currently selected model, switch to another or 'none'
-      if (modelSize === selectedModel) {
-        const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) =>
-          downloaded && size !== modelSize
-        )?.[0];
-
-        if (availableModel) {
-          await handleModelChange(availableModel);
-        } else {
-          // No models left - set to 'none'
-          await handleModelChange('none');
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to delete ${modelSize} model`);
-      console.error(`Failed to delete ${modelSize} model:`, err);
-    } finally {
-      setDeletingModel(null);
-    }
-  }, [deletingModel, selectedModel, handleModelChange]);
 
   const handleSetAbandonHotkey = useCallback(async (newHotkey: string) => {
     if (!window.transcribeAPI?.setAbandonHotkey) return;
@@ -661,11 +517,6 @@ export default function TranscriptionSettings() {
     if (modelStatus === 'downloading') return 'Downloading';
     return 'Ready';
   };
-
-  const meetingDiarizationModel = availableModels[MEETING_DIARIZATION_MODEL_ID];
-  const meetingDiarizationDownloaded = modelDownloadStatus[MEETING_DIARIZATION_MODEL_ID] === true;
-  const meetingDiarizationDownloading = downloadingModel === MEETING_DIARIZATION_MODEL_ID;
-  const meetingDiarizationProgress = modelDownloadProgress[MEETING_DIARIZATION_MODEL_ID];
 
   return (
     <div style={styles.container}>
@@ -946,56 +797,6 @@ export default function TranscriptionSettings() {
               <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Selected</span>
             )}
           </div>
-
-          {meetingDiarizationModel && (
-            <div
-              style={{
-                ...styles.modelCard,
-                marginLeft: '12px',
-                borderLeft: meetingDiarizationDownloaded
-                  ? `3px solid ${theme.success}`
-                  : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-              }}
-            >
-              <div style={styles.modelCardContent}>
-                <div style={styles.modelCardHeader}>
-                  <span style={styles.rowValue}>Meeting speaker turns</span>
-                  <span style={styles.modelSize}>{formatModelSize(meetingDiarizationModel.sizeBytes)}</span>
-                </div>
-                <span style={styles.modelHint}>
-                  Labels detected speaker turns as Speaker 1, Speaker 2, Speaker 3, and so on when meetings stop.
-                </span>
-              </div>
-              <div style={styles.rowControls}>
-                {meetingDiarizationDownloading && meetingDiarizationProgress ? (
-                  <div style={styles.progressBar}>
-                    <div
-                      style={{
-                        ...styles.progressFill,
-                        width: `${meetingDiarizationProgress.total > 0
-                          ? Math.min(100, (meetingDiarizationProgress.downloaded / meetingDiarizationProgress.total) * 100)
-                          : 0}%`,
-                      }}
-                    />
-                  </div>
-                ) : meetingDiarizationDownloaded ? (
-                  <span style={styles.downloadedBadge}>Installed</span>
-                ) : (
-                  <button
-                    onClick={() => void handleDownloadModelForSize(MEETING_DIARIZATION_MODEL_ID)}
-                    disabled={!!downloadingModel}
-                    style={{
-                      ...styles.btn,
-                      opacity: downloadingModel ? 0.6 : 1,
-                      cursor: downloadingModel ? 'default' : 'pointer',
-                    }}
-                  >
-                    Download
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* Reinstall option - shown when parakeet is installed */}
           {parakeetInstalled && (
