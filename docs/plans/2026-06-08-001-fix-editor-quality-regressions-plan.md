@@ -32,7 +32,9 @@ The work should be executed characterization-first. Most failures already have n
 - [x] 2026-06-08: U5 verification passed for launcher reset/focus, Tab panel switching, Field Theory/external invocation target resolution, and recovered panel helper state.
 - [x] 2026-06-08: U6 rendered `/draw` coverage added: Enter opens the Draw dialog without replacing the rendered editor, and saving inserts portable markdown in place.
 - [x] 2026-06-08: U6 verification passed for slash command parsing, drawing rendering/edit affordance, image-range stability, portable image copy, command-launcher image insertion, and `npm run typecheck`.
-- [ ] U7 focused end-to-end verification remains open.
+- [x] 2026-06-08: U7 automated scenario coverage added for a large rendered markdown fixture covering repeated typing, Enter-style insertion, ArrowDown, Command+Right, delete guarding, and hidden syntax leaks.
+- [x] 2026-06-08: U7 focused verification passed for rendered editor, command-click navigation, startup hydration, launcher focus/routing, clipboard window state, and `npm run typecheck`.
+- [ ] Live visual image-revisit verification remains open; the existing Browser Library helper token was expired, and no dev server was started for this pass.
 
 ---
 
@@ -209,12 +211,13 @@ The editor work should reduce unnecessary churn in `D` and make `C` exact for th
 
 - **Goal:** Prove the combined fixes behave as one coherent Library/editor experience.
 - **Requirements:** R1 through R14.
+- **Status:** Complete for automated focused verification across the rendered editor, Library shell, Browser Library hydration, and launcher routing. Live visual image-revisit verification remains open because the existing Browser Library helper token was expired and this pass did not start a dev server.
 - **Dependencies:** U1, U2, U3, U4, U5, U6.
 - **Files:** `mac-app/src/components/__tests__/LibrarianView.test.tsx`, `mac-app/src/components/__tests__/MarkdownCodeEditor.test.tsx`, `mac-app/src/__tests__/browserLibraryApp.test.tsx`, `mac-app/electron/main/commandLauncherWindow.test.ts`, `mac-app/electron/main/commandLauncherTarget.test.ts`, `mac-app/electron/main/clipboardHistoryWindow.test.ts`.
 - **Approach:** Add a small scenario-level suite that combines the behaviors most likely to regress together: rendered editing plus save scheduling, navigation between documents, app-state hydration, and launcher insertion while Field Theory is active.
 - **Patterns to follow:** Existing Library view and Electron main-process tests rather than a new test framework.
 - **Test scenarios:** A large markdown fixture supports repeated typing, Enter, ArrowDown, Command+Right, and delete without raw syntax leaks. Opening another document by command-click preserves sidebar expansion in the source window. Restart-style hydration restores cursor settings and active Library state. The launcher opens, accepts Tab, and routes Enter into Field Theory markdown when the editor is focused.
-- **Verification:** The targeted test set passes and gives reviewers direct coverage for every scratchpad issue.
+- **Verification:** `npm test -- src/components/__tests__/MarkdownCodeEditor.test.tsx`, focused `LibrarianView` U7 slices, `npm test -- src/__tests__/browserLibraryApp.test.tsx electron/main/commandLauncherWindow.test.ts electron/main/commandLauncherTarget.test.ts electron/main/clipboardHistoryWindow.test.ts`, and `npm run typecheck` pass. A full aggregate run of the six target files passed 347/348 tests, with the older sidebar multi-selection test timing out only in the heavy aggregate run and passing in isolation.
 
 ---
 
