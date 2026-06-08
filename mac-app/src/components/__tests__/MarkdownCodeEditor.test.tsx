@@ -1306,6 +1306,91 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('keeps a large rendered editing scenario out of hidden markdown syntax', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const prefix = Array.from({ length: 40 }, (_, index) => (
+      `Long paragraph ${index + 1} keeps enough surrounding prose to exercise rendered editor range mapping.`
+    )).join('\n\n');
+    const scenario = [
+      '## Styled Heading',
+      'Paragraph with **bold** and [link](wiki://target).',
+      '- first item',
+      '- ',
+      '![Diagram](<file:///tmp/Figure%201.png>)',
+      '> quoted thought',
+    ].join('\n');
+    const suffix = Array.from({ length: 20 }, (_, index) => (
+      `Trailing paragraph ${index + 1} keeps the fixture large after the active region.`
+    )).join('\n\n');
+    const doc = `${scenario}\n\n${prefix}\n\n${suffix}`;
+    const activeParagraphOffset = doc.indexOf('Long paragraph 25') + 'Long paragraph 25'.length;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(activeParagraphOffset),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+    const typeText = (text: string) => {
+      for (const character of text) {
+        const handled = handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data: character,
+        }));
+        if (!handled) {
+          const selection = view.state.selection.main;
+          view.dispatch({
+            changes: { from: selection.from, to: selection.to, insert: character },
+            selection: { anchor: selection.from + character.length },
+          });
+        }
+      }
+    };
+
+    typeText('!!!');
+    const afterTyping = view.state.doc.toString();
+    expect(afterTyping).toContain('Long paragraph 25!!! keeps enough surrounding prose');
+
+    const firstListBody = afterTyping.indexOf('- first item') + '- first item'.length;
+    view.dispatch({
+      changes: { from: firstListBody, insert: '\n- new continuation' },
+      selection: { anchor: firstListBody + '\n- new continuation'.length },
+    });
+    const afterEnter = view.state.doc.toString();
+    const emptyListMarker = afterEnter.indexOf('- \n![Diagram]');
+    expect(getRenderedMarkdownVerticalNavigationEdit(afterEnter, emptyListMarker)).toEqual({
+      selection: emptyListMarker + '- '.length,
+    });
+
+    const boldSelection = afterEnter.indexOf('**bold') + '**bo'.length;
+    view.dispatch({ selection: EditorSelection.cursor(boldSelection) });
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'right')).toBe(true);
+    expect(view.state.selection.main.from).toBe(afterEnter.indexOf('\n- first item'));
+
+    const headingBodyStart = afterEnter.indexOf('Styled Heading');
+    view.dispatch({ selection: EditorSelection.cursor(headingBodyStart) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.selection.main.from).toBe(headingBodyStart);
+
+    const renderedText = parent.querySelector('.cm-content')?.textContent ?? '';
+    expect(renderedText).toContain('Styled Heading');
+    expect(renderedText).toContain('Paragraph with bold and link.');
+    expect(renderedText).toContain('Diagram');
+    expect(renderedText).not.toContain('##');
+    expect(renderedText).not.toContain('**');
+    expect(renderedText).not.toContain('[link]');
+    expect(renderedText).not.toContain('(wiki://target)');
+    expect(renderedText).not.toContain('![Diagram]');
+    expect(renderedText).not.toContain('file:///tmp');
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('keeps rendered heading and quote prefixes out of the editing caret path', () => {
     const doc = '# Resolved\n> Quoted';
     const quoteLineStart = '# Resolved\n'.length;
