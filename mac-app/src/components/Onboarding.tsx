@@ -655,11 +655,12 @@ function ModelPhase({
 interface AccountPhaseProps {
   onFinish: () => void;
   onFinishReturning?: () => void; // Skip shortcuts for returning users
+  onLocalSetup: () => Promise<void>;
   theme: Theme;
   styles: Record<string, React.CSSProperties>;
 }
 
-function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPhaseProps) {
+function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles }: AccountPhaseProps) {
   const [email, setEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -683,6 +684,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   const [isReturningUser, setIsReturningUser] = useState(false);
   // Loading state for completing onboarding (clicking "Done")
   const [isCompleting, setIsCompleting] = useState(false);
+  const [isCompletingLocalSetup, setIsCompletingLocalSetup] = useState(false);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -710,21 +712,6 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
             setCallsign(callsignFromSession);
           }
 
-          // Also fetch call sign for already-logged-in users
-          if (!callsignFromSession && session.user.id && supabase) {
-            try {
-              const { data } = await supabase
-                .from('profiles')
-                .select('callsign')
-                .eq('id', session.user.id)
-                .maybeSingle();
-              if (data?.callsign) {
-                setCallsign(data.callsign);
-              }
-            } catch (err) {
-              console.warn('[Onboarding] Failed to fetch callsign:', err);
-            }
-          }
         }
       } catch (err) {
         console.error('[Onboarding] Failed to check session:', err);
@@ -1094,9 +1081,9 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
 
   return (
     <div style={styles.phase}>
-      <h1 style={styles.title}>Create Your Free Account</h1>
+      <h1 style={styles.title}>Use Field Theory</h1>
       <p style={styles.subtitle}>
-        Sign in to get started with Field Theory.
+        Sign in for shared and account-backed features, or continue with local setup.
       </p>
 
       <div style={styles.accountForm}>
@@ -1207,6 +1194,32 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
               </div>
             )}
           </div>
+        )}
+
+        {!otpSent && (
+          <a
+            href="#"
+            onClick={async (event) => {
+              event.preventDefault();
+              if (isCompletingLocalSetup) return;
+              setIsCompletingLocalSetup(true);
+              setError(null);
+              try {
+                await onLocalSetup();
+              } catch (err) {
+                console.error('[Onboarding] Failed to complete local setup:', err);
+                setError('Could not finish local setup. Please try again.');
+                setIsCompletingLocalSetup(false);
+              }
+            }}
+            style={{
+              ...styles.localSetupLink,
+              opacity: isCompletingLocalSetup ? 0.6 : 1,
+              cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
+            }}
+          >
+            {isCompletingLocalSetup ? 'Starting local setup...' : 'local setup'}
+          </a>
         )}
       </div>
     </div>
@@ -1779,6 +1792,11 @@ export default function Onboarding() {
     }
   }, []);
 
+  const finishLocalSetup = useCallback(async () => {
+    await window.transcribeAPI?.setTranscriptionEngine?.(selectedEngine);
+    await window.onboardingAPI?.completeLocalSetup?.();
+  }, [selectedEngine]);
+
   // Show loading state.
   if (isLoading) {
     return (
@@ -1835,7 +1853,13 @@ export default function Onboarding() {
 
       case 'account':
         return (
-          <AccountPhase onFinish={goToShortcuts} onFinishReturning={finish} theme={theme} styles={styles} />
+          <AccountPhase
+            onFinish={goToShortcuts}
+            onFinishReturning={finish}
+            onLocalSetup={finishLocalSetup}
+            theme={theme}
+            styles={styles}
+          />
         );
 
       case 'shortcuts':
@@ -2237,6 +2261,17 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontWeight: 500,
     cursor: 'pointer',
     marginTop: '8px',
+  },
+  localSetupLink: {
+    display: 'block',
+    background: 'none',
+    border: 'none',
+    color: theme.info,
+    padding: 0,
+    margin: '14px auto 0',
+    fontSize: '12px',
+    fontWeight: 500,
+    textDecoration: 'underline',
   },
 
   // Account form styles.
