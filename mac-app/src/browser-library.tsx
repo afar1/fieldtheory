@@ -441,9 +441,13 @@ export function buildBrowserHelperReconnectUrl(location: Pick<Location, 'search'
 }
 
 function hasStaleBrowserHelperTiming(): boolean {
-  return (window.__fieldTheoryBrowserLibraryRequestTimings ?? []).some((entry) => (
-    entry.status === null && entry.ok === false
-  ));
+  const timings = window.__fieldTheoryBrowserLibraryRequestTimings ?? [];
+  for (let index = timings.length - 1; index >= 0; index -= 1) {
+    const entry = timings[index];
+    if (entry.ok) return false;
+    if (entry.status === null && entry.ok === false) return true;
+  }
+  return false;
 }
 
 export function applyRendererStorageChangeFromNative(
