@@ -480,6 +480,86 @@ describe('BrowserLibraryApp', () => {
     }
   });
 
+  it('hydrates cursor and Library session storage before host startup returns', async () => {
+    const previousFetch = globalThis.fetch;
+    const previousEventSource = window.EventSource;
+    const previousSetItem = window.localStorage.setItem;
+    const previousRemoveItem = window.localStorage.removeItem;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const pathname = new URL(String(input)).pathname;
+      const responses: Record<string, unknown> = {
+        '/native/renderer-storage': {
+          ok: true,
+          available: true,
+          values: {
+            [TEXT_CURSOR_BLINK_STORAGE_KEY]: 'false',
+            [RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY]: 'bar',
+            [RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY]: '0.7',
+            'librarian-last-selection': '{"type":"wiki","relPath":"scratchpad/Native"}',
+            'librarian-editor-session': '{"itemType":"wiki","itemPath":"scratchpad/Native","contentMode":"rendered","selectionStart":4,"selectionEnd":4,"scrollTop":120}',
+          },
+        },
+        '/native/app/version': { ok: true, version: '25.6.1' },
+        '/native/updater/enabled': { ok: true, enabled: true },
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => responses[pathname] ?? { ok: true },
+      };
+    }) as unknown as typeof fetch;
+    class TestEventSource {
+      addEventListener = vi.fn();
+      close = vi.fn();
+    }
+    globalThis.fetch = fetchMock;
+    Object.defineProperty(window, 'EventSource', {
+      configurable: true,
+      value: TestEventSource,
+    });
+    Object.defineProperty(globalThis, 'EventSource', {
+      configurable: true,
+      value: TestEventSource,
+    });
+
+    try {
+      delete (window as any).commandsAPI;
+      delete (window as any).hotkeyAPI;
+      delete (window as any).librarianAPI;
+      delete (window as any).libraryAPI;
+      delete (window as any).wikiAPI;
+      delete (window as any).externalAPI;
+      delete (window as any).authAPI;
+      delete (window as any).updaterAPI;
+      delete (window as any).shellAPI;
+
+      await installBrowserLibraryHost({
+        api: 'http://127.0.0.1:59971',
+        token: 'runtime-token',
+        clientId: 'client-one',
+      });
+
+      expect(window.localStorage.getItem(TEXT_CURSOR_BLINK_STORAGE_KEY)).toBe('false');
+      expect(window.localStorage.getItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('bar');
+      expect(window.localStorage.getItem(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY)).toBe('0.7');
+      expect(window.localStorage.getItem('librarian-last-selection')).toBe('{"type":"wiki","relPath":"scratchpad/Native"}');
+      expect(window.localStorage.getItem('librarian-editor-session')).toBe('{"itemType":"wiki","itemPath":"scratchpad/Native","contentMode":"rendered","selectionStart":4,"selectionEnd":4,"scrollTop":120}');
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      window.localStorage.setItem = previousSetItem;
+      window.localStorage.removeItem = previousRemoveItem;
+      globalThis.fetch = previousFetch;
+      Object.defineProperty(window, 'EventSource', {
+        configurable: true,
+        value: previousEventSource,
+      });
+      Object.defineProperty(globalThis, 'EventSource', {
+        configurable: true,
+        value: previousEventSource,
+      });
+    }
+  });
+
   it('clears Browser-owned Library context and navigation when the Browser tab becomes hidden', async () => {
     const previousFetch = globalThis.fetch;
     const previousEventSource = window.EventSource;
@@ -949,6 +1029,41 @@ describe('BrowserLibraryApp', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+  });
+
+  it('does not show a reconnect warning when helper timing recovered before React mounted', () => {
+    window.__fieldTheoryBrowserLibraryRequestTimings = [
+      {
+        path: '/native/renderer-storage',
+        method: 'GET',
+        status: null,
+        ok: false,
+        durationMs: 1,
+        startedAt: 0,
+        error: 'Failed to fetch',
+      },
+      {
+        path: '/native/app/version',
+        method: 'GET',
+        status: 200,
+        ok: true,
+        durationMs: 2,
+        startedAt: 10,
+      },
+    ];
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = () => <div data-testid="library-view">Library</div>;
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
   });
 
   it('shows native plan and metrics readout in the Browser Library footer', async () => {

@@ -25,7 +25,14 @@ The work should be executed characterization-first. Most failures already have n
 - [x] 2026-06-08: U4 sidebar persistence fix landed: popped-out document windows read shared sidebar preferences but no longer write transient expansion state back to shared storage.
 - [x] 2026-06-08: Focused verification passed: popped-out `LibrarianView` tests and `npm run typecheck`.
 - [x] 2026-06-08: Saved locally to the root staging checkout for manual testing.
-- [ ] U4 cursor/window restart hydration remains open.
+- [x] 2026-06-08: U4 cursor/session startup hydration coverage added for Browser Library host boot before React reads renderer storage.
+- [x] 2026-06-08: U4 document-window bounds coverage added for restoring saved bounds and reporting move/resize changes for persistence.
+- [x] 2026-06-08: Focused U4 verification passed: `npm test -- src/__tests__/browserLibraryApp.test.tsx electron/main/documentWindow.test.ts` and `npm run typecheck`.
+- [x] 2026-06-08: U5 panel warning fix landed: stale helper timing now clears when later helper requests succeed before React mounts.
+- [x] 2026-06-08: U5 verification passed for launcher reset/focus, Tab panel switching, Field Theory/external invocation target resolution, and recovered panel helper state.
+- [x] 2026-06-08: U6 rendered `/draw` coverage added: Enter opens the Draw dialog without replacing the rendered editor, and saving inserts portable markdown in place.
+- [x] 2026-06-08: U6 verification passed for slash command parsing, drawing rendering/edit affordance, image-range stability, portable image copy, command-launcher image insertion, and `npm run typecheck`.
+- [ ] U7 focused end-to-end verification remains open.
 
 ---
 
@@ -163,8 +170,9 @@ The editor work should reduce unnecessary churn in `D` and make `C` exact for th
 
 - **Goal:** Make Library state survive command-click document opening, window close/reopen, and dev server restart without conflicting preference sources.
 - **Requirements:** R8, R9, R10.
+- **Status:** Mostly complete for renderer-storage startup hydration, sidebar command-click preservation, and standalone document-window bounds. Broader active-surface restart coverage remains part of U7.
 - **Dependencies:** None.
-- **Files:** `mac-app/src/browser-library.tsx`, `mac-app/src/components/LibrarianView.tsx`, `mac-app/electron/preload.ts`, `mac-app/electron/shared/browserLibraryRendererStorage.ts`, `mac-app/electron/main/browserLibraryRendererStorageStore.ts`, `mac-app/electron/main/preferences.ts`, `mac-app/electron/main/clipboardHistoryWindow.ts`, `mac-app/src/__tests__/browserLibraryApp.test.tsx`, `mac-app/src/components/__tests__/LibrarianView.test.tsx`, `mac-app/electron/main/browserLibraryRendererStorageStore.test.ts`, `mac-app/electron/main/clipboardHistoryWindow.test.ts`.
+- **Files:** `mac-app/src/browser-library.tsx`, `mac-app/src/components/LibrarianView.tsx`, `mac-app/electron/preload.ts`, `mac-app/electron/shared/browserLibraryRendererStorage.ts`, `mac-app/electron/main/browserLibraryRendererStorageStore.ts`, `mac-app/electron/main/preferences.ts`, `mac-app/electron/main/clipboardHistoryWindow.ts`, `mac-app/electron/main/documentWindow.test.ts`, `mac-app/src/__tests__/browserLibraryApp.test.tsx`, `mac-app/src/components/__tests__/LibrarianView.test.tsx`, `mac-app/electron/main/browserLibraryRendererStorageStore.test.ts`, `mac-app/electron/main/clipboardHistoryWindow.test.ts`.
 - **Approach:** Audit every localStorage key and preference field involved in Library tree expansion, cursor style, sidebar state, active document, and window bounds. Then route missing keys through `BROWSER_LIBRARY_RENDERER_STORAGE_KEYS` or existing `Preferences` fields, depending on whether the state is renderer-local or main-process window state.
 - **Execution note:** Characterize the current persistence split before adding keys or changing hydration order.
 - **Patterns to follow:** `hydrateBrowserLibraryRendererStorageBeforeAppBoot`, `installBrowserLibraryRendererStorageForwarding`, `BrowserLibraryRendererStorageStore`, `pickSavedBoundsByKey`, and app-mode window focus tests.
@@ -175,6 +183,7 @@ The editor work should reduce unnecessary churn in `D` and make `C` exact for th
 
 - **Goal:** Make Tab and Enter work from the keyboard immediately after launcher open, with Enter inserting into the active Field Theory surface when Field Theory is active.
 - **Requirements:** R11, R12.
+- **Status:** Complete for the planned focus/routing contract and false panel warning. Existing tests cover reset-before-focus, focus-input events after show/preview blur, Tab default-panel cycling, and invocation target resolution. New coverage prevents old failed Browser helper requests from showing a reconnect warning after later successful helper requests.
 - **Dependencies:** None.
 - **Files:** `mac-app/src/command-launcher.tsx`, `mac-app/src/commandLauncherUtils.ts`, `mac-app/electron/main/commandLauncherWindow.ts`, `mac-app/electron/main/commandLauncherTarget.ts`, `mac-app/electron/main/commandClipboard.ts`, `mac-app/src/__tests__/commandLauncherUtils.test.ts`, `mac-app/electron/main/commandLauncherWindow.test.ts`, `mac-app/electron/main/commandLauncherTarget.test.ts`, `mac-app/electron/main/superPasteRouting.test.ts`.
 - **Approach:** Treat launcher focus as part of the show/reset contract, not as a side effect of clicking visible text. Then make Enter invocation ask `resolveCommandLauncherInvocationTarget` whether the destination is Field Theory markdown, Field Theory terminal, external app, or none.
@@ -187,6 +196,7 @@ The editor work should reduce unnecessary churn in `D` and make `C` exact for th
 
 - **Goal:** Make `/ draw`, the draw button, editing an existing drawing, and revisiting image-heavy pages stable.
 - **Requirements:** R13, R14.
+- **Status:** Complete for the concrete `/draw` startup path and existing drawing/image-rendering unit coverage. No separate draw toolbar button exists in the current implementation path found during this pass. Full visual revisit stability remains part of U7.
 - **Dependencies:** U2.
 - **Files:** `mac-app/src/components/LibrarianView.tsx`, `mac-app/src/components/MarkdownCodeEditor.tsx`, `mac-app/src/utils/markdownSlashCommands.ts`, `mac-app/src/utils/markdownSlashCommands.test.ts`, `mac-app/src/components/__tests__/LibrarianView.test.tsx`, `mac-app/src/components/__tests__/MarkdownCodeEditor.test.tsx`, `mac-app/src/__tests__/figureUtils.test.ts`, `mac-app/electron/main/portableMarkdownImages.test.ts`.
 - **Approach:** Separate the blank draw failure into command parsing, insertion state, dialog mount, and image-copy/save steps. Existing image rendering should use stable source ranges and cached URLs from U2 so drawing fixes do not create fresh rerender flashes.
