@@ -133,6 +133,7 @@ ios/LittleAIKeyboard/Models/
 mac-app/electron-dist/
 mac-app/release/
 mac-app/assets/
+mac-app/build-parakeet
 
 # Librarian status files (local edit tracking)
 .librarian/.status.json

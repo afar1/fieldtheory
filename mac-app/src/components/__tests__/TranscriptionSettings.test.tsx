@@ -326,23 +326,14 @@ describe('TranscriptionSettings Parakeet labels', () => {
     expect(screen.getByText(/Still working, even if the percent pauses/i)).toBeTruthy();
   });
 
-  it('offers the local meeting speaker-turn model download', async () => {
-    const downloadModel = vi.fn(async () => undefined);
-    (window as any).transcribeAPI = makeTranscribeApi({
-      downloadModel,
-      getModelDownloadStatus: vi.fn(async () => ({ small: true, 'small-tdrz': false })),
-    });
+  it('does not show the local meeting speaker-turn model download', async () => {
+    (window as any).transcribeAPI = makeTranscribeApi();
     (window as any).hotMicAPI = makeHotMicApi();
 
     render(<TranscriptionSettings />);
 
-    expect(await screen.findByText('Meeting speaker turns')).toBeTruthy();
-
-    await act(async () => {
-      screen.getByRole('button', { name: 'Download' }).click();
-    });
-
-    expect(downloadModel).toHaveBeenCalledWith('small-tdrz');
+    expect(await screen.findByText('Parakeet English')).toBeTruthy();
+    expect(screen.queryByText('Meeting speaker turns')).toBeNull();
   });
 
   it('shows the Python recovery command and preserves raw setup detail', async () => {
