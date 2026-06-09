@@ -635,13 +635,13 @@ describe('MarkdownCodeEditor line numbers', () => {
     expect(overlayRightInset + overlayGap).toBeLessThanOrEqual(0.5);
   });
 
-  it('reserves the rendered line-number gutter inside the editor box', () => {
+  it('reserves the rendered line-number gutter as editor-owned layout space', () => {
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe(
       `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`,
     );
   });
 
-  it('offsets the rendered line-number gutter without moving body content', () => {
+  it('offsets the editor-owned line-number shell without moving body content', () => {
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET).toBe(
       `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
     );
