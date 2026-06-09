@@ -9,6 +9,8 @@ import {
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
@@ -619,6 +621,12 @@ describe('MarkdownCodeEditor line numbers', () => {
     const fourDigitWidthAtOverlayFontSize = 4 * 0.78;
 
     expect(overlayWidth - overlayRightInset).toBeGreaterThan(fourDigitWidthAtOverlayFontSize);
+  });
+
+  it('reserves the rendered line-number gutter inside the editor box', () => {
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe(
+      `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`,
+    );
   });
 
   it('counts distinct wrapped visual rows from line client rects', () => {
