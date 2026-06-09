@@ -70,6 +70,7 @@ import {
   getMarkdownCodeEditorContentAttributes,
   getMarkdownCodeEditorCursorAnimationStyle,
   getMarkdownCodeEditorFindMatchRanges,
+  getMarkdownCodeEditorLineNumberRowHeight,
   getMarkdownCodeEditorSelectionBackground,
   getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
@@ -646,6 +647,12 @@ describe('MarkdownCodeEditor line numbers', () => {
       `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
     );
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe('calc(4.2em + 0.15em)');
+  });
+
+  it('shares the visual row height between CodeMirror and the editor-owned gutter', () => {
+    expect(getMarkdownCodeEditorLineNumberRowHeight(20, 1.4)).toBe('28px');
+    expect(getMarkdownCodeEditorLineNumberRowHeight('18px', '1.5')).toBe('27px');
+    expect(getMarkdownCodeEditorLineNumberRowHeight('18px', 'normal')).toBe('normal');
   });
 
   it('counts distinct wrapped visual rows from line client rects', () => {
