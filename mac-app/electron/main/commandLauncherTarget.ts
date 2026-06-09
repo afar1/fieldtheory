@@ -15,19 +15,45 @@ export function isExternalCommandTargetBundleId(bundleId: string | null | undefi
 }
 
 export type CommandLauncherInvocationTarget =
-  | { kind: 'field-theory-terminal' }
+  | { kind: 'field-theory-terminal'; sessionId: string | null }
   | { kind: 'field-theory-markdown' }
   | { kind: 'external-app' }
   | { kind: 'none' };
 
+export type CommandLauncherFieldTheoryLaunchSurface =
+  | { kind: 'terminal'; sessionId: string }
+  | { kind: 'markdown' }
+  | { kind: 'none' };
+
+export type CommandLauncherLaunchOrigin =
+  | { kind: 'field-theory'; surface: CommandLauncherFieldTheoryLaunchSurface }
+  | { kind: 'external-app'; app: { bundleId: string; name: string } }
+  | { kind: 'none' };
+
 export function resolveCommandLauncherInvocationTarget(input: {
+  launchOrigin?: CommandLauncherLaunchOrigin | null;
   fieldTheoryActive: boolean;
   hasFocusedFieldTheoryTerminal: boolean;
+  focusedFieldTheoryTerminalSessionId?: string | null;
   hasActiveFieldTheoryMarkdown: boolean;
   hasExternalTargetApp: boolean;
 }): CommandLauncherInvocationTarget {
+  if (input.launchOrigin?.kind === 'external-app') {
+    return input.hasExternalTargetApp ? { kind: 'external-app' } : { kind: 'none' };
+  }
+  if (input.launchOrigin?.kind === 'field-theory') {
+    if (input.launchOrigin.surface.kind === 'terminal') {
+      return { kind: 'field-theory-terminal', sessionId: input.launchOrigin.surface.sessionId };
+    }
+    if (input.launchOrigin.surface.kind === 'markdown') return { kind: 'field-theory-markdown' };
+    return { kind: 'none' };
+  }
+  if (input.launchOrigin?.kind === 'none') return { kind: 'none' };
+
   if (input.fieldTheoryActive) {
-    if (input.hasFocusedFieldTheoryTerminal) return { kind: 'field-theory-terminal' };
+    if (input.hasFocusedFieldTheoryTerminal) {
+      return { kind: 'field-theory-terminal', sessionId: input.focusedFieldTheoryTerminalSessionId ?? null };
+    }
     if (input.hasActiveFieldTheoryMarkdown) return { kind: 'field-theory-markdown' };
     return { kind: 'none' };
   }
