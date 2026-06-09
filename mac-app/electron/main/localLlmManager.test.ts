@@ -46,24 +46,24 @@ describe('LocalLlmManager', () => {
     vi.clearAllMocks();
   });
 
-  it('uses Gemma 4 as the default local command model', () => {
+  it('uses Gemma 4 12B as the default local command model', () => {
     const manager = new LocalLlmManager({ userDataPath: tempDir });
     const models = manager.getAvailableModels();
 
-    expect(DEFAULT_LOCAL_LLM_MODEL).toBe('gemma-4-E4B-it-Q4_K_M');
+    expect(DEFAULT_LOCAL_LLM_MODEL).toBe('gemma-4-12B-it-Q4_K_M');
     expect(models[DEFAULT_LOCAL_LLM_MODEL]).toEqual(expect.objectContaining({
-      name: 'Gemma 4 E4B Instruct Q4_K_M',
-      filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
-      license: 'Apache-2.0',
-      baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
-      ollamaTag: 'gemma4:e4b',
-    }));
-    expect(models['gemma-4-12B-it-Q4_K_M']).toEqual(expect.objectContaining({
       name: 'Gemma 4 12B Instruct Q4_K_M',
       filename: 'gemma-4-12B-it-Q4_K_M.gguf',
-      sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF',
+      license: 'Apache-2.0',
       baseModelUrl: 'https://huggingface.co/google/gemma-4-12B-it',
       ollamaTag: 'gemma4:12b',
+    }));
+    expect(models['gemma-4-E4B-it-Q4_K_M']).toEqual(expect.objectContaining({
+      name: 'Gemma 4 E4B Instruct Q4_K_M',
+      filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
+      sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF',
+      baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+      ollamaTag: 'gemma4:e4b',
     }));
   });
 
@@ -268,8 +268,8 @@ describe('LocalLlmManager', () => {
       env: { FT_LOCAL_LLM_MODEL_PATH: modelPath, HOME: homeDir },
     });
     const candidates = manager.getModelPathCandidates();
-    const sharedModelPath = path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'unsloth', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf');
-    const bundledModelPath = path.join(tempDir, 'resources', 'models', 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const sharedModelPath = path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-12B-it-Q4_K_M', 'model.gguf');
+    const bundledModelPath = path.join(tempDir, 'resources', 'models', 'gemma-4-12B-it-Q4_K_M.gguf');
 
     expect(candidates[0]).toBe(modelPath);
     expect(candidates).toContain(sharedModelPath);
@@ -286,10 +286,10 @@ describe('LocalLlmManager', () => {
       env: { HOME: path.join(tempDir, 'home') },
     });
 
-    expect(manager.getDefaultInstallPath()).toBe(path.join(tempDir, 'models', 'gemma-4-E4B-it-Q4_K_M.gguf'));
+    expect(manager.getDefaultInstallPath()).toBe(path.join(tempDir, 'models', 'gemma-4-12B-it-Q4_K_M.gguf'));
     expect(manager.getModelHealthMap()[DEFAULT_LOCAL_LLM_MODEL]).toEqual(expect.objectContaining({
       status: 'missing',
-      modelPath: expect.stringContaining('gemma-4-E4B-it-Q4_K_M.gguf'),
+      modelPath: expect.stringContaining('gemma-4-12B-it-Q4_K_M.gguf'),
     }));
     expect(manager.getModelHealthMap()['gemma-4-12B-it-Q4_K_M']).toEqual(expect.objectContaining({
       status: 'missing',
@@ -356,10 +356,10 @@ describe('LocalLlmManager', () => {
 
   it('uses an existing shared Gemma model before app-local copies', () => {
     const homeDir = path.join(tempDir, 'home');
-    const sharedModelPath = path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'unsloth', 'gemma-4-E4B-it-Q4_K_M', 'model.gguf');
+    const sharedModelPath = path.join(homeDir, 'Library', 'Application Support', 'Atomic Chat', 'data', 'llamacpp', 'models', 'google', 'gemma-4-12B-it-Q4_K_M', 'model.gguf');
     fs.mkdirSync(path.dirname(sharedModelPath), { recursive: true });
     fs.closeSync(fs.openSync(sharedModelPath, 'w'));
-    fs.truncateSync(sharedModelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(sharedModelPath, 4 * 1024 * 1024 * 1024);
 
     const manager = new LocalLlmManager({
       userDataPath: path.join(tempDir, 'userData'),
@@ -376,9 +376,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('runs replacement commands through the simple local runner by default', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     let capturedArgs: string[] = [];
     const server = {
@@ -419,9 +419,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('reports active generation while a local model request is in flight', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     let resolveSend!: (value: { ok: boolean; text: string }) => void;
     const server = {
@@ -448,9 +448,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('refuses oversized prompts before starting the local model server', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const serverFactory = vi.fn(() => ({
       start: vi.fn(async () => {}),
@@ -477,9 +477,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('runs replacement commands through the Codex harness when enabled', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const server = {
       start: vi.fn(async () => {}),
@@ -513,9 +513,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('forwards local runner progress events while running commands', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const server = {
       start: vi.fn(async () => {}),
@@ -560,9 +560,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('rejects simple replacement command runs when the model returns status text', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const server = {
       start: vi.fn(async () => {}),
@@ -591,9 +591,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('runs selected-text commands through a local stdio server', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const server = {
       start: vi.fn(async () => {}),
@@ -629,9 +629,9 @@ describe('LocalLlmManager', () => {
   });
 
   it('rejects selected-text commands that return a standalone figure path for prose', async () => {
-    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    const modelPath = path.join(tempDir, 'gemma-4-12B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));
-    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+    fs.truncateSync(modelPath, 4 * 1024 * 1024 * 1024);
 
     const server = {
       start: vi.fn(async () => {}),

@@ -4784,6 +4784,10 @@ function getLocalLlmManager(): LocalLlmManager {
   if (!localLlmManager) {
     localLlmManager = new LocalLlmManager();
   }
+  const preferredModel = preferencesManager?.getPreference('localLlmSelectedModel');
+  if (isLocalLlmModelId(preferredModel) && localLlmManager.getSelectedModel() !== preferredModel) {
+    localLlmManager.setSelectedModel(preferredModel);
+  }
   return localLlmManager;
 }
 
@@ -10446,7 +10450,12 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, async (_event, model: string) => {
-    return getLocalLlmManager().setSelectedModel(model);
+    const manager = getLocalLlmManager();
+    const selected = manager.setSelectedModel(model);
+    if (selected.success) {
+      await preferencesManager?.save({ localLlmSelectedModel: model });
+    }
+    return selected;
   });
 
   ipcMain.handle(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, async (_event, model: string) => {
