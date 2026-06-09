@@ -5,6 +5,7 @@ import type { LibrarianSelectedItemType } from './components/LibrarianView';
 import {
   LibraryFooterLocalCommandStatusControls,
   LibraryFooterLogo,
+  LibraryFooterKeyboardShortcutsButton,
   LibraryFooterMaxwellHistoryButton,
   LibraryFooterMaxwellHistoryPopover,
   LibraryFooterSidebarToggle,
@@ -1611,6 +1612,7 @@ function BrowserLibrarySurface(props: {
     || window.localStorage.getItem(LIBRARIAN_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
   ));
   const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = React.useState(0);
+  const [libraryShortcutsHelpRequestKey, setLibraryShortcutsHelpRequestKey] = React.useState(0);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = React.useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = React.useState<number | null>(null);
   const [librarianImmersive, setLibrarianImmersive] = React.useState(() => (
@@ -2339,6 +2341,7 @@ function BrowserLibrarySurface(props: {
               onInitialOpenTargetConsumed={() => setLauncherOpenTarget(null)}
               sidebarCollapsed={sidebarCollapsed}
               sidebarToggleRequestKey={librarySidebarToggleRequestKey}
+              shortcutsHelpRequestKey={libraryShortcutsHelpRequestKey}
               onSwitchToClipboard={() => {}}
               onFocusChromeActiveChange={handleFocusChromeActiveChange}
               onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
@@ -2416,6 +2419,7 @@ function BrowserLibrarySurface(props: {
         footerRef={footerRef}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleSidebarCollapsed}
+        onOpenKeyboardShortcuts={() => setLibraryShortcutsHelpRequestKey((key) => key + 1)}
         hidden={browserChromeHidden}
         opacity={footerChromeOpacity}
         interactive={footerChromeInteractive}
@@ -2428,11 +2432,12 @@ function BrowserLibraryFooter(props: {
   footerRef: React.RefObject<HTMLDivElement>;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  onOpenKeyboardShortcuts: () => void;
   hidden: boolean;
   opacity: number;
   interactive: boolean;
 }) {
-  const { footerRef, sidebarCollapsed, onToggleSidebar, hidden, opacity, interactive } = props;
+  const { footerRef, sidebarCollapsed, onToggleSidebar, onOpenKeyboardShortcuts, hidden, opacity, interactive } = props;
   const { theme, toggleDarkMode } = useTheme();
   const [maxwellHistoryOpen, setMaxwellHistoryOpen] = React.useState(false);
   const { localCommandStatus, footerStatusLabel, cancelLocalCommandRun } = useLibraryFooterLocalCommandStatus();
@@ -2565,6 +2570,11 @@ function BrowserLibraryFooter(props: {
           theme={theme}
           open={maxwellHistoryOpen}
           onToggle={() => setMaxwellHistoryOpen((open) => !open)}
+        />
+        <LibraryFooterKeyboardShortcutsButton
+          theme={theme}
+          open={false}
+          onToggle={onOpenKeyboardShortcuts}
         />
         {localCommandStatus ? (
           <LibraryFooterLocalCommandStatusControls
