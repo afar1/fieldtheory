@@ -115,6 +115,35 @@ describe('LibraryDocumentWindowManager', () => {
     expect(testState.browserWindowInstances[1].getBounds().y).toBeGreaterThan(testState.browserWindowInstances[0].getBounds().y);
   });
 
+  it('restores saved bounds and reports document window bounds changes', () => {
+    const onBoundsChanged = vi.fn();
+    const manager = new LibraryDocumentWindowManager(
+      () => ({ x: 120, y: 140, width: 900, height: 700, displayConfig: 'test' }),
+      onBoundsChanged,
+    );
+
+    manager.open({ kind: 'wiki', path: 'scratchpad/window-state', contentMode: 'rendered' });
+    const opened = testState.browserWindowInstances[0];
+
+    expect(opened.getBounds()).toEqual({
+      x: 120,
+      y: 140,
+      width: 900,
+      height: 700,
+    });
+
+    opened.emit('moved');
+    opened.emit('resized');
+
+    expect(onBoundsChanged).toHaveBeenCalledTimes(2);
+    expect(onBoundsChanged).toHaveBeenLastCalledWith({
+      x: 120,
+      y: 140,
+      width: 900,
+      height: 700,
+    });
+  });
+
   it('destroys and forgets all tracked document windows', () => {
     const manager = new LibraryDocumentWindowManager(
       () => undefined,
