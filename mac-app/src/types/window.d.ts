@@ -1575,7 +1575,7 @@ interface CommandsAPI {
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string }) => void) => () => void;
   onLauncherFocusInput?: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void) => () => void;
-  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }>;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
