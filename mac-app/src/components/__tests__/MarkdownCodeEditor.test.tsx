@@ -11,6 +11,7 @@ import {
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
@@ -640,10 +641,9 @@ describe('MarkdownCodeEditor line numbers', () => {
     );
   });
 
-  it('can offset reserved line-number gutter without moving body content', () => {
-    expect(`calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`).toBe(
-      'calc(-1 * calc(4.2em + 0.15em))',
-    );
+  it('keeps rendered line numbers inside the editor box without shifting the editor left', () => {
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET).toBe('0');
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe('calc(4.2em + 0.15em)');
   });
 
   it('counts distinct wrapped visual rows from line client rects', () => {
