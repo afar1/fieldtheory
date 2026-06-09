@@ -87,7 +87,7 @@ describe('DynamicIsland floating pill', () => {
     });
 
     const escapeHint = container.querySelector('[data-dynamic-island-escape-hint="true"]') as HTMLElement;
-    expect(escapeHint.textContent).toBe('Press Esc');
+    expect(escapeHint.textContent).toBe('Esc');
     expect(escapeHint.style.fontSize).toBe('8px');
     expect(escapeHint.style.fontWeight).toBe('400');
     expect(escapeHint.style.maxWidth).toBe('100%');
