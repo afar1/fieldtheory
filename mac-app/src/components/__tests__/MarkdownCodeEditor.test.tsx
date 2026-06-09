@@ -1229,6 +1229,18 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
   });
 
+  it('keeps ArrowDown from a rendered list item inside an existing empty item body', () => {
+    const doc = '- first item\n- ';
+    const emptyMarkerOffset = '- first item\n-'.length;
+
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, emptyMarkerOffset)).toEqual({
+      selection: doc.length,
+    });
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first item\n'.length)).toEqual({
+      selection: doc.length,
+    });
+  });
+
   it('moves rendered Command+Left to the list body instead of the hidden marker', () => {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
@@ -1245,6 +1257,135 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(view.state.selection.main.from).toBe(2);
     expect(handleRenderedMarkdownEditorCommandArrow(view, 'left')).toBe(true);
     expect(view.state.selection.main.from).toBe(2);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('moves rendered Command+Right to the same styled line end without exposing closing syntax', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = '**Software commission**\n- Total';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('**Software'.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'right')).toBe(true);
+    expect(view.state.selection.main.from).toBe('**Software commission**'.length);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('**');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps paragraph selections across inline syntax rendered coherently', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'Paragraph with **bold** and [link](wiki://target).\n\nNext paragraph';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.range(0, doc.indexOf('\n\n')),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const renderedText = parent.querySelector('.cm-content')?.textContent ?? '';
+    expect(renderedText).toContain('Paragraph with bold and link.');
+    expect(renderedText).not.toContain('**');
+    expect(renderedText).not.toContain('[link]');
+    expect(renderedText).not.toContain('(wiki://target)');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps a large rendered editing scenario out of hidden markdown syntax', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const prefix = Array.from({ length: 40 }, (_, index) => (
+      `Long paragraph ${index + 1} keeps enough surrounding prose to exercise rendered editor range mapping.`
+    )).join('\n\n');
+    const scenario = [
+      '## Styled Heading',
+      'Paragraph with **bold** and [link](wiki://target).',
+      '- first item',
+      '- ',
+      '![Diagram](<file:///tmp/Figure%201.png>)',
+      '> quoted thought',
+    ].join('\n');
+    const suffix = Array.from({ length: 20 }, (_, index) => (
+      `Trailing paragraph ${index + 1} keeps the fixture large after the active region.`
+    )).join('\n\n');
+    const doc = `${scenario}\n\n${prefix}\n\n${suffix}`;
+    const activeParagraphOffset = doc.indexOf('Long paragraph 25') + 'Long paragraph 25'.length;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(activeParagraphOffset),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+    const typeText = (text: string) => {
+      for (const character of text) {
+        const handled = handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data: character,
+        }));
+        if (!handled) {
+          const selection = view.state.selection.main;
+          view.dispatch({
+            changes: { from: selection.from, to: selection.to, insert: character },
+            selection: { anchor: selection.from + character.length },
+          });
+        }
+      }
+    };
+
+    typeText('!!!');
+    const afterTyping = view.state.doc.toString();
+    expect(afterTyping).toContain('Long paragraph 25!!! keeps enough surrounding prose');
+
+    const firstListBody = afterTyping.indexOf('- first item') + '- first item'.length;
+    view.dispatch({
+      changes: { from: firstListBody, insert: '\n- new continuation' },
+      selection: { anchor: firstListBody + '\n- new continuation'.length },
+    });
+    const afterEnter = view.state.doc.toString();
+    const emptyListMarker = afterEnter.indexOf('- \n![Diagram]');
+    expect(getRenderedMarkdownVerticalNavigationEdit(afterEnter, emptyListMarker)).toEqual({
+      selection: emptyListMarker + '- '.length,
+    });
+
+    const boldSelection = afterEnter.indexOf('**bold') + '**bo'.length;
+    view.dispatch({ selection: EditorSelection.cursor(boldSelection) });
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'right')).toBe(true);
+    expect(view.state.selection.main.from).toBe(afterEnter.indexOf('\n- first item'));
+
+    const headingBodyStart = afterEnter.indexOf('Styled Heading');
+    view.dispatch({ selection: EditorSelection.cursor(headingBodyStart) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.selection.main.from).toBe(headingBodyStart);
+
+    const renderedText = parent.querySelector('.cm-content')?.textContent ?? '';
+    expect(renderedText).toContain('Styled Heading');
+    expect(renderedText).toContain('Paragraph with bold and link.');
+    expect(renderedText).toContain('Diagram');
+    expect(renderedText).not.toContain('##');
+    expect(renderedText).not.toContain('**');
+    expect(renderedText).not.toContain('[link]');
+    expect(renderedText).not.toContain('(wiki://target)');
+    expect(renderedText).not.toContain('![Diagram]');
+    expect(renderedText).not.toContain('file:///tmp');
 
     view.destroy();
     parent.remove();
@@ -2202,6 +2343,114 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     expect(stableImageRanges).toEqual([{ from: imageLine.from, to: imageLine.to }]);
     expect(classes).toContain(RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS);
+  });
+
+  it('does not rescan image ranges for ordinary typing or selection movement', () => {
+    const originalLocalStorage = window.localStorage;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn((key: string) => (
+          key === 'fieldtheory-rendered-editor-debug' ? 'true' : null
+        )),
+      },
+    });
+    const timings: Array<Record<string, unknown>> = [];
+    const handleTiming = (event: Event) => {
+      if (event instanceof CustomEvent) timings.push(event.detail);
+    };
+    window.addEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+
+    const doc = [
+      'Plain paragraph',
+      '',
+      '![Diagram](<file:///tmp/diagram.png>)',
+      '',
+      'After paragraph',
+    ].join('\n');
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension()],
+      }),
+      parent,
+    });
+
+    view.dispatch({
+      changes: { from: 5, insert: ' typed' },
+      selection: { anchor: 11 },
+      annotations: Transaction.userEvent.of('input.type'),
+    });
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
+
+    const updates = timings.filter((entry) => entry.stage === 'rendered-decorations-update');
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(updates.find((entry) => entry.docChanged === true)?.imageRangesRecomputed).toBe(false);
+    expect(updates.find((entry) => entry.selectionSet === true && entry.docChanged === false)?.imageRangesRecomputed).toBe(false);
+
+    view.destroy();
+    parent.remove();
+    window.removeEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: originalLocalStorage,
+    });
+  });
+
+  it('rescans stable image ranges when image markdown changes', () => {
+    const originalLocalStorage = window.localStorage;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn((key: string) => (
+          key === 'fieldtheory-rendered-editor-debug' ? 'true' : null
+        )),
+      },
+    });
+    const timings: Array<Record<string, unknown>> = [];
+    const handleTiming = (event: Event) => {
+      if (event instanceof CustomEvent) timings.push(event.detail);
+    };
+    window.addEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+
+    const doc = [
+      'Plain paragraph',
+      '',
+      '![Diagram](<file:///tmp/diagram.png>)',
+      '',
+      'After paragraph',
+    ].join('\n');
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [createRenderedMarkdownEditorPresentationExtension()],
+      }),
+      parent,
+    });
+    const imageLine = view.state.doc.line(3);
+
+    view.dispatch({
+      changes: { from: imageLine.from + 2, insert: 'Updated ' },
+      annotations: Transaction.userEvent.of('input.type'),
+    });
+
+    const update = timings.find((entry) => (
+      entry.stage === 'rendered-decorations-update'
+      && entry.docChanged === true
+    ));
+    expect(update?.imageRangesRecomputed).toBe(true);
+
+    view.destroy();
+    parent.remove();
+    window.removeEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: originalLocalStorage,
+    });
   });
 
   it('keeps code block styling when a visible range starts inside a fenced block', () => {

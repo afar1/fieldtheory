@@ -17,6 +17,7 @@ import LibrarianView, {
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
+  shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldAnimateResponsiveSidebar,
   isLiveLibrarianRendererStoragePreferenceKey,
   restoreLibrarianLineNumbersMode,
@@ -51,6 +52,22 @@ vi.mock('../../supabaseClient', () => ({
 
 vi.mock('../AgentKickoffModal', () => ({
   default: () => null,
+}));
+
+vi.mock('../SketchView', () => ({
+  default: ({ onSave, backgroundImage }: {
+    onSave: (imageData: { dataUrl: string; width: number; height: number }) => void;
+    backgroundImage?: { dataUrl: string; width: number; height: number } | null;
+  }) => (
+    <div data-testid="sketch-view" data-has-background={backgroundImage ? 'true' : 'false'}>
+      <button
+        type="button"
+        onClick={() => onSave({ dataUrl: 'data:image/png;base64,drawn', width: 640, height: 480 })}
+      >
+        Save drawing
+      </button>
+    </div>
+  ),
 }));
 
 describe('LibrarianView render', () => {
@@ -150,6 +167,12 @@ describe('LibrarianView render', () => {
       selectionEnd: blockStart,
     });
     expect(blockEnd).toBeGreaterThan(blockStart);
+  });
+
+  it('keeps Backspace at rendered heading and quote starts from deleting hidden syntax', () => {
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('## Heading', 3, 3, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('> Quoted', 2, 2, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('Plain text', 5, 5, 'Backspace')).toBe(false);
   });
 
   function mockStoredWikiSelection(relPath: string, options: { expandScratchpad?: boolean } = {}): void {
@@ -1128,6 +1151,19 @@ describe('LibrarianView render', () => {
       configurable: true,
       value: undefined,
     });
+    Object.defineProperty(window, 'markdownImagesAPI', {
+      configurable: true,
+      value: {
+        copyImageForDocument: vi.fn(async () => null),
+        copyImageDataUrlForDocument: vi.fn(async () => null),
+        makeImagesPortable: vi.fn(async (_documentPath: string, content: string) => ({
+          content,
+          copied: 0,
+          rewritten: 0,
+          missing: 0,
+        })),
+      },
+    });
   });
 
   afterEach(() => {
@@ -1507,6 +1543,53 @@ describe('LibrarianView render', () => {
     const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
     expect(sidebarPane?.style.width).toBe('0px');
     expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeTruthy();
+  });
+
+  it('does not let popped-out document windows overwrite shared sidebar expansion state', async () => {
+    const relPath = 'scratchpad/popped-out-preserve-expanded';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'popped-out-preserve-expanded',
+          title: 'Popped Out Preserve Expanded',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'popped-out-preserve-expanded',
+      title: 'Popped Out Preserve Expanded',
+      lastUpdated: 1,
+      content: 'Popped out body',
+      documentVersion: { mtimeMs: 1, size: 15, sha256: 'popped-out-preserve-expanded' },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    expect(await screen.findByText('Popped out body')).toBeTruthy();
+    const expandedFolderWrites = vi.mocked(window.localStorage.setItem).mock.calls
+      .filter(([key]) => key === 'wiki-expanded-folders');
+    expect(expandedFolderWrites).toEqual([]);
   });
 
   it('shows pinned recent docs only in Recents and without pin buttons', async () => {
@@ -2576,6 +2659,91 @@ describe('LibrarianView render', () => {
     expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
   });
 
+  it('opens inline draw from a rendered /draw command and saves portable markdown in place', async () => {
+    const relPath = 'scratchpad/rendered-draw-command-test';
+    const content = '/draw';
+    const drawingMarkdown = '![Drawing](<./.assets/rendered-drawing.png>)';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-draw-command-test',
+      title: 'rendered-draw-command-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-draw-command-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'rendered',
+          selectionStart: content.length,
+          selectionEnd: content.length,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: drawingMarkdown.length + 1, sha256: 'rendered-draw-command-saved' },
+    });
+    vi.mocked(window.markdownImagesAPI!.copyImageDataUrlForDocument).mockResolvedValue({
+      markdown: drawingMarkdown,
+      destination: './.assets/rendered-drawing.png',
+      copiedPath: `/Users/afar/.fieldtheory/library/${relPath}.assets/rendered-drawing.png`,
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('/draw');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input).toBeTruthy();
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor input missing');
+
+    fireEvent.keyDown(renderedInput, { key: 'Enter' });
+
+    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
+    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
+
+    const saveDrawingButton = await screen.findByRole('button', { name: 'Save drawing' });
+    await act(async () => {
+      fireEvent.click(saveDrawingButton);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(window.markdownImagesAPI!.copyImageDataUrlForDocument).toHaveBeenCalledWith(
+        page.absPath,
+        'data:image/png;base64,drawn',
+        'Drawing',
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
+    });
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    await waitFor(() => {
+      const contentNode = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(contentNode?.textContent).toContain(drawingMarkdown);
+      expect(contentNode?.textContent).not.toContain('/draw');
+    });
+  });
+
   it('inserts super-pasted image paths as plain text in rendered mode', async () => {
     const relPath = 'scratchpad/rendered-super-paste-image-path-test';
     const content = 'hello rendered super paste';
@@ -3210,6 +3378,8 @@ describe('LibrarianView render', () => {
       const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
       expect(stages).toContain('apply-rendered-editor-body');
       expect(stages).toContain('local-content-state-scheduled');
+      expect(stages).toContain('editor-session-persist-scheduled');
+      expect(stages).toContain('save-scheduled');
     }, { timeout: 1200 });
 
     const timingEntries = appendRenderedEditorDebug.mock.calls
@@ -3218,9 +3388,17 @@ describe('LibrarianView render', () => {
         entry.stage === 'apply-rendered-editor-body'
         || entry.stage === 'local-content-state-scheduled'
         || entry.stage === 'handle-rendered-editor-change'
+        || entry.stage === 'editor-session-persist-scheduled'
+        || entry.stage === 'save-scheduled'
       ));
     expect(timingEntries.length).toBeGreaterThan(0);
-    expect(timingEntries.every((entry) => typeof entry.details?.durationMs === 'number')).toBe(true);
+    expect(timingEntries.filter((entry) => (
+      entry.stage === 'apply-rendered-editor-body'
+      || entry.stage === 'local-content-state-scheduled'
+      || entry.stage === 'handle-rendered-editor-change'
+    )).every((entry) => typeof entry.details?.durationMs === 'number')).toBe(true);
+    expect(timingEntries.find((entry) => entry.stage === 'editor-session-persist-scheduled')?.details?.delayMs).toBe(160);
+    expect(timingEntries.find((entry) => entry.stage === 'save-scheduled')?.details?.delayMs).toBeGreaterThan(0);
   });
 
   it('waits for a quiet rendered typing window before autosaving', async () => {
