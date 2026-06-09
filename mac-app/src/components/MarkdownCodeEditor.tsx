@@ -113,8 +113,9 @@ export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLi
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS = 'cm-ft-lineNumberSelectionHitArea';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH = '4.2em';
-export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '1.05em';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '0.15em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT = '0.75em';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH = `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`;
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -3114,11 +3115,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       return Prec.highest(EditorView.theme(
         {
           '&': {
+            position: 'relative',
+            boxSizing: 'border-box',
             height: isRenderedPresentation ? 'auto' : '100%',
             color,
             backgroundColor: background ?? 'transparent',
             fontFamily,
             fontSize: fontSizePx,
+            paddingLeft: lineNumbersMode === 'hidden' ? '0' : MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
             '--ft-line-number-row-height': lineNumberRowHeight,
           },
           '.cm-scroller': {
@@ -3187,7 +3191,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             left: '0',
             top: '0',
             width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
-            transform: `translateX(calc(-100% - ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP}))`,
             color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.4)' : 'rgba(17,17,17,0.36)'),
             opacity: lineNumbersMode === 'faded' ? 0.5 : 0.82,
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
@@ -3200,8 +3203,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             left: '0',
             top: '0',
             bottom: '0',
-            width: '16em',
-            transform: `translateX(calc(-100% - ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP}))`,
+            width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
             cursor: 'text',
             pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',
             zIndex: 1,
