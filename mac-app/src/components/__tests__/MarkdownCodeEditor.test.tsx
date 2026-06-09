@@ -613,12 +613,12 @@ describe('MarkdownCodeEditor checked task decorations', () => {
 });
 
 describe('MarkdownCodeEditor line numbers', () => {
-  it('reserves enough rendered gutter room for three-digit line numbers', () => {
+  it('reserves enough rendered gutter room for four-digit line numbers', () => {
     const overlayWidth = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH);
     const overlayRightInset = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT);
-    const threeDigitWidthAtOverlayFontSize = 3 * 0.78;
+    const fourDigitWidthAtOverlayFontSize = 4 * 0.78;
 
-    expect(overlayWidth - overlayRightInset).toBeGreaterThan(threeDigitWidthAtOverlayFontSize);
+    expect(overlayWidth - overlayRightInset).toBeGreaterThan(fourDigitWidthAtOverlayFontSize);
   });
 
   it('counts distinct wrapped visual rows from line client rects', () => {
