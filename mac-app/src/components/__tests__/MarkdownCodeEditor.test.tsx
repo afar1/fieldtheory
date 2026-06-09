@@ -629,6 +629,12 @@ describe('MarkdownCodeEditor line numbers', () => {
     );
   });
 
+  it('can offset reserved line-number gutter without moving body content', () => {
+    expect(`calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`).toBe(
+      'calc(-1 * calc(4.2em + 0.15em))',
+    );
+  });
+
   it('counts distinct wrapped visual rows from line client rects', () => {
     expect(countVisualLineRowsFromClientRects([
       { top: 10, width: 120, height: 20 },
