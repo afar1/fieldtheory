@@ -18,6 +18,7 @@ import LibrarianView, {
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
+  shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldAnimateResponsiveSidebar,
   isLiveLibrarianRendererStoragePreferenceKey,
@@ -137,6 +138,39 @@ describe('LibrarianView render', () => {
       right: 420,
       top: 100,
     });
+  });
+
+  it('opens markdown source links on plain left click', () => {
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: true,
+      ctrlKey: false,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 1,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(false);
   });
 
   it('prefers the saved editor session over a stale last-selection on startup', () => {
@@ -2764,6 +2798,49 @@ describe('LibrarianView render', () => {
       expect(contentNode?.textContent).toContain(drawingMarkdown);
       expect(contentNode?.textContent).not.toContain('/draw');
     });
+  });
+
+  it('opens inline draw from a markdown /draw command', async () => {
+    const relPath = 'scratchpad/markdown-draw-command-test';
+    const content = '/draw';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'markdown-draw-command-test',
+      title: 'markdown-draw-command-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'markdown-draw-command-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: content.length,
+          selectionEnd: content.length,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const markdownInput = await waitFor(() => {
+      const input = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('/draw');
+      return input;
+    });
+    if (!markdownInput) throw new Error('Markdown editor input missing');
+
+    fireEvent.keyDown(markdownInput, { key: 'Enter' });
+
+    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
   });
 
   it('inserts super-pasted image paths as plain text in rendered mode', async () => {
