@@ -253,7 +253,9 @@ describe('CommandLauncherWindow.show()', () => {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
       getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
     };
-    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    const launcher = new CommandLauncherWindow(nativeHelper as any, {
+      getFieldTheoryLaunchSurface: () => ({ kind: 'markdown' }),
+    });
     (launcher as any).window = mockWindow;
     (launcher as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
 
@@ -263,6 +265,7 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
     expect(launcher.wasFieldTheoryActiveOnShow()).toBe(true);
+    expect(launcher.getLaunchOrigin()).toEqual({ kind: 'field-theory', surface: { kind: 'markdown' } });
   });
 
   it('marks Field Theory inactive when shown over an external app', async () => {
@@ -279,6 +282,31 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
     expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
+    expect(launcher.getLaunchOrigin()).toEqual({
+      kind: 'external-app',
+      app: { bundleId: 'com.apple.Safari', name: 'Safari' },
+    });
+  });
+
+  it('captures the focused Field Theory terminal session as the launch origin', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any, {
+      getFieldTheoryLaunchSurface: () => ({ kind: 'terminal', sessionId: 'terminal-at-open' }),
+    });
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    expect(launcher.wasFieldTheoryActiveOnShow()).toBe(true);
+    expect(launcher.getLaunchOrigin()).toEqual({
+      kind: 'field-theory',
+      surface: { kind: 'terminal', sessionId: 'terminal-at-open' },
+    });
   });
 
   it('does not capture Dock as a previous command target', async () => {

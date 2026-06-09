@@ -157,7 +157,12 @@ import {
 } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
-import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, resolveCommandLauncherInvocationTarget } from './commandLauncherTarget';
+import {
+  type CommandLauncherFieldTheoryLaunchSurface,
+  isExternalCommandTargetBundleId,
+  isFieldTheoryCommandTargetBundleId,
+  resolveCommandLauncherInvocationTarget,
+} from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendTranscriberTrace } from './transcriberTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
@@ -2274,10 +2279,10 @@ function handleBrowserLibraryReplaceSelectedTextResult(result: { requestId?: str
   pending.resolve(result.success === true);
 }
 
-function writeTextIntoFocusedCodexTerminal(text: string): boolean {
-  if (!text || !focusedCodexTerminalLauncherSessionId) return false;
-  const wrote = getCodexTerminalManager().writeInput(focusedCodexTerminalLauncherSessionId, text);
-  if (!wrote) {
+function writeTextIntoFocusedCodexTerminal(text: string, sessionId = focusedCodexTerminalLauncherSessionId): boolean {
+  if (!text || !sessionId) return false;
+  const wrote = getCodexTerminalManager().writeInput(sessionId, text);
+  if (!wrote && sessionId === focusedCodexTerminalLauncherSessionId) {
     focusedCodexTerminalLauncherSessionId = null;
   }
   return wrote;
@@ -5408,35 +5413,45 @@ function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: st
   };
 }
 
+function getFieldTheoryCommandLauncherLaunchSurface(): CommandLauncherFieldTheoryLaunchSurface {
+  if (focusedCodexTerminalLauncherSessionId) {
+    return { kind: 'terminal', sessionId: focusedCodexTerminalLauncherSessionId };
+  }
+  if (hasFocusedFieldTheoryMarkdownInsertionTarget() || hasActiveFieldTheoryMarkdownInsertionTarget()) {
+    return { kind: 'markdown' };
+  }
+  return { kind: 'none' };
+}
+
 function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
-  const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
-  if (previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)) {
+  const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
+  if (launchOrigin.kind === 'external-app' && isExternalCommandTargetBundleId(launchOrigin.app.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
-      source: 'previous-app',
-      previousBundleId: previousApp.bundleId,
-      previousName: previousApp.name,
+      source: 'launch-origin',
+      previousBundleId: launchOrigin.app.bundleId,
+      previousName: launchOrigin.app.name,
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
     });
-    return previousApp;
+    return launchOrigin.app;
   }
 
   appendCommandLauncherTrace('target-resolved', {
-    source: lastExternalCommandTargetApp ? 'last-external-app' : 'none',
-    previousBundleId: previousApp?.bundleId ?? null,
-    previousName: previousApp?.name ?? null,
+    source: launchOrigin.kind,
+    previousBundleId: null,
+    previousName: null,
     fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
     fallbackName: lastExternalCommandTargetApp?.name ?? null,
   });
-  return lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
-    ? lastExternalCommandTargetApp
-    : null;
+  return null;
 }
 
 function getCommandLauncherInvocationTarget(targetApp: { bundleId: string; name: string } | null) {
   return resolveCommandLauncherInvocationTarget({
+    launchOrigin: commandLauncherWindow?.getLaunchOrigin() ?? null,
     fieldTheoryActive: commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false,
     hasFocusedFieldTheoryTerminal: Boolean(focusedCodexTerminalLauncherSessionId),
+    focusedFieldTheoryTerminalSessionId: focusedCodexTerminalLauncherSessionId,
     hasActiveFieldTheoryMarkdown: hasActiveFieldTheoryMarkdownInsertionTarget(),
     hasExternalTargetApp: Boolean(targetApp),
   });
@@ -11791,16 +11806,17 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext: boolean; targetApp: { bundleId: string; name: string } | null }> => {
-    const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
+    const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
+    const fieldTheoryActive = launchOrigin.kind === 'field-theory';
+    const launchOriginSurface = launchOrigin.kind === 'field-theory' ? launchOrigin.surface.kind : null;
     const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
     const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
-    const targetApp = previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)
-      ? previousApp
-      : lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
-        ? lastExternalCommandTargetApp
-        : null;
+    const targetApp = getCommandLauncherTargetApp();
+    const hasActiveLibraryFileContext = launchOriginSurface === 'markdown' && Boolean(activeLibraryFileContext?.filePath);
     appendCommandLauncherTrace('launcher-context', {
       fieldTheoryActive,
+      launchOriginKind: launchOrigin.kind,
+      launchOriginSurface,
       previousBundleId: previousApp?.bundleId ?? null,
       previousName: previousApp?.name ?? null,
       frontmostBundleId: frontmostApp?.bundleId ?? null,
@@ -11808,11 +11824,12 @@ function setupClipboardIPCHandlers(): void {
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
       integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
-      hasActiveLibraryFileContext: Boolean(activeLibraryFileContext?.filePath),
+      launchOriginTerminalSessionId: launchOrigin.kind === 'field-theory' && launchOrigin.surface.kind === 'terminal' ? launchOrigin.surface.sessionId : null,
+      hasActiveLibraryFileContext,
       targetBundleId: targetApp?.bundleId ?? null,
       targetName: targetApp?.name ?? null,
     });
-    return { fieldTheoryActive, hasActiveLibraryFileContext: Boolean(activeLibraryFileContext?.filePath), targetApp };
+    return { fieldTheoryActive, hasActiveLibraryFileContext, targetApp };
   });
 
   ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
@@ -12414,11 +12431,11 @@ function setupClipboardIPCHandlers(): void {
           mode: 'text-reference',
           markdownContent: '',
         });
-        if (writeTextIntoFocusedCodexTerminal(handoffText)) {
+        if (writeTextIntoFocusedCodexTerminal(handoffText, invocationTarget.sessionId)) {
           commandLauncherWindow?.hide(true);
           appendCommandLauncherTrace('invoke-handoff-integrated-terminal-success', {
             filePath,
-            sessionId: focusedCodexTerminalLauncherSessionId,
+            sessionId: invocationTarget.sessionId,
             textLength: handoffText.length,
           });
           return { success: true };
@@ -12552,6 +12569,7 @@ function setupClipboardIPCHandlers(): void {
         targetBundleId: targetApp?.bundleId ?? null,
         targetName: targetApp?.name ?? null,
         integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+        launchOriginTerminalSessionId: invocationTarget.kind === 'field-theory-terminal' ? invocationTarget.sessionId : null,
         invocationTarget: invocationTarget.kind,
       });
       if (invocationTarget.kind === 'field-theory-terminal') {
@@ -12562,13 +12580,13 @@ function setupClipboardIPCHandlers(): void {
           mode: 'text-reference',
           markdownContent: '',
         });
-        if (writeTextIntoFocusedCodexTerminal(commandText)) {
+        if (writeTextIntoFocusedCodexTerminal(commandText, invocationTarget.sessionId)) {
           commandLauncherWindow?.hide(true);
           appendCommandLauncherTrace('invoke-command-integrated-terminal-success', {
             ...invocationTrace,
             commandName,
             commandPath: command.filePath,
-            sessionId: focusedCodexTerminalLauncherSessionId,
+            sessionId: invocationTarget.sessionId,
             textLength: commandText.length,
           });
           return { success: true };
@@ -13479,6 +13497,24 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   nativeHelper.on('frontmostAppChanged', (appInfo) => {
     rememberCommandTargetApp(appInfo);
     clipboardHistoryWindow?.rememberExternalApp(appInfo);
+    if (
+      commandLauncherWindow?.isShowingOrVisible() &&
+      appInfo?.bundleId &&
+      isExternalCommandTargetBundleId(appInfo.bundleId)
+    ) {
+      const launchOrigin = commandLauncherWindow.getLaunchOrigin();
+      const sameAsLaunchOrigin = launchOrigin.kind === 'external-app' &&
+        launchOrigin.app.bundleId === appInfo.bundleId;
+      if (!sameAsLaunchOrigin) {
+        appendCommandLauncherTrace('frontmost-app-changed-dismiss-launcher', {
+          bundleId: appInfo.bundleId,
+          name: appInfo.name ?? null,
+          launchOriginKind: launchOrigin.kind,
+          launchOriginBundleId: launchOrigin.kind === 'external-app' ? launchOrigin.app.bundleId : null,
+        });
+        commandLauncherWindow.hide(true);
+      }
+    }
     if (isAlfredApp(appInfo)) {
       hideFieldTheoryForAlfred();
     }
@@ -14432,6 +14468,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined, {
     getInitialDarkMode: () => preferencesManager?.getPreference('darkMode') ?? false,
+    getFieldTheoryLaunchSurface: getFieldTheoryCommandLauncherLaunchSurface,
   });
   appendCommandLauncherTrace('command-launcher-main-ready', {
     pasteTraceVersion: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
