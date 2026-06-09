@@ -128,10 +128,10 @@ export function resolveWikiLink(
 ): { relPath: string | null; artifactPath: string | null; commandPath: string | null; bookmarks: boolean } {
   const clean = target.trim();
   if (!clean) return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
-  const relKey = normalizeWikiRelPath(clean);
-  if (relKey.toLowerCase() === 'bookmark' || relKey.toLowerCase() === 'bookmarks') {
+  if (clean.toLowerCase() === '@bookmark' || clean.toLowerCase() === '@bookmarks') {
     return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
   }
+  const relKey = normalizeWikiRelPath(clean);
   if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   const hit = index.byTitle.get(clean.toLowerCase());
@@ -224,6 +224,8 @@ export type MarkdownWikiLinkCompletionEdit = {
 };
 
 export type MarkdownWikiLinkCompletionDeleteKey = 'Backspace' | 'Delete';
+
+export type MarkdownMentionCompletion = MarkdownWikiLinkCompletion;
 
 export type WikiBacklinkInput = {
   relPath: string;
@@ -381,6 +383,34 @@ function transformBareExternalUrls(markdown: string): string {
     out += markdown.slice(cursor, start);
     out += `[${escapeMarkdownLinkText(href)}](${href})`;
     cursor = end;
+  }
+
+  return cursor === 0 ? markdown : `${out}${markdown.slice(cursor)}`;
+}
+
+function transformBookmarkMentions(markdown: string): string {
+  const protectedRanges = getProtectedMarkdownLinkRanges(markdown);
+  let protectedIndex = 0;
+  let cursor = 0;
+  let out = '';
+
+  for (const match of markdown.matchAll(/(^|[^\w@])@(bookmarks?)\b/gi)) {
+    const fullStart = match.index ?? -1;
+    if (fullStart < 0) continue;
+    const prefix = match[1] ?? '';
+    const mention = `@${match[2] ?? ''}`;
+    const start = fullStart + prefix.length;
+    while (protectedIndex < protectedRanges.length && protectedRanges[protectedIndex].end <= start) {
+      protectedIndex += 1;
+    }
+    const protectedRange = protectedRanges[protectedIndex];
+    if (protectedRange && start >= protectedRange.start && start < protectedRange.end) {
+      continue;
+    }
+
+    out += markdown.slice(cursor, start);
+    out += `[${mention}](${BOOKMARKS_PREFIX}root)`;
+    cursor = start + mention.length;
   }
 
   return cursor === 0 ? markdown : `${out}${markdown.slice(cursor)}`;
@@ -797,6 +827,48 @@ export function getMarkdownWikiLinkCompletionDeleteEdit(
   };
 }
 
+export function getActiveMarkdownMentionCompletion(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownMentionCompletion | null {
+  if (selectionStart !== selectionEnd) return null;
+  const caret = Math.max(0, Math.min(selectionStart, markdown.length));
+  const lineStart = markdown.lastIndexOf('\n', Math.max(0, caret - 1)) + 1;
+  const beforeCaret = markdown.slice(lineStart, caret);
+  const match = beforeCaret.match(/(^|[^\w@])@([\w-]{0,64})$/);
+  if (!match) return null;
+  const openStart = lineStart + beforeCaret.length - (match[2]?.length ?? 0) - 1;
+  const previousChar = markdown[openStart - 1] ?? '';
+  if (previousChar === '@' || /[\w]/.test(previousChar)) return null;
+  return {
+    openStart,
+    queryStart: openStart + 1,
+    queryEnd: caret,
+    replaceEnd: caret,
+    query: match[2] ?? '',
+  };
+}
+
+export function getMarkdownMentionCompletionReplacement(
+  markdown: string,
+  completion: MarkdownMentionCompletion,
+  title: string,
+  href: string,
+): MarkdownWikiLinkCompletionEdit | null {
+  const cleanTitle = title.trim();
+  const cleanHref = href.trim();
+  if (!cleanTitle || !cleanHref) return null;
+  const display = cleanTitle.startsWith('@') ? cleanTitle : `@${cleanTitle}`;
+  const inserted = `[${escapeMarkdownLinkText(display)}](${cleanHref})`;
+  const selection = completion.openStart + inserted.length;
+  return {
+    nextValue: `${markdown.slice(0, completion.openStart)}${inserted}${markdown.slice(completion.replaceEnd)}`,
+    selectionStart: selection,
+    selectionEnd: selection,
+  };
+}
+
 export function getMarkdownWikiLinkAutoCloseEdit(
   markdown: string,
   selectionStart: number,
@@ -862,7 +934,7 @@ export function transformWikiLinks(body: string, index: WikiIndex): string {
           return `[${escapedDisplay}](${href})`;
         },
       );
-      return transformBareExternalUrls(withWikiLinks);
+      return transformBookmarkMentions(transformBareExternalUrls(withWikiLinks));
     })
     .join('');
 }

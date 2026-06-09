@@ -133,8 +133,12 @@ describe('BookmarksPane native preference sync', () => {
       />
     );
 
-    expect(await screen.findByLabelText('Bookmarks location')).toBeTruthy();
-    expect(screen.getByText('Library')).toBeTruthy();
+    const location = await screen.findByLabelText('Bookmarks location');
+    expect(location).toBeTruthy();
+    const toolbar = location.closest('[data-fieldtheory-bookmarks-toolbar="true"]') as HTMLElement | null;
+    expect(toolbar?.style.paddingLeft).toBe('44px');
+    expect(toolbar?.style.paddingRight).toBe('30px');
+    expect(screen.queryByText('Library')).toBeNull();
     expect(screen.getByText('Bookmarks')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText('Back'));
