@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT,
+  BROWSER_HELPER_REQUEST_TIMING_EVENT,
   BROWSER_HELPER_STALE_EVENT,
   BrowserLibraryApp,
   applyRendererStorageChangeFromNative,
@@ -1001,6 +1002,41 @@ describe('BrowserLibraryApp', () => {
 
     act(() => {
       window.dispatchEvent(new Event(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT));
+    });
+
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+  });
+
+  it('clears the reconnect button when a later helper request succeeds', () => {
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = () => <div data-testid="library-view">Library</div>;
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event(BROWSER_HELPER_STALE_EVENT));
+    });
+
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(BROWSER_HELPER_REQUEST_TIMING_EVENT, {
+        detail: {
+          path: '/native/shared-files/pinned-item-ids',
+          method: 'GET',
+          status: 200,
+          ok: true,
+          durationMs: 2,
+          startedAt: 10,
+        },
+      }));
     });
 
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
