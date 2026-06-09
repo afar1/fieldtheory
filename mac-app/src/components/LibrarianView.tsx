@@ -662,7 +662,7 @@ export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
   altKey: boolean;
   ctrlKey: boolean;
 }): boolean {
-  return input.button === 0 && input.metaKey && !input.altKey && !input.ctrlKey;
+  return input.button === 0 && !input.altKey && !input.ctrlKey;
 }
 
 export function isRenderedMarkdownLinkEventTarget(target: EventTarget | null): boolean {
