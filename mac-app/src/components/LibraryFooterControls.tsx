@@ -227,6 +227,41 @@ export function LibraryFooterMaxwellHistoryButton(props: {
   );
 }
 
+export function LibraryFooterKeyboardShortcutsButton(props: {
+  theme: LibraryFooterTheme;
+  open: boolean;
+  onToggle: () => void;
+  style?: React.CSSProperties;
+}) {
+  const { theme, open, onToggle, style } = props;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title="Keyboard shortcuts (Shift+?)"
+      aria-label="Keyboard shortcuts"
+      style={{
+        width: '18px',
+        height: '18px',
+        padding: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: open ? theme.accent : 'transparent',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        color: open ? '#fff' : theme.textSecondary,
+        cursor: 'pointer',
+        transition: 'background-color 0.15s ease',
+        flexShrink: 0,
+        ...style,
+      }}
+    >
+      <span style={{ fontSize: '11px', lineHeight: '16px', fontWeight: 650 }}>?</span>
+    </button>
+  );
+}
+
 export function LibraryFooterMaxwellCancelButton(props: {
   theme: LibraryFooterTheme;
   onCancel: () => void;

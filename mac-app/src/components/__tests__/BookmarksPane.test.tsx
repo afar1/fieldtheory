@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BookmarksPane from '../BookmarksPane';
 
@@ -117,5 +117,31 @@ describe('BookmarksPane native preference sync', () => {
 
     await waitFor(() => expect(screen.getByText('0 bookmarks')).toBeTruthy());
     expect(screen.getByText('No bookmarks in this folder.')).toBeTruthy();
+  });
+
+  it('shows bookmarks location controls wired to librarian history', async () => {
+    const onNavigateBack = vi.fn();
+    const onNavigateForward = vi.fn();
+
+    render(
+      <BookmarksPane
+        active
+        canNavigateBack
+        canNavigateForward={false}
+        onNavigateBack={onNavigateBack}
+        onNavigateForward={onNavigateForward}
+      />
+    );
+
+    expect(await screen.findByLabelText('Bookmarks location')).toBeTruthy();
+    expect(screen.getByText('Library')).toBeTruthy();
+    expect(screen.getByText('Bookmarks')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Back'));
+    fireEvent.click(screen.getByLabelText('Forward'));
+
+    expect(onNavigateBack).toHaveBeenCalledTimes(1);
+    expect(onNavigateForward).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Forward')).toHaveProperty('disabled', true);
   });
 });

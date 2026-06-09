@@ -102,6 +102,7 @@ describe('resolveWikiLink', () => {
   });
 
   it('resolves the bookmarks page as a built-in destination', () => {
+    expect(resolveWikiLink('bookmark', index).bookmarks).toBe(true);
     expect(resolveWikiLink('bookmarks', index).bookmarks).toBe(true);
     expect(resolveWikiLink('Bookmarks.md', index).bookmarks).toBe(true);
   });
@@ -211,8 +212,8 @@ describe('transformWikiLinks', () => {
   });
 
   it('rewrites bookmarks wikilinks to the built-in bookmarks destination', () => {
-    const out = transformWikiLinks('Open [[bookmarks]].', index);
-    expect(out).toBe('Open [bookmarks](bookmarks://root).');
+    const out = transformWikiLinks('Open [[bookmark]] or [[bookmarks]].', index);
+    expect(out).toBe('Open [bookmark](bookmarks://root) or [bookmarks](bookmarks://root).');
   });
 
   it('leaves wikilink syntax inside fenced code blocks untouched', () => {

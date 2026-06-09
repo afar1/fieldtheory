@@ -232,7 +232,7 @@ export class DynamicIslandManager extends EventEmitter {
   private inputMode: DynamicIslandInputMode = 'standard';
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
-  private recordingIndicatorMode: RecordingIndicatorMode = 'auto';
+  private recordingIndicatorMode: RecordingIndicatorMode = 'floating';
   private currentWindowMode: ResolvedRecordingIndicatorMode | null = null;
   private floatingPosition: FloatingIndicatorPosition | null = null;
   private floatingAnchorCenterX: number | null = null;
@@ -469,7 +469,7 @@ export class DynamicIslandManager extends EventEmitter {
   getResolvedRecordingIndicatorMode(): ResolvedRecordingIndicatorMode {
     if (this.recordingIndicatorMode === 'floating') return 'floating';
     if (this.recordingIndicatorMode === 'notch') return 'notch';
-    return this.getActiveNotchProfile() ? 'notch' : 'floating';
+    return 'floating';
   }
 
   setFloatingPosition(position: FloatingIndicatorPosition | null): FloatingIndicatorPosition | null {
