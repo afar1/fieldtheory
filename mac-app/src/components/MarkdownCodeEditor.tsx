@@ -4155,6 +4155,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       ...style,
       width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
       marginLeft: lineNumbersVisible ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET : '0',
+      backgroundColor: lineNumbersVisible ? 'rgba(255, 128, 0, 0.08)' : 'transparent',
+      outline: lineNumbersVisible ? '2px solid rgba(255, 128, 0, 0.9)' : 'none',
     };
     const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
       width: '100%',
