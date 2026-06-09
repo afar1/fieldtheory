@@ -116,6 +116,8 @@ export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH = '4.2em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '0.15em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT = '0.25em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH = `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX = 20;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX = 21;
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -1564,6 +1566,29 @@ export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
+export function getRenderedMarkdownTaskMarkerDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; insert: string; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)(?:[-*+]\s*)?\[[ xX]?\](\s+)(.+)$/.exec(lineText);
+  if (!taskMatch) return null;
+  const markerPrefixLength = taskMatch[0].length - taskMatch[3].length;
+  const bodyStart = lineStart + markerPrefixLength;
+  if (caret !== bodyStart) return null;
+
+  const indentation = taskMatch[1];
+  const selection = lineStart + indentation.length;
+  return {
+    from: lineStart,
+    to: bodyStart,
+    insert: indentation,
+    selection,
+  };
+}
+
 export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
   const clampedOffset = Math.max(0, Math.min(value.length, offset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, clampedOffset);
@@ -1613,6 +1638,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if (input.inputType === 'deleteContentBackward' && !input.isComposing) {
     const value = view.state.doc.toString();
+    const taskMarkerEdit = getRenderedMarkdownTaskMarkerDeleteBackwardEdit(value, selection.from);
+    if (taskMarkerEdit) {
+      view.dispatch({
+        changes: { from: taskMarkerEdit.from, to: taskMarkerEdit.to, insert: taskMarkerEdit.insert },
+        selection: { anchor: taskMarkerEdit.selection, head: taskMarkerEdit.selection },
+      });
+      return true;
+    }
     const emptyTaskEdit = getRenderedMarkdownEmptyTaskDeleteBackwardEdit(value, selection.from);
     if (emptyTaskEdit) {
       view.dispatch({
@@ -3198,7 +3231,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
             fontSize: '0.78em',
             pointerEvents: 'none',
-            zIndex: 2,
+            zIndex: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
           },
           '.cm-ft-lineNumberSelectionHitArea': {
             position: 'absolute',
@@ -3208,7 +3241,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
             cursor: 'text',
             pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',
-            zIndex: 1,
+            zIndex: MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
           },
           '.cm-ft-lineNumberOverlayNumber': {
             position: 'absolute',
