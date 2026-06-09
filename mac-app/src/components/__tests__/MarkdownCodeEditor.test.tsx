@@ -7,6 +7,8 @@ import {
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
@@ -611,6 +613,14 @@ describe('MarkdownCodeEditor checked task decorations', () => {
 });
 
 describe('MarkdownCodeEditor line numbers', () => {
+  it('reserves enough rendered gutter room for three-digit line numbers', () => {
+    const overlayWidth = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH);
+    const overlayRightInset = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT);
+    const threeDigitWidthAtOverlayFontSize = 3 * 0.78;
+
+    expect(overlayWidth - overlayRightInset).toBeGreaterThan(threeDigitWidthAtOverlayFontSize);
+  });
+
   it('counts distinct wrapped visual rows from line client rects', () => {
     expect(countVisualLineRowsFromClientRects([
       { top: 10, width: 120, height: 20 },
