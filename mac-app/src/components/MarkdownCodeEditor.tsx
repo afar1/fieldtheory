@@ -112,6 +112,9 @@ export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS = 'cm-ft-lineNumberSelectionHitArea';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH = '4.2em';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '1.05em';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT = '0.75em';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -3183,8 +3186,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             position: 'absolute',
             left: '0',
             top: '0',
-            width: '2.2em',
-            transform: 'translateX(calc(-100% - 0.65em))',
+            width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
+            transform: `translateX(calc(-100% - ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP}))`,
             color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.4)' : 'rgba(17,17,17,0.36)'),
             opacity: lineNumbersMode === 'faded' ? 0.5 : 0.82,
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
@@ -3198,14 +3201,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             top: '0',
             bottom: '0',
             width: '16em',
-            transform: 'translateX(calc(-100% - 0.65em))',
+            transform: `translateX(calc(-100% - ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP}))`,
             cursor: 'text',
             pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',
             zIndex: 1,
           },
           '.cm-ft-lineNumberOverlayNumber': {
             position: 'absolute',
-            right: '0.55em',
+            right: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT,
             height: 'var(--ft-line-number-row-height)',
             lineHeight: 'var(--ft-line-number-row-height)',
             textAlign: 'right',
