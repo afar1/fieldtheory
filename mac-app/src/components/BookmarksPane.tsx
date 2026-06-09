@@ -188,11 +188,12 @@ function BookmarksPane({
       {/* Toolbar */}
       <div
         ref={toolbarRef}
+        data-fieldtheory-bookmarks-toolbar="true"
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: '10px',
-          padding: '10px 16px',
+          padding: '10px 30px 10px 44px',
           borderBottom: `1px solid ${theme.border}`,
           flexShrink: 0,
         }}
@@ -270,8 +271,6 @@ function BookmarksPane({
               whiteSpace: 'nowrap',
             }}
           >
-            <span>Library</span>
-            <span style={{ opacity: 0.55 }}>/</span>
             <span style={{ color: theme.text, fontWeight: 600 }}>Bookmarks</span>
           </div>
         </div>
