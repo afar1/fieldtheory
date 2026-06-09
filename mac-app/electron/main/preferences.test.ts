@@ -141,6 +141,13 @@ describe('PreferencesManager', () => {
     expect(saved.fieldTheoryWindowMode).toBe('app');
   });
 
+  it('defaults the local command model to Gemma 4 12B', async () => {
+    const manager = new PreferencesManager();
+    await manager.load();
+
+    expect(manager.getPreference('localLlmSelectedModel')).toBe('gemma-4-12B-it-Q4_K_M');
+  });
+
   it('migrates legacy normal-window prefs into Field Theory app mode', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(
