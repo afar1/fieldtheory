@@ -3014,6 +3014,18 @@ export function getMarkdownCodeEditorSelectionDrawConfig(blinkCursor: boolean): 
   return { cursorBlinkRate: blinkCursor ? MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS : 0 };
 }
 
+export function getMarkdownCodeEditorLineNumberRowHeight(
+  fontSize: number | string,
+  lineHeight: number | string,
+): string {
+  const fontSizeNumber = typeof fontSize === 'number' ? fontSize : Number.parseFloat(String(fontSize));
+  const lineHeightNumber = typeof lineHeight === 'number' ? lineHeight : Number.parseFloat(String(lineHeight));
+  if (Number.isFinite(fontSizeNumber) && Number.isFinite(lineHeightNumber)) {
+    return `${fontSizeNumber * lineHeightNumber}px`;
+  }
+  return typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
+}
+
 export function getMarkdownCodeEditorSelectionBackground(
   isDark: boolean,
   presentation: MarkdownCodeEditorPresentation,
@@ -3195,11 +3207,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
       const lineHeightCss = typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
-      const fontSizeNumber = typeof fontSize === 'number' ? fontSize : Number.parseFloat(String(fontSize));
-      const lineHeightNumber = typeof lineHeight === 'number' ? lineHeight : Number.parseFloat(String(lineHeight));
-      const lineNumberRowHeight = Number.isFinite(fontSizeNumber) && Number.isFinite(lineHeightNumber)
-        ? `${fontSizeNumber * lineHeightNumber}px`
-        : lineHeightCss;
+      const lineNumberRowHeight = getMarkdownCodeEditorLineNumberRowHeight(fontSize, lineHeight);
       const isRenderedPresentation = presentation === 'rendered';
       const cursorAnimationStyle = getMarkdownCodeEditorCursorAnimationStyle(blinkCursor);
       const cursorShapeStyle = getMarkdownCodeEditorCursorShapeStyle(
@@ -4134,6 +4142,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const lineNumberColor = mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.4)' : 'rgba(17,17,17,0.36)');
     const lineNumberOpacity = lineNumbersMode === 'faded' ? 0.5 : 0.82;
     const selectedLineNumberColor = theme.isDark ? 'rgba(255,255,255,0.84)' : 'rgba(17,17,17,0.82)';
+    const lineNumberRowHeight = getMarkdownCodeEditorLineNumberRowHeight(fontSize, lineHeight);
     const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
       width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
       height: '100%',
@@ -4144,6 +4153,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ? `${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH} minmax(0, 1fr)`
         : 'minmax(0, 1fr)',
       alignItems: 'stretch',
+      '--ft-line-number-row-height': lineNumberRowHeight,
       [MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR]: lineNumberColor,
       [MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR]: String(lineNumberOpacity),
       [MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_COLOR_VAR]: selectedLineNumberColor,
