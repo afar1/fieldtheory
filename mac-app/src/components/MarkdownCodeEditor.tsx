@@ -3122,7 +3122,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             backgroundColor: background ?? 'transparent',
             fontFamily,
             fontSize: fontSizePx,
+            marginLeft: lineNumbersMode === 'hidden' ? '0' : `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
             paddingLeft: lineNumbersMode === 'hidden' ? '0' : MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
+            width: lineNumbersMode === 'hidden' ? undefined : `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
             '--ft-line-number-row-height': lineNumberRowHeight,
           },
           '.cm-scroller': {
