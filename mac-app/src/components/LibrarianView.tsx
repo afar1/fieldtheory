@@ -11000,8 +11000,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             minHeight: 0,
             overflow: 'hidden',
             position: 'relative',
-            backgroundColor: 'rgba(120, 0, 255, 0.04)',
-            outline: '2px solid rgba(120, 0, 255, 0.55)',
           }}
         >
         {/* Top draggable region - captures clicks at very top of frameless window */}
@@ -11424,8 +11422,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             overflow: 'hidden',
             display: 'flex',
             justifyContent: 'center',
-            backgroundColor: 'rgba(255, 0, 0, 0.035)',
-            outline: '2px solid rgba(255, 0, 0, 0.5)',
           }}
         >
         <div
@@ -11457,8 +11453,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             scrollbarGutter: contentMode === 'markdown' ? undefined : 'stable',
             display: 'flex',
             justifyContent: 'center',
-            backgroundColor: 'rgba(0, 0, 255, 0.035)',
-            outline: '2px solid rgba(0, 0, 255, 0.5)',
           }}
         >
         {activeReading ? (
@@ -11473,8 +11467,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               minHeight: 0,
               overflow: contentMode === 'markdown' ? 'hidden' : 'visible',
               position: 'relative',
-              backgroundColor: 'rgba(0, 255, 0, 0.035)',
-              outline: '2px solid rgba(0, 160, 0, 0.5)',
             }}
           >
             {activeTitlePath && activeReading && (
@@ -11717,8 +11709,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 minHeight: activeHtmlUsesFullCanvas ? 0 : undefined,
                 display: activeHtmlUsesFullCanvas ? 'flex' : undefined,
                 flexDirection: activeHtmlUsesFullCanvas ? 'column' : undefined,
-                backgroundColor: 'rgba(255, 165, 0, 0.04)',
-                boxShadow: 'inset 0 0 0 2px rgba(255, 165, 0, 0.6)',
               }}
             >
               {activeIsHtmlDocument && activeReadingPath ? (

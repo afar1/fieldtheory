@@ -615,8 +615,6 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
         top: '0',
         bottom: '0',
         width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
-        backgroundColor: 'rgba(255, 0, 255, 0.18)',
-        outline: '1px solid rgba(255, 0, 255, 0.85)',
         cursor: 'text',
         pointerEvents: 'auto',
         zIndex: String(MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX),
@@ -629,8 +627,6 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
         left: '0',
         top: '0',
         width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
-        backgroundColor: 'rgba(255, 238, 0, 0.24)',
-        outline: '1px solid rgba(255, 191, 0, 0.95)',
         color: `var(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR})`,
         opacity: `var(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR})`,
         fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
@@ -4155,8 +4151,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       ...style,
       width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
       marginLeft: lineNumbersVisible ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET : '0',
-      backgroundColor: lineNumbersVisible ? 'rgba(255, 128, 0, 0.08)' : 'transparent',
-      outline: lineNumbersVisible ? '2px solid rgba(255, 128, 0, 0.9)' : 'none',
     };
     const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
       width: '100%',
@@ -4168,8 +4162,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ? `${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH} minmax(0, 1fr)`
         : 'minmax(0, 1fr)',
       alignItems: 'stretch',
-      backgroundColor: lineNumbersVisible ? 'rgba(0, 200, 255, 0.08)' : 'transparent',
-      outline: lineNumbersVisible ? '1px dashed rgba(0, 170, 255, 0.8)' : 'none',
       '--ft-line-number-row-height': lineNumberRowHeight,
       [MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR]: lineNumberColor,
       [MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR]: String(lineNumberOpacity),
@@ -4194,8 +4186,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                 minWidth: 0,
                 minHeight: 0,
                 height: '100%',
-                backgroundColor: 'rgba(255, 0, 128, 0.16)',
-                outline: '1px solid rgba(255, 0, 128, 0.9)',
               }}
             />
           )}
@@ -4208,8 +4198,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
-              outline: lineNumbersVisible ? '1px solid rgba(0, 200, 80, 0.8)' : 'none',
-              backgroundColor: lineNumbersVisible ? 'rgba(0, 200, 80, 0.04)' : 'transparent',
             }}
           />
         </div>
