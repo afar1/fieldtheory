@@ -20,7 +20,12 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
-import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
+import {
+  isExternalCommandTargetBundleId,
+  isFieldTheoryCommandTargetBundleId,
+  type CommandLauncherFieldTheoryLaunchSurface,
+  type CommandLauncherLaunchOrigin,
+} from './commandLauncherTarget';
 import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrace';
 
 const log = createLogger('CommandLauncher');
@@ -46,6 +51,7 @@ type AnchorBounds = {
 
 type CommandLauncherWindowOptions = {
   getInitialDarkMode?: () => boolean;
+  getFieldTheoryLaunchSurface?: () => CommandLauncherFieldTheoryLaunchSurface;
 };
 
 type CommandLauncherShowOptions = {
@@ -89,10 +95,12 @@ export class CommandLauncherWindow {
   private window: BrowserWindow | null = null;
   private nativeHelper: NativeHelper | null = null;
   private getInitialDarkMode: () => boolean;
+  private getFieldTheoryLaunchSurface: () => CommandLauncherFieldTheoryLaunchSurface;
 
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
   private fieldTheoryActiveOnShow = false;
+  private launchOrigin: CommandLauncherLaunchOrigin = { kind: 'none' };
 
   // Track when show() is in progress (before window.show() is called).
   // This closes the race window where isVisible() returns false during async setup.
@@ -128,6 +136,7 @@ export class CommandLauncherWindow {
   constructor(nativeHelper?: NativeHelper, options: CommandLauncherWindowOptions = {}) {
     this.nativeHelper = nativeHelper || null;
     this.getInitialDarkMode = options.getInitialDarkMode ?? (() => false);
+    this.getFieldTheoryLaunchSurface = options.getFieldTheoryLaunchSurface ?? (() => ({ kind: 'none' }));
     appendCommandLauncherTrace('launcher-constructed', {
       hasNativeHelper: Boolean(this.nativeHelper),
     });
@@ -255,6 +264,7 @@ export class CommandLauncherWindow {
     this.launcherSessionId = options.launcherSessionId ?? `launcher-${Date.now().toString(36)}-${this.showGeneration}`;
     this.querySessionId = null;
     this.qualityScenario = options.qualityScenario ?? null;
+    this.launchOrigin = { kind: 'none' };
     if (typeof options.suppressBlurHideMs === 'number' && options.suppressBlurHideMs > 0) {
       this.suppressBlurHideUntil = Math.max(this.suppressBlurHideUntil, Date.now() + options.suppressBlurHideMs);
     }
@@ -292,6 +302,10 @@ export class CommandLauncherWindow {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
           };
+          this.launchOrigin = {
+            kind: 'external-app',
+            app: this.previousApp,
+          };
           appendCommandLauncherTrace('show-frontmost-app', {
             launcherSessionId: this.launcherSessionId,
             qualityScenario: this.qualityScenario,
@@ -300,12 +314,21 @@ export class CommandLauncherWindow {
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
           });
         } else {
+          const fieldTheorySurface = this.fieldTheoryActiveOnShow
+            ? this.getFieldTheoryLaunchSurface()
+            : { kind: 'none' as const };
+          this.launchOrigin = this.fieldTheoryActiveOnShow
+            ? { kind: 'field-theory', surface: fieldTheorySurface }
+            : { kind: 'none' };
           appendCommandLauncherTrace('show-frontmost-app-skipped-field-theory', {
             launcherSessionId: this.launcherSessionId,
             qualityScenario: this.qualityScenario,
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             previousAppBundleId: this.previousApp?.bundleId ?? null,
+            launchOriginKind: this.launchOrigin.kind,
+            fieldTheorySurface: fieldTheorySurface.kind,
+            fieldTheoryTerminalSessionId: fieldTheorySurface.kind === 'terminal' ? fieldTheorySurface.sessionId : null,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
           });
         }
@@ -407,6 +430,8 @@ export class CommandLauncherWindow {
         qualityScenario: this.qualityScenario,
         windowVisible: this.isVisible(),
         previousAppBundleId: this.previousApp?.bundleId ?? null,
+        launchOriginKind: this.launchOrigin.kind,
+        fieldTheorySurface: this.launchOrigin.kind === 'field-theory' ? this.launchOrigin.surface.kind : null,
       });
 
       this.scheduleProcessMetricsSnapshot('after-show-250ms', 250);
@@ -569,6 +594,10 @@ export class CommandLauncherWindow {
 
   wasFieldTheoryActiveOnShow(): boolean {
     return this.fieldTheoryActiveOnShow;
+  }
+
+  getLaunchOrigin(): CommandLauncherLaunchOrigin {
+    return this.launchOrigin;
   }
 
   private getInitialThemeOptions(): { argument: string } {
