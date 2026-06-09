@@ -19,6 +19,32 @@ const CONFIG = {
   BUFFER: 600,
 };
 
+export const BOOKMARKS_CANVAS_EDGE_GUTTER_PX = 30;
+
+export function getBookmarksCanvasColumnMetrics(viewportWidth: number): {
+  cols: number;
+  itemWidth: number;
+  totalWidth: number;
+  edgeGutter: number;
+  gap: number;
+} {
+  const gap = CONFIG.GAP;
+  const edgeGutter = BOOKMARKS_CANVAS_EDGE_GUTTER_PX;
+  const contentWidth = Math.max(1, viewportWidth - edgeGutter * 2);
+  const cols = Math.max(
+    CONFIG.MIN_COLS,
+    Math.min(CONFIG.MAX_COLS, Math.floor((contentWidth + gap) / CONFIG.TARGET_COL_WIDTH)),
+  );
+  const itemWidth = Math.max(1, Math.floor((contentWidth - gap * (cols - 1)) / cols));
+  return {
+    cols,
+    itemWidth,
+    totalWidth: edgeGutter * 2 + itemWidth * cols + gap * (cols - 1),
+    edgeGutter,
+    gap,
+  };
+}
+
 const easeInOutQuart = (t: number) =>
   t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
 
@@ -268,12 +294,10 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     const buildLayout = () => {
       const vw = viewport.clientWidth;
       if (vw === 0) return; // canvas is hidden; don't waste a layout pass.
-      const gap = CONFIG.GAP;
-      const newCols = Math.max(
-        CONFIG.MIN_COLS,
-        Math.min(CONFIG.MAX_COLS, Math.floor((vw - gap) / CONFIG.TARGET_COL_WIDTH)),
-      );
-      const newColWidth = Math.max(1, Math.floor((vw - gap) / newCols));
+      const metrics = getBookmarksCanvasColumnMetrics(vw);
+      const gap = metrics.gap;
+      const newCols = metrics.cols;
+      const newColWidth = metrics.itemWidth + gap;
       if (
         newColWidth === lastBuildColWidth &&
         newCols === lastBuildCols &&
@@ -287,11 +311,11 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       lastBuildCurrent = current;
       colWidth = newColWidth;
       cols = newCols;
-      totalWidth = colWidth * cols;
+      totalWidth = metrics.totalWidth;
 
       const colHeights = new Array(cols).fill(0);
       const columns: LayoutItem[][] = Array.from({ length: cols }, () => []);
-      const itemW = colWidth - gap;
+      const itemW = metrics.itemWidth;
 
       for (const bm of current) {
         let minCol = 0;
@@ -310,7 +334,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         } else {
           itemH = estimateTextCardHeight(bm, itemW);
         }
-        const x = minCol * colWidth + gap / 2;
+        const x = metrics.edgeGutter + minCol * colWidth;
         const y = colHeights[minCol] + gap / 2;
         columns[minCol].push({ key: '', bookmark: bm, x, y, w: itemW, h: itemH });
         colHeights[minCol] += itemH + gap;
