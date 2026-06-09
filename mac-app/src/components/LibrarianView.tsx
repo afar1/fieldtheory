@@ -132,6 +132,8 @@ import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
 import MarkdownCodeEditor, {
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
@@ -11438,10 +11440,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
           style={{
             flex: activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
-            width: activeHtmlUsesFullCanvas ? '100%' : `min(100%, calc(${documentMaxWidth} + 64px))`,
+            width: activeHtmlUsesFullCanvas
+              ? '100%'
+              : lineNumbersMode === 'hidden'
+                ? `min(100%, calc(${documentMaxWidth} + 64px))`
+                : `min(100%, calc(${documentMaxWidth} + 64px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH}))`,
             minHeight: 0,
+            marginLeft: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
+              ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET
+              : undefined,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
-            padding: `${contentTopPadding}px 32px 0 32px`,
+            padding: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
+              ? `${contentTopPadding}px 32px 0 calc(32px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`
+              : `${contentTopPadding}px 32px 0 32px`,
             scrollPaddingBottom: `${contentBottomScrollSpace}px`,
             scrollbarGutter: contentMode === 'markdown' ? undefined : 'stable',
             display: 'flex',
