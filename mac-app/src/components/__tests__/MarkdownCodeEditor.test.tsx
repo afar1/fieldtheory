@@ -641,8 +641,10 @@ describe('MarkdownCodeEditor line numbers', () => {
     );
   });
 
-  it('keeps rendered line numbers inside the editor box without shifting the editor left', () => {
-    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET).toBe('0');
+  it('offsets the rendered line-number gutter without moving body content', () => {
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET).toBe(
+      `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
+    );
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe('calc(4.2em + 0.15em)');
   });
 

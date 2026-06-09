@@ -116,7 +116,7 @@ export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH = '4.2em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '0.15em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT = '0.25em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH = `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`;
-export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET = '0';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET = `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`;
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX = 20;
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX = 21;
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
@@ -3158,7 +3158,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontSize: fontSizePx,
             marginLeft: lineNumbersMode === 'hidden' ? '0' : MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET,
             paddingLeft: lineNumbersMode === 'hidden' ? '0' : MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
-            width: '100%',
+            width: lineNumbersMode === 'hidden' ? '100%' : `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
             '--ft-line-number-row-height': lineNumberRowHeight,
           },
           '.cm-scroller': {
