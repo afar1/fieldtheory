@@ -3688,7 +3688,7 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
 
-  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }> => {
+  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: RunningApp | null }> => {
     return ipcRenderer.invoke('commands:getLauncherContext');
   },
 

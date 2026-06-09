@@ -42,15 +42,17 @@ describe('resolveCommandLauncherInvocationTarget', () => {
     expect(resolveCommandLauncherInvocationTarget({
       fieldTheoryActive: true,
       hasFocusedFieldTheoryTerminal: true,
+      focusedFieldTheoryTerminalSessionId: 'terminal-1',
       hasActiveFieldTheoryMarkdown: true,
       hasExternalTargetApp: true,
-    })).toEqual({ kind: 'field-theory-terminal' });
+    })).toEqual({ kind: 'field-theory-terminal', sessionId: 'terminal-1' });
   });
 
   it('ignores a stale integrated terminal when another app was active', () => {
     expect(resolveCommandLauncherInvocationTarget({
       fieldTheoryActive: false,
       hasFocusedFieldTheoryTerminal: true,
+      focusedFieldTheoryTerminalSessionId: 'terminal-1',
       hasActiveFieldTheoryMarkdown: false,
       hasExternalTargetApp: true,
     })).toEqual({ kind: 'external-app' });
@@ -63,5 +65,35 @@ describe('resolveCommandLauncherInvocationTarget', () => {
       hasActiveFieldTheoryMarkdown: true,
       hasExternalTargetApp: true,
     })).toEqual({ kind: 'field-theory-markdown' });
+  });
+
+  it('uses a captured Field Theory terminal origin even if markdown is active later', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      launchOrigin: { kind: 'field-theory', surface: { kind: 'terminal', sessionId: 'terminal-at-open' } },
+      fieldTheoryActive: true,
+      hasFocusedFieldTheoryTerminal: false,
+      hasActiveFieldTheoryMarkdown: true,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'field-theory-terminal', sessionId: 'terminal-at-open' });
+  });
+
+  it('uses a captured Field Theory markdown origin instead of a stale external target', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      launchOrigin: { kind: 'field-theory', surface: { kind: 'markdown' } },
+      fieldTheoryActive: true,
+      hasFocusedFieldTheoryTerminal: false,
+      hasActiveFieldTheoryMarkdown: false,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'field-theory-markdown' });
+  });
+
+  it('does not fall back to an external target when the captured Field Theory origin has no input surface', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      launchOrigin: { kind: 'field-theory', surface: { kind: 'none' } },
+      fieldTheoryActive: true,
+      hasFocusedFieldTheoryTerminal: false,
+      hasActiveFieldTheoryMarkdown: true,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'none' });
   });
 });
