@@ -7139,8 +7139,8 @@ function showClipboardHistoryOnActivate(): void {
     return;
   }
 
-  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.focusExistingWindow()) {
-    appendVisibilityTrace('app-activate.show-clipboard.action', { action: 'focus-existing' });
+  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.restoreExistingAppWindow('app-activate')) {
+    appendVisibilityTrace('app-activate.show-clipboard.action', { action: 'restore-existing-app-window' });
     cursorStatusManager?.refreshWindowProperties();
     dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-app-activate');
     return;

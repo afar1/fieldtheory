@@ -1137,6 +1137,30 @@ export class ClipboardHistoryWindow {
     return true;
   }
 
+  restoreExistingAppWindow(reason: string = 'unspecified'): boolean {
+    if (!this.shouldUseAppWindow() || !this.window || this.window.isDestroyed()) {
+      appendVisibilityTrace('clipboard.restore-existing-app-window.skipped', {
+        reason,
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
+      return false;
+    }
+
+    appendVisibilityTrace('clipboard.restore-existing-app-window.begin', {
+      reason,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
+    this._isShowing = true;
+    this.revealWindow(true, true);
+    this.logLifecycle('restore-existing-app-window', `reason=${reason}`);
+    return true;
+  }
+
   focusVisibleWindow(reason: string = 'unspecified'): boolean {
     if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
       appendVisibilityTrace('clipboard.focus-visible.skipped', {

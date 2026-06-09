@@ -638,6 +638,34 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('restores a hidden app-mode window without resetting renderer state', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+    windowRef.isVisible.mockReturnValue(false);
+
+    expect(window.restoreExistingAppWindow('app-activate')).toBe(true);
+
+    expect(windowRef.show).toHaveBeenCalled();
+    expect(windowRef.moveTop).toHaveBeenCalled();
+    expect(windowRef.focus).toHaveBeenCalled();
+    expect(mockApp.show).toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not restore a hidden panel-mode window through app activation', () => {
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+    windowRef.isVisible.mockReturnValue(false);
+
+    expect(window.restoreExistingAppWindow('app-activate')).toBe(false);
+
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(windowRef.focus).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('quietly focuses a visible app-mode window without revealing it again', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const send = vi.fn();

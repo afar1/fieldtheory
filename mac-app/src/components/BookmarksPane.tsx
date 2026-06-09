@@ -29,6 +29,10 @@ function isBookmarksStorageKey(key: string | null | undefined): boolean {
 interface BookmarksPaneProps {
   active?: boolean;
   isFullScreen?: boolean;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
   onToggleFullScreen?: () => void;
   onCanvasModeActiveChange?: (active: boolean) => void;
   onCanvasToolbarTopChange?: (top: number | null) => void;
@@ -37,7 +41,18 @@ interface BookmarksPaneProps {
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange, onCanvasToolbarTopChange, onActionFeedback }: BookmarksPaneProps) {
+function BookmarksPane({
+  active = true,
+  isFullScreen,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onNavigateBack,
+  onNavigateForward,
+  onToggleFullScreen,
+  onCanvasModeActiveChange,
+  onCanvasToolbarTopChange,
+  onActionFeedback,
+}: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -182,6 +197,85 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
           flexShrink: 0,
         }}
       >
+        <div
+          aria-label="Bookmarks location"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            minWidth: 0,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={onNavigateBack}
+              disabled={!canNavigateBack}
+              title="Back"
+              aria-label="Back"
+              style={{
+                width: '22px',
+                height: '24px',
+                padding: 0,
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: canNavigateBack ? 'pointer' : 'default',
+                opacity: canNavigateBack ? 1 : 0.32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={onNavigateForward}
+              disabled={!canNavigateForward}
+              title="Forward"
+              aria-label="Forward"
+              style={{
+                width: '22px',
+                height: '24px',
+                padding: 0,
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: canNavigateForward ? 'pointer' : 'default',
+                opacity: canNavigateForward ? 1 : 0.32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+              </svg>
+            </button>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              minWidth: 0,
+              fontSize: '11px',
+              color: theme.textSecondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span>Library</span>
+            <span style={{ opacity: 0.55 }}>/</span>
+            <span style={{ color: theme.text, fontWeight: 600 }}>Bookmarks</span>
+          </div>
+        </div>
+
         {/* List / Canvas segmented toggle */}
         <div
           style={{
