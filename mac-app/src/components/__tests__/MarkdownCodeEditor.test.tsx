@@ -623,6 +623,13 @@ describe('MarkdownCodeEditor line numbers', () => {
     expect(overlayWidth - overlayRightInset).toBeGreaterThan(fourDigitWidthAtOverlayFontSize);
   });
 
+  it('keeps rendered line numbers close enough to the body to avoid clipping the left digit', () => {
+    const overlayRightInset = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT);
+    const overlayGap = Number.parseFloat(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP);
+
+    expect(overlayRightInset + overlayGap).toBeLessThanOrEqual(0.5);
+  });
+
   it('reserves the rendered line-number gutter inside the editor box', () => {
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH).toBe(
       `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`,
