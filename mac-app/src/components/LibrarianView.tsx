@@ -158,6 +158,7 @@ import {
 } from '../utils/markdownContentMode';
 import {
   buildWikiIndex,
+  getActiveMarkdownMentionCompletion,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
@@ -168,6 +169,7 @@ import {
   getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getMarkdownMentionCompletionReplacement,
   mergeMarkdownLinkRelationDocuments,
   normalizeWikiRelPath,
   removeMarkdownLinkRelationDocument,
@@ -177,6 +179,7 @@ import {
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
+  type MarkdownMentionCompletion,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
   type WikiLinkTarget,
@@ -2759,7 +2762,6 @@ export function resolveLibrarianInitialSelection(
   hasInitialOpenTarget: boolean,
 ): LibrarianStoredSelection | null {
   if (hasInitialOpenTarget) return null;
-  if (restoredSelection) return restoredSelection;
   if (restoredEditorSession?.itemType === 'wiki') {
     return { type: 'wiki', relPath: restoredEditorSession.itemPath };
   }
@@ -2830,6 +2832,11 @@ type MarkdownWikiLinkCompletionState = MarkdownWikiLinkCompletion & {
   left: number;
 };
 
+type MarkdownMentionCompletionState = MarkdownMentionCompletion & {
+  top: number;
+  left: number;
+};
+
 type MarkdownEmojiCompletionState = MarkdownEmojiCompletion & {
   top: number;
   left: number;
@@ -2843,7 +2850,7 @@ type MarkdownSlashCommandCompletionState = MarkdownSlashCommandCompletion & {
 export type MarkdownWikiLinkSuggestion = {
   title: string;
   detail: string;
-  kind: 'wiki' | 'artifact' | 'command';
+  kind: 'wiki' | 'artifact' | 'command' | 'bookmarks';
 };
 
 function isTwitterLikeWikiLinkSuggestion(item: MarkdownWikiLinkSuggestion): boolean {
@@ -2889,6 +2896,17 @@ export function getMarkdownWikiLinkCompletionState(
 ): MarkdownWikiLinkCompletionState | null {
   if (!position) return null;
   const completion = getActiveMarkdownWikiLinkCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
+}
+
+export function getMarkdownMentionCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownMentionCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownMentionCompletion(markdown, selectionStart, selectionEnd);
   return completion ? { ...completion, ...position } : null;
 }
 
@@ -3206,6 +3224,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownWikiLinkCompletion, setMarkdownWikiLinkCompletion] = useState<MarkdownWikiLinkCompletionState | null>(null);
   const [markdownWikiLinkSuggestionIndex, setMarkdownWikiLinkSuggestionIndex] = useState(0);
+  const [markdownMentionCompletion, setMarkdownMentionCompletion] = useState<MarkdownMentionCompletionState | null>(null);
+  const [markdownMentionSuggestionIndex, setMarkdownMentionSuggestionIndex] = useState(0);
   const [markdownEmojiCompletion, setMarkdownEmojiCompletion] = useState<MarkdownEmojiCompletionState | null>(null);
   const [markdownEmojiSuggestionIndex, setMarkdownEmojiSuggestionIndex] = useState(0);
   const [markdownSlashCommandCompletion, setMarkdownSlashCommandCompletion] = useState<MarkdownSlashCommandCompletionState | null>(null);
@@ -5639,9 +5659,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     for (const command of commandIndexPages) {
       addItem(command.title, command.commandPath ?? command.relPath, 'command');
     }
+    addItem('bookmarks', 'Built-in Bookmarks view', 'bookmarks');
 
     return items.sort((a, b) => a.title.localeCompare(b.title));
   }, [commandIndexPages, readings, wikiIndexPages]);
+
+  const markdownMentionSuggestions = useMemo(() => {
+    if (!markdownMentionCompletion) return [];
+    return rankMarkdownWikiLinkSuggestions(markdownWikiLinkSuggestionItems, markdownMentionCompletion.query);
+  }, [markdownMentionCompletion, markdownWikiLinkSuggestionItems]);
 
   const markdownWikiLinkSuggestions = useMemo(() => {
     if (!markdownWikiLinkCompletion) return [];
@@ -6575,6 +6601,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [applyRenderedEditorBody, recordRenderedEditorDebug, sampleRenderedEditorInteraction]);
 
+  const getMarkdownMentionSuggestionHref = useCallback((suggestion: MarkdownWikiLinkSuggestion): string => {
+    if (suggestion.kind === 'wiki') return `wiki://${encodeURI(suggestion.detail)}`;
+    if (suggestion.kind === 'artifact') return `artifact://${encodeURIComponent(suggestion.detail)}`;
+    if (suggestion.kind === 'command') return `command://${encodeURIComponent(suggestion.detail)}`;
+    return 'bookmarks://root';
+  }, []);
+
   const applyRenderedWikiLinkSuggestion = useCallback((
     suggestion: MarkdownWikiLinkSuggestion,
     completionFallback: MarkdownWikiLinkCompletion | null,
@@ -6602,6 +6635,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
     focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
   }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
+  const applyRenderedMentionSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownMentionCompletion | null,
+  ) => {
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownMentionCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownMentionCompletionReplacement(
+      currentValue,
+      completion,
+      suggestion.title,
+      getMarkdownMentionSuggestionHref(suggestion),
+    );
+    if (!edit) return;
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownMentionCompletion(null);
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor, getMarkdownMentionSuggestionHref]);
 
   const applyRenderedEmojiSuggestion = useCallback((
     suggestion: MarkdownEmojiSuggestion,
@@ -6758,6 +6825,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             Math.min(markdownEmojiSuggestionIndex, markdownEmojiSuggestions.length - 1)
           ];
           applyRenderedEmojiSuggestion(suggestion, emojiCompletion);
+          return true;
+        }
+      }
+    }
+
+    const mentionCompletion = markdownMentionCompletion;
+    if (mentionCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownMentionCompletion(null);
+        return true;
+      }
+
+      if (markdownMentionSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index + 1) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index - 1 + markdownMentionSuggestions.length) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownMentionSuggestions[
+            Math.min(markdownMentionSuggestionIndex, markdownMentionSuggestions.length - 1)
+          ];
+          applyRenderedMentionSuggestion(suggestion, mentionCompletion);
           return true;
         }
       }
@@ -7024,6 +7129,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeReading,
     applyRenderedEditorBody,
     applyRenderedEmojiSuggestion,
+    applyRenderedMentionSuggestion,
     applyRenderedSlashCommandSuggestion,
     applyRenderedWikiLinkSuggestion,
     captureRenderedDeleteSelectionScroll,
@@ -7035,6 +7141,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownEmojiCompletion,
     markdownEmojiSuggestionIndex,
     markdownEmojiSuggestions,
+    markdownMentionCompletion,
+    markdownMentionSuggestionIndex,
+    markdownMentionSuggestions,
     markdownSlashCommandCompletion,
     markdownSlashCommandSuggestionIndex,
     markdownSlashCommandSuggestions,
@@ -7074,6 +7183,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         completionPosition,
       ));
       setMarkdownEmojiCompletion(null);
+      setMarkdownMentionCompletion(null);
       setMarkdownSlashCommandCompletion(null);
       if (startedAt > 0) {
         recordRenderedEditorDebug('rendered-wiki-link-completion', {
@@ -7091,15 +7201,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       snapshot.selectionEnd,
       completionPosition,
     );
-    const emojiCompletion = wikiCompletion ? null : getMarkdownEmojiCompletionState(
+    const mentionCompletion = wikiCompletion ? null : getMarkdownMentionCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    );
+    const emojiCompletion = wikiCompletion || mentionCompletion ? null : getMarkdownEmojiCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
       completionPosition,
     );
     setMarkdownWikiLinkCompletion(wikiCompletion);
+    setMarkdownMentionCompletion(mentionCompletion);
     setMarkdownEmojiCompletion(emojiCompletion);
-    setMarkdownSlashCommandCompletion(wikiCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
+    setMarkdownSlashCommandCompletion(wikiCompletion || mentionCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
@@ -7481,6 +7598,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setMarkdownUrlPasteChoice(null);
     if (!options.preserveCompletion) {
       setMarkdownWikiLinkCompletion(null);
+      setMarkdownMentionCompletion(null);
       setMarkdownEmojiCompletion(null);
     }
     scheduleEditorSessionPersist();
@@ -7634,6 +7752,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         snapshot.caretPosition,
       ));
       setMarkdownEmojiCompletion(null);
+      setMarkdownMentionCompletion(null);
       setMarkdownSlashCommandCompletion(null);
       return;
     }
@@ -7644,15 +7763,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       snapshot.selectionEnd,
       snapshot.caretPosition,
     );
-    const emojiCompletion = wikiCompletion ? null : getMarkdownEmojiCompletionState(
+    const mentionCompletion = wikiCompletion ? null : getMarkdownMentionCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    );
+    const emojiCompletion = wikiCompletion || mentionCompletion ? null : getMarkdownEmojiCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
       snapshot.caretPosition,
     );
     setMarkdownWikiLinkCompletion(wikiCompletion);
+    setMarkdownMentionCompletion(mentionCompletion);
     setMarkdownEmojiCompletion(emojiCompletion);
-    setMarkdownSlashCommandCompletion(wikiCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
+    setMarkdownSlashCommandCompletion(wikiCompletion || mentionCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
@@ -7713,6 +7839,42 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const applyMarkdownMentionSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownMentionCompletion | null,
+  ) => {
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownMentionCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownMentionCompletionReplacement(
+      currentValue,
+      completion,
+      suggestion.title,
+      getMarkdownMentionSuggestionHref(suggestion),
+    );
+    if (!edit) return;
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownMentionCompletion(null);
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (!nextCodeEditor || nextCodeEditor.getValue() !== edit.nextValue) return;
+      nextCodeEditor.focus({ preventScroll: true });
+      nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+  }, [editContent, getMarkdownMentionSuggestionHref, markWritingActive, scheduleEditorSessionPersist]);
 
   const applyMarkdownEmojiSuggestion = useCallback((
     suggestion: MarkdownEmojiSuggestion,
@@ -7785,6 +7947,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markWritingActive();
     setMarkdownUrlPasteChoice(null);
     setMarkdownWikiLinkCompletion(null);
+    setMarkdownMentionCompletion(null);
     setMarkdownEmojiCompletion(null);
 
     const editor = markdownCodeEditorRef.current;
@@ -7993,7 +8156,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const value = editor?.getValue() ?? editContent;
     const selection = editor?.getSelectionRange() ?? { start: 0, end: 0 };
 
-    if (event.key === 'Escape' && !markdownWikiLinkCompletion && !markdownEmojiCompletion && !markdownSlashCommandCompletion) {
+    if (
+      event.key === 'Escape'
+      && !markdownWikiLinkCompletion
+      && !markdownMentionCompletion
+      && !markdownEmojiCompletion
+      && !markdownSlashCommandCompletion
+    ) {
       event.preventDefault();
       event.stopPropagation();
       void exitEditMode();
@@ -8182,6 +8351,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
     }
 
+    const mentionCompletion = markdownMentionCompletion;
+    if (mentionCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownMentionCompletion(null);
+        return true;
+      }
+
+      if (markdownMentionSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index + 1) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index - 1 + markdownMentionSuggestions.length) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownMentionSuggestions[
+            Math.min(markdownMentionSuggestionIndex, markdownMentionSuggestions.length - 1)
+          ];
+          applyMarkdownMentionSuggestion(suggestion, mentionCompletion);
+          return true;
+        }
+      }
+    }
+
     const completion = markdownWikiLinkCompletion;
     if (completion) {
       if (event.key === 'Escape') {
@@ -8306,6 +8513,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeReading,
     applyMarkdownCodeEditorTextEdit,
     applyMarkdownEmojiSuggestion,
+    applyMarkdownMentionSuggestion,
     applyMarkdownWikiLinkSuggestion,
     editContent,
     exitEditMode,
@@ -8315,6 +8523,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownEmojiCompletion,
     markdownEmojiSuggestionIndex,
     markdownEmojiSuggestions,
+    markdownMentionCompletion,
+    markdownMentionSuggestionIndex,
+    markdownMentionSuggestions,
     markdownSlashCommandCompletion,
     markdownSlashCommandSuggestionIndex,
     markdownSlashCommandSuggestions,
@@ -10089,14 +10300,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       suggestion: MarkdownWikiLinkSuggestion,
       completion: MarkdownWikiLinkCompletion,
     ) => void,
+    mode: 'wiki' | 'mention' = 'wiki',
   ) => {
-    const completion = markdownWikiLinkCompletion;
-    if (!completion || markdownWikiLinkSuggestions.length === 0) return null;
+    const completion = mode === 'mention' ? markdownMentionCompletion : markdownWikiLinkCompletion;
+    const suggestions = mode === 'mention' ? markdownMentionSuggestions : markdownWikiLinkSuggestions;
+    const selectedIndex = mode === 'mention' ? markdownMentionSuggestionIndex : markdownWikiLinkSuggestionIndex;
+    const setSelectedIndex = mode === 'mention' ? setMarkdownMentionSuggestionIndex : setMarkdownWikiLinkSuggestionIndex;
+    if (!completion || suggestions.length === 0) return null;
 
     return (
       <div
         role="listbox"
-        aria-label="Wiki link suggestions"
+        aria-label={mode === 'mention' ? 'Mention suggestions' : 'Wiki link suggestions'}
         onMouseDown={(e) => e.preventDefault()}
         style={{
           position: 'absolute',
@@ -10114,15 +10329,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           backdropFilter: 'blur(10px)',
         }}
       >
-        {markdownWikiLinkSuggestions.map((suggestion, index) => {
-          const selected = index === markdownWikiLinkSuggestionIndex;
+        {suggestions.map((suggestion, index) => {
+          const selected = index === selectedIndex;
           return (
             <button
               key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
               type="button"
               role="option"
               aria-selected={selected}
-              onMouseEnter={() => setMarkdownWikiLinkSuggestionIndex(index)}
+              onMouseEnter={() => setSelectedIndex(index)}
               onClick={() => onSelectSuggestion(suggestion, completion)}
               style={{
                 display: 'block',
@@ -10322,6 +10537,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
     setSidebarHoverExpanded(false);
   }, [sidebarTemporarilyExpanded]);
+  const dismissBookmarksExpandedSidebar = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSidebarHoverExpanded(false);
+  }, []);
 
   const inlineDrawDialog = inlineDrawInsertion ? (
     <div
@@ -10707,6 +10927,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           position: 'relative',
         }}
       >
+        {sidebarTemporarilyExpanded && selectedItemType === 'bookmarks' && (
+          <div
+            aria-label="Close sidebar"
+            data-fieldtheory-bookmarks-sidebar-dismiss-shield="true"
+            role="button"
+            tabIndex={-1}
+            onMouseDown={dismissBookmarksExpandedSidebar}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 28,
+              backgroundColor: theme.isDark ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.06)',
+              cursor: 'default',
+            }}
+          />
+        )}
         {bookmarksEverShown && (
           <div
             style={{
@@ -11349,6 +11585,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 	                  />
                 </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
+                {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
                 {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
                 {markdownUrlPasteChoice && (
@@ -11537,6 +11774,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 	                    }}
 	                  />
 	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
 	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
 	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />

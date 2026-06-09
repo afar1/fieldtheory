@@ -3,6 +3,7 @@ import {
   buildWikiIndex,
   classifyLinkHref,
   decodeUnresolvedWikiHref,
+  getActiveMarkdownMentionCompletion,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
@@ -13,6 +14,7 @@ import {
   getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getMarkdownMentionCompletionReplacement,
   getWikiBacklinks,
   getWikiLinkedPages,
   getWikiOutboundLinks,
@@ -101,10 +103,11 @@ describe('resolveWikiLink', () => {
     expect(resolveWikiLink('.meetings/meeting-1/transcript.md', index).relPath).toBe('.meetings/meeting-1/transcript');
   });
 
-  it('resolves the bookmarks page as a built-in destination', () => {
-    expect(resolveWikiLink('bookmark', index).bookmarks).toBe(true);
-    expect(resolveWikiLink('bookmarks', index).bookmarks).toBe(true);
-    expect(resolveWikiLink('Bookmarks.md', index).bookmarks).toBe(true);
+  it('resolves @bookmarks as a built-in destination', () => {
+    expect(resolveWikiLink('@bookmark', index).bookmarks).toBe(true);
+    expect(resolveWikiLink('@bookmarks', index).bookmarks).toBe(true);
+    expect(resolveWikiLink('bookmarks', index).bookmarks).toBe(false);
+    expect(resolveWikiLink('Bookmarks.md', index).bookmarks).toBe(false);
   });
 
   it('returns null for unknown targets', () => {
@@ -211,9 +214,24 @@ describe('transformWikiLinks', () => {
     expect(out).toBe('Run [refactor](command://%2Ftmp%2Frefactor.md).');
   });
 
-  it('rewrites bookmarks wikilinks to the built-in bookmarks destination', () => {
-    const out = transformWikiLinks('Open [[bookmark]] or [[bookmarks]].', index);
-    expect(out).toBe('Open [bookmark](bookmarks://root) or [bookmarks](bookmarks://root).');
+  it('rewrites @bookmarks mentions to the built-in bookmarks destination', () => {
+    const out = transformWikiLinks('Open @bookmark or @bookmarks.', index);
+    expect(out).toBe('Open [@bookmark](bookmarks://root) or [@bookmarks](bookmarks://root).');
+  });
+
+  it('does not rewrite bookmarks wikilinks to the built-in bookmarks destination', () => {
+    const out = transformWikiLinks('Open [[bookmarks]].', index);
+    expect(out).toBe('Open [bookmarks](wiki://!/bookmarks).');
+  });
+
+  it('does not rewrite @bookmarks inside existing markdown links', () => {
+    const out = transformWikiLinks('Open [@bookmarks](https://example.com).', index);
+    expect(out).toBe('Open [@bookmarks](https://example.com).');
+  });
+
+  it('leaves @bookmarks mentions inside code untouched', () => {
+    const out = transformWikiLinks('Use `@bookmarks` then @bookmarks.', index);
+    expect(out).toBe('Use `@bookmarks` then [@bookmarks](bookmarks://root).');
   });
 
   it('leaves wikilink syntax inside fenced code blocks untouched', () => {
@@ -397,9 +415,9 @@ describe('getMarkdownEditorLinkActionAtOffset', () => {
     });
   });
 
-  it('activates built-in bookmarks wikilinks from edit mode', () => {
-    const input = 'Open [[bookmarks]] now.';
-    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('bookmarks'), index)).toEqual({
+  it('activates built-in @bookmarks markdown links from edit mode', () => {
+    const input = 'Open [@bookmarks](bookmarks://root) now.';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('@bookmarks'), index)).toEqual({
       kind: 'bookmarks',
     });
   });
@@ -946,6 +964,52 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
       selectionStart: 5,
       selectionEnd: 5,
     });
+  });
+});
+
+describe('getActiveMarkdownMentionCompletion', () => {
+  it('returns the active @mention query', () => {
+    const input = 'Open @boo';
+
+    expect(getActiveMarkdownMentionCompletion(input, input.length, input.length)).toEqual({
+      openStart: 5,
+      queryStart: 6,
+      queryEnd: 9,
+      replaceEnd: 9,
+      query: 'boo',
+    });
+  });
+
+  it('replaces a mention query with an exact markdown link target', () => {
+    const input = 'Open @Rob';
+    const completion = getActiveMarkdownMentionCompletion(input, input.length, input.length);
+
+    expect(getMarkdownMentionCompletionReplacement(
+      input,
+      completion!,
+      'Robin Poke-Style Prompt Readable Brief',
+      'wiki://briefs/robin-poke-style',
+    )).toEqual({
+      nextValue: 'Open [@Robin Poke-Style Prompt Readable Brief](wiki://briefs/robin-poke-style)',
+      selectionStart: 78,
+      selectionEnd: 78,
+    });
+  });
+
+  it('keeps @bookmarks as a visible built-in mention', () => {
+    const input = 'Open @boo';
+    const completion = getActiveMarkdownMentionCompletion(input, input.length, input.length);
+
+    expect(getMarkdownMentionCompletionReplacement(input, completion!, 'bookmarks', 'bookmarks://root')).toEqual({
+      nextValue: 'Open [@bookmarks](bookmarks://root)',
+      selectionStart: 35,
+      selectionEnd: 35,
+    });
+  });
+
+  it('does not complete email-like or selected text mentions', () => {
+    expect(getActiveMarkdownMentionCompletion('a@boo', 5, 5)).toBeNull();
+    expect(getActiveMarkdownMentionCompletion('Open @boo', 5, 9)).toBeNull();
   });
 });
 
