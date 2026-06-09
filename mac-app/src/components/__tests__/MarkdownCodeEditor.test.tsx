@@ -11,7 +11,9 @@ import {
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
@@ -61,6 +63,7 @@ import {
   doesBrowserSelectionIntersectElement,
   renderedMarkdownEditorPresentationExtension,
   selectedLineNumberGutterExtension,
+  visualLineNumberOverlayExtension,
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorContentAttributes,
@@ -98,6 +101,7 @@ import {
   getRenderedMarkdownBlockBodyStart,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
+  getRenderedMarkdownTaskMarkerDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListBodyStartForLine,
@@ -660,6 +664,13 @@ describe('MarkdownCodeEditor line numbers', () => {
   it('anchors rendered line number rows to the line box top', () => {
     expect(getVisualLineRowTopsFromLineBox(100, [104, 125], 20)).toEqual([100, 120]);
     expect(getVisualLineRowTopsFromLineBox(160, [], 20)).toEqual([160]);
+  });
+
+  it('floats rendered line numbers above rendered body widgets', () => {
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX).toBeGreaterThan(10);
+    expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX).toBeGreaterThan(
+      MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
+    );
   });
 
   it('marks selected line numbers distinctly', () => {
@@ -2045,6 +2056,41 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(view.state.doc.toString()).toBe('');
     expect(view.state.selection.main.from).toBe(0);
     expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes only the rendered task marker on Backspace at task text start', () => {
+    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('- [ ] keep this text', '- [ ] '.length)).toEqual({
+      from: 0,
+      to: '- [ ] '.length,
+      insert: '',
+      selection: 0,
+    });
+    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('before\n  - [x] keep this text', 'before\n  - [x] '.length)).toEqual({
+      from: 'before\n'.length,
+      to: 'before\n  - [x] '.length,
+      insert: '  ',
+      selection: 'before\n  '.length,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [ ] keep this text',
+        selection: EditorSelection.cursor('- [ ] '.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('keep this text');
+    expect(view.state.selection.main.from).toBe(0);
 
     view.destroy();
     parent.remove();
