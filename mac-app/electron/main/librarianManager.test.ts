@@ -19,7 +19,6 @@ vi.mock('electron', () => ({
 import { shell } from 'electron';
 import {
   buildEffectiveArtifactRuleContent,
-  buildFieldTheoryMarkdownCommandContent,
   defaultScratchpadName,
   defaultScratchpadNameWithTime,
   extractArtifactModelSignature,
@@ -217,22 +216,6 @@ describe('artifact signature helpers', () => {
     expect(result).toContain('Required artifact format:');
     expect(result).toContain('Signature metadata line');
     expect(result).toContain('*Model: <the exact model or assistant name that wrote this artifact>*');
-  });
-});
-
-describe('Field Theory Markdown command content', () => {
-  it('codifies the plain, tidy writing conventions for Field Theory notes', () => {
-    const content = buildFieldTheoryMarkdownCommandContent();
-
-    expect(content).toContain('plain, practical English');
-    expect(content).toContain('It does not apply to Librarian artifacts');
-    expect(content).toContain('prefer bold section labels instead of more heading levels');
-    expect(content).toContain('Keep most text at the same visual size');
-    expect(content).toContain('Prefer prose');
-    expect(content).toContain('Use ordered lists only for real sequence, priority, or steps');
-    expect(content).toContain('- [ ] One action per line');
-    expect(content).toContain('[[Page Name]]');
-    expect(content).toContain('**Sources**');
   });
 });
 
