@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useTheme, type Theme } from '../contexts/ThemeContext';
 import {
   CODEX_TERMINAL_DARK_MODE_SYNC_EVENT,
+  getLinkedCodexTerminalDarkModeUpdate,
   readStoredCodexTerminalDarkMode,
   writeStoredCodexTerminalDarkMode,
   type CodexTerminalDarkModeSyncEvent,
@@ -576,6 +577,10 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   useEffect(() => {
     writeStoredCodexTerminalDarkMode(terminalDarkMode);
   }, [terminalDarkMode]);
+
+  useEffect(() => {
+    setTerminalDarkMode((current) => getLinkedCodexTerminalDarkModeUpdate(!theme.isDark, current) ?? current);
+  }, [theme.isDark]);
 
   useEffect(() => {
     const handleTerminalDarkModeSync = (event: Event) => {

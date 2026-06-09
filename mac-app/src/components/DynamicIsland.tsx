@@ -318,7 +318,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
           style={escapeHintActive ? rightStyles.escapeHintContainer : rightStyles.waveformContainer}
         >
           {escapeHintActive ? (
-            <span data-dynamic-island-escape-hint="true" style={rightStyles.escapeHintText}>Press Esc</span>
+            <span data-dynamic-island-escape-hint="true" style={rightStyles.escapeHintText}>Esc</span>
           ) : (
             <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
           )}

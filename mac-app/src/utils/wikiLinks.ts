@@ -129,7 +129,9 @@ export function resolveWikiLink(
   const clean = target.trim();
   if (!clean) return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
   const relKey = normalizeWikiRelPath(clean);
-  if (relKey.toLowerCase() === 'bookmarks') return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  if (relKey.toLowerCase() === 'bookmark' || relKey.toLowerCase() === 'bookmarks') {
+    return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  }
   if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   const hit = index.byTitle.get(clean.toLowerCase());

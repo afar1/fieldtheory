@@ -29,6 +29,13 @@ describe('rankMarkdownEmojiSuggestions', () => {
     expect(rankMarkdownEmojiSuggestions('roc').map(item => item.emoji)).toEqual(['🚀']);
     expect(rankMarkdownEmojiSuggestions('done').map(item => item.emoji)[0]).toBe('✅');
   });
+
+  it('returns several hand emoji for hands queries', () => {
+    expect(rankMarkdownEmojiSuggestions('hands').map(item => item.emoji)).toEqual(
+      expect.arrayContaining(['🙌', '👏', '🤝', '✋']),
+    );
+    expect(rankMarkdownEmojiSuggestions('hands').length).toBeGreaterThanOrEqual(4);
+  });
 });
 
 describe('getMarkdownEmojiCompletionReplacement', () => {

@@ -119,7 +119,15 @@ import {
   type MarkdownUrlPasteKind,
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
-import { getMarkdownDrawCommandEdit, insertMarkdownBlockAt } from '../utils/markdownSlashCommands';
+import {
+  getActiveMarkdownSlashCommandCompletion,
+  getMarkdownDrawCommandEdit,
+  insertMarkdownBlockAt,
+  rankMarkdownSlashCommandSuggestions,
+  removeActiveMarkdownSlashCommandCompletion,
+  type MarkdownSlashCommandCompletion,
+  type MarkdownSlashCommandSuggestion,
+} from '../utils/markdownSlashCommands';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
@@ -2827,6 +2835,11 @@ type MarkdownEmojiCompletionState = MarkdownEmojiCompletion & {
   left: number;
 };
 
+type MarkdownSlashCommandCompletionState = MarkdownSlashCommandCompletion & {
+  top: number;
+  left: number;
+};
+
 export type MarkdownWikiLinkSuggestion = {
   title: string;
   detail: string;
@@ -2887,6 +2900,17 @@ export function getMarkdownEmojiCompletionState(
 ): MarkdownEmojiCompletionState | null {
   if (!position) return null;
   const completion = getActiveMarkdownEmojiCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
+}
+
+export function getMarkdownSlashCommandCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownSlashCommandCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownSlashCommandCompletion(markdown, selectionStart, selectionEnd);
   return completion ? { ...completion, ...position } : null;
 }
 
@@ -2980,6 +3004,7 @@ interface LibrarianViewProps {
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
   sidebarToggleRequestKey?: number;
+  shortcutsHelpRequestKey?: number;
 }
 
 type MarkdownRenderNode = {
@@ -3061,7 +3086,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -3183,6 +3208,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [markdownWikiLinkSuggestionIndex, setMarkdownWikiLinkSuggestionIndex] = useState(0);
   const [markdownEmojiCompletion, setMarkdownEmojiCompletion] = useState<MarkdownEmojiCompletionState | null>(null);
   const [markdownEmojiSuggestionIndex, setMarkdownEmojiSuggestionIndex] = useState(0);
+  const [markdownSlashCommandCompletion, setMarkdownSlashCommandCompletion] = useState<MarkdownSlashCommandCompletionState | null>(null);
+  const [markdownSlashCommandSuggestionIndex, setMarkdownSlashCommandSuggestionIndex] = useState(0);
   const [renderedImagePreview, setRenderedImagePreview] = useState<MarkdownCodeEditorImagePreview | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     return restoreLibrarianSidebarWidth(localStorage);
@@ -3395,6 +3422,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setSidebarHoverExpanded((expanded) => !expanded);
     }
   }, [effectiveSidebarCollapsed, isFullScreen, sidebarToggleRequestKey]);
+  useEffect(() => {
+    if (shortcutsHelpRequestKey > 0) setShortcutsHelpOpen(true);
+  }, [shortcutsHelpRequestKey]);
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -5622,6 +5652,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!markdownEmojiCompletion) return [];
     return rankMarkdownEmojiSuggestions(markdownEmojiCompletion.query);
   }, [markdownEmojiCompletion]);
+  const markdownSlashCommandSuggestions = useMemo(() => {
+    if (!markdownSlashCommandCompletion) return [];
+    return rankMarkdownSlashCommandSuggestions(markdownSlashCommandCompletion.query);
+  }, [markdownSlashCommandCompletion]);
 
   const rawDisplaySourceBody = markdownDisplay ? markdownDisplay.body : (renderedDisplayReadingContent ?? activeReading?.content ?? '');
   const displaySourceBody = useMemo(() => (
@@ -6596,6 +6630,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
   }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
 
+  const applyRenderedSlashCommandSuggestion = useCallback((
+    suggestion: MarkdownSlashCommandSuggestion,
+    completionFallback: MarkdownSlashCommandCompletion | null,
+  ) => {
+    if (suggestion.name !== 'draw' || !activeReading?.path) return;
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownSlashCommandCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = removeActiveMarkdownSlashCommandCompletion(currentValue, completion);
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownSlashCommandCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+    setInlineDrawInsertion({
+      mode: 'rendered',
+      documentPath: activeReading.path,
+      insertionStart: edit.selectionStart,
+    });
+  }, [activeReading?.path, applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
   const restoreRenderedEditorProgrammaticUndo = useCallback((): boolean => {
     const snapshot = renderedEditUndoStackRef.current.pop();
     if (!snapshot) return false;
@@ -6619,6 +6685,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       event.stopPropagation();
       openInlineGemmaCommand();
       return true;
+    }
+
+    const slashCommandCompletion = markdownSlashCommandCompletion;
+    if (slashCommandCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownSlashCommandCompletion(null);
+        return true;
+      }
+
+      if (markdownSlashCommandSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index + 1) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index - 1 + markdownSlashCommandSuggestions.length) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownSlashCommandSuggestions[
+            Math.min(markdownSlashCommandSuggestionIndex, markdownSlashCommandSuggestions.length - 1)
+          ];
+          applyRenderedSlashCommandSuggestion(suggestion, slashCommandCompletion);
+          return true;
+        }
+      }
     }
 
     const emojiCompletion = markdownEmojiCompletion;
@@ -6920,6 +7024,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeReading,
     applyRenderedEditorBody,
     applyRenderedEmojiSuggestion,
+    applyRenderedSlashCommandSuggestion,
     applyRenderedWikiLinkSuggestion,
     captureRenderedDeleteSelectionScroll,
     clearRenderedEditingState,
@@ -6930,6 +7035,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownEmojiCompletion,
     markdownEmojiSuggestionIndex,
     markdownEmojiSuggestions,
+    markdownSlashCommandCompletion,
+    markdownSlashCommandSuggestionIndex,
+    markdownSlashCommandSuggestions,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
@@ -6966,6 +7074,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         completionPosition,
       ));
       setMarkdownEmojiCompletion(null);
+      setMarkdownSlashCommandCompletion(null);
       if (startedAt > 0) {
         recordRenderedEditorDebug('rendered-wiki-link-completion', {
           durationMs: performance.now() - startedAt,
@@ -6982,8 +7091,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       snapshot.selectionEnd,
       completionPosition,
     );
+    const emojiCompletion = wikiCompletion ? null : getMarkdownEmojiCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    );
     setMarkdownWikiLinkCompletion(wikiCompletion);
-    setMarkdownEmojiCompletion(wikiCompletion ? null : getMarkdownEmojiCompletionState(
+    setMarkdownEmojiCompletion(emojiCompletion);
+    setMarkdownSlashCommandCompletion(wikiCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
@@ -7518,6 +7634,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         snapshot.caretPosition,
       ));
       setMarkdownEmojiCompletion(null);
+      setMarkdownSlashCommandCompletion(null);
       return;
     }
 
@@ -7527,8 +7644,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       snapshot.selectionEnd,
       snapshot.caretPosition,
     );
+    const emojiCompletion = wikiCompletion ? null : getMarkdownEmojiCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    );
     setMarkdownWikiLinkCompletion(wikiCompletion);
-    setMarkdownEmojiCompletion(wikiCompletion ? null : getMarkdownEmojiCompletionState(
+    setMarkdownEmojiCompletion(emojiCompletion);
+    setMarkdownSlashCommandCompletion(wikiCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
@@ -7618,6 +7742,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const applyMarkdownSlashCommandSuggestion = useCallback((
+    suggestion: MarkdownSlashCommandSuggestion,
+    completionFallback: MarkdownSlashCommandCompletion | null,
+  ) => {
+    if (suggestion.name !== 'draw' || !activeReading?.path) return;
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownSlashCommandCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = removeActiveMarkdownSlashCommandCompletion(currentValue, completion);
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownSlashCommandCompletion(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (!nextCodeEditor || nextCodeEditor.getValue() !== edit.nextValue) return;
+      nextCodeEditor.focus({ preventScroll: true });
+      nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+    setInlineDrawInsertion({
+      mode: 'markdown',
+      documentPath: activeReading.path,
+      insertionStart: edit.selectionStart,
+    });
+  }, [activeReading?.path, editContent, markWritingActive, scheduleEditorSessionPersist]);
 
   const applyMarkdownTextInsertion = useCallback((
     text: string,
@@ -7835,7 +7993,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const value = editor?.getValue() ?? editContent;
     const selection = editor?.getSelectionRange() ?? { start: 0, end: 0 };
 
-    if (event.key === 'Escape' && !markdownWikiLinkCompletion && !markdownEmojiCompletion) {
+    if (event.key === 'Escape' && !markdownWikiLinkCompletion && !markdownEmojiCompletion && !markdownSlashCommandCompletion) {
       event.preventDefault();
       event.stopPropagation();
       void exitEditMode();
@@ -7945,6 +8103,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         event.preventDefault();
         applyMarkdownCodeEditorTextEdit(edit);
         return true;
+      }
+    }
+
+    const slashCommandCompletion = markdownSlashCommandCompletion;
+    if (slashCommandCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownSlashCommandCompletion(null);
+        return true;
+      }
+
+      if (markdownSlashCommandSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index + 1) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index - 1 + markdownSlashCommandSuggestions.length) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownSlashCommandSuggestions[
+            Math.min(markdownSlashCommandSuggestionIndex, markdownSlashCommandSuggestions.length - 1)
+          ];
+          applyMarkdownSlashCommandSuggestion(suggestion, slashCommandCompletion);
+          return true;
+        }
       }
     }
 
@@ -8119,11 +8315,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownEmojiCompletion,
     markdownEmojiSuggestionIndex,
     markdownEmojiSuggestions,
+    markdownSlashCommandCompletion,
+    markdownSlashCommandSuggestionIndex,
+    markdownSlashCommandSuggestions,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
     navigateHistory,
     openInlineGemmaCommand,
+    applyMarkdownSlashCommandSuggestion,
     restoreMarkdownCodeEditorProgrammaticUndo,
     scheduleEditorSessionPersist,
     toggleLineNumbers,
@@ -10047,6 +10247,72 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
+  const renderMarkdownSlashCommandMenu = (
+    onSelectSuggestion: (
+      suggestion: MarkdownSlashCommandSuggestion,
+      completion: MarkdownSlashCommandCompletion,
+    ) => void,
+  ) => {
+    const completion = markdownSlashCommandCompletion;
+    if (!completion || markdownSlashCommandSuggestions.length === 0) return null;
+
+    return (
+      <div
+        role="listbox"
+        aria-label="Slash commands"
+        onMouseDown={(e) => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: `${completion.top}px`,
+          left: `${completion.left}px`,
+          width: '220px',
+          zIndex: 4,
+          padding: '4px',
+          borderRadius: '6px',
+          backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}
+      >
+        {markdownSlashCommandSuggestions.map((suggestion, index) => {
+          const selected = index === markdownSlashCommandSuggestionIndex;
+          return (
+            <button
+              key={suggestion.name}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onMouseEnter={() => setMarkdownSlashCommandSuggestionIndex(index)}
+              onClick={() => onSelectSuggestion(suggestion, completion)}
+              style={{
+                display: 'block',
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 7px',
+                textAlign: 'left',
+                backgroundColor: selected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                  : 'transparent',
+                color: theme.text,
+                cursor: 'pointer',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}
+            >
+              <span style={{ display: 'block', fontSize: '12px', lineHeight: '16px' }}>
+                /{suggestion.name}
+              </span>
+              <span style={{ display: 'block', fontSize: '10px', lineHeight: '13px', color: theme.textSecondary }}>
+                {suggestion.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !hasActiveLibrarySurface && !isFullScreen);
   const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !userResizingPanel && !isFullScreen && !sidebarForcedVisible;
   const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
@@ -10454,6 +10720,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             <BookmarksPane
               active={active && selectedItemType === 'bookmarks'}
               isFullScreen={effectiveFullScreen}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
               onToggleFullScreen={toggleImmersive}
               onCanvasModeActiveChange={setBookmarksCanvasActive}
               onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}
@@ -11080,6 +11350,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
+                {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -11267,6 +11538,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 	                  />
 	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
 	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
+	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
               )}
