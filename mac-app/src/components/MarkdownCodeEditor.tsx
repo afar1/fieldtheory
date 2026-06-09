@@ -4147,11 +4147,20 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const lineNumberOpacity = lineNumbersMode === 'faded' ? 0.5 : 0.82;
     const selectedLineNumberColor = theme.isDark ? 'rgba(255,255,255,0.84)' : 'rgba(17,17,17,0.82)';
     const lineNumberRowHeight = getMarkdownCodeEditorLineNumberRowHeight(fontSize, lineHeight);
-    const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
-      width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
+    const outerEditorStyle: React.CSSProperties = {
       height: '100%',
       minHeight: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      ...style,
+      width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
       marginLeft: lineNumbersVisible ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET : '0',
+    };
+    const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
+      width: '100%',
+      height: '100%',
+      minHeight: 0,
+      marginLeft: '0',
       display: 'grid',
       gridTemplateColumns: lineNumbersVisible
         ? `${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH} minmax(0, 1fr)`
@@ -4168,14 +4177,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     return (
       <div
         data-ft-quality-editor={presentation === 'rendered' ? 'rendered' : 'markdown'}
-        style={{
-          width: '100%',
-          height: '100%',
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          ...style,
-        }}
+        style={outerEditorStyle}
       >
         <div
           data-ft-line-number-shell="true"
