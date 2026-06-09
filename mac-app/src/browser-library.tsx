@@ -1713,11 +1713,16 @@ function BrowserLibrarySurface(props: {
   React.useEffect(() => {
     const markStale = () => setBrowserHelperStale(true);
     const markConnected = () => setBrowserHelperStale(false);
+    const markConnectedFromTiming = (event: Event) => {
+      if ((event as CustomEvent<BrowserHelperRequestTimingEntry>).detail?.ok === true) markConnected();
+    };
     window.addEventListener(BROWSER_HELPER_STALE_EVENT, markStale);
     window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, markConnected);
+    window.addEventListener(BROWSER_HELPER_REQUEST_TIMING_EVENT, markConnectedFromTiming);
     return () => {
       window.removeEventListener(BROWSER_HELPER_STALE_EVENT, markStale);
       window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, markConnected);
+      window.removeEventListener(BROWSER_HELPER_REQUEST_TIMING_EVENT, markConnectedFromTiming);
     };
   }, []);
   React.useEffect(() => {
