@@ -13,6 +13,7 @@ import LibrarianView, {
   persistLibrarianHtmlLayoutByPath,
   restoreLibrarianHtmlLayoutByPath,
   resolveCurrentWikiCreateFolder,
+  resolveLibrarianInitialSelection,
   getFocusChromeContentCenterX,
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
@@ -136,6 +137,21 @@ describe('LibrarianView render', () => {
       right: 420,
       top: 100,
     });
+  });
+
+  it('prefers the saved editor session over a stale last-selection on startup', () => {
+    expect(resolveLibrarianInitialSelection(
+      { type: 'wiki', relPath: 'briefs/Robin Poke-Style Prompt Readable Brief' },
+      {
+        itemType: 'wiki',
+        itemPath: 'scratchpad/actual-last-file',
+        contentMode: 'rendered',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      false,
+    )).toEqual({ type: 'wiki', relPath: 'scratchpad/actual-last-file' });
   });
 
   it('deletes rendered ft-html blocks as whole containers', () => {
@@ -980,17 +996,23 @@ describe('LibrarianView render', () => {
     const getSidebarPane = () => root.querySelector(
       '[data-fieldtheory-collapsed-sidebar-pane="true"]'
     ) as HTMLElement | null;
+    const getDismissShield = () => root.querySelector(
+      '[data-fieldtheory-bookmarks-sidebar-dismiss-shield="true"]'
+    ) as HTMLElement | null;
 
     await waitFor(() => {
       expect(getHoverStrip()).toBeTruthy();
     });
+    expect(getHoverStrip()?.style.width).toBe('30px');
 
     fireEvent.click(getHoverStrip()!);
     expect(getHoverStrip()).toBeNull();
     expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
+    expect(getDismissShield()).toBeTruthy();
 
-    fireEvent.mouseDown(root);
+    fireEvent.mouseDown(getDismissShield()!);
     expect(getHoverStrip()).toBeTruthy();
+    expect(getDismissShield()).toBeNull();
   });
 
   it('lets Bookmarks collapse the sidebar like a selected document', async () => {
@@ -4406,6 +4428,63 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'See [[Consensus]]',
+        expect.any(Object),
+      );
+    }, { timeout: 1200 });
+  });
+
+  it('lets rendered editor input complete @bookmarks mentions', async () => {
+    const relPath = 'scratchpad/rendered-bookmarks-mention-completion-test';
+    const content = 'See ';
+    const nextContent = 'See [@bookmarks](bookmarks://root)';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-bookmarks-mention-completion-test',
+      title: 'rendered-bookmarks-mention-completion-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-bookmarks-mention-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getTree).mockResolvedValue([]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: nextContent.length, sha256: 'rendered-bookmarks-mention-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('See');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('See');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteText(renderedInput, '@boo');
+
+    const listbox = await screen.findByRole('listbox', { name: 'Mention suggestions' });
+    fireEvent.click(within(listbox).getByRole('option', { name: /bookmarks/ }));
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        nextContent,
         expect.any(Object),
       );
     }, { timeout: 1200 });
