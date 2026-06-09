@@ -455,7 +455,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicBackgroundFilterStrength: 4,
   hotMicDrawerTextSize: 14,
   hotMicIslandStayOnLaptop: false,
-  recordingIndicatorMode: 'auto',
+  recordingIndicatorMode: 'floating',
   floatingIndicatorPosition: null,
   hotMicIslandAutoHide: false,
   hotMicIslandNotchWidthOverride: 0,

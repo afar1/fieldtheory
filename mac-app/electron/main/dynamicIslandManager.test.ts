@@ -279,8 +279,14 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager = null;
   });
 
+  const createNotchManager = () => {
+    const notchManager = new DynamicIslandManager();
+    notchManager.setRecordingIndicatorMode('notch');
+    return notchManager;
+  };
+
   it('creates a single unified island window spanning left pill, notch gap, and right pill', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -299,6 +305,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('auto');
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -412,6 +419,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
 
     manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('auto');
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -492,6 +500,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
   it('does not create a unified island while startup waits to apply floating preferences', () => {
     manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('notch');
     manager.setEnabled(false);
     manager.setClipboardManager({
       queryItems: () => [],
@@ -727,7 +736,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('does not create island windows while disabled until re-enabled', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setEnabled(false);
     manager.setClipboardManager({
       queryItems: () => [],
@@ -743,10 +752,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(testState.getWindowBySide('drawer')).toBeDefined();
   });
 
-  it('switches from floating back to the unified notch window when auto mode sees an internal notch display', () => {
+  it('keeps the floating pill when auto mode sees an internal notch display', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('auto');
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -758,13 +768,12 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     testState.setPrimaryInternal(true);
     testState.emitScreenEvent('display-metrics-changed');
 
-    const unified = testState.getWindowBySide('unified');
-    expect(unified).toBeDefined();
-    expect(unified?.isVisible()).toBe(true);
+    expect(testState.getWindowBySide('unified')).toBeUndefined();
+    expect(testState.getWindowBySide('floating')).toBeDefined();
   });
 
   it('restores the unified island visibility when re-enabled', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -784,7 +793,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('documents that dynamic-island IPC can request opening the main Field Theory window', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -884,7 +893,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('forwards hot-mic background filter meter updates to the left island renderer', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -914,7 +923,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('forwards drawer transcript updates to the drawer window', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -932,7 +941,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('recreates the drawer window when transcript updates arrive after drawer teardown', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -958,7 +967,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('includes mute state in hot-mic payloads sent to the unified window', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -980,7 +989,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('broadcasts input mode updates to the unified island renderer', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -996,7 +1005,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('keeps one-chip standard recording within idle outer width', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1023,7 +1032,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('shows the final transcript when it arrives during transcribing', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1044,7 +1053,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('keeps waiting-agent updates from changing pill width while the indicator is hidden', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1076,7 +1085,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1112,7 +1121,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       internal: true,
     });
 
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1133,7 +1142,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       internal: true,
     });
 
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1164,7 +1173,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
     testState.setCursorPoint({ x: 864, y: 48 });
 
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1178,7 +1187,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1238,7 +1247,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('forwards stack count updates to the unified island renderer', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1256,7 +1265,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('re-sends stack count to the unified window after it reconnects', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1283,7 +1292,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('re-applies transparent backing on forced refreshes to recover from compositor corruption', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
@@ -1301,7 +1310,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
   });
 
   it('re-applies island backing when display metrics change', () => {
-    manager = new DynamicIslandManager();
+    manager = createNotchManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });

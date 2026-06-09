@@ -161,6 +161,7 @@ describe('PreferencesManager', () => {
     expect(loaded.fieldTheoryWindowMode).toBe('app');
     expect(loaded.showInDock).toBe(true);
     expect(loaded.clickAwayToDismiss).toBe(false);
+    expect(loaded.recordingIndicatorMode).toBe('floating');
   });
 
   it('migrates legacy click-away prefs into Field Theory app mode on load', async () => {
