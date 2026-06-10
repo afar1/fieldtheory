@@ -506,6 +506,90 @@ describe('WikiSidebar River root helpers', () => {
     await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
   });
 
+  it('keeps the current sidebar and retries when library roots briefly load empty', async () => {
+    const notesTree: LibraryRoot['tree'] = [{
+      kind: 'dir',
+      name: 'Notes',
+      relPath: 'Notes',
+      children: [{
+        kind: 'file',
+        relPath: 'Notes/note',
+        absPath: `${libraryRootPath}/Notes/note.md`,
+        name: 'note',
+        title: 'note',
+        lastUpdated: 1,
+      }],
+    }];
+    mockSidebarNativeApis([], [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: notesTree,
+    }]);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockImplementationOnce(async () => ([{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: notesTree,
+      }]))
+      .mockImplementationOnce(async () => [])
+      .mockImplementation(async () => ([{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: notesTree,
+      }]));
+
+    let rootsChanged: (() => void) | undefined;
+    vi.mocked(window.libraryAPI!.onRootsChanged).mockImplementation((callback: () => void) => {
+      rootsChanged = callback;
+      return () => undefined;
+    });
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    fireEvent.click(await screen.findByText('Notes'));
+    await screen.findByText('note');
+
+    act(() => {
+      rootsChanged?.();
+    });
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('note')).toBeTruthy();
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(3));
+  });
+
+  it('accepts empty library roots when there is no previous sidebar state to preserve', async () => {
+    mockSidebarNativeApis([], []);
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores duplicate builtin library change payloads after wiki deltas', async () => {
     let pageChanged: ((event?: LibraryChangeEvent) => void) | undefined;
     let rootsChanged: ((event?: LibraryChangeEvent) => void) | undefined;
