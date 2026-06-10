@@ -1324,6 +1324,49 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first item\n'.length)).toEqual({
       selection: doc.length,
     });
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, doc.length)).toEqual({
+      selection: doc.length,
+    });
+  });
+
+  it('consumes rendered ArrowDown into an empty list body', () => {
+    const doc = '- first item\n- ';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor(doc.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('- first'.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(true);
+    expect(moveVertically).toHaveBeenCalledWith(view.state.selection.main, true);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: doc.length, head: doc.length },
+    });
+  });
+
+  it('consumes rendered ArrowUp into an empty list body', () => {
+    const doc = '- \nnext item';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor('- '.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowUp' }))).toBe(true);
+    expect(moveVertically).toHaveBeenCalledWith(view.state.selection.main, false);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: '- '.length, head: '- '.length },
+    });
   });
 
   it('moves rendered Command+Left to the list body instead of the hidden marker', () => {
