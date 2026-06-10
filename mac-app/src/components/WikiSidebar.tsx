@@ -1802,6 +1802,7 @@ function WikiSidebar({
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
+  const [libraryRootsLoaded, setLibraryRootsLoaded] = useState(false);
   const [hiddenDefaultFolders, setHiddenDefaultFolders] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
   const [taggedDocs, setTaggedDocs] = useState<TaggedDocListItem[]>([]);
@@ -1994,6 +1995,7 @@ function WikiSidebar({
       }
       libraryRootsRef.current = nextRoots;
       setLibraryRoots(nextRoots);
+      setLibraryRootsLoaded(true);
       setExpandedFolders((prev) => {
         const next = new Set(prev);
         for (const root of nextRoots) {
@@ -2870,7 +2872,7 @@ function WikiSidebar({
   const totalPages = countSidebarItems(sidebarRootsWithTodoOverrides);
   const visiblePages = flatItems.filter((item) => item.type !== 'bookmarks').length;
 
-  const emptyWiki = visibleSidebarRoots.length === 0 && !bookmarksActionItem;
+  const emptyWiki = libraryRootsLoaded && visibleSidebarRoots.length === 0 && !bookmarksActionItem;
   const contextActiveNodeId = contextMenu?.node?.id ?? null;
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
@@ -3692,7 +3694,7 @@ function WikiSidebar({
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
         </div>
-      ) : visibleSidebarRoots.length === 0 ? (
+      ) : libraryRootsLoaded && visibleSidebarRoots.length === 0 ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>

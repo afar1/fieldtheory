@@ -571,6 +571,34 @@ describe('WikiSidebar River root helpers', () => {
     await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(3));
   });
 
+  it('does not show the empty state while first library roots load is pending', async () => {
+    const rootsLoad = deferred<TestLibraryRoot[]>();
+    mockSidebarNativeApis([], []);
+    vi.mocked(window.libraryAPI!.getRoots).mockImplementation(async () => rootsLoad.promise);
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/No pages yet/)).toBeNull();
+    expect(screen.queryByText(/No pages match that search/)).toBeNull();
+
+    await act(async () => {
+      rootsLoad.resolve([]);
+      await rootsLoad.promise;
+    });
+
+    expect(await screen.findByText(/No pages yet/)).toBeTruthy();
+  });
+
   it('accepts empty library roots when there is no previous sidebar state to preserve', async () => {
     mockSidebarNativeApis([], []);
 
@@ -586,6 +614,7 @@ describe('WikiSidebar River root helpers', () => {
     }));
 
     await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/No pages yet/)).toBeTruthy();
     await new Promise((resolve) => window.setTimeout(resolve, 350));
     expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
   });
