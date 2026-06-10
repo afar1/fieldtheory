@@ -2355,6 +2355,10 @@ describe('LibrarianView render', () => {
         'librarian-last-selection',
         JSON.stringify({ type: 'wiki', relPath }),
       );
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        'librarian-editor-session',
+        expect.stringContaining(`"itemPath":"${relPath}"`),
+      );
     });
   });
 
@@ -2699,7 +2703,7 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('does not let Browser Library surfaces overwrite the native startup editor session', async () => {
+  it('persists Browser Library editor sessions for the active page', async () => {
     const relPath = 'scratchpad/browser-panel-session-test';
     const page: WikiPage = {
       relPath,
@@ -2712,7 +2716,7 @@ describe('LibrarianView render', () => {
     };
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
-    const { unmount } = render(
+    render(
       <LibrarianView
         browserLibrarySurface
         sidebarCollapsed={false}
@@ -2722,11 +2726,16 @@ describe('LibrarianView render', () => {
     );
 
     await screen.findByText('Browser panel body');
-    unmount();
 
     const sessionCalls = vi.mocked(window.localStorage.setItem).mock.calls
       .filter(([key]) => key === 'librarian-editor-session');
-    expect(sessionCalls).toHaveLength(0);
+    expect(sessionCalls.length).toBeGreaterThan(0);
+    const latestSession = JSON.parse(sessionCalls[sessionCalls.length - 1][1]);
+    expect(latestSession).toMatchObject({
+      itemType: 'wiki',
+      itemPath: relPath,
+      contentMode: 'rendered',
+    });
   });
 
   it('keeps command-launcher image insertion in rendered mode when rendered is active', async () => {

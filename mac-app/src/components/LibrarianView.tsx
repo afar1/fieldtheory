@@ -7548,10 +7548,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [contentMode, getEditorSessionTarget]);
 
   const persistEditorSession = useCallback(() => {
-    if (browserLibrarySurface) {
-      recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'browser-library-surface' });
-      return;
-    }
     const session = captureEditorSession();
     if (!session) {
       recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'no-session-target' });
@@ -7566,7 +7562,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       selectionEnd: session.selectionEnd,
       scrollTop: session.scrollTop,
     });
-  }, [browserLibrarySurface, captureEditorSession, recordRenderedEditorDebug]);
+  }, [captureEditorSession, recordRenderedEditorDebug]);
 
   useEffect(() => {
     persistEditorSession();
