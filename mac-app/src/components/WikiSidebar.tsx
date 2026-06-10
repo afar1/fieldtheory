@@ -1107,11 +1107,12 @@ export function sortSidebarNodes(
 
 export function orderTopLevelSidebarNodes(
   nodes: SidebarNode[],
-  _sortMode: SortMode = 'alpha',
+  sortMode: SortMode = 'alpha',
   pinnedItemIds: ReadonlySet<string> = new Set(),
   iconColorIndices: Readonly<Record<string, number>> = {},
   iconColorOrder: readonly number[] = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER,
 ): SidebarNode[] {
+  if (sortMode === 'time') return sortSidebarNodes(nodes, 'time');
   return sortSidebarNodes(nodes, 'alpha', pinnedItemIds, iconColorIndices, iconColorOrder);
 }
 
@@ -1855,7 +1856,9 @@ function WikiSidebar({
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
+  const libraryRootsRef = useRef<LibraryRoot[]>([]);
   const loadTreeRequestIdRef = useRef(0);
+  const emptyRootsRetryTimeoutRef = useRef<number | null>(null);
   const loadArtifactsRequestIdRef = useRef(0);
   const loadRecentRequestIdRef = useRef(0);
   const loadTaggedDocsRequestIdRef = useRef(0);
@@ -1897,6 +1900,17 @@ function WikiSidebar({
     });
     return () => cancelAnimationFrame(id);
   }, [selectedId, wikiTree, libraryRoots, artifacts, searchQuery]);
+
+  useEffect(() => {
+    libraryRootsRef.current = libraryRoots;
+  }, [libraryRoots]);
+
+  useEffect(() => () => {
+    if (emptyRootsRetryTimeoutRef.current !== null) {
+      window.clearTimeout(emptyRootsRetryTimeoutRef.current);
+      emptyRootsRetryTimeoutRef.current = null;
+    }
+  }, []);
 
   const pruneDeletedWikiPage = useCallback((relPath: string) => {
     deletedWikiRelPathsRef.current.add(relPath);
@@ -1965,6 +1979,20 @@ function WikiSidebar({
     if (nextTree) setWikiTree(nextTree);
     if (hiddenFoldersResult) setHiddenDefaultFolders(hiddenFoldersResult);
     if (nextRoots) {
+      if (nextRoots.length === 0 && libraryRootsRef.current.length > 0 && reason !== 'empty-roots-retry') {
+        traceLibrarySidebar('sidebar-loadTree-empty-roots-retry', {
+          reason,
+          requestId,
+          durationMs: Date.now() - startedAt,
+        });
+        if (emptyRootsRetryTimeoutRef.current !== null) window.clearTimeout(emptyRootsRetryTimeoutRef.current);
+        emptyRootsRetryTimeoutRef.current = window.setTimeout(() => {
+          emptyRootsRetryTimeoutRef.current = null;
+          void loadTree('empty-roots-retry');
+        }, 250);
+        return undefined;
+      }
+      libraryRootsRef.current = nextRoots;
       setLibraryRoots(nextRoots);
       setExpandedFolders((prev) => {
         const next = new Set(prev);
