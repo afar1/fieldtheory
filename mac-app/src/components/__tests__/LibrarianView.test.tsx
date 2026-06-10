@@ -1081,6 +1081,53 @@ describe('LibrarianView render', () => {
     expect(getHoverStrip()).toBeTruthy();
   });
 
+  it('uses focus chrome proximity for the standalone immersive button and native window buttons', async () => {
+    const relPath = 'scratchpad/focus-chrome';
+    mockStoredWikiSelection(relPath);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'focus-chrome',
+      title: 'Focus Chrome',
+      lastUpdated: 1,
+      content: 'Focus body',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'focus-chrome' },
+    });
+
+    const { rerender, unmount } = render(
+      <LibrarianView
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0}
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Focus body');
+    const immersiveButton = screen.getByRole('button', { name: 'Exit immersive view' });
+    expect((immersiveButton.parentElement as HTMLElement).style.opacity).toBe('0.6');
+    await waitFor(() => {
+      expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(false);
+    });
+
+    rerender(
+      <LibrarianView
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={1}
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    expect((immersiveButton.parentElement as HTMLElement).style.opacity).toBe('1');
+    await waitFor(() => {
+      expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(true);
+    });
+
+    unmount();
+    expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(true);
+  });
+
   function pasteText(target: HTMLElement, text: string): void {
     fireEvent.paste(target, {
       clipboardData: {
@@ -1149,6 +1196,7 @@ describe('LibrarianView render', () => {
         onReadingRemoved: vi.fn(() => () => {}),
         onSetFullscreen: vi.fn(() => () => {}),
         setMarkdownEditorFocused: vi.fn(),
+        setWindowButtonVisibility: vi.fn(),
       },
     });
     Object.defineProperty(window, 'wikiAPI', {
@@ -2279,6 +2327,41 @@ describe('LibrarianView render', () => {
     expect(readerPane?.style.overflow).toBe('hidden');
   });
 
+  it('persists Browser Library wiki selections for startup restore', async () => {
+    const relPath = 'scratchpad/browser-library-last-selection-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'browser-library-last-selection-test',
+      title: 'browser-library-last-selection-test',
+      lastUpdated: 1,
+      content: 'Browser restore body',
+      documentVersion: { mtimeMs: 1, size: 20, sha256: 'browser-restore-selection' },
+    };
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(
+      <LibrarianView
+        browserLibrarySurface
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Browser restore body');
+    await waitFor(() => {
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        'librarian-last-selection',
+        JSON.stringify({ type: 'wiki', relPath }),
+      );
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        'librarian-editor-session',
+        expect.stringContaining(`"itemPath":"${relPath}"`),
+      );
+    });
+  });
+
   it('does not show the selected-text Codex paste button in Browser mode', async () => {
     const relPath = 'scratchpad/browser-library-codex-selection-test';
     const page: WikiPage = {
@@ -2620,7 +2703,7 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('does not let Browser Library surfaces overwrite the native startup editor session', async () => {
+  it('persists Browser Library editor sessions for the active page', async () => {
     const relPath = 'scratchpad/browser-panel-session-test';
     const page: WikiPage = {
       relPath,
@@ -2633,7 +2716,7 @@ describe('LibrarianView render', () => {
     };
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
-    const { unmount } = render(
+    render(
       <LibrarianView
         browserLibrarySurface
         sidebarCollapsed={false}
@@ -2643,11 +2726,16 @@ describe('LibrarianView render', () => {
     );
 
     await screen.findByText('Browser panel body');
-    unmount();
 
     const sessionCalls = vi.mocked(window.localStorage.setItem).mock.calls
       .filter(([key]) => key === 'librarian-editor-session');
-    expect(sessionCalls).toHaveLength(0);
+    expect(sessionCalls.length).toBeGreaterThan(0);
+    const latestSession = JSON.parse(sessionCalls[sessionCalls.length - 1][1]);
+    expect(latestSession).toMatchObject({
+      itemType: 'wiki',
+      itemPath: relPath,
+      contentMode: 'rendered',
+    });
   });
 
   it('keeps command-launcher image insertion in rendered mode when rendered is active', async () => {
@@ -2773,7 +2861,8 @@ describe('LibrarianView render', () => {
 
     fireEvent.keyDown(renderedInput, { key: 'Enter' });
 
-    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Drawing' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
 
     const saveDrawingButton = await screen.findByRole('button', { name: 'Save drawing' });
@@ -2790,7 +2879,7 @@ describe('LibrarianView render', () => {
       );
     });
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Drawing' })).toBeNull();
     });
     fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
     await waitFor(() => {
@@ -2840,7 +2929,8 @@ describe('LibrarianView render', () => {
 
     fireEvent.keyDown(markdownInput, { key: 'Enter' });
 
-    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Drawing' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
   });
 
   it('inserts super-pasted image paths as plain text in rendered mode', async () => {

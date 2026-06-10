@@ -7217,6 +7217,15 @@ let pendingOpenMarkdownPath: string | null = null;
  * Set up all IPC handlers for audio-related communication.
  */
 function setupIPCHandlers(): void {
+  ipcMain.on('window:setWindowButtonVisibility', (event: IpcMainEvent, visible: boolean) => {
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!sourceWindow || sourceWindow.isDestroyed()) return;
+    const setWindowButtonVisibility = sourceWindow.setWindowButtonVisibility?.bind(sourceWindow);
+    if (typeof setWindowButtonVisibility === 'function') {
+      setWindowButtonVisibility(Boolean(visible));
+    }
+  });
+
   ipcMain.handle(AudioIPCChannels.GET_STATE, () => {
     if (!audioManager) {
       return {

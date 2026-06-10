@@ -2260,6 +2260,10 @@ export class ClipboardManager extends EventEmitter {
       }
 
       const extension = this.getPastedImageExtension(file.name, file.type);
+      if (!extension) {
+        log.warn('Unsupported pasted image file format:', { name: file.name, type: file.type });
+        return null;
+      }
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `Pasted Image ${timestamp}-${crypto.randomBytes(3).toString('hex')}${extension}`;
       const filePath = path.join(cacheDir, filename);
@@ -2274,12 +2278,7 @@ export class ClipboardManager extends EventEmitter {
     }
   }
 
-  private getPastedImageExtension(name?: string | null, type?: string | null): string {
-    const extension = name ? path.extname(name).toLowerCase() : '';
-    if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.tif', '.tiff', '.heic', '.heif'].includes(extension)) {
-      return extension;
-    }
-
+  private getPastedImageExtension(name?: string | null, type?: string | null): string | null {
     switch ((type || '').toLowerCase()) {
       case 'image/jpeg':
       case 'image/jpg':
@@ -2288,16 +2287,20 @@ export class ClipboardManager extends EventEmitter {
         return '.gif';
       case 'image/webp':
         return '.webp';
-      case 'image/tiff':
-        return '.tiff';
-      case 'image/heic':
-        return '.heic';
-      case 'image/heif':
-        return '.heif';
       case 'image/png':
-      default:
         return '.png';
+      case 'image/tiff':
+      case 'image/heic':
+      case 'image/heif':
+        return null;
     }
+
+    const extension = name ? path.extname(name).toLowerCase() : '';
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(extension)) {
+      return extension;
+    }
+    if (['.tif', '.tiff', '.heic', '.heif'].includes(extension)) return null;
+    return '.png';
   }
 
   /**
