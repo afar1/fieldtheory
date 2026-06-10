@@ -361,8 +361,8 @@ const rightStyles: Record<string, React.CSSProperties> = {
   },
   escapeHintText: {
     maxWidth: '100%',
-    fontSize: '8px',
-    fontWeight: 400,
+    fontSize: '11px',
+    fontWeight: 600,
     lineHeight: 1,
     letterSpacing: 0,
     whiteSpace: 'nowrap',
