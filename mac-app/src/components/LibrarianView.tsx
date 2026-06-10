@@ -10559,23 +10559,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSidebarHoverExpanded(false);
   }, []);
 
-  const inlineDrawDialog = inlineDrawInsertion ? (
+  const inlineDrawSurface = inlineDrawInsertion ? (
     <div
-      role="dialog"
-      aria-label="Draw"
+      role="region"
+      aria-label="Drawing"
+      data-ft-inline-draw-region="true"
       style={{
-        position: 'absolute',
-        top: '42px',
-        bottom: '32px',
-        left: 0,
-        right: 0,
-        zIndex: 40,
-        display: 'flex',
+        position: 'relative',
+        width: '100%',
+        height: 'min(520px, calc(100vh - 180px))',
+        minHeight: '360px',
+        margin: '8px 0 18px 0',
         overflow: 'hidden',
         borderRadius: '8px',
         border: `1px solid ${theme.border}`,
         backgroundColor: theme.isDark ? '#111' : '#fff',
-        boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(0,0,0,0.22)',
+        boxShadow: theme.isDark ? '0 10px 30px rgba(0,0,0,0.28)' : '0 10px 30px rgba(0,0,0,0.08)',
       }}
     >
       {inlineDrawSaving && (
@@ -11620,6 +11619,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
                 {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
+                {inlineDrawInsertion?.mode === 'markdown' ? inlineDrawSurface : null}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -11809,6 +11809,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
 	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
 	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
+                  {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
               )}
@@ -11994,7 +11995,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
         />
         </div>
-        {inlineDrawDialog}
         {inlineGemmaDialog}
         {selectionPastePopoverAvailable && terminalPastePopover && (
           <button
