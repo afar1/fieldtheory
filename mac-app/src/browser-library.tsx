@@ -1186,12 +1186,14 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
       await request<{ path: string | null }>('/native/clipboard/image-path')
     ).path,
     savePastedImageFile: async (file: { name?: string | null; type?: string | null; data: Uint8Array }) => (
-      await request<{ path: string | null }>('/native/clipboard/pasted-image-file', {
+      await request<{ path: string | null }>(`/native/clipboard/pasted-image-file?${new URLSearchParams({
+        name: file.name ?? '',
+        type: file.type ?? '',
+      }).toString()}`, {
         method: 'POST',
-        json: {
-          name: file.name ?? null,
-          type: file.type ?? null,
-          data: Array.from(file.data),
+        body: new Blob([file.data as BlobPart]),
+        headers: {
+          'Content-Type': 'application/octet-stream',
         },
       })
     ).path,
