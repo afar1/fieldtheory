@@ -3953,6 +3953,9 @@ const librarianAPI = {
   setImmersiveDismissable: (dismissable: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveDismissable', dismissable);
   },
+  setWindowButtonVisibility: (visible: boolean): void => {
+    ipcRenderer.send('window:setWindowButtonVisibility', visible);
+  },
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw'): void => {
     ipcRenderer.send('clipboard-history:setSizeKey', key);
   },
