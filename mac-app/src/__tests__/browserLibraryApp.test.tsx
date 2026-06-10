@@ -561,6 +561,94 @@ describe('BrowserLibraryApp', () => {
     }
   });
 
+  it('writes Library restore and editor preferences through to native renderer storage', async () => {
+    const previousFetch = globalThis.fetch;
+    const previousEventSource = window.EventSource;
+    const previousSetItem = window.localStorage.setItem;
+    const previousRemoveItem = window.localStorage.removeItem;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const pathname = new URL(String(input)).pathname;
+      const responses: Record<string, unknown> = {
+        '/native/renderer-storage': { ok: true, available: true, values: {} },
+        '/native/app/version': { ok: true, version: '25.6.1' },
+        '/native/updater/enabled': { ok: true, enabled: true },
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => responses[pathname] ?? { ok: true },
+      };
+    }) as unknown as typeof fetch;
+    class TestEventSource {
+      addEventListener = vi.fn();
+      close = vi.fn();
+    }
+    globalThis.fetch = fetchMock;
+    Object.defineProperty(window, 'EventSource', {
+      configurable: true,
+      value: TestEventSource,
+    });
+    Object.defineProperty(globalThis, 'EventSource', {
+      configurable: true,
+      value: TestEventSource,
+    });
+
+    try {
+      delete (window as any).commandsAPI;
+      delete (window as any).hotkeyAPI;
+      delete (window as any).librarianAPI;
+      delete (window as any).libraryAPI;
+      delete (window as any).wikiAPI;
+      delete (window as any).externalAPI;
+      delete (window as any).authAPI;
+      delete (window as any).updaterAPI;
+      delete (window as any).shellAPI;
+
+      await installBrowserLibraryHost({
+        api: 'http://127.0.0.1:59971',
+        token: 'runtime-token',
+        clientId: 'client-one',
+      });
+
+      window.localStorage.setItem('librarian-last-selection', '{"type":"wiki","relPath":"scratchpad/Renderer"}');
+      window.localStorage.setItem('librarian-editor-session', '{"path":"scratchpad/Renderer"}');
+      window.localStorage.setItem(TEXT_CURSOR_BLINK_STORAGE_KEY, 'false');
+      window.localStorage.removeItem(TEXT_CURSOR_BLINK_STORAGE_KEY);
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/renderer-storage', expect.objectContaining({
+          method: 'POST',
+          body: '{"key":"librarian-last-selection","value":"{\\"type\\":\\"wiki\\",\\"relPath\\":\\"scratchpad/Renderer\\"}"}',
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/renderer-storage', expect.objectContaining({
+          method: 'POST',
+          body: '{"key":"librarian-editor-session","value":"{\\"path\\":\\"scratchpad/Renderer\\"}"}',
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/renderer-storage', expect.objectContaining({
+          method: 'POST',
+          body: `{"key":"${TEXT_CURSOR_BLINK_STORAGE_KEY}","value":"false"}`,
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:59971/native/renderer-storage', expect.objectContaining({
+          method: 'POST',
+          body: `{"key":"${TEXT_CURSOR_BLINK_STORAGE_KEY}","value":null}`,
+        }));
+      });
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      window.localStorage.setItem = previousSetItem;
+      window.localStorage.removeItem = previousRemoveItem;
+      globalThis.fetch = previousFetch;
+      Object.defineProperty(window, 'EventSource', {
+        configurable: true,
+        value: previousEventSource,
+      });
+      Object.defineProperty(globalThis, 'EventSource', {
+        configurable: true,
+        value: previousEventSource,
+      });
+    }
+  });
+
   it('clears Browser-owned Library context and navigation when the Browser tab becomes hidden', async () => {
     const previousFetch = globalThis.fetch;
     const previousEventSource = window.EventSource;
