@@ -2327,6 +2327,37 @@ describe('LibrarianView render', () => {
     expect(readerPane?.style.overflow).toBe('hidden');
   });
 
+  it('persists Browser Library wiki selections for startup restore', async () => {
+    const relPath = 'scratchpad/browser-library-last-selection-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'browser-library-last-selection-test',
+      title: 'browser-library-last-selection-test',
+      lastUpdated: 1,
+      content: 'Browser restore body',
+      documentVersion: { mtimeMs: 1, size: 20, sha256: 'browser-restore-selection' },
+    };
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(
+      <LibrarianView
+        browserLibrarySurface
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Browser restore body');
+    await waitFor(() => {
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        'librarian-last-selection',
+        JSON.stringify({ type: 'wiki', relPath }),
+      );
+    });
+  });
+
   it('does not show the selected-text Codex paste button in Browser mode', async () => {
     const relPath = 'scratchpad/browser-library-codex-selection-test';
     const page: WikiPage = {
