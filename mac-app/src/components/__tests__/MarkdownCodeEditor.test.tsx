@@ -1369,6 +1369,44 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
   });
 
+  it('keeps rendered ArrowUp from an empty bullet out of the previous item start gap', () => {
+    const doc = '- hello\n- ';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor('- '.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowUp' }))).toBe(true);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: '- hello'.length, head: '- hello'.length },
+    });
+  });
+
+  it('keeps rendered ArrowDown from an empty bullet out of the next item start gap', () => {
+    const doc = '- \n- hello';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor('- \n- '.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('- '.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(true);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: doc.length, head: doc.length },
+    });
+  });
+
   it('moves rendered Command+Left to the list body instead of the hidden marker', () => {
     const parent = document.createElement('div');
     document.body.appendChild(parent);

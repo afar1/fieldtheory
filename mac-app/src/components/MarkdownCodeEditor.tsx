@@ -2032,11 +2032,19 @@ export function getRenderedMarkdownCommandArrowSelection(
 export function getRenderedMarkdownVerticalNavigationEdit(
   value: string,
   targetOffset: number,
+  previousOffset?: number,
 ): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, targetOffset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
   const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, targetOffset);
   if (bodyStart === null) return null;
+  if (typeof previousOffset === 'number' && caret === bodyStart && bodyStart < lineEnd) {
+    const previousListBodyStart = getRenderedMarkdownListBodyStartAtOffset(value, previousOffset);
+    const previousLineEnd = getMarkdownLineBounds(value, previousOffset).lineEnd;
+    if (previousListBodyStart !== null && previousListBodyStart === previousLineEnd) {
+      return { selection: lineEnd };
+    }
+  }
   if (caret < bodyStart) return { selection: bodyStart };
   const listBodyStart = getRenderedMarkdownListBodyStartForLine(value, lineStart);
   return listBodyStart === bodyStart && caret === bodyStart && bodyStart === lineEnd
@@ -2081,7 +2089,7 @@ export function handleMarkdownCodeEditorListArrowDown(view: EditorView): boolean
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
   const next = view.moveVertically(selection, true);
-  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
+  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head, selection.head);
   if (!edit) return false;
   view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
   return true;
@@ -2139,7 +2147,7 @@ export function handleRenderedMarkdownEditorVerticalArrow(view: EditorView, dire
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
   const next = view.moveVertically(selection, direction === 'down');
-  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
+  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head, selection.head);
   if (!edit) return false;
   view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
   return true;
