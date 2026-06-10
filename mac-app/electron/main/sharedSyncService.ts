@@ -288,8 +288,7 @@ export class SharedSyncService extends EventEmitter {
       return;
     }
 
-    const teamState = await this.getActiveTeamState();
-    const teamScopeUserId = teamState?.currentTeamScopeUserId ?? null;
+    const teamScopeUserId = await this.getReadableTeamScopeUserId();
     if (this.disposed || !teamScopeUserId) {
       await this.stopRemoteChangeSync();
       return;
@@ -388,6 +387,15 @@ export class SharedSyncService extends EventEmitter {
 
   async getAvailability(): Promise<SharedFilesAvailability> {
     const teamState = await this.sharedTeamService.getTeamState();
+    const cachedTeamScopeUserId = this.getCachedTeamScopeUserId();
+    if (!teamState.available && cachedTeamScopeUserId) {
+      return {
+        available: true,
+        canWrite: false,
+        hasTeamMembers: true,
+        currentTeamScopeUserId: cachedTeamScopeUserId,
+      };
+    }
     const hasTeamMembers = teamState.available;
     return {
       available: teamState.available,
@@ -401,6 +409,40 @@ export class SharedSyncService extends EventEmitter {
   private async getActiveTeamState(): Promise<SharedTeamState | null> {
     const teamState = await this.sharedTeamService.getTeamState();
     return teamState.available && teamState.currentTeamScopeUserId ? teamState : null;
+  }
+
+  private getCachedTeamScopeUserIds(): string[] {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return [];
+    const teamScopeUserIds = new Set<string>();
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(path.join(root, entry.name), 'utf-8'));
+        if (parsed?.teamId) teamScopeUserIds.add(parsed.teamId);
+      } catch {
+        // Ignore unreadable cache files while inferring River team scope.
+      }
+    }
+    return [...teamScopeUserIds];
+  }
+
+  private getCachedTeamScopeUserId(): string | null {
+    const teamScopeUserIds = this.getCachedTeamScopeUserIds();
+    return teamScopeUserIds.length === 1 ? teamScopeUserIds[0] ?? null : null;
+  }
+
+  private async getReadableTeamScopeUserId(): Promise<string | null> {
+    const teamState = await this.getActiveTeamState();
+    return teamState?.currentTeamScopeUserId ?? this.getCachedTeamScopeUserId();
+  }
+
+  private async getWritableTeamScopeUserId(): Promise<string | null> {
+    const teamState = await this.sharedTeamService.getTeamState();
+    if (teamState.available && teamState.currentTeamScopeUserId) {
+      return canWriteTeamDocuments(teamState) ? teamState.currentTeamScopeUserId : null;
+    }
+    return null;
   }
 
   async getShareStatus(filePath: string): Promise<SharedFileStatus> {
@@ -449,13 +491,13 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return [];
-    const teamState = await this.getActiveTeamState();
-    if (!teamState?.currentTeamScopeUserId) return [];
+    const teamScopeUserId = await this.getReadableTeamScopeUserId();
+    if (!teamScopeUserId) return [];
 
     const { data, error } = await supabase
       .from('team_document_pins')
       .select('document_id')
-      .eq('team_scope_user_id', teamState.currentTeamScopeUserId);
+      .eq('team_scope_user_id', teamScopeUserId);
 
     if (error) {
       log.warn('River pinned items lookup failed:', error);
@@ -491,9 +533,8 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { ok: false, reason: 'not_authenticated' };
-    const teamState = await this.getActiveTeamState();
-    if (!teamState?.currentTeamScopeUserId) return { ok: false, reason: 'not_available' };
-    if (!canWriteTeamDocuments(teamState)) return { ok: false, reason: 'read_only' };
+    const teamScopeUserId = await this.getWritableTeamScopeUserId();
+    if (!teamScopeUserId) return { ok: false, reason: 'not_available' };
 
     const resolvedPath = path.resolve(filePath);
     if (!isInsidePath(sharedFilesRoot(), resolvedPath) || !fs.existsSync(resolvedPath)) {
@@ -512,7 +553,7 @@ export class SharedSyncService extends EventEmitter {
       const { error } = await supabase
         .from('team_document_pins')
         .upsert({
-          team_scope_user_id: teamState.currentTeamScopeUserId,
+          team_scope_user_id: teamScopeUserId,
           document_id: sharedId,
           pinned_by: session.user.id,
         }, { onConflict: 'team_scope_user_id,document_id' });
@@ -521,7 +562,7 @@ export class SharedSyncService extends EventEmitter {
       const { error } = await supabase
         .from('team_document_pins')
         .delete()
-        .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
+        .eq('team_scope_user_id', teamScopeUserId)
         .eq('document_id', sharedId);
       if (error) return { ok: false, reason: 'request_failed', error: error.message };
     }
@@ -534,9 +575,15 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { shared: false };
-    const teamState = await this.getActiveTeamState();
-    if (!teamState?.currentTeamScopeUserId) return { shared: false };
-    if (!canWriteTeamDocuments(teamState)) return { shared: false, error: 'Accept the team invite before sharing to River' };
+    const teamState = await this.sharedTeamService.getTeamState();
+    const teamScopeUserId = teamState.available && teamState.currentTeamScopeUserId && canWriteTeamDocuments(teamState)
+      ? teamState.currentTeamScopeUserId
+      : null;
+    if (!teamScopeUserId) {
+      return teamState.available
+        ? { shared: false, error: 'Accept the team invite before sharing to River' }
+        : { shared: false };
+    }
 
     const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
     const sourceKey = sourceKeyForFilePath(input.filePath);
@@ -547,7 +594,7 @@ export class SharedSyncService extends EventEmitter {
     const authorCallsign = await authorCallsignForSession(supabase, session);
 
     const row = {
-      team_scope_user_id: teamState.currentTeamScopeUserId,
+      team_scope_user_id: teamScopeUserId,
       kind: sharedKindForType(type),
       path: sharedPathForInput({ ...input, type }),
       title,
@@ -615,8 +662,8 @@ export class SharedSyncService extends EventEmitter {
     const session = this.authManager.getSession();
     const result = { written: 0, removed: 0, created: 0, errors: [] as string[] };
     if (!supabase || !session?.user?.id) return result;
-    const teamState = await this.getActiveTeamState();
-    if (!teamState?.currentTeamScopeUserId) return result;
+    const teamScopeUserId = await this.getReadableTeamScopeUserId();
+    if (!teamScopeUserId) return result;
     const root = sharedFilesRoot();
     const createdRoot = !fs.existsSync(root);
     ensureDir(root);
@@ -625,7 +672,7 @@ export class SharedSyncService extends EventEmitter {
     const { data, error } = await supabase
       .from('team_documents')
       .select('*')
-      .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
+      .eq('team_scope_user_id', teamScopeUserId)
       .is('deleted_at', null);
 
     if (error) {
