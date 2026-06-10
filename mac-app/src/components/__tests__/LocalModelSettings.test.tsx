@@ -22,7 +22,6 @@ vi.mock('../../contexts/ThemeContext', () => ({
 
 const modelId = 'gemma-4-E4B-it-Q4_K_M';
 const twelveBModelId = 'gemma-4-12B-it-Q4_K_M';
-const defaultMeetingSummaryPrompt = 'Preserve Notes, Transcript, speaker labels if present, links, figures, and checkboxes.';
 
 function makeModel() {
   return {
@@ -66,8 +65,6 @@ describe('LocalModelSettings', () => {
   const setLocalLLMSelected = vi.fn(async () => ({ success: true }));
   const setUseLocalLLM = vi.fn(async () => ({ success: true }));
   const downloadLocalLLM = vi.fn(async () => ({ success: true, reusedExisting: true }));
-  const saveMeetingSummaryPrompt = vi.fn(async (prompt: string) => ({ success: true, prompt }));
-  const resetMeetingSummaryPrompt = vi.fn(async () => ({ success: true, prompt: defaultMeetingSummaryPrompt }));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,9 +75,6 @@ describe('LocalModelSettings', () => {
       setLocalLLMSelected,
       setUseLocalLLM,
       downloadLocalLLM,
-      getMeetingSummaryPrompt: vi.fn(async () => defaultMeetingSummaryPrompt),
-      saveMeetingSummaryPrompt,
-      resetMeetingSummaryPrompt,
     };
   });
 
@@ -152,36 +146,20 @@ describe('LocalModelSettings', () => {
     const select = await screen.findByRole('combobox');
     fireEvent.change(select, { target: { value: twelveBModelId } });
 
+    await waitFor(() => {
+      expect(setLocalLLMSelected).toHaveBeenCalledWith(twelveBModelId);
+    });
     expect(screen.getByText(/brew install ollama llama\.cpp && ollama pull gemma4:12b/i)).toBeTruthy();
     expect(screen.getAllByText(/~\/\.fieldtheory\/models\/gemma-4-12B-it-Q4_K_M\.gguf/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/https:\/\/huggingface\.co\/ggml-org\/gemma-4-12B-it-GGUF\/resolve\/main\/gemma-4-12B-it-Q4_K_M\.gguf/i)).toBeTruthy();
   });
 
-  it('saves a customized meeting notes prompt', async () => {
+  it('does not show the disabled meeting notes prompt settings', async () => {
     render(<LocalModelSettings />);
 
-    const textarea = await screen.findByLabelText('Meeting notes prompt') as HTMLTextAreaElement;
-    expect(textarea.value).toContain('speaker labels');
-
-    fireEvent.change(textarea, { target: { value: 'Write brief meeting notes with strong action items.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save prompt' }));
-
-    await waitFor(() => {
-      expect(saveMeetingSummaryPrompt).toHaveBeenCalledWith('Write brief meeting notes with strong action items.');
-    });
-    expect(await screen.findByText('Meeting notes prompt saved.')).toBeTruthy();
-  });
-
-  it('resets the meeting notes prompt to the default', async () => {
-    render(<LocalModelSettings />);
-
-    const textarea = await screen.findByLabelText('Meeting notes prompt') as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: 'Custom style.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
-
-    await waitFor(() => {
-      expect(resetMeetingSummaryPrompt).toHaveBeenCalled();
-    });
-    expect(textarea.value).toBe(defaultMeetingSummaryPrompt);
+    expect(await screen.findByText('Setup steps')).toBeTruthy();
+    expect(screen.queryByText('Meeting notes')).toBeNull();
+    expect(screen.queryByLabelText('Meeting notes prompt')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull();
   });
 });

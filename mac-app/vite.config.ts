@@ -33,6 +33,9 @@ export default defineConfig(({ mode }) => {
     // Bake Supabase credentials into the production bundle at build time.
     // Without this, import.meta.env.VITE_* is undefined in production builds.
     define: {
+      'process.env': JSON.stringify({
+        NODE_ENV: mode === 'production' ? 'production' : 'development',
+      }),
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
       'import.meta.env.FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabasePublishableKey),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabasePublishableKey),

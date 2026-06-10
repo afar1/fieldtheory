@@ -28,9 +28,9 @@ type LocalModelHealth = {
   minValidSizeBytes: number;
 };
 
-const FALLBACK_MODEL_ID = 'gemma-4-E4B-it-Q4_K_M';
-const FALLBACK_MODEL_FILENAME = 'gemma-4-E4B-it-Q4_K_M.gguf';
-const FALLBACK_MODEL_SOURCE_URL = 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF';
+const FALLBACK_MODEL_ID = 'gemma-4-12B-it-Q4_K_M';
+const FALLBACK_MODEL_FILENAME = 'gemma-4-12B-it-Q4_K_M.gguf';
+const FALLBACK_MODEL_SOURCE_URL = 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF';
 const FIELD_THEORY_MODEL_DIR = '~/.fieldtheory/models';
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -60,7 +60,7 @@ function getGemmaLinkCommand(model: LocalModelInfo | undefined): string {
 }
 
 function getOllamaGemmaCommand(model: LocalModelInfo | undefined): string {
-  return `brew install ollama llama.cpp && ollama pull ${model?.ollamaTag ?? 'gemma4:e4b'}`;
+  return `brew install ollama llama.cpp && ollama pull ${model?.ollamaTag ?? 'gemma4:12b'}`;
 }
 
 export default function LocalModelSettings() {
@@ -72,10 +72,6 @@ export default function LocalModelSettings() {
   const [finding, setFinding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState('');
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptMessage, setPromptMessage] = useState<string | null>(null);
-  const [promptError, setPromptError] = useState<string | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<'ollama' | 'download' | 'link' | null>(null);
 
   const load = useCallback(async () => {
@@ -88,16 +84,14 @@ export default function LocalModelSettings() {
 
     try {
       setLoading(true);
-      const [nextModels, nextSelected, nextHealth, nextMeetingSummaryPrompt] = await Promise.all([
+      const [nextModels, nextSelected, nextHealth] = await Promise.all([
         api.getLocalLLMModels(),
         api.getLocalLLMSelected(),
         api.getLocalLLMHealth(),
-        api.getMeetingSummaryPrompt?.() ?? Promise.resolve(''),
       ]);
       setModels(nextModels);
       setSelectedModel(nextSelected || FALLBACK_MODEL_ID);
       setHealthByModel(nextHealth);
-      setMeetingSummaryPrompt(nextMeetingSummaryPrompt);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load local model status.');
@@ -145,6 +139,23 @@ export default function LocalModelSettings() {
     }
   }, []);
 
+  const handleSelectModel = useCallback(async (modelId: string) => {
+    const api = window.clipboardAPI;
+    setSelectedModel(modelId);
+    setError(null);
+    setMessage(null);
+    if (!api?.setLocalLLMSelected) return;
+
+    try {
+      const selected = await api.setLocalLLMSelected(modelId);
+      if (!selected.success) {
+        setError(selected.error ?? 'Could not select local model.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not select local model.');
+    }
+  }, []);
+
   const handleFindGemma = useCallback(async () => {
     const api = window.clipboardAPI;
     if (!api?.getLocalLLMHealth || !api.setLocalLLMSelected) return;
@@ -181,58 +192,6 @@ export default function LocalModelSettings() {
     }
   }, [activeModelId, model?.filename]);
 
-  const handleSaveMeetingSummaryPrompt = useCallback(async () => {
-    const api = window.clipboardAPI;
-    if (!api?.saveMeetingSummaryPrompt) {
-      setPromptError('Meeting notes prompt settings are unavailable in this build.');
-      return;
-    }
-
-    setPromptSaving(true);
-    setPromptMessage(null);
-    setPromptError(null);
-
-    try {
-      const result = await api.saveMeetingSummaryPrompt(meetingSummaryPrompt);
-      if (!result.success) {
-        setPromptError(result.error ?? 'Could not save meeting notes prompt.');
-        return;
-      }
-      setMeetingSummaryPrompt(result.prompt ?? meetingSummaryPrompt);
-      setPromptMessage('Meeting notes prompt saved.');
-    } catch (err) {
-      setPromptError(err instanceof Error ? err.message : 'Could not save meeting notes prompt.');
-    } finally {
-      setPromptSaving(false);
-    }
-  }, [meetingSummaryPrompt]);
-
-  const handleResetMeetingSummaryPrompt = useCallback(async () => {
-    const api = window.clipboardAPI;
-    if (!api?.resetMeetingSummaryPrompt) {
-      setPromptError('Meeting notes prompt settings are unavailable in this build.');
-      return;
-    }
-
-    setPromptSaving(true);
-    setPromptMessage(null);
-    setPromptError(null);
-
-    try {
-      const result = await api.resetMeetingSummaryPrompt();
-      if (!result.success) {
-        setPromptError(result.error ?? 'Could not reset meeting notes prompt.');
-        return;
-      }
-      setMeetingSummaryPrompt(result.prompt);
-      setPromptMessage('Meeting notes prompt reset.');
-    } catch (err) {
-      setPromptError(err instanceof Error ? err.message : 'Could not reset meeting notes prompt.');
-    } finally {
-      setPromptSaving(false);
-    }
-  }, []);
-
   if (loading && !model) {
     return (
       <SettingsSectionHeading
@@ -259,7 +218,7 @@ export default function LocalModelSettings() {
             control={
               <select
                 value={activeModelId}
-                onChange={(event) => setSelectedModel(event.target.value)}
+                onChange={(event) => void handleSelectModel(event.target.value)}
                 style={{
                   minWidth: '220px',
                   padding: '6px 8px',
@@ -362,85 +321,6 @@ export default function LocalModelSettings() {
 
       {message && <SettingsNotice theme={theme} tone="success">{message}</SettingsNotice>}
       {error && <SettingsNotice theme={theme} tone="warning">{error}</SettingsNotice>}
-
-      <SettingsCard theme={theme}>
-        <SettingsSectionHeading
-          theme={theme}
-          title="Meeting notes"
-          description="Customize the prompt used when meeting transcripts become summary notes."
-        />
-
-        <label
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            fontSize: '12px',
-            color: theme.text,
-          }}
-        >
-          <span>Summary style prompt</span>
-          <textarea
-            aria-label="Meeting notes prompt"
-            value={meetingSummaryPrompt}
-            onChange={(event) => setMeetingSummaryPrompt(event.target.value)}
-            spellCheck={false}
-            style={{
-              minHeight: '150px',
-              resize: 'vertical',
-              padding: '10px 12px',
-              borderRadius: '8px',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: theme.surface1,
-              color: theme.text,
-              fontSize: '12px',
-              lineHeight: 1.5,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-            }}
-          />
-        </label>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0' }}>
-          <button
-            type="button"
-            onClick={() => void handleSaveMeetingSummaryPrompt()}
-            disabled={promptSaving || !meetingSummaryPrompt.trim()}
-            style={{
-              padding: '7px 12px',
-              borderRadius: '7px',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: promptSaving ? theme.selectedBg : theme.accent,
-              color: promptSaving ? theme.textSecondary : '#fff',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: promptSaving || !meetingSummaryPrompt.trim() ? 'default' : 'pointer',
-              opacity: !meetingSummaryPrompt.trim() ? 0.6 : 1,
-            }}
-          >
-            {promptSaving ? 'Saving...' : 'Save prompt'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleResetMeetingSummaryPrompt()}
-            disabled={promptSaving}
-            style={{
-              padding: '7px 12px',
-              borderRadius: '7px',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: theme.surface1,
-              color: theme.text,
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: promptSaving ? 'default' : 'pointer',
-            }}
-          >
-            Reset
-          </button>
-        </div>
-
-        {promptMessage && <SettingsNotice theme={theme} tone="success">{promptMessage}</SettingsNotice>}
-        {promptError && <SettingsNotice theme={theme} tone="warning">{promptError}</SettingsNotice>}
-      </SettingsCard>
     </div>
   );
 }
