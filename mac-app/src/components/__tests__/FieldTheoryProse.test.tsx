@@ -82,6 +82,23 @@ describe('FieldTheoryProse', () => {
     expect((container.firstElementChild as HTMLElement).style.getPropertyValue('--ft-prose-paragraph-spacing')).toBe('1.08em');
   });
 
+  it('styles prose links as inherited text with only a subtle underline', () => {
+    const proseCss = readFileSync('src/prose.css', 'utf-8');
+    const linkRule = proseCss.match(/\.ft-prose a\s*\{[^}]*\}/)?.[0] ?? '';
+    const linkHoverRule = proseCss.match(/\.ft-prose a:hover\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(linkRule).toContain('color: inherit;');
+    expect(linkRule).toContain('text-decoration: underline;');
+    expect(linkRule).toContain('text-decoration-color: color-mix(in srgb, currentColor 24%, transparent);');
+    expect(linkRule).toContain('text-decoration-thickness: 1px;');
+    expect(linkRule).toContain('text-underline-offset: 2px;');
+    expect(linkRule).not.toContain('background');
+    expect(linkRule).not.toContain('padding');
+    expect(linkRule).not.toContain('border-bottom');
+    expect(linkHoverRule).toContain('text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);');
+    expect(linkHoverRule).not.toContain('background');
+  });
+
   it('renders markdown text without source offset annotations', () => {
     render(
       <FieldTheoryProse>
