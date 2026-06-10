@@ -95,6 +95,7 @@ const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY
 function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
   const storage = (globalThis as unknown as {
     localStorage?: {
+      getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => void;
       removeItem: (key: string) => void;
     };
@@ -108,11 +109,10 @@ function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
     } | null;
     if (!snapshot?.available || !snapshot.values) return;
     for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
+      if (storage.getItem(key) !== null) continue;
       const value = snapshot.values[key];
       if (typeof value === 'string') {
         storage.setItem(key, value);
-      } else {
-        storage.removeItem(key);
       }
     }
   } catch {
@@ -123,6 +123,7 @@ function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
 function installBrowserLibraryRendererStorageForwarding(): void {
   const storage = (globalThis as unknown as {
     localStorage: {
+      getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => void;
       removeItem: (key: string) => void;
     };
@@ -145,8 +146,22 @@ function installBrowserLibraryRendererStorageForwarding(): void {
   };
 }
 
+function flushBrowserLibraryRendererStorageToBridge(): void {
+  const storage = (globalThis as unknown as {
+    localStorage?: {
+      getItem: (key: string) => string | null;
+    };
+  }).localStorage;
+  if (!storage) return;
+
+  for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
+    ipcRenderer.send('browser-library:renderer-storage-changed', { key, value: storage.getItem(key) });
+  }
+}
+
 hydrateBrowserLibraryRendererStorageBeforeAppBoot();
 installBrowserLibraryRendererStorageForwarding();
+flushBrowserLibraryRendererStorageToBridge();
 
 const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
@@ -3952,6 +3967,9 @@ const librarianAPI = {
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
   setImmersiveDismissable: (dismissable: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveDismissable', dismissable);
+  },
+  setWindowButtonVisibility: (visible: boolean): void => {
+    ipcRenderer.send('window:setWindowButtonVisibility', visible);
   },
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw'): void => {
     ipcRenderer.send('clipboard-history:setSizeKey', key);

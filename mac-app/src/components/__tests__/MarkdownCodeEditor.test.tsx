@@ -40,6 +40,8 @@ import {
   RENDERED_MARKDOWN_EDITOR_INLINE_HTML_EXPANDED_CLASS,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_LINK_HOVER_UNDERLINE_COLOR,
+  RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR,
   RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS,
@@ -75,6 +77,8 @@ import {
   getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
+  getRenderedMarkdownEditorLinkStyle,
+  getRenderedMarkdownEditorWikiLinkStyle,
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSelectionWithoutTrailingLineStart,
   getMarkdownCodeEditorSourcePosition,
@@ -156,6 +160,36 @@ describe('MarkdownCodeEditor cursor blink', () => {
 
   it('uses one physical row height for styled rendered text', () => {
     expect(RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT).toBe('var(--ft-line-number-row-height)');
+  });
+
+  it('styles rendered links as inherited text with only a subtle underline', () => {
+    expect(getRenderedMarkdownEditorLinkStyle()).toEqual({
+      color: 'inherit',
+      cursor: 'pointer',
+      textDecoration: 'underline',
+      textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR,
+      textDecorationThickness: '1px',
+      textUnderlineOffset: '2px',
+      textDecorationSkipInk: 'auto',
+      transition: 'text-decoration-color 120ms ease',
+    });
+    expect(RENDERED_MARKDOWN_EDITOR_LINK_HOVER_UNDERLINE_COLOR).toBe('color-mix(in srgb, currentColor 38%, transparent)');
+  });
+
+  it('clears rendered wiki-link pill styling while keeping the subtle underline', () => {
+    expect(getRenderedMarkdownEditorWikiLinkStyle()).toEqual({
+      color: 'inherit',
+      backgroundColor: 'transparent',
+      padding: '0',
+      borderRadius: '0',
+      borderBottom: '0',
+      textDecoration: 'underline',
+      textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR,
+      textDecorationThickness: '1px',
+      textUnderlineOffset: '2px',
+      boxDecorationBreak: 'slice',
+      WebkitBoxDecorationBreak: 'slice',
+    });
   });
 
   it('detects range selections so the drawn cursor can hide while text is selected', () => {
@@ -1289,6 +1323,49 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
     expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first item\n'.length)).toEqual({
       selection: doc.length,
+    });
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, doc.length)).toEqual({
+      selection: doc.length,
+    });
+  });
+
+  it('consumes rendered ArrowDown into an empty list body', () => {
+    const doc = '- first item\n- ';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor(doc.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('- first'.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(true);
+    expect(moveVertically).toHaveBeenCalledWith(view.state.selection.main, true);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: doc.length, head: doc.length },
+    });
+  });
+
+  it('consumes rendered ArrowUp into an empty list body', () => {
+    const doc = '- \nnext item';
+    const dispatch = vi.fn();
+    const moveVertically = vi.fn(() => EditorSelection.cursor('- '.length));
+    const view = {
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      moveVertically,
+      dispatch,
+    } as unknown as EditorView;
+
+    expect(handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowUp' }))).toBe(true);
+    expect(moveVertically).toHaveBeenCalledWith(view.state.selection.main, false);
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: '- '.length, head: '- '.length },
     });
   });
 

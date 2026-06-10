@@ -36,6 +36,7 @@ export default function LinkedDocumentsSection({ links, onOpen }: LinkedDocument
   return (
     <section
       aria-label="Linked"
+      className="linked-documents-section"
       style={{
         marginTop: '32px',
         paddingTop: '16px',

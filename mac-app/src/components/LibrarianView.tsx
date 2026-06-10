@@ -2701,10 +2701,8 @@ export function persistLibrarianSelection(
 
 export function persistNativeLibrarianSelection(
   storage: Pick<Storage, 'setItem' | 'removeItem'>,
-  selection: LibrarianStoredSelection | null,
-  browserLibrarySurface: boolean,
+  selection: LibrarianStoredSelection | null
 ): boolean {
-  if (browserLibrarySurface) return false;
   persistLibrarianSelection(storage, selection);
   return true;
 }
@@ -3866,6 +3864,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const focusChromeVisualOpacity = !focusChromeUsesProximityFade || focusChromePinnedVisible
     ? 1
     : focusChromeProximityOpacity;
+  const focusStandaloneImmersiveOpacity = focusChromeUsesProximityFade
+    ? 0.6 + (focusChromeProximityOpacity * 0.4)
+    : 1;
   const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
   const focusChromeScopedItemOpacity = getFocusChromeScopedItemOpacity({
     focusChromeActive,
@@ -4409,37 +4410,36 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, onSelectedItemTypeChange, selectedItemType]);
 
   useEffect(() => {
-    if (browserLibrarySurface) return;
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-      persistNativeLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath }, browserLibrarySurface);
+      persistNativeLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath });
       return;
     }
     if (selectedItemType === 'artifact' && selectedPath) {
-      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath }, browserLibrarySurface);
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
       return;
     }
     if (selectedItemType === 'bookmarks') {
       clearLibrarianEditorSession(localStorage);
-      persistNativeLibrarianSelection(localStorage, { type: 'bookmarks' }, browserLibrarySurface);
+      persistNativeLibrarianSelection(localStorage, { type: 'bookmarks' });
       return;
     }
     if (selectedItemType === 'ember') {
       clearLibrarianEditorSession(localStorage);
-      persistNativeLibrarianSelection(localStorage, { type: 'ember' }, browserLibrarySurface);
+      persistNativeLibrarianSelection(localStorage, { type: 'ember' });
       return;
     }
     if (selectedItemType === 'external') {
       if (externalOpenFile?.path) {
-        persistNativeLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path }, browserLibrarySurface);
+        persistNativeLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path });
       }
       return;
     }
     if (selectedPath) {
-      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath }, browserLibrarySurface);
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
       return;
     }
-    persistNativeLibrarianSelection(localStorage, null, browserLibrarySurface);
-  }, [browserLibrarySurface, externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
+    persistNativeLibrarianSelection(localStorage, null);
+  }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!currentNavigationEntry) return;
@@ -4534,6 +4534,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFocusChromeActiveChange?.(active && focusChromeActive);
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    const visible = !active || !focusChromeActive || focusChromeProximityOpacity >= 0.95;
+    window.librarianAPI?.setWindowButtonVisibility?.(visible);
+  }, [active, focusChromeActive, focusChromeProximityOpacity]);
+
+  useEffect(() => {
+    return () => {
+      window.librarianAPI?.setWindowButtonVisibility?.(true);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     let frame: number | null = null;
@@ -7537,10 +7548,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [contentMode, getEditorSessionTarget]);
 
   const persistEditorSession = useCallback(() => {
-    if (browserLibrarySurface) {
-      recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'browser-library-surface' });
-      return;
-    }
     const session = captureEditorSession();
     if (!session) {
       recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'no-session-target' });
@@ -7555,7 +7562,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       selectionEnd: session.selectionEnd,
       scrollTop: session.scrollTop,
     });
-  }, [browserLibrarySurface, captureEditorSession, recordRenderedEditorDebug]);
+  }, [captureEditorSession, recordRenderedEditorDebug]);
 
   useEffect(() => {
     persistEditorSession();
@@ -10545,23 +10552,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSidebarHoverExpanded(false);
   }, []);
 
-  const inlineDrawDialog = inlineDrawInsertion ? (
+  const inlineDrawSurface = inlineDrawInsertion ? (
     <div
-      role="dialog"
-      aria-label="Draw"
+      role="region"
+      aria-label="Drawing"
+      data-ft-inline-draw-region="true"
       style={{
-        position: 'absolute',
-        top: '42px',
-        bottom: '32px',
-        left: 0,
-        right: 0,
-        zIndex: 40,
-        display: 'flex',
+        position: 'relative',
+        width: '100%',
+        height: 'min(520px, calc(100vh - 180px))',
+        minHeight: '360px',
+        margin: '8px 0 18px 0',
         overflow: 'hidden',
         borderRadius: '8px',
         border: `1px solid ${theme.border}`,
         backgroundColor: theme.isDark ? '#111' : '#fff',
-        boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(0,0,0,0.22)',
+        boxShadow: theme.isDark ? '0 10px 30px rgba(0,0,0,0.28)' : '0 10px 30px rgba(0,0,0,0.08)',
       }}
     >
       {inlineDrawSaving && (
@@ -11265,7 +11271,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 />
               )}
               {focusStandaloneImmersiveVisible && (
-                <div style={{ marginLeft: 'auto', opacity: 1, pointerEvents: 'auto' }}>
+                <div style={{ marginLeft: 'auto', opacity: focusStandaloneImmersiveOpacity, pointerEvents: 'auto' }}>
                   <ImmersiveToggle
                     isFullScreen={isFullScreen || focusImmersive}
                     onToggle={toggleFocusChromeShortcut}
@@ -11606,6 +11612,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
                 {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
+                {inlineDrawInsertion?.mode === 'markdown' ? inlineDrawSurface : null}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -11795,6 +11802,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
 	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
 	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
+                  {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
               )}
@@ -11980,7 +11988,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
         />
         </div>
-        {inlineDrawDialog}
         {inlineGemmaDialog}
         {selectionPastePopoverAvailable && terminalPastePopover && (
           <button

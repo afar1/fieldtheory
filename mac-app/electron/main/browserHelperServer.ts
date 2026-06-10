@@ -1810,12 +1810,15 @@ export class BrowserHelperServer {
       }
 
       if (req.method === 'POST' && parsed.pathname === '/native/clipboard/pasted-image-file') {
-        const body = await readJsonBody(req);
-        const name = typeof body.name === 'string' ? body.name : null;
-        const type = typeof body.type === 'string' ? body.type : null;
-        const data = Array.isArray(body.data)
-          ? Uint8Array.from(body.data.map((value) => Number(value) & 0xff))
-          : null;
+        const data = await readBufferBody(req);
+        const headerName = readHeaderString(req.headers['x-fieldtheory-file-name']);
+        const headerType = readHeaderString(req.headers['x-fieldtheory-file-type']);
+        const name = headerName ?? parsed.searchParams.get('name') ?? null;
+        const type = headerType ?? parsed.searchParams.get('type') ?? null;
+        if (isUnsupportedPastedImageFormat(name, type)) {
+          writeJson(res, 415, { ok: false, path: null, error: unsupportedPastedImageFormatMessage(name, type) }, req.headers.origin);
+          return;
+        }
         const path = data
           ? await this.nativeBridge.savePastedImageFile?.({ name, type, data }) ?? null
           : null;
@@ -2252,6 +2255,34 @@ async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, u
   const raw = Buffer.concat(chunks).toString('utf-8');
   const parsed = JSON.parse(raw);
   return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+}
+
+async function readBufferBody(req: http.IncomingMessage): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) return null;
+  return Buffer.concat(chunks);
+}
+
+function readHeaderString(value: string | string[] | undefined): string | null {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
+function isUnsupportedPastedImageFormat(name?: string | null, type?: string | null): boolean {
+  const normalizedType = (type || '').toLowerCase();
+  if (['image/heic', 'image/heif', 'image/tiff'].includes(normalizedType)) return true;
+  if (normalizedType) return false;
+  const extension = name ? path.extname(name).toLowerCase() : '';
+  return ['.heic', '.heif', '.tif', '.tiff'].includes(extension);
+}
+
+function unsupportedPastedImageFormatMessage(name?: string | null, type?: string | null): string {
+  const label = type || (name ? path.extname(name).replace(/^\./, '').toUpperCase() : 'that format');
+  return `Pasted image format ${label} is not supported. Use PNG, JPEG, GIF, or WebP.`;
 }
 
 function writeJson(res: http.ServerResponse, statusCode: number, payload: Record<string, unknown>, origin?: string): void {

@@ -109,6 +109,8 @@ export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-ta
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
 export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
+export const RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR = 'color-mix(in srgb, currentColor 24%, transparent)';
+export const RENDERED_MARKDOWN_EDITOR_LINK_HOVER_UNDERLINE_COLOR = 'color-mix(in srgb, currentColor 38%, transparent)';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS = 'cm-ft-lineNumberSelectionHitArea';
@@ -2031,8 +2033,15 @@ export function getRenderedMarkdownVerticalNavigationEdit(
   value: string,
   targetOffset: number,
 ): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, targetOffset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
   const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, targetOffset);
-  return bodyStart !== null && targetOffset < bodyStart ? { selection: bodyStart } : null;
+  if (bodyStart === null) return null;
+  if (caret < bodyStart) return { selection: bodyStart };
+  const listBodyStart = getRenderedMarkdownListBodyStartForLine(value, lineStart);
+  return listBodyStart === bodyStart && caret === bodyStart && bodyStart === lineEnd
+    ? { selection: bodyStart }
+    : null;
 }
 
 export function getMarkdownListMarkerProtectedDeleteBackwardEdit(
@@ -2126,14 +2135,22 @@ export function handleRenderedMarkdownEditorCommandArrow(view: EditorView, direc
   return true;
 }
 
-export function handleRenderedMarkdownEditorArrowDown(view: EditorView): boolean {
+export function handleRenderedMarkdownEditorVerticalArrow(view: EditorView, direction: 'up' | 'down'): boolean {
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
-  const next = view.moveVertically(selection, true);
+  const next = view.moveVertically(selection, direction === 'down');
   const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
   if (!edit) return false;
   view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
   return true;
+}
+
+export function handleRenderedMarkdownEditorArrowDown(view: EditorView): boolean {
+  return handleRenderedMarkdownEditorVerticalArrow(view, 'down');
+}
+
+export function handleRenderedMarkdownEditorArrowUp(view: EditorView): boolean {
+  return handleRenderedMarkdownEditorVerticalArrow(view, 'up');
 }
 
 export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): boolean {
@@ -2156,6 +2173,7 @@ export function handleRenderedMarkdownEditorKeyDown(view: EditorView, event: Key
   }
   if (event.key === 'ArrowRight') return handleRenderedMarkdownEditorArrowRight(view);
   if (event.key === 'ArrowLeft') return handleRenderedMarkdownEditorArrowLeft(view);
+  if (event.key === 'ArrowUp') return handleRenderedMarkdownEditorArrowUp(view);
   if (event.key === 'ArrowDown') return handleRenderedMarkdownEditorArrowDown(view);
   return false;
 }
@@ -3064,6 +3082,35 @@ export function getMarkdownCodeEditorCursorShapeStyle(
   };
 }
 
+export function getRenderedMarkdownEditorLinkStyle(): Record<string, string> {
+  return {
+    color: 'inherit',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR,
+    textDecorationThickness: '1px',
+    textUnderlineOffset: '2px',
+    textDecorationSkipInk: 'auto',
+    transition: 'text-decoration-color 120ms ease',
+  };
+}
+
+export function getRenderedMarkdownEditorWikiLinkStyle(): Record<string, string> {
+  return {
+    color: 'inherit',
+    backgroundColor: 'transparent',
+    padding: '0',
+    borderRadius: '0',
+    borderBottom: '0',
+    textDecoration: 'underline',
+    textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_UNDERLINE_COLOR,
+    textDecorationThickness: '1px',
+    textUnderlineOffset: '2px',
+    boxDecorationBreak: 'slice',
+    WebkitBoxDecorationBreak: 'slice',
+  };
+}
+
 export function getMarkdownCodeEditorCursorScrollMargin(bottomRoomPx = MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX): { x: number; y: number } {
   return { x: 5, y: bottomRoomPx };
 }
@@ -3435,32 +3482,16 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             opacity: 0.72,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`]: {
-            color: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
-            cursor: 'pointer',
-            textDecoration: 'underline',
-            textUnderlineOffset: '2px',
-            borderRadius: '3px',
-            transition: 'color 120ms ease, background-color 120ms ease, text-decoration-color 120ms ease',
+            ...getRenderedMarkdownEditorLinkStyle(),
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}:hover`]: {
-            color: linkColor ?? (theme.isDark ? '#a9c7ff' : '#123a8c'),
-            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.16)' : 'rgba(15,118,110,0.12)',
-            textDecorationColor: caretColor ?? linkColor ?? theme.accent,
-            textDecorationThickness: '2px',
+            textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_HOVER_UNDERLINE_COLOR,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`]: {
-            borderRadius: '4px',
-            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.12)' : 'rgba(29,78,216,0.08)',
-            padding: '0 0.12em',
-            color: linkColor ?? (theme.isDark ? '#8fb7ff' : '#1746a2'),
-            textDecoration: 'none',
-            borderBottom: `1px solid ${theme.isDark ? 'rgba(122,167,255,0.42)' : 'rgba(29,78,216,0.32)'}`,
-            boxDecorationBreak: 'clone',
-            WebkitBoxDecorationBreak: 'clone',
+            ...getRenderedMarkdownEditorWikiLinkStyle(),
           },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}:hover`]: {
-            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.2)' : 'rgba(29,78,216,0.14)',
-            borderBottomColor: theme.isDark ? 'rgba(122,167,255,0.7)' : 'rgba(29,78,216,0.55)',
+            textDecorationColor: RENDERED_MARKDOWN_EDITOR_LINK_HOVER_UNDERLINE_COLOR,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS}`]: {
             color: mutedColor ?? theme.textSecondary,
@@ -3730,6 +3761,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                   ? handleRenderedMarkdownEditorArrowDown(view)
                   : handleMarkdownCodeEditorListArrowDown(view)
               ),
+            },
+            {
+              key: 'ArrowUp',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowUp(view) : false),
             },
             {
               key: 'ArrowLeft',
