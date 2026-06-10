@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HotMicSettings from '../HotMicSettings';
 
@@ -17,13 +17,21 @@ vi.mock('../../contexts/ThemeContext', () => ({
   }),
 }));
 
-function makeHotMicApi() {
+function makeHotMicApi({
+  enabled = true,
+  runtimeStatus,
+}: {
+  enabled?: boolean;
+  runtimeStatus?: Partial<Awaited<ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>>>;
+} = {}) {
   return {
-    getEnabled: vi.fn(async () => true),
+    getEnabled: vi.fn(async () => enabled),
     setEnabled: vi.fn(async () => undefined),
     getStatus: vi.fn(async () => ({ state: 'idle', muted: false })),
     getBackgroundFilterEnabled: vi.fn(async () => false),
+    setBackgroundFilterEnabled: vi.fn(async () => undefined),
     getBackgroundFilterStrength: vi.fn(async () => 4),
+    setBackgroundFilterStrength: vi.fn(async (value: number) => value),
     isHookInstalled: vi.fn(async () => false),
     getSubmitWord: vi.fn(async () => 'submit'),
     getPasteWords: vi.fn(async () => 'paste'),
@@ -49,17 +57,23 @@ function makeHotMicApi() {
     getSystemCommands: vi.fn(async () => ({})),
     getRectangleCommands: vi.fn(async () => ({})),
     getRuntimeStatus: vi.fn(async () => ({
+      state: 'idle',
       engineReady: true,
       engine: {
         selectedEngine: 'parakeet',
         readiness: 'ready',
         detail: 'Parakeet English server is ready',
+        source: 'global',
+        whisperModel: null,
+        fallbackAvailable: false,
       },
       condition: 'idle',
       queueDepth: 0,
+      lastChunkAgeMs: null,
       chunksReceived: 0,
       whisperFallbackActive: false,
       micHealthy: true,
+      ...runtimeStatus,
     })),
     onStateChanged: vi.fn(() => () => {}),
     onStatusChanged: vi.fn(() => () => {}),
@@ -94,5 +108,74 @@ describe('HotMicSettings runtime engine display', () => {
     expect(screen.queryByText(/Whisper fallback model/i)).toBeNull();
     expect((window as any).transcribeAPI.getSelectedModel).not.toHaveBeenCalled();
     expect((window as any).transcribeAPI.getModelDownloadStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows enabling Hot Mic while the engine is warming', async () => {
+    (window as any).hotMicAPI = makeHotMicApi({
+      enabled: false,
+      runtimeStatus: {
+        engineReady: false,
+        engine: {
+          selectedEngine: 'parakeet',
+          readiness: 'warming',
+          detail: 'Parakeet English server is warming',
+          source: 'global',
+          whisperModel: null,
+          fallbackAvailable: false,
+        },
+      },
+    });
+
+    render(<HotMicSettings />);
+
+    const enableToggle = await screen.findByTitle('Hot Mic disabled');
+    expect(enableToggle.hasAttribute('disabled')).toBe(false);
+
+    fireEvent.click(enableToggle);
+
+    await waitFor(() => {
+      expect((window as any).hotMicAPI.setEnabled).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it('blocks enabling Hot Mic when the engine is not installed', async () => {
+    (window as any).hotMicAPI = makeHotMicApi({
+      enabled: false,
+      runtimeStatus: {
+        engineReady: false,
+        engine: {
+          selectedEngine: 'parakeet',
+          readiness: 'not-installed',
+          detail: 'Parakeet is not installed',
+          source: 'global',
+          whisperModel: null,
+          fallbackAvailable: false,
+        },
+      },
+    });
+
+    render(<HotMicSettings />);
+
+    const enableToggle = await screen.findByTitle('Hot Mic disabled');
+    await waitFor(() => {
+      expect(enableToggle.hasAttribute('disabled')).toBe(true);
+    });
+  });
+
+  it('keeps Background Voice Filter configurable when Hot Mic is off', async () => {
+    (window as any).hotMicAPI = makeHotMicApi({ enabled: false });
+
+    render(<HotMicSettings />);
+
+    const filterRow = await screen.findByText('Background Voice Filter');
+    const filterToggle = filterRow.closest('div')?.querySelector('button');
+    expect(filterToggle).toBeTruthy();
+    expect(filterToggle!.hasAttribute('disabled')).toBe(false);
+
+    fireEvent.click(filterToggle!);
+
+    await waitFor(() => {
+      expect((window as any).hotMicAPI.setBackgroundFilterEnabled).toHaveBeenCalledWith(true);
+    });
   });
 });

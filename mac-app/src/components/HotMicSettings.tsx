@@ -17,6 +17,13 @@ import {
 type HotMicRuntimeStatus = Awaited<
   ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
 >;
+
+function canEnableHotMicForRuntimeStatus(status: HotMicRuntimeStatus | null): boolean {
+  if (!status) return true;
+  const readiness = status?.engine?.readiness;
+  return readiness === 'ready' || readiness === 'warming' || readiness === 'cold';
+}
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   const rounded = Math.round(value);
@@ -70,7 +77,7 @@ export default function HotMicSettings() {
   const [rectangleCommands, setRectangleCommands] = useState<Record<string, string>>({});
 
   const styles = getStyles(theme);
-  const canEnableHotMic = runtimeStatus?.engineReady ?? true;
+  const canEnableHotMic = canEnableHotMicForRuntimeStatus(runtimeStatus);
   const canToggleHotMic = enabled || canEnableHotMic;
   useEffect(() => {
     if (!window.hotMicAPI) return;
@@ -570,13 +577,48 @@ export default function HotMicSettings() {
         )}
       </SettingsCard>
 
-      <SettingsDisabledBlock disabled={!enabled}>
       <div style={styles.cardStack}>
       <SettingsCard theme={theme}>
       <SettingsSectionHeading
         theme={theme}
+        title="Voice Filter"
+        description="Reject far-field speech before it reaches voice commands."
+      />
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Background Voice Filter</span>
+        <button
+          onClick={() => handleBackgroundFilterEnabledChange(!backgroundFilterEnabled)}
+          style={{ ...styles.toggle, backgroundColor: backgroundFilterEnabled ? theme.success : '#d1d5db' }}
+        >
+          <span style={{ ...styles.toggleKnob, transform: backgroundFilterEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+        </button>
+      </div>
+      <div style={{ padding: '4px 0' }}>
+        <div style={styles.rangeHeader}>
+          <span style={styles.rangeLabel}>Strictness</span>
+          <span style={styles.rangeValue}>{backgroundFilterStrength}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={backgroundFilterStrength}
+          onChange={(e) => void handleBackgroundFilterStrengthChange(Number(e.target.value))}
+          style={styles.rangeInput}
+        />
+        <p style={{ ...styles.description, marginTop: 6 }}>
+          Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
+        </p>
+      </div>
+      </SettingsCard>
+
+      <SettingsDisabledBlock disabled={!enabled}>
+      <SettingsCard theme={theme}>
+      <SettingsSectionHeading
+        theme={theme}
         title="Controls"
-        description="Hotkey and background voice filtering for the active Hot Mic mode."
+        description="Hotkey controls for the active Hot Mic mode."
       />
       <div style={styles.row}>
         <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
@@ -618,36 +660,6 @@ export default function HotMicSettings() {
         Toggles between hot mic and standard mode.
       </p>
       {modeToggleHotkeyError && <p style={styles.hotkeyError}>{modeToggleHotkeyError}</p>}
-      <div style={styles.divider} />
-
-      {/* Background voice filter */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Background Voice Filter</span>
-        <button
-          onClick={() => handleBackgroundFilterEnabledChange(!backgroundFilterEnabled)}
-          style={{ ...styles.toggle, backgroundColor: backgroundFilterEnabled ? theme.success : '#d1d5db' }}
-        >
-          <span style={{ ...styles.toggleKnob, transform: backgroundFilterEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-      <div style={{ padding: '4px 0' }}>
-        <div style={styles.rangeHeader}>
-          <span style={styles.rangeLabel}>Strictness</span>
-          <span style={styles.rangeValue}>{backgroundFilterStrength}%</span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={backgroundFilterStrength}
-          onChange={(e) => void handleBackgroundFilterStrengthChange(Number(e.target.value))}
-          style={styles.rangeInput}
-        />
-        <p style={{ ...styles.description, marginTop: 6 }}>
-          Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
-        </p>
-      </div>
       </SettingsCard>
 
       <SettingsCard theme={theme}>
@@ -1137,8 +1149,8 @@ export default function HotMicSettings() {
         </p>
       )}
       </SettingsCard>
-      </div>
       </SettingsDisabledBlock>
+      </div>
     </div>
   );
 }
