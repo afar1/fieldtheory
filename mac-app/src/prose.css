@@ -92,10 +92,16 @@
 }
 
 .ft-prose a {
-  color: var(--ft-prose-link);
+  color: inherit;
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--ft-prose-link) 45%, transparent);
+  text-decoration-color: color-mix(in srgb, currentColor 24%, transparent);
+  text-decoration-thickness: 1px;
   text-underline-offset: 2px;
+  text-decoration-skip-ink: auto;
+}
+
+.ft-prose a:hover {
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
 }
 
 .ft-prose blockquote {
