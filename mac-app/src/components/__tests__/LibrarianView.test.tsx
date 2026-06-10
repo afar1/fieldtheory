@@ -2821,7 +2821,8 @@ describe('LibrarianView render', () => {
 
     fireEvent.keyDown(renderedInput, { key: 'Enter' });
 
-    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Drawing' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
 
     const saveDrawingButton = await screen.findByRole('button', { name: 'Save drawing' });
@@ -2838,7 +2839,7 @@ describe('LibrarianView render', () => {
       );
     });
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Drawing' })).toBeNull();
     });
     fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
     await waitFor(() => {
@@ -2888,7 +2889,8 @@ describe('LibrarianView render', () => {
 
     fireEvent.keyDown(markdownInput, { key: 'Enter' });
 
-    expect(await screen.findByRole('dialog', { name: 'Draw' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Drawing' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
   });
 
   it('inserts super-pasted image paths as plain text in rendered mode', async () => {
