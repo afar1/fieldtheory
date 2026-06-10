@@ -1,4 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import {
+  BROWSER_LIBRARY_RENDERER_STORAGE_KEYS,
+  hydrateMissingBrowserLibraryRendererStorage,
+  readBrowserLibraryRendererStorageValues,
+} from './shared/browserLibraryRendererStorage';
 
 // Define IPC channels locally to avoid import issues
 
@@ -51,50 +56,12 @@ const GazeIPCChannels = {
   SCREEN_OVERLAY_STATE_CHANGED: 'gaze:screenOverlayStateChanged',
 } as const;
 
-const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
-  'library-sort-mode',
-  'wiki-expanded-folders',
-  'wiki-recent-collapsed',
-  'library-pinned-item-ids',
-  'library-sidebar-icon-color-indices',
-  'library-sidebar-icon-color-order',
-  'library-new-doc-location',
-  'librarian-last-selection',
-  'librarian-immersive',
-  'librarian-editor-session',
-  'fieldtheory.libraryRenameTrace',
-  'fieldtheory.contentToolbar.pinnedActions.v2',
-  'librarian-text-size',
-  'librarian-typography-preset',
-  'librarian-line-height',
-  'librarian-unordered-list-marker',
-  'librarian-todo-marker',
-  'librarian-maxwell-items',
-  'librarian-html-layout-by-path',
-  'fieldtheory-line-numbers',
-  'fieldtheory-rendered-edit-click-mode',
-  'fieldtheory-text-cursor-blink',
-  'fieldtheory-rendered-text-cursor-style',
-  'fieldtheory-rendered-block-cursor-opacity',
-  'fieldtheory-shared-file-toggle-hotkey',
-  'librarian-sidebar-width',
-  'librarian-sidebar-collapsed',
-  'bookmarks-view-mode',
-  'bookmarks-show-text',
-  'commands-text-size',
-  'commands-sidebar-width',
-  'darkMode',
-  'glassEffect',
-  'accentPreset',
-  'darkModeIntensity',
-  'fieldtheory-rendered-editor-debug',
-] as const;
-
 const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
 
 function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
   const storage = (globalThis as unknown as {
     localStorage?: {
+      getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => void;
       removeItem: (key: string) => void;
     };
@@ -107,14 +74,7 @@ function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
       values?: Record<string, string | null>;
     } | null;
     if (!snapshot?.available || !snapshot.values) return;
-    for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
-      const value = snapshot.values[key];
-      if (typeof value === 'string') {
-        storage.setItem(key, value);
-      } else {
-        storage.removeItem(key);
-      }
-    }
+    hydrateMissingBrowserLibraryRendererStorage(storage, snapshot);
   } catch {
     // Best effort only; renderer-storage event sync will still catch up later.
   }
@@ -123,6 +83,7 @@ function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
 function installBrowserLibraryRendererStorageForwarding(): void {
   const storage = (globalThis as unknown as {
     localStorage: {
+      getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => void;
       removeItem: (key: string) => void;
     };
@@ -145,8 +106,23 @@ function installBrowserLibraryRendererStorageForwarding(): void {
   };
 }
 
+function flushBrowserLibraryRendererStorageToBridge(): void {
+  const storage = (globalThis as unknown as {
+    localStorage?: {
+      getItem: (key: string) => string | null;
+    };
+  }).localStorage;
+  if (!storage) return;
+
+  const values = readBrowserLibraryRendererStorageValues(storage);
+  for (const [key, value] of Object.entries(values)) {
+    ipcRenderer.send('browser-library:renderer-storage-changed', { key, value });
+  }
+}
+
 hydrateBrowserLibraryRendererStorageBeforeAppBoot();
 installBrowserLibraryRendererStorageForwarding();
+flushBrowserLibraryRendererStorageToBridge();
 
 const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
