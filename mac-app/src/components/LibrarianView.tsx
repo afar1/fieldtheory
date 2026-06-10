@@ -3866,6 +3866,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const focusChromeVisualOpacity = !focusChromeUsesProximityFade || focusChromePinnedVisible
     ? 1
     : focusChromeProximityOpacity;
+  const focusStandaloneImmersiveOpacity = focusChromeUsesProximityFade
+    ? 0.6 + (focusChromeProximityOpacity * 0.4)
+    : 1;
   const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
   const focusChromeScopedItemOpacity = getFocusChromeScopedItemOpacity({
     focusChromeActive,
@@ -4534,6 +4537,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFocusChromeActiveChange?.(active && focusChromeActive);
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    const visible = !active || !focusChromeActive || focusChromeProximityOpacity >= 0.95;
+    window.librarianAPI?.setWindowButtonVisibility?.(visible);
+  }, [active, focusChromeActive, focusChromeProximityOpacity]);
+
+  useEffect(() => {
+    return () => {
+      window.librarianAPI?.setWindowButtonVisibility?.(true);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     let frame: number | null = null;
@@ -11265,7 +11279,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 />
               )}
               {focusStandaloneImmersiveVisible && (
-                <div style={{ marginLeft: 'auto', opacity: 1, pointerEvents: 'auto' }}>
+                <div style={{ marginLeft: 'auto', opacity: focusStandaloneImmersiveOpacity, pointerEvents: 'auto' }}>
                   <ImmersiveToggle
                     isFullScreen={isFullScreen || focusImmersive}
                     onToggle={toggleFocusChromeShortcut}
