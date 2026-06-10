@@ -4015,6 +4015,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
+  const [wikiSelectedPageLoading, setWikiSelectedPageLoading] = useState<boolean>(() => initialSelection?.type === 'wiki');
   // Local agent kickoff modal — opened by the toolbar agent button. Dispatches
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
@@ -4049,6 +4050,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
+    setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
   }, []);
 
@@ -4068,6 +4070,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemType('external');
     setSelectedPath(null);
     setWikiSelectedRelPath(null);
+    setWikiSelectedPageLoading(false);
     setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(file.path, 'external')));
     void window.recentAPI?.visit({
       kind: 'external',
@@ -4084,6 +4087,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
+    setWikiSelectedPageLoading(true);
     setSelectedPath(null);
     setExternalOpenFile(null);
   }, []);
@@ -4127,6 +4131,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemType('bookmarks');
     setSelectedPath(null);
     setWikiSelectedRelPath(null);
+    setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
     setContentMode('rendered');
   }, []);
@@ -4770,6 +4775,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
+  const showWikiSelectedPageLoadingShell =
+    selectedItemType === 'wiki' &&
+    Boolean(wikiSelectedRelPath) &&
+    wikiSelectedPageLoading &&
+    !activeReading;
   useLayoutEffect(() => {
     pendingScrollRatioRef.current = null;
     if (contentScrollRef.current) {
@@ -4817,6 +4827,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedReading(null);
     setWikiSelectedRelPath(null);
     setWikiSelectedPage(null);
+    setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
     setShareStatus(null);
     setLinkCopied(false);
@@ -9364,9 +9375,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
 
   useEffect(() => {
-    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); return; }
+    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); setWikiSelectedPageLoading(false); return; }
+    let cancelled = false;
+    setWikiSelectedPageLoading(true);
     (async () => {
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (cancelled) return;
       if (page) {
         if (page.relPath !== wikiSelectedRelPath) {
           setWikiSelectedRelPath(page.relPath);
@@ -9385,7 +9399,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         // the previous page, which would look like "the link did nothing".
         setWikiSelectedPage(null);
       }
+      setWikiSelectedPageLoading(false);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [wikiSelectedRelPath]);
 
   useEffect(() => {
@@ -11953,6 +11971,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               </>
             )}
           </div>
+        ) : showWikiSelectedPageLoadingShell ? (
+          <div
+            aria-label="Loading selected file"
+            data-ft-librarian-document-loading="true"
+            style={{
+              width: '100%',
+              height: '100%',
+            }}
+          />
         ) : (
           <div
             style={{

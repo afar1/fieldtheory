@@ -2252,6 +2252,31 @@ describe('BrowserLibraryApp', () => {
     await waitFor(() => expect(screen.getByText('focus-opacity:0')).toBeTruthy());
   });
 
+  it('starts the Library sidebar collapsed from persisted preference on the first render', async () => {
+    window.localStorage.setItem('librarian-sidebar-collapsed', '1');
+    vi.mocked(window.localStorage.setItem).mockClear();
+    const ThemeProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const LibrarianView = (props: { sidebarCollapsed?: boolean }) => (
+      <div data-testid="library-view">
+        <span>{props.sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-open'}</span>
+      </div>
+    );
+    const CommandsView = () => <div data-testid="commands-view">Commands</div>;
+
+    render(
+      <BrowserLibraryApp
+        LibrarianView={LibrarianView}
+        CommandsView={CommandsView}
+        ThemeProvider={ThemeProvider}
+      />,
+    );
+
+    expect(await screen.findByTestId('library-view')).toBeTruthy();
+    expect(screen.getByText('sidebar-collapsed')).toBeTruthy();
+    expect(screen.queryByText('sidebar-open')).toBeNull();
+    expect(window.localStorage.setItem).not.toHaveBeenCalledWith('librarian-sidebar-collapsed', '1');
+  });
+
   it('checks pending native auto-open readings without continuous polling', async () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval');
     Object.defineProperty(document, 'visibilityState', {
