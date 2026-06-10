@@ -2,7 +2,7 @@ import fs from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer } from './browserHelperServer';
 import { getLocalImageCacheHeaders } from './localImageProtocol';
@@ -35,7 +35,11 @@ type TestResponse = {
 async function request(url: string, options: { method?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<TestResponse> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const body = options.body === undefined ? null : JSON.stringify(options.body);
+    const body = Buffer.isBuffer(options.body)
+      ? options.body
+      : options.body === undefined
+        ? null
+        : Buffer.from(JSON.stringify(options.body));
     const req = http.request({
       method: options.method ?? 'GET',
       hostname: parsed.hostname,
@@ -43,7 +47,7 @@ async function request(url: string, options: { method?: string; headers?: Record
       path: `${parsed.pathname}${parsed.search}`,
       headers: {
         ...(options.headers ?? {}),
-        ...(body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body).toString() } : {}),
+        ...(body ? { 'Content-Type': Buffer.isBuffer(options.body) ? 'application/octet-stream' : 'application/json', 'Content-Length': body.length.toString() } : {}),
       },
     }, (res) => {
       const chunks: Buffer[] = [];
@@ -1578,23 +1582,77 @@ describe('BrowserHelperServer', () => {
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
       body: { text: 'Copy me' },
     });
-    const pasted = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file`, {
+    const pasted = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file?name=${encodeURIComponent('paste.png')}&type=${encodeURIComponent('image/png')}`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { name: 'paste.png', type: 'image/png', data: [137, 80, 78, 71] },
+      body: Buffer.from([137, 80, 78, 71]),
     });
 
     expect(imagePath.body.path).toBe('/tmp/current-clipboard.png');
     expect(copiedText.body.result).toEqual({ success: true });
     expect(pasted.body.path).toBe('/tmp/pasted-image.png');
-    expect(calls).toEqual([
-      ['text', 'Copy me'],
-      {
-        name: 'paste.png',
-        type: 'image/png',
-        data: Uint8Array.from([137, 80, 78, 71]),
+    expect(calls[0]).toEqual(['text', 'Copy me']);
+    expect(calls[1]).toMatchObject({ name: 'paste.png', type: 'image/png' });
+    expect(Buffer.isBuffer((calls[1] as { data: unknown }).data)).toBe(true);
+    expect(Array.from((calls[1] as { data: Buffer }).data)).toEqual([137, 80, 78, 71]);
+  });
+
+  it('bridges pasted image files as binary body with metadata outside JSON arrays', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const calls: unknown[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        savePastedImageFile: (file) => {
+          calls.push(file);
+          return '/tmp/pasted-image.jpg';
+        },
       },
-    ]);
+    });
+    servers.push(server);
+    const address = await server.start();
+    const largeImage = Buffer.alloc(1024 * 1024, 7);
+
+    const pasted = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file?token=test-token&name=${encodeURIComponent('Phone Photo.jpg')}&type=${encodeURIComponent('image/jpeg')}`, {
+      method: 'POST',
+      body: largeImage,
+    });
+
+    expect(pasted.body.path).toBe('/tmp/pasted-image.jpg');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ name: 'Phone Photo.jpg', type: 'image/jpeg' });
+    expect(Buffer.isBuffer((calls[0] as { data: unknown }).data)).toBe(true);
+    expect((calls[0] as { data: Buffer }).data.length).toBe(largeImage.length);
+  });
+
+  it('rejects HEIC and HEIF pasted image files with a clear error before caching', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
+    const savePastedImageFile = vi.fn(() => '/tmp/pasted-image.heic');
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: { savePastedImageFile },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const heic = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file?token=test-token&name=${encodeURIComponent('IMG_0001.HEIC')}&type=${encodeURIComponent('image/heic')}`, {
+      method: 'POST',
+      body: Buffer.from([1, 2, 3, 4]),
+    });
+    const heif = await request(`http://${address.host}:${address.port}/native/clipboard/pasted-image-file?token=test-token&name=${encodeURIComponent('IMG_0002.HEIF')}&type=${encodeURIComponent('image/heif')}`, {
+      method: 'POST',
+      body: Buffer.from([1, 2, 3, 4]),
+    });
+
+    expect(heic.status).toBe(415);
+    expect(heic.body.error).toContain('image/heic is not supported');
+    expect(heif.status).toBe(415);
+    expect(heif.body.error).toContain('image/heif is not supported');
+    expect(savePastedImageFile).not.toHaveBeenCalled();
   });
 
   it('bridges rendered editor diagnostics through the native bridge', async () => {
