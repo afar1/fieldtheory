@@ -122,6 +122,7 @@ import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
+import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
@@ -7479,11 +7480,22 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
   });
 
-  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): string | null => {
+  ipcMain.handle('library:moveItem', async (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> => {
     if (!librarianManager) return null;
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return null;
+    }
+    if (isMoveIntoRiver(kind, sourceRelPath, targetDirRelPath)) {
+      refreshFieldTheorySyncServices();
+      if (!sharedSyncService || !canUseSharedFeatures()) return null;
+      return moveLibraryFileIntoRiver({
+        librarianManager,
+        sharedSyncService,
+        rootPath,
+        sourceRelPath,
+        targetRootPath,
+      });
     }
     return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
   });

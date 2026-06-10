@@ -318,6 +318,166 @@ describe('SharedSyncService cache behavior', () => {
     expect(fs.existsSync(sharedFilesRoot())).toBe(true);
   });
 
+  it('keeps River available from cached team metadata when team lookup fails', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'Plan AF.md'), [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "document"',
+      'shared_team_id: "owner-1"',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+    const authManager = {
+      getSupabaseClient: () => ({}),
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
+      available: true,
+      canWrite: false,
+      hasTeamMembers: true,
+      currentTeamScopeUserId: 'owner-1',
+    });
+  });
+
+  it('does not use cached team metadata as write permission when team lookup fails', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Plan AF.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "document"',
+      'shared_team_id: "owner-1"',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+    const fromCalls: string[] = [];
+    const supabase = {
+      from(table: string) {
+        fromCalls.push(table);
+        return {};
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const service = new SharedSyncService(authManager, teamService as unknown as SharedTeamService);
+
+    await expect(service.shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+    })).resolves.toEqual({ shared: false });
+    await expect(service.setPinned(cachePath, true)).resolves.toEqual({ ok: false, reason: 'not_available' });
+    expect(fromCalls).toEqual([]);
+  });
+
+  it('pulls River rows using cached team scope when team lookup fails', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'Old AF.md'), [
+      '---',
+      'shared: true',
+      'shared_id: "old-shared"',
+      'shared_type: "document"',
+      'shared_team_id: "owner-1"',
+      '---',
+      '',
+      'Old',
+    ].join('\n'));
+    const eqCalls: Array<{ field: string; value: unknown }> = [];
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        eq(field: string, value: unknown) {
+          eqCalls.push({ field, value });
+          return this;
+        },
+        async is() {
+          return {
+            data: [{
+              id: 'shared-2',
+              team_scope_user_id: 'owner-1',
+              kind: 'document',
+              path: 'Docs/Plan.md',
+              title: 'Plan',
+              content: 'Fresh body\n',
+              content_hash: null,
+              client_id: 'shared-client',
+              client_created_at_ms: 1,
+              created_by: 'user-1',
+              updated_by: 'user-1',
+              deleted_at: null,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-02T00:00:00Z',
+              original_source_path: 'scratchpad/Plan.md',
+              shared_name: 'Plan',
+              author_initials: 'AF',
+              author_callsign: 'afar',
+              revision: 2,
+            }],
+            error: null,
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 1,
+      removed: 1,
+      created: 0,
+      errors: [],
+    });
+    expect(eqCalls).toContainEqual({ field: 'team_scope_user_id', value: 'owner-1' });
+    expect(fs.readFileSync(path.join(root, 'Plan AF.md'), 'utf-8')).toContain('Fresh body');
+  });
+
   it('removes stale River cache files after a team document realtime change', async () => {
     const root = sharedFilesRoot();
     fs.mkdirSync(root, { recursive: true });
@@ -327,6 +487,7 @@ describe('SharedSyncService cache behavior', () => {
       'shared: true',
       'shared_id: "shared-removed"',
       'shared_type: "document"',
+      'shared_team_id: "owner-1"',
       '---',
       '',
       'Body',
@@ -357,9 +518,10 @@ describe('SharedSyncService cache behavior', () => {
     } as unknown as AuthManager;
     const teamService = {
       getTeamState: async () => ({
-        available: true,
-        currentTeamScopeUserId: 'user-1',
-        isOwner: true,
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
         members: [],
         pendingIncoming: [],
         pendingOutgoing: [],
@@ -380,14 +542,14 @@ describe('SharedSyncService cache behavior', () => {
       expect(fs.existsSync(cachePath)).toBe(false);
     });
 
-    expect(supabase.channel).toHaveBeenCalledWith('shared-team-documents:user-1');
+    expect(supabase.channel).toHaveBeenCalledWith('shared-team-documents:owner-1');
     expect(channel.on).toHaveBeenCalledWith(
       'postgres_changes',
       {
         event: '*',
         schema: 'public',
         table: 'team_documents',
-        filter: 'team_scope_user_id=eq.user-1',
+        filter: 'team_scope_user_id=eq.owner-1',
       },
       expect.any(Function),
     );
@@ -397,7 +559,7 @@ describe('SharedSyncService cache behavior', () => {
         event: '*',
         schema: 'public',
         table: 'team_document_pins',
-        filter: 'team_scope_user_id=eq.user-1',
+        filter: 'team_scope_user_id=eq.owner-1',
       },
       expect.any(Function),
     );
