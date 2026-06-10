@@ -119,7 +119,7 @@ const LOCAL_LLM_MODELS = {
 export type LocalLlmModelId = keyof typeof LOCAL_LLM_MODELS;
 const LOCAL_LLM_MODEL_IDS = Object.keys(LOCAL_LLM_MODELS) as LocalLlmModelId[];
 
-export const DEFAULT_LOCAL_LLM_MODEL: LocalLlmModelId = 'gemma-4-E4B-it-Q4_K_M';
+export const DEFAULT_LOCAL_LLM_MODEL: LocalLlmModelId = 'gemma-4-12B-it-Q4_K_M';
 
 export function isLocalLlmModelId(value: unknown): value is LocalLlmModelId {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LOCAL_LLM_MODELS, value);

@@ -273,6 +273,9 @@ interface Preferences {
   // Maxwell local command memory. Content lives in maxwell/memory.md.
   maxwellMemoryEnabled?: boolean;
 
+  // Selected local command model. Kept separate from transcription selectedModel.
+  localLlmSelectedModel?: string;
+
   // Maxwell meeting summaries - user-customizable prompt/style contract.
   meetingSummaryPrompt?: string;
 
@@ -436,6 +439,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Maxwell memory is explicit, visible, and opt-out.
   maxwellMemoryEnabled: true,
+
+  // Local command model defaults to the larger local Gemma option.
+  localLlmSelectedModel: 'gemma-4-12B-it-Q4_K_M',
 
   // Meeting summary prompt defaults to preserving the note as the source of truth.
   meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT,
