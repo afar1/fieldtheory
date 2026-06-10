@@ -116,6 +116,14 @@ export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH = '4.2em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP = '0.15em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT = '0.25em';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH = `calc(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH} + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_GAP})`;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET = `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX = 20;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX = 21;
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_SHELL_ATTR = 'data-ft-line-number-shell';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_GUTTER_ATTR = 'data-ft-line-number-gutter';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR = '--ft-line-number-color';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR = '--ft-line-number-opacity';
+export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_COLOR_VAR = '--ft-selected-line-number-color';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -497,8 +505,16 @@ function isLineElementSelected(view: EditorView, lineElement: HTMLElement | unde
   return doesBrowserSelectionIntersectElement(view.dom.ownerDocument.getSelection(), lineElement);
 }
 
-function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineNumberOverlayRow[]; signature: string } {
-  const editorRect = view.dom.getBoundingClientRect();
+function getMarkdownCodeEditorLineNumberOverlayHost(view: EditorView): HTMLElement {
+  const shell = view.dom.closest(`[${MARKDOWN_CODE_EDITOR_LINE_NUMBER_SHELL_ATTR}="true"]`);
+  return shell?.querySelector<HTMLElement>(`[${MARKDOWN_CODE_EDITOR_LINE_NUMBER_GUTTER_ATTR}="true"]`) ?? view.dom;
+}
+
+function buildVisualLineNumberOverlayRows(
+  view: EditorView,
+  overlayHost: HTMLElement = getMarkdownCodeEditorLineNumberOverlayHost(view),
+): { rows: VisualLineNumberOverlayRow[]; signature: string } {
+  const overlayHostRect = overlayHost.getBoundingClientRect();
   const lineHeight = getMeasuredEditorLineHeight(view);
   const blocks = view.viewportLineBlocks;
   const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
@@ -531,13 +547,13 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
       const selected = rowSelectionState[rowIndex] ?? false;
       rows.push({
         number: String(visualLineNumber),
-        top: top - editorRect.top,
+        top: top - overlayHostRect.top,
         selected,
       });
       visualLineNumber += 1;
     }
     signatureParts.push(`${line.from}:${rowTops.map((top, rowIndex) => (
-      `${Math.round(top - editorRect.top)}:${rowSelectionState[rowIndex] ? 'selected' : 'plain'}`
+      `${Math.round(top - overlayHostRect.top)}:${rowSelectionState[rowIndex] ? 'selected' : 'plain'}`
     )).join(',')}`);
   }
 
@@ -583,18 +599,51 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
     private readonly hitArea: HTMLElement;
     private readonly view: EditorView;
     private readonly handleSelectionChange: () => void;
+    private readonly handleHitAreaMouseDown: (event: MouseEvent) => void;
+    private lineNumberSelectionCleanup: (() => void) | null = null;
     private pendingMeasure = false;
     private signature = '';
 
     constructor(view: EditorView) {
       this.view = view;
+      const overlayHost = getMarkdownCodeEditorLineNumberOverlayHost(view);
       this.hitArea = document.createElement('div');
       this.hitArea.className = MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS;
-      view.dom.appendChild(this.hitArea);
+      Object.assign(this.hitArea.style, {
+        position: 'absolute',
+        left: '0',
+        top: '0',
+        bottom: '0',
+        width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
+        cursor: 'text',
+        pointerEvents: 'auto',
+        zIndex: String(MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX),
+      });
+      overlayHost.appendChild(this.hitArea);
       this.dom = document.createElement('div');
       this.dom.className = 'cm-ft-lineNumberOverlay';
-      view.dom.appendChild(this.dom);
+      Object.assign(this.dom.style, {
+        position: 'absolute',
+        left: '0',
+        top: '0',
+        width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_WIDTH,
+        color: `var(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR})`,
+        opacity: `var(${MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR})`,
+        fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+        fontSize: '0.78em',
+        pointerEvents: 'none',
+        zIndex: String(MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX),
+      });
+      overlayHost.appendChild(this.dom);
       this.handleSelectionChange = () => this.scheduleMeasure(this.view);
+      this.handleHitAreaMouseDown = (event) => {
+        const cleanup = startMarkdownCodeEditorLineNumberSelection(this.view, event);
+        if (!cleanup) return;
+        this.lineNumberSelectionCleanup?.();
+        this.lineNumberSelectionCleanup = cleanup;
+        event.stopPropagation();
+      };
+      this.hitArea.addEventListener('mousedown', this.handleHitAreaMouseDown);
       view.dom.ownerDocument.addEventListener('selectionchange', this.handleSelectionChange);
       this.scheduleMeasure(view);
     }
@@ -611,6 +660,8 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
 
     destroy() {
       this.view.dom.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange);
+      this.hitArea.removeEventListener('mousedown', this.handleHitAreaMouseDown);
+      this.lineNumberSelectionCleanup?.();
       this.hitArea.remove();
       this.dom.remove();
     }
@@ -618,8 +669,9 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
     private scheduleMeasure(view: EditorView): void {
       if (this.pendingMeasure) return;
       this.pendingMeasure = true;
+      const overlayHost = getMarkdownCodeEditorLineNumberOverlayHost(view);
       view.requestMeasure({
-        read: (measuredView) => buildVisualLineNumberOverlayRows(measuredView),
+        read: (measuredView) => buildVisualLineNumberOverlayRows(measuredView, overlayHost),
         write: (result, measuredView) => {
           this.pendingMeasure = false;
           if (result.signature === this.signature) return;
@@ -637,6 +689,19 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
           ? `cm-ft-lineNumberOverlayNumber ${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS}`
           : 'cm-ft-lineNumberOverlayNumber';
         element.textContent = row.number;
+        Object.assign(element.style, {
+          position: 'absolute',
+          right: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_RIGHT,
+          height: 'var(--ft-line-number-row-height)',
+          lineHeight: 'var(--ft-line-number-row-height)',
+          textAlign: 'right',
+          fontVariantNumeric: 'tabular-nums',
+        });
+        if (row.selected) {
+          element.style.color = `var(${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_COLOR_VAR})`;
+          element.style.opacity = '1';
+          element.style.fontWeight = '600';
+        }
         element.style.top = `${row.top}px`;
         fragment.appendChild(element);
       }
@@ -1564,6 +1629,29 @@ export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
+export function getRenderedMarkdownTaskMarkerDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; insert: string; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)(?:[-*+]\s*)?\[[ xX]?\](\s+)(.+)$/.exec(lineText);
+  if (!taskMatch) return null;
+  const markerPrefixLength = taskMatch[0].length - taskMatch[3].length;
+  const bodyStart = lineStart + markerPrefixLength;
+  if (caret !== bodyStart) return null;
+
+  const indentation = taskMatch[1];
+  const selection = lineStart + indentation.length;
+  return {
+    from: lineStart,
+    to: bodyStart,
+    insert: indentation,
+    selection,
+  };
+}
+
 export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
   const clampedOffset = Math.max(0, Math.min(value.length, offset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, clampedOffset);
@@ -1613,6 +1701,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if (input.inputType === 'deleteContentBackward' && !input.isComposing) {
     const value = view.state.doc.toString();
+    const taskMarkerEdit = getRenderedMarkdownTaskMarkerDeleteBackwardEdit(value, selection.from);
+    if (taskMarkerEdit) {
+      view.dispatch({
+        changes: { from: taskMarkerEdit.from, to: taskMarkerEdit.to, insert: taskMarkerEdit.insert },
+        selection: { anchor: taskMarkerEdit.selection, head: taskMarkerEdit.selection },
+      });
+      return true;
+    }
     const emptyTaskEdit = getRenderedMarkdownEmptyTaskDeleteBackwardEdit(value, selection.from);
     if (emptyTaskEdit) {
       view.dispatch({
@@ -2918,6 +3014,18 @@ export function getMarkdownCodeEditorSelectionDrawConfig(blinkCursor: boolean): 
   return { cursorBlinkRate: blinkCursor ? MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS : 0 };
 }
 
+export function getMarkdownCodeEditorLineNumberRowHeight(
+  fontSize: number | string,
+  lineHeight: number | string,
+): string {
+  const fontSizeNumber = typeof fontSize === 'number' ? fontSize : Number.parseFloat(String(fontSize));
+  const lineHeightNumber = typeof lineHeight === 'number' ? lineHeight : Number.parseFloat(String(lineHeight));
+  if (Number.isFinite(fontSizeNumber) && Number.isFinite(lineHeightNumber)) {
+    return `${fontSizeNumber * lineHeightNumber}px`;
+  }
+  return typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
+}
+
 export function getMarkdownCodeEditorSelectionBackground(
   isDark: boolean,
   presentation: MarkdownCodeEditorPresentation,
@@ -3099,11 +3207,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
       const lineHeightCss = typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
-      const fontSizeNumber = typeof fontSize === 'number' ? fontSize : Number.parseFloat(String(fontSize));
-      const lineHeightNumber = typeof lineHeight === 'number' ? lineHeight : Number.parseFloat(String(lineHeight));
-      const lineNumberRowHeight = Number.isFinite(fontSizeNumber) && Number.isFinite(lineHeightNumber)
-        ? `${fontSizeNumber * lineHeightNumber}px`
-        : lineHeightCss;
+      const lineNumberRowHeight = getMarkdownCodeEditorLineNumberRowHeight(fontSize, lineHeight);
       const isRenderedPresentation = presentation === 'rendered';
       const cursorAnimationStyle = getMarkdownCodeEditorCursorAnimationStyle(blinkCursor);
       const cursorShapeStyle = getMarkdownCodeEditorCursorShapeStyle(
@@ -3122,9 +3226,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             backgroundColor: background ?? 'transparent',
             fontFamily,
             fontSize: fontSizePx,
-            marginLeft: lineNumbersMode === 'hidden' ? '0' : `calc(-1 * ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
-            paddingLeft: lineNumbersMode === 'hidden' ? '0' : MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
-            width: lineNumbersMode === 'hidden' ? '100%' : `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`,
+            marginLeft: '0',
+            paddingLeft: '0',
+            width: '100%',
             '--ft-line-number-row-height': lineNumberRowHeight,
           },
           '.cm-scroller': {
@@ -3198,7 +3302,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
             fontSize: '0.78em',
             pointerEvents: 'none',
-            zIndex: 2,
+            zIndex: MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
           },
           '.cm-ft-lineNumberSelectionHitArea': {
             position: 'absolute',
@@ -3208,7 +3312,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             width: MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
             cursor: 'text',
             pointerEvents: isRenderedPresentation && lineNumbersMode !== 'hidden' ? 'auto' : 'none',
-            zIndex: 1,
+            zIndex: MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
           },
           '.cm-ft-lineNumberOverlayNumber': {
             position: 'absolute',
@@ -4034,19 +4138,70 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       [presentation],
     );
 
+    const lineNumbersVisible = lineNumbersMode !== 'hidden';
+    const lineNumberColor = mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.4)' : 'rgba(17,17,17,0.36)');
+    const lineNumberOpacity = lineNumbersMode === 'faded' ? 0.5 : 0.82;
+    const selectedLineNumberColor = theme.isDark ? 'rgba(255,255,255,0.84)' : 'rgba(17,17,17,0.82)';
+    const lineNumberRowHeight = getMarkdownCodeEditorLineNumberRowHeight(fontSize, lineHeight);
+    const outerEditorStyle: React.CSSProperties = {
+      height: '100%',
+      minHeight: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      ...style,
+      width: lineNumbersVisible ? `calc(100% + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})` : '100%',
+      marginLeft: lineNumbersVisible ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET : '0',
+    };
+    const lineNumberShellStyle: React.CSSProperties & Record<string, string | number> = {
+      width: '100%',
+      height: '100%',
+      minHeight: 0,
+      marginLeft: '0',
+      display: 'grid',
+      gridTemplateColumns: lineNumbersVisible
+        ? `${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH} minmax(0, 1fr)`
+        : 'minmax(0, 1fr)',
+      alignItems: 'stretch',
+      '--ft-line-number-row-height': lineNumberRowHeight,
+      [MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR]: lineNumberColor,
+      [MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR]: String(lineNumberOpacity),
+      [MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_COLOR_VAR]: selectedLineNumberColor,
+    };
+
     return (
       <div
-        ref={containerRef}
         data-ft-quality-editor={presentation === 'rendered' ? 'rendered' : 'markdown'}
-        style={{
-          width: '100%',
-          height: '100%',
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          ...style,
-        }}
-      />
+        style={outerEditorStyle}
+      >
+        <div
+          data-ft-line-number-shell="true"
+          style={lineNumberShellStyle}
+        >
+          {lineNumbersVisible && (
+            <div
+              data-ft-line-number-gutter="true"
+              aria-hidden="true"
+              style={{
+                position: 'relative',
+                minWidth: 0,
+                minHeight: 0,
+                height: '100%',
+              }}
+            />
+          )}
+          <div
+            ref={containerRef}
+            data-ft-codemirror-host="true"
+            style={{
+              minWidth: 0,
+              minHeight: 0,
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          />
+        </div>
+      </div>
     );
   },
 );
