@@ -1081,6 +1081,53 @@ describe('LibrarianView render', () => {
     expect(getHoverStrip()).toBeTruthy();
   });
 
+  it('uses focus chrome proximity for the standalone immersive button and native window buttons', async () => {
+    const relPath = 'scratchpad/focus-chrome';
+    mockStoredWikiSelection(relPath);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'focus-chrome',
+      title: 'Focus Chrome',
+      lastUpdated: 1,
+      content: 'Focus body',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'focus-chrome' },
+    });
+
+    const { rerender, unmount } = render(
+      <LibrarianView
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0}
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Focus body');
+    const immersiveButton = screen.getByRole('button', { name: 'Exit immersive view' });
+    expect((immersiveButton.parentElement as HTMLElement).style.opacity).toBe('0.6');
+    await waitFor(() => {
+      expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(false);
+    });
+
+    rerender(
+      <LibrarianView
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={1}
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    expect((immersiveButton.parentElement as HTMLElement).style.opacity).toBe('1');
+    await waitFor(() => {
+      expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(true);
+    });
+
+    unmount();
+    expect(window.librarianAPI!.setWindowButtonVisibility).toHaveBeenLastCalledWith(true);
+  });
+
   function pasteText(target: HTMLElement, text: string): void {
     fireEvent.paste(target, {
       clipboardData: {
@@ -1149,6 +1196,7 @@ describe('LibrarianView render', () => {
         onReadingRemoved: vi.fn(() => () => {}),
         onSetFullscreen: vi.fn(() => () => {}),
         setMarkdownEditorFocused: vi.fn(),
+        setWindowButtonVisibility: vi.fn(),
       },
     });
     Object.defineProperty(window, 'wikiAPI', {

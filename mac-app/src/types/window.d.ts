@@ -1889,6 +1889,7 @@ interface LibrarianAPI {
   onReplaceSelectedMarkdownText?: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   setImmersiveDismissable: (dismissable: boolean) => void;
+  setWindowButtonVisibility?: (visible: boolean) => void;
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;
   // Content guidance customization
   getDefaultContentGuidance: () => Promise<string>;
