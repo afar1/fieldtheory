@@ -3171,19 +3171,35 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
-  it('keeps combined top-level sidebar nodes alphabetical in date mode', () => {
+  it('sorts combined top-level sidebar nodes by contained timestamps in date mode', () => {
     const result = orderTopLevelSidebarNodes([
-      dir('scratchpad'),
-      dir('plans'),
-      dir('debates'),
-      dir('entries'),
+      dir('scratchpad', [file('scratchpad-note', 40)]),
+      dir('plans', [file('plans-note', 10)]),
+      dir('debates', [file('debates-note', 30)]),
+      dir('entries', [file('entries-note', 20)]),
     ], 'time');
 
     expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
       'Debates',
       'Entries',
       'Plans',
-      'Scratchpad',
+    ]);
+  });
+
+  it('lets top-level date sort override pins and icon colors', () => {
+    const result = orderTopLevelSidebarNodes([
+      dir('old-pinned', [file('old-pinned-note', 10)]),
+      dir('new-unpinned', [file('new-unpinned-note', 30)]),
+      dir('middle-colored', [file('middle-colored-note', 20)]),
+    ], 'time', new Set(['/wiki::old-pinned']), {
+      '/wiki::middle-colored': 4,
+    }, [4, 0, 1, 2, 3, 5, 6]);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'New-unpinned',
+      'Middle-colored',
+      'Old-pinned',
     ]);
   });
 
