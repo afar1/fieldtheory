@@ -80,4 +80,17 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+const sandboxPreloadPath = path.join(distDir, 'preload.js');
+if (fs.existsSync(sandboxPreloadPath)) {
+  const preloadSource = fs.readFileSync(sandboxPreloadPath, 'utf8');
+  const relativeRequires = [...preloadSource.matchAll(requirePattern)].map((match) => match[1]);
+  if (relativeRequires.length > 0) {
+    console.error('Electron dist require check failed. sandbox preload must be self-contained.');
+    for (const request of relativeRequires) {
+      console.error(`- electron-dist/preload.js requires ${request}`);
+    }
+    process.exit(1);
+  }
+}
+
 console.log('Electron dist require check passed');
