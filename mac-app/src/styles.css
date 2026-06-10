@@ -43,6 +43,16 @@ input, textarea, [contenteditable="true"] {
   -webkit-user-select: text;
 }
 
+.linked-documents-section {
+  opacity: 0.65;
+  transition: opacity 140ms ease;
+}
+
+.linked-documents-section:hover,
+.linked-documents-section:focus-within {
+  opacity: 1;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: gray transparent;
