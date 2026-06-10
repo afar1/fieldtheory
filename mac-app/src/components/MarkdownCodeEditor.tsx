@@ -2033,8 +2033,15 @@ export function getRenderedMarkdownVerticalNavigationEdit(
   value: string,
   targetOffset: number,
 ): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, targetOffset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
   const bodyStart = getRenderedMarkdownBlockBodyStartAtOffset(value, targetOffset);
-  return bodyStart !== null && targetOffset < bodyStart ? { selection: bodyStart } : null;
+  if (bodyStart === null) return null;
+  if (caret < bodyStart) return { selection: bodyStart };
+  const listBodyStart = getRenderedMarkdownListBodyStartForLine(value, lineStart);
+  return listBodyStart === bodyStart && caret === bodyStart && bodyStart === lineEnd
+    ? { selection: bodyStart }
+    : null;
 }
 
 export function getMarkdownListMarkerProtectedDeleteBackwardEdit(
@@ -2128,14 +2135,22 @@ export function handleRenderedMarkdownEditorCommandArrow(view: EditorView, direc
   return true;
 }
 
-export function handleRenderedMarkdownEditorArrowDown(view: EditorView): boolean {
+export function handleRenderedMarkdownEditorVerticalArrow(view: EditorView, direction: 'up' | 'down'): boolean {
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
-  const next = view.moveVertically(selection, true);
+  const next = view.moveVertically(selection, direction === 'down');
   const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
   if (!edit) return false;
   view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
   return true;
+}
+
+export function handleRenderedMarkdownEditorArrowDown(view: EditorView): boolean {
+  return handleRenderedMarkdownEditorVerticalArrow(view, 'down');
+}
+
+export function handleRenderedMarkdownEditorArrowUp(view: EditorView): boolean {
+  return handleRenderedMarkdownEditorVerticalArrow(view, 'up');
 }
 
 export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): boolean {
@@ -2158,6 +2173,7 @@ export function handleRenderedMarkdownEditorKeyDown(view: EditorView, event: Key
   }
   if (event.key === 'ArrowRight') return handleRenderedMarkdownEditorArrowRight(view);
   if (event.key === 'ArrowLeft') return handleRenderedMarkdownEditorArrowLeft(view);
+  if (event.key === 'ArrowUp') return handleRenderedMarkdownEditorArrowUp(view);
   if (event.key === 'ArrowDown') return handleRenderedMarkdownEditorArrowDown(view);
   return false;
 }
@@ -3745,6 +3761,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                   ? handleRenderedMarkdownEditorArrowDown(view)
                   : handleMarkdownCodeEditorListArrowDown(view)
               ),
+            },
+            {
+              key: 'ArrowUp',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowUp(view) : false),
             },
             {
               key: 'ArrowLeft',
