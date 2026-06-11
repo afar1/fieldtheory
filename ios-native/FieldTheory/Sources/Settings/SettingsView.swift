@@ -97,19 +97,36 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Account") {
+                Section {
                     HStack {
                         Text("Signed in as")
                         Spacer()
                         Text(model.auth.email ?? "—")
                             .foregroundStyle(.secondary)
                     }
+                    HStack {
+                        Text("Connection")
+                        Spacer()
+                        if model.auth.sessionAlive {
+                            Label("Connected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(Theme.markRead)
+                                .font(.system(size: 14))
+                        } else {
+                            Label("Offline", systemImage: "wifi.slash")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 14))
+                        }
+                    }
                     Button("Sign out", role: .destructive) {
                         Task {
-                            await model.auth.signOut()
+                            await model.signOutCompletely()
                             dismiss()
                         }
                     }
+                } header: {
+                    Text("Account")
+                } footer: {
+                    Text("Everything works offline — reading, writing, recording, transcribing. A connection is only used to sync. Signing out removes the synced copy from this phone.")
                 }
 
                 Section {

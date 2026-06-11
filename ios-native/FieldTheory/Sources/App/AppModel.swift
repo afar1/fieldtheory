@@ -38,20 +38,16 @@ final class AppModel {
         self.sync = sync
         self.recorder = RecorderController()
 
-        var previousPhase = auth.phase
         auth.onPhaseChange = { [weak self] phase in
             guard let self else { return }
-            defer { previousPhase = phase }
             switch phase {
             case .signedIn(let userId, let email):
                 self.sync.start(userId: userId, email: email)
             case .signedOut:
+                // Session died (offline, refresh failure, revocation). Stop
+                // syncing; local data and identity stay untouched. The only
+                // wipe path is the explicit sign-out in Settings.
                 self.sync.stop()
-                // Only an actual sign-out clears data — never the initial
-                // "no session yet" event, and never a transient auth blip.
-                if case .signedIn = previousPhase {
-                    Task { await self.wipeLocalData() }
-                }
             case .loading:
                 break
             }
@@ -113,14 +109,25 @@ final class AppModel {
 #endif
     }
 
-    /// True when the main tab UI should show (signed in, or simulator preview).
+    /// True when the main tab UI should show: any persisted identity (live
+    /// session or not — the app is local-first), or simulator preview.
     var showMainUI: Bool {
+        if auth.hasIdentity { return true }
         if case .signedIn = auth.phase { return true }
 #if targetEnvironment(simulator)
         return previewMode
 #else
         return false
 #endif
+    }
+
+    /// The explicit sign-out: ends the session, clears identity, wipes the
+    /// device copy. The only road back to the login screen.
+    func signOutCompletely() async {
+        sync.stop()
+        await auth.signOut()
+        auth.clearIdentity()
+        await wipeLocalData()
     }
 
 #if targetEnvironment(simulator)
