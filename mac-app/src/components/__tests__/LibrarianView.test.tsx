@@ -1610,6 +1610,61 @@ describe('LibrarianView render', () => {
     expect(window.librarianAPI!.discoverLibrarianDirs).not.toHaveBeenCalled();
   });
 
+  it('keeps a restored wiki selection out of the empty state while the page loads', async () => {
+    const relPath = 'scratchpad/restored-delayed';
+    mockStoredWikiSelection(relPath);
+
+    let resolvePage: (page: WikiPage) => void = () => {};
+    window.wikiAPI!.getPage = vi.fn(() => new Promise<WikiPage>((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(window.wikiAPI?.getPage).toHaveBeenCalledWith(relPath);
+    });
+    expect(screen.queryByText('Select a file')).toBeNull();
+
+    await act(async () => {
+      resolvePage({
+        relPath,
+        absPath: `${testLibraryRootPath}/${relPath}.md`,
+        name: 'restored-delayed',
+        title: 'Restored Delayed',
+        lastUpdated: 1,
+        content: 'Restored delayed body',
+        documentVersion: { mtimeMs: 1, size: 21, sha256: 'restored-delayed' },
+      });
+    });
+
+    expect(await screen.findByText('Restored delayed body')).toBeTruthy();
+    expect(screen.queryByText('Select a file')).toBeNull();
+  });
+
+  it('shows the empty selection state after a missing restored wiki page resolves', async () => {
+    const relPath = 'scratchpad/missing-restored';
+    mockStoredWikiSelection(relPath);
+
+    let resolvePage: (page: WikiPage | null) => void = () => {};
+    window.wikiAPI!.getPage = vi.fn(() => new Promise<WikiPage | null>((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(window.wikiAPI?.getPage).toHaveBeenCalledWith(relPath);
+    });
+    expect(screen.queryByText('Select a file')).toBeNull();
+
+    await act(async () => {
+      resolvePage(null);
+    });
+
+    expect(await screen.findByText('Select a file')).toBeTruthy();
+  });
+
   it('shows the sidebar while Library has no selected page even when sidebar collapse is enabled', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
       path: '/tmp/library/example.md',
