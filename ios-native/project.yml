@@ -23,12 +23,24 @@ targets:
       base:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+  FieldTheoryUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: FieldTheory/UITests
+    dependencies:
+      - target: FieldTheory
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
   FieldTheory:
     type: application
     platform: iOS
     scheme:
       testTargets:
         - FieldTheoryTests
+        - FieldTheoryUITests
     sources:
       - path: FieldTheory/Sources
       - path: FieldTheory/Resources

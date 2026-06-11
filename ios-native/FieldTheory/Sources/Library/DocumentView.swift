@@ -28,6 +28,20 @@ struct DocumentView: View {
     final class ScrollTracker {
         var lastOffset: CGFloat = 0
         var pulledToDismiss = false
+        /// Chrome toggles change insets, which change the measured offset,
+        /// which would re-trigger toggles — a livelock that froze the app.
+        /// After any toggle, ignore events until the animation settles.
+        var lastToggle: CFTimeInterval = 0
+        var accumulated: CGFloat = 0
+
+        func settled() -> Bool {
+            CACurrentMediaTime() - lastToggle > 0.5
+        }
+
+        func markToggle() {
+            lastToggle = CACurrentMediaTime()
+            accumulated = 0
+        }
     }
 
     private var styling: MarkdownStyling {
@@ -154,7 +168,9 @@ struct DocumentView: View {
         .scrollIndicators(.hidden)
         // Reading chrome: scrolling down clears the deck, scrolling up
         // brings it back; one firm pull past the top closes the document.
-        // Only the rare chrome flip touches @State — never per-frame values.
+        // Toggles change insets, so the handler must (a) wait out its own
+        // animation, (b) judge direction from accumulated user travel, and
+        // (c) ignore inset-sized jumps that aren't finger scrolling.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
@@ -168,11 +184,25 @@ struct DocumentView: View {
             }
             let delta = offset - scrollTracker.lastOffset
             scrollTracker.lastOffset = offset
+
+            guard scrollTracker.settled() else { return }
+            guard abs(delta) < 100 else { return } // inset jump, not a finger
+
+            if (delta >= 0) != (scrollTracker.accumulated >= 0) {
+                scrollTracker.accumulated = 0
+            }
+            scrollTracker.accumulated += delta
+
             if offset <= 8 {
-                if chromeHidden { withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false } }
-            } else if delta > 6, !chromeHidden {
+                if chromeHidden {
+                    scrollTracker.markToggle()
+                    withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false }
+                }
+            } else if scrollTracker.accumulated > 28, !chromeHidden {
+                scrollTracker.markToggle()
                 withAnimation(.easeOut(duration: 0.2)) { chromeHidden = true }
-            } else if delta < -14, chromeHidden {
+            } else if scrollTracker.accumulated < -28, chromeHidden {
+                scrollTracker.markToggle()
                 withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false }
             }
         }
