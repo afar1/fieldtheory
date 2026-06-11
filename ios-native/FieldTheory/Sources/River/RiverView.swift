@@ -98,8 +98,9 @@ struct SwipeToTriageRow<Content: View>: View {
                 .offset(x: offset)
         }
         .gesture(
-            DragGesture(minimumDistance: 14)
+            DragGesture(minimumDistance: 14, coordinateSpace: .global)
                 .onChanged { value in
+                    guard !startedAtScreenEdge(value) else { return }
                     let dx = value.translation.width
                     guard abs(dx) > abs(value.translation.height) else { return }
                     // Ease off past the commit point so it feels weighted.
@@ -108,6 +109,7 @@ struct SwipeToTriageRow<Content: View>: View {
                     offset = (dx < 0 ? -1 : 1) * damped
                 }
                 .onEnded { value in
+                    guard !startedAtScreenEdge(value) else { return }
                     // A flick counts: blend actual travel with projected end.
                     let projected = value.translation.width + value.predictedEndTranslation.width * 0.25
                     if projected > commitDistance {
@@ -122,6 +124,13 @@ struct SwipeToTriageRow<Content: View>: View {
                     }
                 }
         )
+    }
+
+    /// Drags born in the edge strips belong to tab navigation, not the card.
+    private func startedAtScreenEdge(_ value: DragGesture.Value) -> Bool {
+        let width = UIScreen.main.bounds.width
+        return value.startLocation.x < EdgeSwipe.zoneWidth
+            || value.startLocation.x > width - EdgeSwipe.zoneWidth
     }
 
     private var reveal: some View {

@@ -4,6 +4,13 @@ enum AppTab: Hashable, CaseIterable {
     case library, river, voice
 }
 
+/// Screen-edge strips reserved for hopping between the three sections.
+/// Content gestures (river card triage, etc.) must ignore drags that
+/// start inside these zones.
+enum EdgeSwipe {
+    static let zoneWidth: CGFloat = 30
+}
+
 /// Tracks pushed reading surfaces so global edge-swipe tab switching steps
 /// aside (and the system back-swipe wins). A depth counter, not a Bool,
 /// because a push fires the new view's onAppear before the old one's
@@ -76,9 +83,9 @@ struct RootView: View {
                     guard abs(dx) > 55, abs(dx) > abs(dy) * 1.6 else { return }
                     let tabs = AppTab.allCases
                     guard let index = tabs.firstIndex(of: selectedTab) else { return }
-                    if value.startLocation.x > width - 30, dx < 0, index < tabs.count - 1 {
+                    if value.startLocation.x > width - EdgeSwipe.zoneWidth, dx < 0, index < tabs.count - 1 {
                         withAnimation { selectedTab = tabs[index + 1] }
-                    } else if value.startLocation.x < 30, dx > 0, index > 0 {
+                    } else if value.startLocation.x < EdgeSwipe.zoneWidth, dx > 0, index > 0 {
                         withAnimation { selectedTab = tabs[index - 1] }
                     }
                 }
