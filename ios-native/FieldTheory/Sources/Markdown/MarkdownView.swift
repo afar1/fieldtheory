@@ -67,6 +67,9 @@ struct MarkdownView: View {
                 .padding(.vertical, 4)
         case .table(let headers, let rows):
             tableView(headers: headers, rows: rows)
+        case .spacer(let lines):
+            Color.clear
+                .frame(height: CGFloat(lines) * styling.typography.bodySize * 1.15)
         }
     }
 

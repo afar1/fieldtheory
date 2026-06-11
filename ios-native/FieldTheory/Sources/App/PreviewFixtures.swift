@@ -8,6 +8,16 @@ enum PreviewFixtures {
         let sampleDoc = """
         # Reading on glass
 
+        Line one written on its own line
+        line two follows with a single newline
+        line three the same way — each must render on its own line
+
+        One blank line above this paragraph.
+
+
+
+        Three blank lines above this one — it should sit visibly lower.
+
         A reader is a room. The best rooms disappear: you notice the *words*, \
         not the walls. This note exists to test **bold**, *italics*, `inline code`, \
         and [links](https://example.com) in the immersive view.

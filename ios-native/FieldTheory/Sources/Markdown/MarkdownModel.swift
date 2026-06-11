@@ -11,6 +11,9 @@ enum MDBlock: Identifiable {
     case quote(blocks: [MDBlock])
     case rule
     case table(headers: [AttributedString], rows: [[AttributedString]])
+    /// Extra blank source lines between blocks, preserved as vertical space
+    /// (notes use empty lines as deliberate breathing room).
+    case spacer(lines: Int)
 
     var id: UUID { UUID() }
 }
@@ -39,7 +42,25 @@ struct MarkdownStyling {
 enum MarkdownParser {
     static func parse(_ content: String, styling: MarkdownStyling) -> [MDBlock] {
         let document = Document(parsing: content)
-        return document.children.compactMap { block(from: $0, styling: styling) }
+        var blocks: [MDBlock] = []
+        var previousEndLine: Int?
+
+        for child in document.children {
+            // One blank line is a normal paragraph break (spacing handles
+            // it); each additional blank line becomes real vertical space,
+            // like the Mac's editing surface.
+            if let start = child.range?.lowerBound.line, let prevEnd = previousEndLine {
+                let blankLines = start - prevEnd - 1
+                if blankLines >= 2 {
+                    blocks.append(.spacer(lines: blankLines - 1))
+                }
+            }
+            if let block = block(from: child, styling: styling) {
+                blocks.append(block)
+            }
+            previousEndLine = child.range?.upperBound.line ?? previousEndLine
+        }
+        return blocks
     }
 
     /// Strips YAML frontmatter (River cache files and some library docs carry it).
@@ -163,7 +184,10 @@ enum MarkdownParser {
             var next = state; next.italic = true
             result += styled("🖼 \(alt)", state: next, styling: styling, baseFont: baseFont)
         case is SoftBreak:
-            result += AttributedString(" ")
+            // Notes treat a single newline as a real line break (the Mac
+            // surface preserves it); CommonMark's space-collapse reads as a
+            // wall of text.
+            result += AttributedString("\n")
         case is LineBreak:
             result += AttributedString("\n")
         case let html as InlineHTML:
