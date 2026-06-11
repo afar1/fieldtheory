@@ -39,8 +39,24 @@ enum PreviewFixtures {
         - Triage is optional
         """
 
+        // Stress fixture: a long real-world-sized document for freeze checks.
+        let bigDoc = (1...250).map { index in
+            """
+            ## Section \(index)
+
+            A paragraph with **bold**, *italics*, `code`, and a [link](https://example.com) \
+            to keep the inline pipeline honest while we scroll through a long document.
+
+            - Point one for section \(index)
+            - [ ] An open task
+            - [x] A finished task
+
+            > A quote to break the rhythm.
+            """
+        }.joined(separator: "\n\n")
+
         for (path, content) in [
-            ("scratchpad/Reading on glass.md", sampleDoc),
+            ("scratchpad/Reading on glass.md", sampleDoc + "\n\n" + bigDoc),
             ("scratchpad/Riffs.md", secondDoc),
             ("Plans/Mobile launch.md", "# Mobile launch\n\n- [ ] Ship the river\n- [ ] Ship voice\n- [x] Build the scaffold"),
             ("artifacts/Council notes.md", "# Council notes\n\nThe council voted to keep things simple."),

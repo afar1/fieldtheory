@@ -337,7 +337,11 @@ final class LineNumberedTextView: UITextView {
         ]
         let originY = textContainerInset.top
 
-        layoutManager.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
+        // Start at the viewport, not the document head — ensuresLayout from
+        // the top would lay out the whole document on every draw.
+        let startLocation = layoutManager.textViewportLayoutController.viewportRange?.location
+
+        layoutManager.enumerateTextLayoutFragments(from: startLocation, options: [.ensuresLayout]) { fragment in
             let frame = fragment.layoutFragmentFrame
             let fragmentTop = frame.minY + originY
             guard fragmentTop <= rect.maxY + 40 else { return false }

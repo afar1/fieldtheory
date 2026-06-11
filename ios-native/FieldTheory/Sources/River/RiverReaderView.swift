@@ -137,7 +137,8 @@ struct RiverPageView: View {
 
                 MarkdownView(
                     blocks: MarkdownParser.parse(bodyContent, styling: styling),
-                    styling: styling
+                    styling: styling,
+                    lazy: true
                 )
                 .padding(.top, 4)
             }

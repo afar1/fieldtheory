@@ -19,8 +19,16 @@ struct DocumentView: View {
     @State private var editing = false
     @State private var saveTask: Task<Void, Never>?
     @State private var chromeHidden = false
-    @State private var lastScrollOffset: CGFloat = 0
-    @State private var pulledToDismiss = false
+    @State private var parsedBlocks: [MDBlock] = []
+    /// Reference type on purpose: per-frame scroll bookkeeping must not
+    /// invalidate the view (a @State write per frame re-parses the document
+    /// every frame — that was the reader freeze).
+    private let scrollTracker = ScrollTracker()
+
+    final class ScrollTracker {
+        var lastOffset: CGFloat = 0
+        var pulledToDismiss = false
+    }
 
     private var styling: MarkdownStyling {
         MarkdownStyling(
@@ -29,6 +37,11 @@ struct DocumentView: View {
             mutedColor: Theme.textMuted(colorScheme),
             accentColor: Theme.accent(model.settings.accentPreset, colorScheme)
         )
+    }
+
+    /// Everything the parsed blocks bake in; changes trigger a reparse.
+    private var stylingKey: String {
+        "\(model.settings.typographyPreset.rawValue)-\(model.settings.textSize.rawValue)-\(model.settings.lineHeight.rawValue)-\(model.settings.accentPreset.rawValue)-\(colorScheme == .dark ? "dark" : "light")"
     }
 
     var body: some View {
@@ -91,12 +104,20 @@ struct DocumentView: View {
                 text = model.library.content(of: doc) ?? ""
                 loaded = true
                 editing = startEditing
+                reparse()
                 await model.library.recordVisit(sourcePath: doc.sourcePath)
             }
         }
         .onChange(of: text) { _, _ in
             guard loaded else { return }
             scheduleSave()
+            if !editing { reparse() }
+        }
+        .onChange(of: editing) { _, isEditing in
+            if !isEditing { reparse() }
+        }
+        .onChange(of: stylingKey) { _, _ in
+            reparse()
         }
         .onAppear { readingState.enter() }
         .onDisappear {
@@ -108,8 +129,9 @@ struct DocumentView: View {
     private var readerView: some View {
         ScrollView {
             MarkdownView(
-                blocks: MarkdownParser.parse(MarkdownParser.stripFrontmatter(text), styling: styling),
+                blocks: parsedBlocks,
                 styling: styling,
+                lazy: true,
                 onToggleCheckbox: toggleCheckbox
             )
             .frame(maxWidth: 680, alignment: .leading)
@@ -132,18 +154,20 @@ struct DocumentView: View {
         .scrollIndicators(.hidden)
         // Reading chrome: scrolling down clears the deck, scrolling up
         // brings it back; one firm pull past the top closes the document.
+        // Only the rare chrome flip touches @State — never per-frame values.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
             if offset < -70 {
-                if !pulledToDismiss {
-                    pulledToDismiss = true
+                if !scrollTracker.pulledToDismiss {
+                    scrollTracker.pulledToDismiss = true
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     dismiss()
                 }
                 return
             }
-            let delta = offset - lastScrollOffset
+            let delta = offset - scrollTracker.lastOffset
+            scrollTracker.lastOffset = offset
             if offset <= 8 {
                 if chromeHidden { withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false } }
             } else if delta > 6, !chromeHidden {
@@ -151,8 +175,11 @@ struct DocumentView: View {
             } else if delta < -14, chromeHidden {
                 withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false }
             }
-            lastScrollOffset = offset
         }
+    }
+
+    private func reparse() {
+        parsedBlocks = MarkdownParser.parse(MarkdownParser.stripFrontmatter(text), styling: styling)
     }
 
     private var typographyMenu: some View {

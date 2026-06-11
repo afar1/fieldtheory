@@ -6,15 +6,24 @@ import SwiftUI
 struct MarkdownView: View {
     let blocks: [MDBlock]
     let styling: MarkdownStyling
+    /// Lazy for full documents (the reader); eager for small embeds
+    /// (quotes, river cards).
+    var lazy = false
     /// Called with the 1-based source line when a task checkbox is tapped.
     var onToggleCheckbox: ((Int) -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                blockView(block)
-                    .padding(.top, topSpacing(for: block, at: index))
-            }
+        if lazy {
+            LazyVStack(alignment: .leading, spacing: 0) { rows }
+        } else {
+            VStack(alignment: .leading, spacing: 0) { rows }
+        }
+    }
+
+    private var rows: some View {
+        ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+            blockView(block)
+                .padding(.top, topSpacing(for: block, at: index))
         }
     }
 
