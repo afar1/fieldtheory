@@ -24,6 +24,10 @@ const commandsAPI = window.commandsAPI as unknown as LauncherPreviewCommandsAPI;
 const themeAPI = window.themeAPI as unknown as LauncherPreviewThemeAPI | undefined;
 const PREVIEW_PADDING = 20;
 const COMMAND_LAUNCHER_RADIUS = 16;
+const PREVIEW_STACK_PADDING_TOP = 10;
+const PREVIEW_STACK_PADDING_BOTTOM = 14;
+const PREVIEW_FRAME_MAX_HEIGHT = `calc(100vh - ${PREVIEW_PADDING * 2}px)`;
+const PREVIEW_CONTENT_MAX_HEIGHT = `calc(100vh - ${PREVIEW_PADDING * 2 + PREVIEW_STACK_PADDING_TOP + PREVIEW_STACK_PADDING_BOTTOM}px)`;
 
 function ClipboardPreviewCard({
   title,
@@ -85,7 +89,7 @@ function ClipboardPreviewCard({
             alt=""
             style={{
               maxWidth: '100%',
-              maxHeight: '620px',
+              maxHeight: PREVIEW_CONTENT_MAX_HEIGHT,
               objectFit: 'contain',
               borderRadius: '8px',
               display: 'block',
@@ -97,7 +101,7 @@ function ClipboardPreviewCard({
           style={{
             margin: 0,
             padding: '14px',
-            maxHeight: '620px',
+            maxHeight: PREVIEW_CONTENT_MAX_HEIGHT,
             overflow: 'auto',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -109,6 +113,75 @@ function ClipboardPreviewCard({
           {content.content}
         </pre>
       )}
+    </div>
+  );
+}
+
+function PreviewStackFrame({
+  children,
+  isDark,
+}: {
+  children: React.ReactNode;
+  isDark: boolean;
+}) {
+  const lowerBackground = isDark ? 'rgba(0, 0, 0, 0.42)' : 'rgba(17, 17, 17, 0.14)';
+  const upperBackground = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.58)';
+  const border = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)';
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        maxHeight: PREVIEW_FRAME_MAX_HEIGHT,
+        minHeight: 0,
+        padding: `${PREVIEW_STACK_PADDING_TOP}px 0 ${PREVIEW_STACK_PADDING_BOTTOM}px`,
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '18px',
+          right: '18px',
+          top: '22px',
+          bottom: '2px',
+          borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
+          background: lowerBackground,
+          border: `1px solid ${border}`,
+          transform: 'translateY(12px) scale(0.94)',
+          filter: 'blur(0.2px)',
+          opacity: 0.8,
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '9px',
+          right: '9px',
+          top: '16px',
+          bottom: '7px',
+          borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
+          background: upperBackground,
+          border: `1px solid ${border}`,
+          transform: 'translateY(6px) scale(0.97)',
+          opacity: 0.9,
+        }}
+      />
+      <div
+        style={{
+          position: 'relative',
+          maxHeight: PREVIEW_CONTENT_MAX_HEIGHT,
+          minHeight: 0,
+          overflowY: 'auto',
+          overscrollBehavior: 'contain',
+          borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -180,29 +253,30 @@ function CommandLauncherPreview() {
           ref={previewRef}
           style={{
             width: '100%',
-            maxHeight: '100%',
+            maxHeight: PREVIEW_FRAME_MAX_HEIGHT,
             minHeight: 0,
-            overflowY: 'auto',
-            overscrollBehavior: 'contain',
+            overflow: 'visible',
             borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
           }}
         >
-          {preview.kind === 'bookmark' ? (
-            <BookmarkCard bookmark={preview.bookmark} isDark={isDarkMode} />
-          ) : preview.kind === 'markdown' ? (
-            <MarkdownPreviewCard
-              title={preview.title}
-              filePath={preview.filePath}
-              content={preview.content}
-              isDark={isDarkMode}
-            />
-          ) : (
-            <ClipboardPreviewCard
-              title={preview.title}
-              content={preview.content}
-              isDark={isDarkMode}
-            />
-          )}
+          <PreviewStackFrame isDark={isDarkMode}>
+            {preview.kind === 'bookmark' ? (
+              <BookmarkCard bookmark={preview.bookmark} isDark={isDarkMode} />
+            ) : preview.kind === 'markdown' ? (
+              <MarkdownPreviewCard
+                title={preview.title}
+                filePath={preview.filePath}
+                content={preview.content}
+                isDark={isDarkMode}
+              />
+            ) : (
+              <ClipboardPreviewCard
+                title={preview.title}
+                content={preview.content}
+                isDark={isDarkMode}
+              />
+            )}
+          </PreviewStackFrame>
         </div>
       )}
     </div>

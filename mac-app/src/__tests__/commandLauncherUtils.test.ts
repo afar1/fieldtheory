@@ -175,7 +175,7 @@ describe('launcher default panel helpers', () => {
     expect(getLauncherDefaultPanelSourceLabel('bookmarks')).toBe('Bookmarks');
   });
 
-  it('only lets Tab cycle idle panels when no launcher row is explicitly selected', () => {
+  it('lets Tab cycle idle panels even after a row is explicitly selected', () => {
     expect(shouldSwitchLauncherDefaultPanelOnTab({
       isRootIdleLauncher: true,
       hasExplicitSelection: false,
@@ -183,7 +183,7 @@ describe('launcher default panel helpers', () => {
     expect(shouldSwitchLauncherDefaultPanelOnTab({
       isRootIdleLauncher: true,
       hasExplicitSelection: true,
-    })).toBe(false);
+    })).toBe(true);
     expect(shouldSwitchLauncherDefaultPanelOnTab({
       isRootIdleLauncher: false,
       hasExplicitSelection: false,
