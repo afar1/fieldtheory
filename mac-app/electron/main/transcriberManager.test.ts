@@ -1487,6 +1487,35 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(pasteStack).not.toHaveBeenCalled();
   });
 
+  it('runs the pre-toggle cleanup before handling the dictation hotkey', async () => {
+    const order: string[] = [];
+    const beforeRecordingToggleHandler = vi.fn(async () => {
+      order.push('cleanup');
+    });
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {
+      order.push('meeting-stop');
+    });
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'whisper',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      beforeRecordingToggleHandler,
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: false,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(beforeRecordingToggleHandler).toHaveBeenCalledOnce();
+    expect(meetingCaptureHotkeyHandler).toHaveBeenCalledOnce();
+    expect(order).toEqual(['cleanup', 'meeting-stop']);
+  });
+
   it('ignores duplicate meeting stop hotkeys while a stop is already running', async () => {
     const meetingCaptureHotkeyHandler = vi.fn(async () => {});
     const manager: any = {
