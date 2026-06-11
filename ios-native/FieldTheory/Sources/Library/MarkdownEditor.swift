@@ -174,25 +174,67 @@ struct MarkdownEditor: UIViewRepresentable {
 
         // MARK: Toolbar
 
-        func makeToolbar() -> UIToolbar {
-            let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
-            func item(_ systemName: String, _ action: Selector) -> UIBarButtonItem {
-                UIBarButtonItem(image: UIImage(systemName: systemName), style: .plain, target: self, action: action)
-            }
-            toolbar.items = [
-                item("checkmark.square", #selector(insertCheckbox)),
-                item("list.bullet", #selector(insertBullet)),
-                item("list.number", #selector(insertNumbered)),
-                .flexibleSpace(),
-                item("bold", #selector(wrapBold)),
-                item("italic", #selector(wrapItalic)),
-                item("chevron.left.forwardslash.chevron.right", #selector(wrapCode)),
-                item("link", #selector(insertLink)),
-                .flexibleSpace(),
-                item("keyboard.chevron.compact.down", #selector(dismissKeyboard)),
-            ]
-            toolbar.sizeToFit()
-            return toolbar
+        /// A horizontally scrollable format bar (UIToolbar clips overflow),
+        /// with the keyboard-dismiss button pinned on the trailing edge.
+        func makeToolbar() -> UIView {
+            let input = UIInputView(frame: CGRect(x: 0, y: 0, width: 320, height: 48), inputViewStyle: .keyboard)
+            input.allowsSelfSizing = true
+            input.translatesAutoresizingMaskIntoConstraints = false
+            input.heightAnchor.constraint(equalToConstant: 48).isActive = true
+
+            let scroll = UIScrollView()
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            scroll.showsHorizontalScrollIndicator = false
+            scroll.alwaysBounceHorizontal = true
+            input.addSubview(scroll)
+
+            let dismiss = accessoryButton("keyboard.chevron.compact.down", #selector(dismissKeyboard))
+            dismiss.translatesAutoresizingMaskIntoConstraints = false
+            input.addSubview(dismiss)
+
+            let tools = UIStackView(arrangedSubviews: [
+                accessoryButton("checkmark.square", #selector(insertCheckbox)),
+                accessoryButton("list.bullet", #selector(insertBullet)),
+                accessoryButton("list.number", #selector(insertNumbered)),
+                accessoryButton("bold", #selector(wrapBold)),
+                accessoryButton("italic", #selector(wrapItalic)),
+                accessoryButton("chevron.left.forwardslash.chevron.right", #selector(wrapCode)),
+                accessoryButton("link", #selector(insertLink)),
+            ])
+            tools.axis = .horizontal
+            tools.spacing = 2
+            tools.translatesAutoresizingMaskIntoConstraints = false
+            scroll.addSubview(tools)
+
+            NSLayoutConstraint.activate([
+                scroll.leadingAnchor.constraint(equalTo: input.leadingAnchor, constant: 6),
+                scroll.topAnchor.constraint(equalTo: input.topAnchor),
+                scroll.bottomAnchor.constraint(equalTo: input.bottomAnchor),
+                scroll.trailingAnchor.constraint(equalTo: dismiss.leadingAnchor, constant: -4),
+
+                dismiss.trailingAnchor.constraint(equalTo: input.trailingAnchor, constant: -8),
+                dismiss.centerYAnchor.constraint(equalTo: input.centerYAnchor),
+
+                tools.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+                tools.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+                tools.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+                tools.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+                tools.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+            ])
+            return input
+        }
+
+        private func accessoryButton(_ systemName: String, _ action: Selector) -> UIButton {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(
+                systemName: systemName,
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            )
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 11, bottom: 12, trailing: 11)
+            let button = UIButton(configuration: configuration)
+            button.tintColor = .label
+            button.addTarget(self, action: action, for: .touchUpInside)
+            return button
         }
 
         @objc private func insertCheckbox() { prefixCurrentLine(with: "- [ ] ") }
