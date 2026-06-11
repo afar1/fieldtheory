@@ -29,6 +29,12 @@ struct MarkdownView: View {
 
     private func topSpacing(for block: MDBlock, at index: Int) -> CGFloat {
         guard index > 0 else { return 0 }
+        if case .spacer = block { return 0 }
+        // An explicit spacer above already carries the rhythm; keep the
+        // residual gap minimal so one blank line ≈ one empty line.
+        if case .spacer = blocks[index - 1] {
+            return styling.typography.bodySize * 0.2
+        }
         switch block {
         case .heading(let level, _):
             return level <= 2 ? styling.typography.bodySize * 1.35 : styling.typography.bodySize * 1.15
@@ -68,8 +74,9 @@ struct MarkdownView: View {
         case .table(let headers, let rows):
             tableView(headers: headers, rows: rows)
         case .spacer(let lines):
+            // One blank source line = one empty text line, like the Mac.
             Color.clear
-                .frame(height: CGFloat(lines) * styling.typography.bodySize * 1.15)
+                .frame(height: CGFloat(lines) * styling.typography.bodySize * styling.typography.lineHeightMultiple * 0.92)
         }
     }
 

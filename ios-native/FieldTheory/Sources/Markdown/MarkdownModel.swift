@@ -46,13 +46,13 @@ enum MarkdownParser {
         var previousEndLine: Int?
 
         for child in document.children {
-            // One blank line is a normal paragraph break (spacing handles
-            // it); each additional blank line becomes real vertical space,
-            // like the Mac's editing surface.
+            // Every blank source line renders as one full empty line — the
+            // Mac surface shows whitespace literally, and that rhythm is
+            // what makes notes readable.
             if let start = child.range?.lowerBound.line, let prevEnd = previousEndLine {
                 let blankLines = start - prevEnd - 1
-                if blankLines >= 2 {
-                    blocks.append(.spacer(lines: blankLines - 1))
+                if blankLines >= 1 {
+                    blocks.append(.spacer(lines: blankLines))
                 }
             }
             if let block = block(from: child, styling: styling) {
