@@ -96,8 +96,9 @@ struct ReadingTypography {
     var h2Size: CGFloat { (bodySize * 1.18).rounded() }
     var h3Size: CGFloat { bodySize }
 
-    /// Extra line spacing in points (SwiftUI lineSpacing is additive).
-    var lineSpacing: CGFloat { bodySize * (lineHeightMultiple - 1) * 0.62 }
+    /// Extra line spacing in points (SwiftUI lineSpacing is additive on top
+    /// of the font's intrinsic ~1.25em, so this lands near the Mac's total).
+    var lineSpacing: CGFloat { bodySize * (lineHeightMultiple - 1) * 0.85 }
 
     func bodyFont(weight: Font.Weight = .regular, italic: Bool = false) -> Font {
         var font = Font.custom(preset.fontFamily, size: bodySize).weight(weight)

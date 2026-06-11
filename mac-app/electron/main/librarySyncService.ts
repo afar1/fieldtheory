@@ -614,11 +614,30 @@ export class LibrarySyncService {
 
     if (rowsToUpsert.length === 0) return;
 
-    const { error } = await supabase
-      .from('library_documents')
-      .upsert(rowsToUpsert, { onConflict: 'user_id,client_id' });
+    // Chunked upserts: one oversized or rejected document must not silently
+    // block every other pending upload (which is how newly created folders
+    // stopped reaching mobile).
+    const UPSERT_CHUNK_SIZE = 20;
+    for (let i = 0; i < rowsToUpsert.length; i += UPSERT_CHUNK_SIZE) {
+      const chunk = rowsToUpsert.slice(i, i + UPSERT_CHUNK_SIZE);
+      const { error } = await supabase
+        .from('library_documents')
+        .upsert(chunk, { onConflict: 'user_id,client_id' });
+      if (!error) continue;
 
-    if (error) throw error;
+      // Retry rows individually so only the genuinely bad row is skipped,
+      // and its path is named in the log.
+      for (const row of chunk) {
+        const { error: rowError } = await supabase
+          .from('library_documents')
+          .upsert([row], { onConflict: 'user_id,client_id' });
+        if (rowError) {
+          const sourcePath = (row as { source_path?: string }).source_path ?? 'unknown';
+          result.errors.push(`Upload failed for ${sourcePath}: ${rowError.message}`);
+          log.error(`Library sync upload failed for ${sourcePath}:`, rowError.message);
+        }
+      }
+    }
   }
 
   private applyRemoteTombstones(

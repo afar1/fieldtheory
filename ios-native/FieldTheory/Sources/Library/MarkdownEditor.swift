@@ -27,7 +27,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var onEditingChanged: ((Bool) -> Void)?
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+        let textView = LineNumberedTextView()
         textView.backgroundColor = .clear
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
@@ -36,7 +36,8 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.smartQuotesType = .no
         textView.smartDashesType = .no
         textView.spellCheckingType = .yes
-        textView.textContainerInset = UIEdgeInsets(top: 18, left: 16, bottom: 140, right: 16)
+        textView.textContainerInset = UIEdgeInsets(top: 18, left: 44, bottom: 140, right: 18)
+        textView.gutterColor = UIColor(styling.mutedColor).withAlphaComponent(0.45)
         textView.delegate = context.coordinator
         textView.inputAccessoryView = context.coordinator.makeToolbar()
 
@@ -100,6 +101,11 @@ struct MarkdownEditor: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             restyle(textView)
             parent.text = textView.text
+            (textView as? LineNumberedTextView)?.invalidateLineNumbers()
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            (scrollView as? LineNumberedTextView)?.setNeedsDisplay()
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -278,6 +284,77 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 }
 
+/// UITextView with a Mac-style line-number gutter, drawn per source line
+/// using TextKit 2 layout fragments.
+final class LineNumberedTextView: UITextView {
+    var gutterColor: UIColor = .tertiaryLabel
+
+    private var lineStartOffsets: [Int] = []
+    private let numberFont = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+
+    override var text: String! {
+        didSet { invalidateLineNumbers() }
+    }
+
+    override var attributedText: NSAttributedString! {
+        didSet { invalidateLineNumbers() }
+    }
+
+    func invalidateLineNumbers() {
+        let nsText = (text ?? "") as NSString
+        var offsets: [Int] = [0]
+        nsText.enumerateSubstrings(in: NSRange(location: 0, length: nsText.length), options: [.byLines, .substringNotRequired]) { _, _, enclosingRange, _ in
+            let next = enclosingRange.location + enclosingRange.length
+            if next <= nsText.length { offsets.append(next) }
+        }
+        lineStartOffsets = offsets
+        setNeedsDisplay()
+    }
+
+    private func lineNumber(forCharacterAt offset: Int) -> Int {
+        var low = 0
+        var high = lineStartOffsets.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if lineStartOffsets[mid] <= offset { low = mid } else { high = mid - 1 }
+        }
+        return low + 1
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        super.draw(rect)
+        guard let layoutManager = textLayoutManager,
+              let contentManager = layoutManager.textContentManager else { return }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: numberFont,
+            .foregroundColor: gutterColor,
+        ]
+        let originY = textContainerInset.top
+
+        layoutManager.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
+            let frame = fragment.layoutFragmentFrame
+            let fragmentTop = frame.minY + originY
+            guard fragmentTop <= rect.maxY + 40 else { return false }
+            guard fragmentTop >= rect.minY - 40 else { return true }
+
+            let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
+            let number = "\(self.lineNumber(forCharacterAt: offset))" as NSString
+            let size = number.size(withAttributes: attributes)
+            // First text line of the fragment, right-aligned in the gutter.
+            let firstLineHeight = fragment.textLineFragments.first?.typographicBounds.height ?? size.height
+            let numberY = fragmentTop + (firstLineHeight - size.height) / 2
+            number.draw(at: CGPoint(x: 34 - size.width, y: numberY), withAttributes: attributes)
+            return true
+        }
+    }
+}
+
 /// The single-pass attributed-string styler for editing mode.
 enum MarkdownEditorStyler {
     struct ListMarkerMatch {
@@ -329,6 +406,9 @@ enum MarkdownEditorStyler {
         return NSRange(location: start, length: 3)
     }
 
+    /// How visible markdown syntax markers are while editing: ghosts, not text.
+    private static let markerAlpha: CGFloat = 0.16
+
     static func style(_ string: String, styling: MarkdownStyling) -> NSAttributedString {
         let typography = styling.typography
         let textColor = UIColor(styling.textColor)
@@ -339,9 +419,11 @@ enum MarkdownEditorStyler {
         let result = NSMutableAttributedString(string: string)
         let fullRange = NSRange(location: 0, length: result.length)
 
+        // The Mac's reading rhythm: full preset line height plus real
+        // paragraph air, so prose never reads as a wall.
         let baseParagraph = NSMutableParagraphStyle()
-        baseParagraph.lineSpacing = typography.lineSpacing
-        baseParagraph.paragraphSpacing = typography.paragraphSpacing * 0.85
+        baseParagraph.lineHeightMultiple = typography.lineHeightMultiple * 0.92
+        baseParagraph.paragraphSpacing = typography.paragraphSpacing
 
         result.addAttributes([
             .font: bodyFont,
@@ -368,14 +450,19 @@ enum MarkdownEditorStyler {
                 return
             }
 
-            // Headings
+            // Headings: bigger type, breathing room above, ghosted #
             if let match = headingRegex.firstMatch(in: line, range: lineNSRange) {
                 let level = match.range(at: 1).length
                 let size = level == 1 ? typography.h1Size : (level == 2 ? typography.h2Size : typography.h3Size)
                 let font = UIFont.variable(family: typography.preset.fontFamily, size: size, weight: .semibold)
                 result.addAttribute(.font, value: font, range: lineRange)
+                let headingParagraph = NSMutableParagraphStyle()
+                headingParagraph.lineHeightMultiple = 1.18
+                headingParagraph.paragraphSpacingBefore = typography.bodySize * (level <= 2 ? 1.0 : 0.7)
+                headingParagraph.paragraphSpacing = typography.paragraphSpacing * 0.7
+                result.addAttribute(.paragraphStyle, value: headingParagraph, range: lineRange)
                 let markerRange = NSRange(location: lineRange.location, length: match.range.length)
-                result.addAttribute(.foregroundColor, value: mutedColor.withAlphaComponent(0.55), range: markerRange)
+                result.addAttribute(.foregroundColor, value: mutedColor.withAlphaComponent(markerAlpha), range: markerRange)
                 return
             }
 
@@ -431,7 +518,12 @@ enum MarkdownEditorStyler {
             }
             for match in linkRegex.matches(in: line, range: lineNSRange) {
                 result.addAttribute(.foregroundColor, value: UIColor(Theme.link), range: mapped(match.range(at: 1)))
-                result.addAttribute(.foregroundColor, value: mutedColor.withAlphaComponent(0.6), range: mapped(match.range(at: 2)))
+                // The (url) part fades to a ghost; the words stay readable.
+                let urlStart = match.range(at: 1).location + match.range(at: 1).length
+                let urlRange = NSRange(location: urlStart, length: match.range.location + match.range.length - urlStart)
+                result.addAttribute(.foregroundColor, value: mutedColor.withAlphaComponent(markerAlpha + 0.1), range: mapped(urlRange))
+                let openBracket = NSRange(location: match.range.location, length: 1)
+                result.addAttribute(.foregroundColor, value: mutedColor.withAlphaComponent(markerAlpha), range: mapped(openBracket))
             }
             for match in wikiRegex.matches(in: line, range: lineNSRange) {
                 result.addAttribute(.foregroundColor, value: accentColor, range: mapped(match.range))
@@ -444,7 +536,7 @@ enum MarkdownEditorStyler {
     private static func dimMarkers(_ result: NSMutableAttributedString, match: NSTextCheckingResult, in lineRange: NSRange, markerLength: Int, color: UIColor) {
         let start = NSRange(location: lineRange.location + match.range.location, length: markerLength)
         let end = NSRange(location: lineRange.location + match.range.location + match.range.length - markerLength, length: markerLength)
-        result.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.5), range: start)
-        result.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.5), range: end)
+        result.addAttribute(.foregroundColor, value: color.withAlphaComponent(markerAlpha), range: start)
+        result.addAttribute(.foregroundColor, value: color.withAlphaComponent(markerAlpha), range: end)
     }
 }
