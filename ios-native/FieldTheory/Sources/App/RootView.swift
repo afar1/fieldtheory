@@ -1,7 +1,20 @@
 import SwiftUI
 
-enum AppTab: Hashable {
+enum AppTab: Hashable, CaseIterable {
     case library, river, voice
+}
+
+/// Tracks pushed reading surfaces so global edge-swipe tab switching steps
+/// aside (and the system back-swipe wins). A depth counter, not a Bool,
+/// because a push fires the new view's onAppear before the old one's
+/// onDisappear.
+@MainActor
+@Observable
+final class ReadingState {
+    private var depth = 0
+    var isReading: Bool { depth > 0 }
+    func enter() { depth += 1 }
+    func exit() { depth = max(0, depth - 1) }
 }
 
 struct RootView: View {
@@ -11,6 +24,7 @@ struct RootView: View {
     @State private var selectedTab: AppTab = .library
     @State private var editorFocus = EditorFocusBus()
     @State private var toast = ToastCenter()
+    @State private var readingState = ReadingState()
     @State private var showSettings = false
 
     var body: some View {
@@ -27,6 +41,8 @@ struct RootView: View {
         }
         .environment(editorFocus)
         .environment(toast)
+        .environment(readingState)
+        .preferredColorScheme(model.settings.appearanceMode.colorScheme)
         .onAppear {
             wireRecorder()
             if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
@@ -48,6 +64,25 @@ struct RootView: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        // Edge swipes hop between the three sections (disabled while a
+        // document is open so the system back-swipe keeps its lane).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 25, coordinateSpace: .global)
+                .onEnded { value in
+                    guard !readingState.isReading else { return }
+                    let width = UIScreen.main.bounds.width
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > 55, abs(dx) > abs(dy) * 1.6 else { return }
+                    let tabs = AppTab.allCases
+                    guard let index = tabs.firstIndex(of: selectedTab) else { return }
+                    if value.startLocation.x > width - 30, dx < 0, index < tabs.count - 1 {
+                        withAnimation { selectedTab = tabs[index + 1] }
+                    } else if value.startLocation.x < 30, dx > 0, index > 0 {
+                        withAnimation { selectedTab = tabs[index - 1] }
+                    }
+                }
+        )
         .overlay(alignment: .bottomTrailing) {
             if selectedTab != .voice {
                 FloatingMicButton()

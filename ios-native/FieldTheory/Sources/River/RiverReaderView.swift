@@ -23,7 +23,7 @@ struct RiverReaderView: View {
         .tabViewStyle(.page(indexDisplayMode: .never))
         .ignoresSafeArea(edges: .bottom)
         .background(Theme.background(colorScheme))
-        .overlay(alignment: .topTrailing) { controls }
+        .overlay(alignment: .bottomTrailing) { controls }
         .onAppear { currentId = startAt.id }
         .onChange(of: currentId) { _, id in
             guard let id, let item = items.first(where: { $0.id == id }) else { return }
@@ -31,6 +31,7 @@ struct RiverReaderView: View {
         }
     }
 
+    /// Thumb-reach controls, bottom-right: copy, more, close.
     private var controls: some View {
         HStack(spacing: 14) {
             if let item = currentItem {
@@ -69,7 +70,7 @@ struct RiverReaderView: View {
             }
         }
         .padding(.trailing, 18)
-        .padding(.top, 8)
+        .padding(.bottom, 30)
     }
 
     private var currentItem: RiverItem? {
@@ -89,7 +90,9 @@ private extension Image {
 struct RiverPageView: View {
     let item: RiverItem
     @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @State private var pulledToDismiss = false
 
     private var styling: MarkdownStyling {
         MarkdownStyling(
@@ -143,5 +146,15 @@ struct RiverPageView: View {
             .padding(.bottom, 120)
         }
         .scrollIndicators(.hidden)
+        // One firm pull past the top closes the reader.
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            if offset < -70, !pulledToDismiss {
+                pulledToDismiss = true
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                dismiss()
+            }
+        }
     }
 }

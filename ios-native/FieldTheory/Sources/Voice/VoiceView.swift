@@ -375,19 +375,9 @@ struct StackCard: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
+        // The old app's mechanic exactly: hold still ~600ms → selection mode.
+        // No context menu here — it would swallow the long-press.
         .onLongPressGesture(minimumDuration: 0.6, maximumDistance: 8) { onLongPress() }
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = item.text
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
-            if item.isStack {
-                Button { onUnstack() } label: {
-                    Label("Unstack", systemImage: "square.stack.3d.down.right")
-                }
-            }
-        }
     }
 
     private var header: some View {

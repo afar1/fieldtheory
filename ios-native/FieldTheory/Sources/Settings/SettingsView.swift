@@ -40,6 +40,12 @@ struct SettingsView: View {
                             .tag(preset)
                         }
                     }
+                    Picker("Appearance", selection: $settings.appearanceMode) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
 
                 Section("Library") {

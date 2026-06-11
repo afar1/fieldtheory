@@ -10,12 +10,17 @@ struct DocumentView: View {
     @Environment(AppModel.self) private var model
     @Environment(EditorFocusBus.self) private var editorFocus
     @Environment(ToastCenter.self) private var toast
+    @Environment(ReadingState.self) private var readingState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
 
     @State private var text = ""
     @State private var loaded = false
     @State private var editing = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var chromeHidden = false
+    @State private var lastScrollOffset: CGFloat = 0
+    @State private var pulledToDismiss = false
 
     private var styling: MarkdownStyling {
         MarkdownStyling(
@@ -44,6 +49,7 @@ struct DocumentView: View {
         .navigationTitle(doc.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        .toolbarVisibility(chromeHidden && !editing ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if editing {
@@ -92,7 +98,11 @@ struct DocumentView: View {
             guard loaded else { return }
             scheduleSave()
         }
-        .onDisappear { flushSave() }
+        .onAppear { readingState.enter() }
+        .onDisappear {
+            readingState.exit()
+            flushSave()
+        }
     }
 
     private var readerView: some View {
@@ -120,6 +130,29 @@ struct DocumentView: View {
             }
         }
         .scrollIndicators(.hidden)
+        // Reading chrome: scrolling down clears the deck, scrolling up
+        // brings it back; one firm pull past the top closes the document.
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            if offset < -70 {
+                if !pulledToDismiss {
+                    pulledToDismiss = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    dismiss()
+                }
+                return
+            }
+            let delta = offset - lastScrollOffset
+            if offset <= 8 {
+                if chromeHidden { withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false } }
+            } else if delta > 6, !chromeHidden {
+                withAnimation(.easeOut(duration: 0.2)) { chromeHidden = true }
+            } else if delta < -14, chromeHidden {
+                withAnimation(.easeOut(duration: 0.2)) { chromeHidden = false }
+            }
+            lastScrollOffset = offset
+        }
     }
 
     private var typographyMenu: some View {

@@ -146,6 +146,7 @@ struct DocRow: View {
 struct FolderContentsView: View {
     let folder: LibraryFolder
     @Environment(AppModel.self) private var model
+    @Environment(ReadingState.self) private var readingState
 
     private var docs: [LibraryDocMeta] {
         (model.library.docsByFolder[folder.name] ?? []).filter(\.materialized)
@@ -166,6 +167,9 @@ struct FolderContentsView: View {
         .listStyle(.plain)
         .navigationTitle(folder.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        // Pushed view: leave the leading edge to the system back-swipe.
+        .onAppear { readingState.enter() }
+        .onDisappear { readingState.exit() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

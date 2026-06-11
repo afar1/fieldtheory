@@ -25,6 +25,10 @@ final class AppSettings {
         didSet { defaults.set(accentPreset.rawValue, forKey: "accentPreset") }
     }
 
+    var appearanceMode: AppearanceMode {
+        didSet { defaults.set(appearanceMode.rawValue, forKey: "appearance-mode") }
+    }
+
     var newDocFolder: String {
         didSet { defaults.set(newDocFolder, forKey: "library-new-doc-location") }
     }
@@ -49,8 +53,31 @@ final class AppSettings {
         lineHeight = LineHeightID(rawValue: defaults.string(forKey: "librarian-line-height") ?? "") ?? .normal
         textSize = TextSizeID(rawValue: defaults.string(forKey: "librarian-text-size") ?? "") ?? .normal
         accentPreset = AccentPreset(rawValue: defaults.string(forKey: "accentPreset") ?? "") ?? .forest
+        appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearance-mode") ?? "") ?? .system
         newDocFolder = defaults.string(forKey: "library-new-doc-location") ?? "scratchpad"
         autoCopyTranscripts = defaults.object(forKey: "voice-auto-copy") as? Bool ?? true
         syncedFolders = defaults.stringArray(forKey: "library-synced-folders")
+    }
+}
+
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
     }
 }
