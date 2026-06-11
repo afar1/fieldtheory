@@ -491,6 +491,87 @@ final class SyncEngine {
         await syncNow()
     }
 
+    /// Shares a library document to River, matching the Mac's shareFile:
+    /// client_id = "shared-" + sha256("<user>:<sourceKey>")[0..<32], path
+    /// under Docs/, revision 1, upsert on (team_scope_user_id, client_id).
+    func shareToRiver(sourcePath: String, content: String) async -> Bool {
+        guard let userId else { return false }
+        do {
+            guard let scope = try await resolveTeamScope(userId: userId) else { return false }
+
+            struct ProfileRow: Decodable { let callsign: String? }
+            let callsign: String? = await {
+                let row: ProfileRow? = try? await client
+                    .from("profiles")
+                    .select("callsign")
+                    .eq("id", value: userId)
+                    .single()
+                    .execute()
+                    .value
+                return row?.callsign?.trimmingCharacters(in: .whitespaces)
+            }()
+
+            let initials: String = {
+                let source = userEmail ?? "FT"
+                let words = source.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                if words.count >= 2, let a = words[0].first, let b = words[1].first {
+                    return String([a, b]).uppercased()
+                }
+                return String((words.first ?? "FT").prefix(2)).uppercased()
+            }()
+
+            let title = (sourcePath as NSString).lastPathComponent
+                .replacingOccurrences(of: ".md", with: "")
+            let now = Timestamps.nowMs()
+
+            struct TeamDocUpsert: Encodable {
+                let team_scope_user_id: String
+                let kind: String
+                let path: String
+                let title: String
+                let content: String
+                let content_hash: String
+                let client_id: String
+                let client_created_at_ms: Int64
+                let created_by: String
+                let updated_by: String
+                let deleted_at: String?
+                let original_source_path: String
+                let shared_name: String
+                let author_initials: String
+                let author_callsign: String?
+                let revision: Int
+            }
+
+            try await client
+                .from("team_documents")
+                .upsert(TeamDocUpsert(
+                    team_scope_user_id: scope,
+                    kind: "document",
+                    path: "Docs/\(sourcePath)",
+                    title: title,
+                    content: content,
+                    content_hash: Hashing.sha256Hex(content),
+                    client_id: "shared-" + String(Hashing.sha256Hex("\(userId):\(sourcePath)").prefix(32)),
+                    client_created_at_ms: now,
+                    created_by: userId,
+                    updated_by: userId,
+                    deleted_at: nil,
+                    original_source_path: sourcePath,
+                    shared_name: title,
+                    author_initials: initials,
+                    author_callsign: callsign?.isEmpty == false ? callsign : nil,
+                    revision: 1
+                ), onConflict: "team_scope_user_id,client_id")
+                .execute()
+
+            scheduleDebounced(after: 0.5)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Transcripts (Voice)
 
     private func syncTranscripts(userId: String) async throws {

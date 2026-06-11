@@ -10,24 +10,26 @@ final class ReaderScrollUITests: XCTestCase {
         app.launchArguments = ["ft-preview", "ft-open-doc"]
         app.launch()
 
-        let scroll = app.scrollViews.firstMatch
-        XCTAssertTrue(scroll.waitForExistence(timeout: 15), "reader did not appear")
+        let surface = app.textViews.firstMatch
+        XCTAssertTrue(surface.waitForExistence(timeout: 15), "document surface did not appear")
 
         // Deep scroll down through the 250-section fixture.
         for _ in 0..<12 { app.swipeUp(velocity: .fast) }
-        // Back up — chrome returns.
+        // Back up.
         for _ in 0..<5 { app.swipeDown(velocity: .fast) }
-        // Rapid direction flips around the hide/show boundary, where the
-        // oscillation lived.
+        // Rapid direction flips around chrome-transition boundaries.
         for _ in 0..<6 {
             app.swipeUp(velocity: .slow)
             app.swipeDown(velocity: .slow)
         }
 
-        // A hang would stall the swipes themselves; prove we can still
-        // query and interact afterwards.
-        XCTAssertTrue(scroll.exists, "reader scroll view gone after scrolling")
+        // Typing must stay responsive on a huge document (styling is
+        // attribute-only and line-scoped).
+        surface.tap()
+        surface.typeText("Live editing check, one two three. ")
+
+        XCTAssertTrue(surface.exists, "document surface gone after interaction")
         XCTAssertTrue(app.tabBars.firstMatch.exists || app.buttons.firstMatch.exists,
-                      "app chrome unreachable after scrolling — likely hung")
+                      "app chrome unreachable — likely hung")
     }
 }
