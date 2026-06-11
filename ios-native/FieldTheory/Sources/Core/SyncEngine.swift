@@ -193,19 +193,8 @@ final class SyncEngine {
 
     // MARK: - Library
 
-    /// Port of normalizeLibrarySourcePath from librarySyncService.ts.
     private func normalizeSourcePath(_ sourcePath: String?, title: String) -> String? {
-        let fallback = "scratchpad/\(LibraryStore.safeFileName(title)).md"
-        var raw = (sourcePath?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? fallback
-        raw = raw.replacingOccurrences(of: "\\", with: "/")
-        if raw.hasPrefix("/") { return nil }
-        var parts = raw.split(separator: "/").map(String.init)
-        if parts.isEmpty { return fallback }
-        if parts.contains(where: { $0 == "." || $0 == ".." }) { return nil }
-        if !parts[parts.count - 1].lowercased().hasSuffix(".md") {
-            parts[parts.count - 1] += ".md"
-        }
-        return parts.joined(separator: "/")
+        LibraryPaths.normalize(sourcePath, title: title)
     }
 
     private func folderOf(_ sourcePath: String) -> String {
@@ -328,18 +317,19 @@ final class SyncEngine {
                 let url = library.fileURL(for: local.sourcePath)
                 try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-                if local.dirty, let localHash = local.localHash, localHash != remoteHash,
-                   local.remoteHash != nil, local.remoteHash != remoteHash {
-                    // Both sides changed: keep the local words in a conflict
-                    // copy, take remote as canonical — Mac behavior.
-                    if let localContent = try? String(contentsOf: url, encoding: .utf8) {
-                        let conflictURL = url.deletingPathExtension()
-                            .appendingPathExtension("sync-conflict-\(Timestamps.nowMs()).md")
-                        try? localContent.write(to: conflictURL, atomically: true, encoding: .utf8)
-                    }
-                } else if local.dirty, local.remoteHash == remoteHash {
+                if local.dirty, local.remoteHash == remoteHash {
                     // Remote unchanged since our base; our push below wins.
                     continue
+                }
+                if local.dirty,
+                   let localContent = try? String(contentsOf: url, encoding: .utf8),
+                   Hashing.sha256Hex(localContent) != remoteHash {
+                    // Local words differ from what's about to land (remote
+                    // changed under us, or we never had a base): keep them in
+                    // a conflict copy, take remote as canonical — Mac behavior.
+                    let conflictURL = url.deletingPathExtension()
+                        .appendingPathExtension("sync-conflict-\(Timestamps.nowMs()).md")
+                    try? localContent.write(to: conflictURL, atomically: true, encoding: .utf8)
                 }
 
                 try? contentRow.content.write(to: url, atomically: true, encoding: .utf8)

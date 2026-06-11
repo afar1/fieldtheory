@@ -43,18 +43,18 @@ final class ModelManager {
     }
 
     func ensureDownloaded() {
-        guard state == .notDownloaded || isFailed else { return }
-        downloadTask?.cancel()
-        downloadTask = Task { await download() }
-    }
-
-    private var isFailed: Bool {
-        if case .failed = state { return true }
-        return false
+        switch state {
+        case .ready, .downloading:
+            return
+        case .notDownloaded, .failed:
+            // Mark as downloading synchronously so a second caller can't
+            // race in and start (or cancel) a duplicate task.
+            state = .downloading(progress: 0)
+            downloadTask = Task { await download() }
+        }
     }
 
     private func download() async {
-        state = .downloading(progress: 0)
         do {
             let (bytes, response) = try await URLSession.shared.bytes(from: Self.downloadURL)
             let total = response.expectedContentLength

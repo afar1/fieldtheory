@@ -49,7 +49,9 @@ final class RiverStore {
                 guard let id = row["id"]?.stringValue else { return nil }
                 return (id, Int(row["read_revision"]?.intValue ?? 0))
             })
-            available = (try await db.getMeta("river_team_scope")) != nil
+            // nil = not resolved yet (stay hopeful); "" = resolved, no team.
+            let scope = try await db.getMeta("river_team_scope")
+            available = scope != ""
         } catch {
             items = []
         }

@@ -12,9 +12,23 @@ packages:
     url: https://github.com/swiftlang/swift-markdown
     from: 0.4.0
 targets:
+  FieldTheoryTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FieldTheory/Tests
+    dependencies:
+      - target: FieldTheory
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
   FieldTheory:
     type: application
     platform: iOS
+    scheme:
+      testTargets:
+        - FieldTheoryTests
     sources:
       - path: FieldTheory/Sources
       - path: FieldTheory/Resources

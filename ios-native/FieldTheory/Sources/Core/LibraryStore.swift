@@ -150,11 +150,7 @@ final class LibraryStore {
     }
 
     static func safeFileName(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = trimmed.isEmpty ? "Untitled" : trimmed
-        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
-        let cleaned = base.components(separatedBy: invalid).joined(separator: "-")
-        return String(cleaned.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).prefix(120))
+        LibraryPaths.safeFileName(value)
     }
 
     static func defaultTitle() -> String {
