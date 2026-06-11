@@ -14185,6 +14185,9 @@ async function initTranscriberSystem(): Promise<void> {
       });
     }
   });
+  transcriberManager.setBeforeRecordingToggleHandler(() => {
+    commandLauncherWindow?.hide(true);
+  });
   await transcriberManager.init();
   startupMark('transcriber-manager-init-complete');
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);

@@ -33,6 +33,7 @@ const log = createLogger('CommandLauncher');
 const execFileAsync = promisify(execFile);
 const COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS = 35;
 const COMMAND_LAUNCHER_PREVIEW_BLUR_SUPPRESSION_MS = 150;
+const COMMAND_LAUNCHER_CENTER_Y_OFFSET = -50;
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -117,9 +118,7 @@ export class CommandLauncherWindow {
   private readonly WINDOW_HEIGHT_COLLAPSED = 52;
   private readonly WINDOW_HEIGHT_RESULTS = 430;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
-  private readonly PREVIEW_IMAGE_WINDOW_WIDTH = 860;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
-  private readonly PREVIEW_IMAGE_WINDOW_MAX_HEIGHT = 760;
   private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;
 
   private resizeBurstCount = 0;
@@ -372,14 +371,14 @@ export class CommandLauncherWindow {
         this.previewAnchorBounds = windowBounds;
         // Center on the current frontmost window.
         x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
+        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET);
       } else {
         // Fallback: center on active display.
         const cursorPoint = screen.getCursorScreenPoint();
         const display = screen.getDisplayNearestPoint(cursorPoint);
         this.previewAnchorBounds = display.bounds;
         x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
+        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET);
       }
 
       this.window!.setBounds({
@@ -455,6 +454,7 @@ export class CommandLauncherWindow {
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
     if (!isVisible) {
+      this.hidePreview();
       appendCommandLauncherTrace('hide-noop', {
         launcherSessionId: this.launcherSessionId,
         qualityScenario: this.qualityScenario,
@@ -474,8 +474,8 @@ export class CommandLauncherWindow {
       externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
       previousAppBundleId: this.previousApp?.bundleId ?? null,
     });
-    this.window!.hide();
     this.hidePreview();
+    this.window!.hide();
 
     if (shouldSkipActivation || this.fieldTheoryActiveOnShow) {
       appendCommandLauncherTrace('hide-skip-activation', {
@@ -737,8 +737,8 @@ export class CommandLauncherWindow {
     const initialTheme = this.getInitialThemeOptions();
     this.previewWindow = new BrowserWindow({
       title: 'Field Theory Command Preview',
-      width: this.PREVIEW_IMAGE_WINDOW_WIDTH,
-      height: this.PREVIEW_IMAGE_WINDOW_MAX_HEIGHT,
+      width: this.PREVIEW_WINDOW_WIDTH,
+      height: this.PREVIEW_WINDOW_MAX_HEIGHT,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -809,7 +809,7 @@ export class CommandLauncherWindow {
       this.createPreviewWindow();
     }
 
-    const bounds = this.getPreviewBounds(this.getPreviewMaxHeight(preview), preview);
+    const bounds = this.getPreviewBounds(this.PREVIEW_WINDOW_MAX_HEIGHT);
 
     this.previewWindow!.setBounds(bounds);
     appendCommandLauncherTrace('preview-show', {
@@ -831,32 +831,21 @@ export class CommandLauncherWindow {
     this.previewWindow!.moveTop();
   }
 
-  private isImagePreview(preview: Record<string, unknown> | null | undefined = this.previewPayload): boolean {
-    if (!preview || preview.kind !== 'clipboard' || typeof preview.content !== 'object' || !preview.content) return false;
-    return (preview.content as Record<string, unknown>).type === 'image';
-  }
-
-  private getPreviewWidth(preview: Record<string, unknown> | null | undefined = this.previewPayload): number {
-    return this.isImagePreview(preview) ? this.PREVIEW_IMAGE_WINDOW_WIDTH : this.PREVIEW_WINDOW_WIDTH;
-  }
-
-  private getPreviewMaxHeight(preview: Record<string, unknown> | null | undefined = this.previewPayload): number {
-    return this.isImagePreview(preview) ? this.PREVIEW_IMAGE_WINDOW_MAX_HEIGHT : this.PREVIEW_WINDOW_MAX_HEIGHT;
-  }
-
-  private getPreviewBounds(requestedHeight: number, preview: Record<string, unknown> | null | undefined = this.previewPayload): Electron.Rectangle {
+  private getPreviewBounds(requestedHeight: number): Electron.Rectangle {
     const anchor = this.previewAnchorBounds ?? (() => {
       const cursorPoint = screen.getCursorScreenPoint();
       return screen.getDisplayNearestPoint(cursorPoint).bounds;
     })();
-    const width = this.getPreviewWidth(preview);
+    const centerX = anchor.x + anchor.width / 2;
+    const centerY = anchor.y + anchor.height / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET;
+    const width = this.PREVIEW_WINDOW_WIDTH;
     const height = Math.max(
       this.PREVIEW_WINDOW_MIN_HEIGHT,
-      Math.min(Math.ceil(requestedHeight), this.getPreviewMaxHeight(preview))
+      Math.min(Math.ceil(requestedHeight), this.PREVIEW_WINDOW_MAX_HEIGHT)
     );
     return {
-      x: Math.round(anchor.x + (anchor.width - width) / 2),
-      y: Math.round(anchor.y + (anchor.height - height) / 2),
+      x: Math.round(centerX - width / 2),
+      y: Math.round(centerY - height / 2),
       width,
       height,
     };

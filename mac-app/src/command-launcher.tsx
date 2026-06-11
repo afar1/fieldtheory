@@ -1156,6 +1156,9 @@ function CommandLauncher() {
     }
     sampleLauncherInputInteraction();
     setCommittedItemId(null);
+    hasNavigatedRef.current = false;
+    hasExplicitSelectionRef.current = false;
+    setHasExplicitSelection(false);
     const next = getLauncherClipboardSearchInputState({
       active: clipboardSearchActive,
       query: nextQuery,
@@ -2267,8 +2270,10 @@ function CommandLauncher() {
     applyFilteredResults(getDefaultPanelItemsForSource(nextDefaultPanelSource, true));
     resetSoftSelection();
     resizeLauncherForDefaultPanel(true);
+    focusLauncherInput();
   }, [
     applyFilteredResults,
+    focusLauncherInput,
     getDefaultPanelItemsForSource,
     nextDefaultPanelSource,
     resetSoftSelection,
@@ -2703,11 +2708,19 @@ function CommandLauncher() {
         : (forceEmptyState ? emptyStateHeight : 0);
       resizeLauncher(inputHeight + listHeight);
     };
+    const showResults = (results: LauncherItem[], resetMode: 'index' | 'soft' = 'index') => {
+      applyFilteredResults(results);
+      if (hasNavigatedRef.current && selectedIndexRef.current < results.length) return;
+      if (resetMode === 'soft') {
+        resetSoftSelection();
+      } else {
+        selectIndex(0);
+      }
+    };
 
     if (clipboardSearchQuery !== null) {
       const results = clipboardLauncherItems;
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, clipboardSearchQuery.length > 0 || clipboardSearchLoading);
       return;
     }
@@ -2716,8 +2729,7 @@ function CommandLauncher() {
       const waitingForResults = (launcherDataLoading || libraryMarkdownLoading) && query.trim() !== '';
       const fallback = waitingForResults ? null : localInstructionFallbackForQuery(query, 0, isHelpQuery);
       const results = fallback ? [fallback] : [];
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
       resizeForResults(fallback ? 1 : 0, waitingForResults);
@@ -2752,8 +2764,7 @@ function CommandLauncher() {
     }
 
     if (isRootIdleLauncher) {
-      applyFilteredResults(defaultPanelItems);
-      resetSoftSelection();
+      showResults(defaultPanelItems, 'soft');
       resizeForResults(defaultPanelItems.length, false, {
         itemHeight: LAUNCHER_DEFAULT_PANEL_ITEM_HEIGHT,
         minRows: launcherDefaultPanelExpanded ? LAUNCHER_DEFAULT_PANEL_VISIBLE_ROWS : 0,
@@ -2774,8 +2785,8 @@ function CommandLauncher() {
         .filter(item => item.type === 'command')
         .sort(compareLauncherItemsByRecency);
 
-      applyFilteredResults([...actions, ...hoffs, ...cmds]);
-      selectIndex(0);
+      const results = [...actions, ...hoffs, ...cmds];
+      showResults(results);
 
       // Resize for all items.
       const itemHeight = 30;
@@ -2795,8 +2806,7 @@ function CommandLauncher() {
 
     if (fileSearchQuery !== null) {
       const results = fileSearchEnabled ? fileItems : [];
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, fileSearchQuery.length > 0 || launcherFileSearchLoading);
       return;
     }
@@ -2847,16 +2857,14 @@ function CommandLauncher() {
       const results = exactCommandMatch
         ? [...commandMatches, ...customInstructionItem]
         : [...customInstructionItem, ...commandMatches];
-      applyFilteredResults(results.slice(0, 14));
-      selectIndex(0);
+      showResults(results.slice(0, 14));
       resizeForResults(results.length, true);
       return;
     }
 
     if (moveSource) {
       const results = filterLauncherMoveTargetDirectories(directoryItems, moveSource, q);
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
@@ -2867,16 +2875,14 @@ function CommandLauncher() {
         directoryNamespace,
         q,
       );
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
 
     if (authorNamespace) {
       const results = filterLauncherNamespaceItems(authorBookmarkItems, q);
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
@@ -2886,8 +2892,7 @@ function CommandLauncher() {
         ? [...bookmarkAuthorItems, ...bookmarkFacetItems, ...(bookmarkNamespaceItems.length > 0 ? bookmarkNamespaceItems : bookmarkPostItems)]
         : bookmarkNamespaceItems;
       const results = filterLauncherNamespaceItems(pool, q);
-      applyFilteredResults(results);
-      selectIndex(0);
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
@@ -2903,8 +2908,7 @@ function CommandLauncher() {
               ? recentFileItems
               : [...libraryMarkdownSearchItems, ...commandItems, ...artifactReadings].filter(isLauncherRiverItem);
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
-      applyFilteredResults(results.slice(0, 20));
-      selectIndex(0);
+      showResults(results.slice(0, 20));
       resizeForResults(results.length, true);
       return;
     }
@@ -2912,8 +2916,8 @@ function CommandLauncher() {
     const areaActionId = getLauncherAreaActionIdForQuery(q);
     if (areaActionId) {
       const areaAction = allItems.find((item) => item.type === 'action' && item.actionId === areaActionId);
-      applyFilteredResults(areaAction ? [areaAction] : []);
-      selectIndex(0);
+      const results = areaAction ? [areaAction] : [];
+      showResults(results);
       resizeForResults(areaAction ? 1 : 0);
       return;
     }
@@ -2923,8 +2927,7 @@ function CommandLauncher() {
     const fallback = waitingForLibraryMarkdown ? null : localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
-    applyFilteredResults(results);
-    selectIndex(0);
+    showResults(results);
 
     // Resize window.
     resizeForResults(results.length, true);
@@ -2956,8 +2959,9 @@ function CommandLauncher() {
     });
   }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults]);
 
-  // Reset navigation flag when filtered results change.
+  // Reset soft selection only when results change before keyboard navigation starts.
   useEffect(() => {
+    if (hasNavigatedRef.current) return;
     hasNavigatedRef.current = false;
     hasExplicitSelectionRef.current = false;
     setHasExplicitSelection(false);

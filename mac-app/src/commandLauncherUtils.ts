@@ -124,7 +124,7 @@ export function shouldSwitchLauncherDefaultPanelOnTab(input: {
   isRootIdleLauncher: boolean;
   hasExplicitSelection: boolean;
 }): boolean {
-  return input.isRootIdleLauncher && !input.hasExplicitSelection;
+  return input.isRootIdleLauncher;
 }
 
 export type LauncherDefaultBookmarkEnterAction =

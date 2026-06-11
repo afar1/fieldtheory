@@ -149,6 +149,7 @@ type FieldTheoryTerminalInsertionTarget = {
 };
 
 type MeetingCaptureHotkeyHandler = () => Promise<void>;
+type BeforeRecordingToggleHandler = () => void | Promise<void>;
 
 export type { HotMicEngineReadiness, HotMicEngineStatus };
 
@@ -255,6 +256,7 @@ export class TranscriberManager extends EventEmitter {
   private activeRecordingSource: RecordingInputSource | null = null;
   private activeMeetingCapture: MeetingCaptureSession | null = null;
   private meetingCaptureHotkeyHandler: MeetingCaptureHotkeyHandler | null = null;
+  private beforeRecordingToggleHandler: BeforeRecordingToggleHandler | null = null;
   private meetingCaptureHotkeyStopInFlight: boolean = false;
   private standardSessionCancelRequested: boolean = false;
   private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
@@ -396,6 +398,10 @@ export class TranscriberManager extends EventEmitter {
 
   setMeetingCaptureHotkeyHandler(handler: MeetingCaptureHotkeyHandler | null): void {
     this.meetingCaptureHotkeyHandler = handler;
+  }
+
+  setBeforeRecordingToggleHandler(handler: BeforeRecordingToggleHandler | null): void {
+    this.beforeRecordingToggleHandler = handler;
   }
 
   /**
@@ -745,6 +751,14 @@ export class TranscriberManager extends EventEmitter {
    * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
   private async handleHotkeyPress(_isSecondary: boolean): Promise<void> {
+    if (this.beforeRecordingToggleHandler) {
+      try {
+        await this.beforeRecordingToggleHandler();
+      } catch (error) {
+        log.warn('Before recording toggle handler failed:', error);
+      }
+    }
+
     if (this.activeMeetingCapture) {
       if (!this.meetingCaptureHotkeyHandler || this.meetingCaptureHotkeyStopInFlight) {
         return;

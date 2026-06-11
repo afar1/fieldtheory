@@ -716,7 +716,7 @@ describe('CommandLauncherWindow preview IPC', () => {
     }));
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 700,
-      y: 260,
+      y: 210,
       width: 520,
       height: 560,
     });
@@ -766,13 +766,13 @@ describe('CommandLauncherWindow preview IPC', () => {
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 290,
-      y: 270,
+      y: 220,
       width: 520,
       height: 560,
     });
   });
 
-  it('uses larger detached preview bounds for clipboard images', async () => {
+  it('uses the same detached preview bounds for clipboard images', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
       getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
@@ -790,10 +790,10 @@ describe('CommandLauncherWindow preview IPC', () => {
     mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: 120,
-      y: 170,
-      width: 860,
-      height: 760,
+      x: 290,
+      y: 220,
+      width: 520,
+      height: 560,
     });
   });
 
@@ -818,7 +818,7 @@ describe('CommandLauncherWindow preview IPC', () => {
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 290,
-      y: 370,
+      y: 320,
       width: 520,
       height: 360,
     });
@@ -835,9 +835,28 @@ describe('CommandLauncherWindow preview IPC', () => {
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 700,
-      y: 260,
+      y: 210,
       width: 520,
       height: 560,
     });
+  });
+
+  it('clears a visible detached preview even when the launcher window is already hidden', () => {
+    const launcher = new CommandLauncherWindow();
+    launcher.preload();
+    const preview = { kind: 'bookmark', bookmark: { id: 'bookmark-1', text: 'hello' } };
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
+    mockWindow.hide.mockClear();
+    mockWindow.isVisible
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    launcher.hide(true);
+
+    expect(mockWindow.hide).toHaveBeenCalledTimes(1);
+    expect(mockAppendCommandLauncherTrace).toHaveBeenCalledWith('preview-hide');
+    expect(mockAppendCommandLauncherTrace).toHaveBeenCalledWith('hide-noop', expect.objectContaining({
+      skipActivation: true,
+    }));
   });
 });
