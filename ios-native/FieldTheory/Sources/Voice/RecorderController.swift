@@ -24,15 +24,25 @@ final class RecorderController {
 
     private var recorder: AVAudioRecorder?
     private var segmentURLs: [URL] = []
+    private var sessionId: Int64 = 0
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
+    private var draining = false
 
     /// Set by the app: receives the final transcript text for routing
     /// (insert at cursor vs. save to Voice).
     var onTranscript: ((String) async -> Void)?
+    /// Lightweight status line for toasts (queued audio, errors).
+    var onNotice: ((String, String) -> Void)?
 
     let whisper = WhisperService()
     let models = ModelManager()
+
+    /// Recordings waiting for the model; survives relaunches.
+    static var pendingAudioDir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pending-audio", isDirectory: true)
+    }
 
     init() {
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -41,6 +51,12 @@ final class RecorderController {
             queue: .main
         ) { [weak self] notification in
             Task { @MainActor in self?.handleInterruption(notification) }
+        }
+        models.onReady = { [weak self] in
+            Task { await self?.drainPendingQueue() }
+        }
+        if models.readyModelURL != nil {
+            Task { await drainPendingQueue() }
         }
     }
 
@@ -75,6 +91,7 @@ final class RecorderController {
             try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
             try session.setActive(true)
             segmentURLs = []
+            sessionId = Timestamps.nowMs()
             try startNewSegment()
             phase = .recording
             startedAt = Date()
@@ -82,13 +99,14 @@ final class RecorderController {
             startMetering()
         } catch {
             lastError = "Could not start recording: \(error.localizedDescription)"
+            onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
         }
     }
 
     private func startNewSegment() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rec-\(Timestamps.nowMs()).wav")
+            .appendingPathComponent("rec-\(sessionId)-\(segmentURLs.count).wav")
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: 16000,
@@ -147,24 +165,40 @@ final class RecorderController {
         meterTimer?.invalidate()
         recorder?.stop()
         recorder = nil
-        phase = .transcribing
         level = 0
 
         let urls = segmentURLs
         segmentURLs = []
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
+        guard let modelURL = models.readyModelURL else {
+            // Capture is sacred: park the audio and transcribe when the
+            // model lands.
+            phase = .idle
+            startedAt = nil
+            try? FileManager.default.createDirectory(at: Self.pendingAudioDir, withIntermediateDirectories: true)
+            for url in urls {
+                let parked = Self.pendingAudioDir.appendingPathComponent(url.lastPathComponent)
+                try? FileManager.default.moveItem(at: url, to: parked)
+            }
+            models.ensureDownloaded()
+            onNotice?("Saved — transcribing when the speech model finishes", "clock.arrow.circlepath")
+            return
+        }
+
+        phase = .transcribing
         defer {
             phase = .idle
             startedAt = nil
             for url in urls { try? FileManager.default.removeItem(at: url) }
         }
 
-        guard let modelURL = models.readyModelURL else {
-            lastError = "Speech model not downloaded yet — grab it in Settings."
-            return
+        if let transcript = await transcribeSegments(urls, modelURL: modelURL) {
+            await onTranscript?(transcript)
         }
+    }
 
+    private func transcribeSegments(_ urls: [URL], modelURL: URL) async -> String? {
         var parts: [String] = []
         for url in urls {
             do {
@@ -172,13 +206,38 @@ final class RecorderController {
                 if !text.isEmpty { parts.append(text) }
             } catch {
                 lastError = "Transcription failed: \(error.localizedDescription)"
+                onNotice?("Transcription failed", "exclamationmark.triangle")
             }
         }
         let transcript = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !transcript.isEmpty else {
-            if lastError == nil { lastError = "Didn't catch anything." }
-            return
+        return transcript.isEmpty ? nil : transcript
+    }
+
+    /// Transcribes recordings that were parked while the model downloaded.
+    /// Segments are grouped by recording session (rec-<session>-<index>.wav)
+    /// so one long capture stays one transcript.
+    func drainPendingQueue() async {
+        guard !draining, let modelURL = models.readyModelURL else { return }
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.pendingAudioDir, includingPropertiesForKeys: nil)) ?? []
+        let wavs = files.filter { $0.pathExtension == "wav" }
+        guard !wavs.isEmpty else { return }
+
+        draining = true
+        defer { draining = false }
+
+        var sessions: [String: [URL]] = [:]
+        for url in wavs {
+            let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-")
+            let session = parts.count >= 2 ? String(parts[1]) : url.lastPathComponent
+            sessions[session, default: []].append(url)
         }
-        await onTranscript?(transcript)
+
+        for (_, sessionFiles) in sessions.sorted(by: { $0.key < $1.key }) {
+            let ordered = sessionFiles.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            if let transcript = await transcribeSegments(ordered, modelURL: modelURL) {
+                await onTranscript?(transcript)
+            }
+            for url in ordered { try? FileManager.default.removeItem(at: url) }
+        }
     }
 }

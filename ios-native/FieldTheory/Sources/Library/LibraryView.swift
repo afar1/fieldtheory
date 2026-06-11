@@ -18,7 +18,7 @@ struct LibraryView: View {
     }
 
     private var recentDocs: [LibraryDocMeta] {
-        Array(model.library.allDocs.filter(\.materialized).prefix(5))
+        model.library.recents
     }
 
     private var searchResults: [LibraryDocMeta] {

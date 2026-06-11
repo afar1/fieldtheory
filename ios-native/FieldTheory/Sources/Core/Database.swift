@@ -96,6 +96,10 @@ actor Database {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS recents (
+            source_path TEXT PRIMARY KEY,
+            last_opened_at_ms INTEGER NOT NULL
+        );
         """
         guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
             throw DatabaseError(message: lastErrorMessage())

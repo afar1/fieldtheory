@@ -85,6 +85,7 @@ struct DocumentView: View {
                 text = model.library.content(of: doc) ?? ""
                 loaded = true
                 editing = startEditing
+                await model.library.recordVisit(sourcePath: doc.sourcePath)
             }
         }
         .onChange(of: text) { _, _ in

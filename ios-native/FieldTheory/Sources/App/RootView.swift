@@ -80,6 +80,9 @@ struct RootView: View {
                 toast.show("Saved to Voice", symbol: "waveform")
             }
         }
+        model.recorder.onNotice = { message, symbol in
+            toast.show(message, symbol: symbol, duration: 2.6)
+        }
     }
 }
 

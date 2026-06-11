@@ -67,24 +67,14 @@ private struct ContactRow: Decodable {
     let status: String?
 }
 
-private struct TranscriptMetadata: Codable {
-    var stackSegments: [TranscriptSegment]?
-}
-
+/// The deployed transcripts table is lean: id, user_id, client_id,
+/// client_created_at_ms, text, created_at, updated_at. No metadata column —
+/// stack segments stay local; the merged text is what syncs. No deleted_at —
+/// deletes are hard DELETEs.
 private struct TranscriptRow: Decodable {
     let client_id: String
     let text: String
     let client_created_at_ms: Int64
-    let client_updated_at_ms: Int64?
-    let deleted_at: String?
-    let updated_at: String
-    let metadata: TranscriptMetadata?
-}
-
-private struct TranscriptClockRow: Decodable {
-    let client_id: String
-    let client_updated_at_ms: Int64?
-    let deleted_at: String?
     let updated_at: String
 }
 
@@ -93,14 +83,7 @@ private struct TranscriptUpsertRow: Encodable {
     let text: String
     let client_id: String
     let client_created_at_ms: Int64
-    let client_updated_at_ms: Int64
-    let deleted_at: String?
-    let metadata: TranscriptMetadata
-}
-
-private struct TranscriptTombstoneUpdate: Encodable {
-    let client_updated_at_ms: Int64
-    let deleted_at: String
+    let updated_at: String
 }
 
 // MARK: - Engine
@@ -208,13 +191,18 @@ final class SyncEngine {
     }
 
     private func syncLibrary(userId: String) async throws {
-        // 1. Pull metadata for every row (content excluded to keep this cheap).
-        let metaRows: [LibraryMetaRow] = try await client
-            .from("library_documents")
-            .select("client_id, source_path, title, content_hash, client_created_at_ms, deleted_at, updated_at")
-            .eq("user_id", value: userId)
-            .execute()
-            .value
+        // 1. Pull metadata for every row (content excluded; paginated past
+        // PostgREST's 1000-row cap).
+        let metaRows: [LibraryMetaRow] = try await fetchAllPages { from, to in
+            try await self.client
+                .from("library_documents")
+                .select("client_id, source_path, title, content_hash, client_created_at_ms, deleted_at, updated_at")
+                .eq("user_id", value: userId)
+                .order("client_id", ascending: true)
+                .range(from: from, to: to)
+                .execute()
+                .value
+        }
 
         var index: [String: LibraryDocMeta] = [:]
         for row in try await db.query("SELECT * FROM library_index") {
@@ -458,13 +446,17 @@ final class SyncEngine {
     private func syncRiver(userId: String) async throws {
         guard let scope = try await resolveTeamScope(userId: userId) else { return }
 
-        let rows: [TeamDocumentRow] = try await client
-            .from("team_documents")
-            .select("id, kind, title, content, created_by, deleted_at, created_at, updated_at, client_created_at_ms, original_source_path, shared_name, author_initials, author_callsign, revision")
-            .eq("team_scope_user_id", value: scope)
-            .is("deleted_at", value: nil)
-            .execute()
-            .value
+        let rows: [TeamDocumentRow] = try await fetchAllPages { from, to in
+            try await self.client
+                .from("team_documents")
+                .select("id, kind, title, content, created_by, deleted_at, created_at, updated_at, client_created_at_ms, original_source_path, shared_name, author_initials, author_callsign, revision")
+                .eq("team_scope_user_id", value: scope)
+                .is("deleted_at", value: nil)
+                .order("updated_at", ascending: false)
+                .range(from: from, to: to)
+                .execute()
+                .value
+        }
 
         try await db.run("DELETE FROM river_items")
         for row in rows {
@@ -502,109 +494,83 @@ final class SyncEngine {
     // MARK: - Transcripts (Voice)
 
     private func syncTranscripts(userId: String) async throws {
-        // Push explicit deletes, guarded the same way the previous app did.
+        // Push explicit deletes as hard DELETEs (no deleted_at column).
         let tombstones = try await db.query("SELECT * FROM transcript_tombstones")
         for tombstone in tombstones {
-            guard let id = tombstone["id"]?.stringValue,
-                  let deletedAtMs = tombstone["deleted_at_ms"]?.intValue else { continue }
+            guard let id = tombstone["id"]?.stringValue else { continue }
             try await client
                 .from("transcripts")
-                .update(TranscriptTombstoneUpdate(
-                    client_updated_at_ms: deletedAtMs,
-                    deleted_at: Timestamps.iso(fromMs: deletedAtMs)
-                ))
+                .delete()
                 .eq("user_id", value: userId)
                 .eq("client_id", value: id)
-                .or("client_updated_at_ms.is.null,client_updated_at_ms.lte.\(deletedAtMs)")
                 .execute()
             try await db.run("DELETE FROM transcript_tombstones WHERE id = ?", [.text(id)])
         }
 
-        // Pull everything and merge last-write-wins.
-        let rows: [TranscriptRow] = try await client
-            .from("transcripts")
-            .select("client_id, text, client_created_at_ms, client_updated_at_ms, deleted_at, updated_at, metadata")
-            .eq("user_id", value: userId)
-            .execute()
-            .value
+        let rows: [TranscriptRow] = try await fetchAllPages { from, to in
+            try await self.client
+                .from("transcripts")
+                .select("client_id, text, client_created_at_ms, updated_at")
+                .eq("user_id", value: userId)
+                .order("created_at", ascending: false)
+                .range(from: from, to: to)
+                .execute()
+                .value
+        }
 
         var local: [String: TranscriptItem] = [:]
         var localDirty: Set<String> = []
-        for row in try await db.query("SELECT * FROM transcripts") {
+        for row in try await db.query("SELECT id, text, created_at_ms, updated_at_ms, dirty FROM transcripts") {
             guard let id = row["id"]?.stringValue else { continue }
-            var segments: [TranscriptSegment]?
-            if let json = row["segments_json"]?.stringValue, let data = json.data(using: .utf8) {
-                segments = try? JSONDecoder().decode([TranscriptSegment].self, from: data)
-            }
             local[id] = TranscriptItem(
                 id: id,
                 text: row["text"]?.stringValue ?? "",
                 createdAtMs: row["created_at_ms"]?.intValue ?? 0,
                 updatedAtMs: row["updated_at_ms"]?.intValue ?? 0,
-                segments: segments
+                segments: nil
             )
             if (row["dirty"]?.intValue ?? 0) != 0 { localDirty.insert(id) }
         }
 
-        let encoder = JSONEncoder()
+        let remoteIds = Set(rows.map(\.client_id))
+
         for row in rows {
-            let remoteEditMs = row.client_updated_at_ms ?? Timestamps.ms(fromISO: row.updated_at)
-            if let deletedAt = row.deleted_at {
-                let deletedMs = max(Timestamps.ms(fromISO: deletedAt), row.client_updated_at_ms ?? 0)
-                if let existing = local[row.client_id], deletedMs >= existing.updatedAtMs {
-                    try await db.run("DELETE FROM transcripts WHERE id = ?", [.text(row.client_id)])
-                    local[row.client_id] = nil
-                    localDirty.remove(row.client_id)
-                }
-                continue
+            let remoteEditMs = Timestamps.ms(fromISO: row.updated_at)
+            if let existing = local[row.client_id] {
+                // Local edit wins while dirty; otherwise newer remote text lands.
+                if localDirty.contains(row.client_id) { continue }
+                if existing.updatedAtMs >= remoteEditMs + Self.clockSkewMs { continue }
+                if existing.text == row.text { continue }
+                try await db.run("""
+                    UPDATE transcripts SET text = ?, updated_at_ms = ?, dirty = 0 WHERE id = ?
+                    """, [.text(row.text), .int(remoteEditMs), .text(row.client_id)])
+            } else {
+                try await db.run("""
+                    INSERT INTO transcripts (id, text, created_at_ms, updated_at_ms, segments_json, dirty)
+                    VALUES (?, ?, ?, ?, NULL, 0)
+                    """, [
+                        .text(row.client_id), .text(row.text),
+                        .int(row.client_created_at_ms), .int(remoteEditMs),
+                    ])
             }
-
-            if let existing = local[row.client_id], existing.updatedAtMs >= remoteEditMs { continue }
-
-            var segmentsJSON: SQLValue = .null
-            if let segments = row.metadata?.stackSegments, !segments.isEmpty,
-               let data = try? encoder.encode(segments), let json = String(data: data, encoding: .utf8) {
-                segmentsJSON = .text(json)
-            }
-            try await db.run("""
-                INSERT INTO transcripts (id, text, created_at_ms, updated_at_ms, segments_json, dirty)
-                VALUES (?, ?, ?, ?, ?, 0)
-                ON CONFLICT(id) DO UPDATE SET
-                    text = excluded.text,
-                    created_at_ms = excluded.created_at_ms,
-                    updated_at_ms = excluded.updated_at_ms,
-                    segments_json = excluded.segments_json,
-                    dirty = 0
-                """, [
-                    .text(row.client_id), .text(row.text),
-                    .int(row.client_created_at_ms), .int(remoteEditMs), segmentsJSON,
-                ])
-            localDirty.remove(row.client_id)
         }
 
-        // Push local items that are newer than the remote clock.
-        guard !localDirty.isEmpty else { return }
-        let remoteClock = Dictionary(rows.map { row -> (String, Int64) in
-            let deletedMs = Timestamps.ms(fromISO: row.deleted_at)
-            let editMs = row.client_updated_at_ms ?? Timestamps.ms(fromISO: row.updated_at)
-            return (row.client_id, max(editMs, deletedMs))
-        }, uniquingKeysWith: { a, _ in a })
+        // A clean local item missing remotely was deleted from another device.
+        for (id, _) in local where !remoteIds.contains(id) && !localDirty.contains(id) {
+            try await db.run("DELETE FROM transcripts WHERE id = ?", [.text(id)])
+        }
 
+        // Push dirty items (creations, edits, stacks — merged text only).
         var upserts: [TranscriptUpsertRow] = []
         var pushed: [String] = []
         for id in localDirty {
             guard let item = local[id] else { continue }
-            if let row = rows.first(where: { $0.client_id == id }), let deletedAt = row.deleted_at,
-               Timestamps.ms(fromISO: deletedAt) >= item.updatedAtMs { continue }
-            if let clock = remoteClock[id], item.updatedAtMs < clock { continue }
             upserts.append(TranscriptUpsertRow(
                 user_id: userId,
                 text: item.text,
                 client_id: item.id,
                 client_created_at_ms: item.createdAtMs,
-                client_updated_at_ms: item.updatedAtMs,
-                deleted_at: nil,
-                metadata: TranscriptMetadata(stackSegments: item.segments)
+                updated_at: Timestamps.iso(fromMs: item.updatedAtMs)
             ))
             pushed.append(id)
         }
@@ -617,6 +583,20 @@ final class SyncEngine {
                 try await db.run("UPDATE transcripts SET dirty = 0 WHERE id = ?", [.text(id)])
             }
         }
+    }
+
+    /// PostgREST caps responses at 1000 rows; page until a short page.
+    private func fetchAllPages<Row>(_ fetch: (Int, Int) async throws -> [Row]) async throws -> [Row] {
+        let pageSize = 1000
+        var all: [Row] = []
+        var from = 0
+        while true {
+            let page = try await fetch(from, from + pageSize - 1)
+            all.append(contentsOf: page)
+            if page.count < pageSize { break }
+            from += pageSize
+        }
+        return all
     }
 }
 

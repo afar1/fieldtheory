@@ -11,7 +11,8 @@ enum ModelState: Equatable {
 
 /// Downloads ggml-base.en.bin once (same pinned revision + MD5 the previous
 /// app used) into Documents so it survives app updates. After that, speech
-/// never needs the network.
+/// never needs the network. The transfer runs on URLSession's own queue —
+/// nothing here touches the main thread except coarse progress updates.
 @MainActor
 @Observable
 final class ModelManager {
@@ -20,7 +21,10 @@ final class ModelManager {
     static let downloadURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin")!
 
     private(set) var state: ModelState = .notDownloaded
-    private var downloadTask: Task<Void, Never>?
+    /// Fired on the main actor when the model transitions to ready.
+    var onReady: (() -> Void)?
+
+    private var downloader: ModelDownloader?
 
     var modelURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -47,58 +51,121 @@ final class ModelManager {
         case .ready, .downloading:
             return
         case .notDownloaded, .failed:
-            // Mark as downloading synchronously so a second caller can't
-            // race in and start (or cancel) a duplicate task.
             state = .downloading(progress: 0)
-            downloadTask = Task { await download() }
+            startDownload()
         }
     }
 
-    private func download() async {
-        do {
-            let (bytes, response) = try await URLSession.shared.bytes(from: Self.downloadURL)
-            let total = response.expectedContentLength
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("model-download.bin")
-            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-            let handle = try FileHandle(forWritingTo: tempURL)
-            defer { try? handle.close() }
-
-            var received: Int64 = 0
-            var buffer = Data(capacity: 1 << 16)
-            var lastReportedProgress = 0.0
-            for try await byte in bytes {
-                buffer.append(byte)
-                if buffer.count >= 1 << 16 {
-                    try handle.write(contentsOf: buffer)
-                    received += Int64(buffer.count)
-                    buffer.removeAll(keepingCapacity: true)
-                    if total > 0 {
-                        let progress = Double(received) / Double(total)
-                        if progress - lastReportedProgress > 0.01 {
-                            lastReportedProgress = progress
-                            state = .downloading(progress: progress)
-                        }
+    private func startDownload() {
+        let destination = modelURL
+        let downloader = ModelDownloader(
+            onProgress: { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    guard let self, case .downloading(let current) = self.state else { return }
+                    if progress - current >= 0.01 {
+                        self.state = .downloading(progress: progress)
                     }
                 }
-            }
-            if !buffer.isEmpty {
-                try handle.write(contentsOf: buffer)
-            }
-            try handle.close()
+            },
+            onFinish: { [weak self] result in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.downloader = nil
+                    switch result {
+                    case .success:
+                        self.state = .ready
+                        self.onReady?()
+                    case .failure(let error):
+                        self.state = .failed(error.localizedDescription)
+                    }
+                }
+            },
+            destination: destination,
+            expectedMD5: Self.expectedMD5
+        )
+        self.downloader = downloader
+        downloader.start(url: Self.downloadURL)
+    }
+}
 
-            let digest = try Hashing.md5Hex(of: tempURL)
-            guard digest == Self.expectedMD5 else {
-                try? FileManager.default.removeItem(at: tempURL)
-                state = .failed("Model checksum mismatch — try again")
-                return
-            }
+/// Delegate-driven download: progress callbacks, then MD5 verification and
+/// the final move into place — all off the main thread.
+private final class ModelDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let onProgress: @Sendable (Double) -> Void
+    private let onFinish: @Sendable (Result<Void, Error>) -> Void
+    private let destination: URL
+    private let expectedMD5: String
+    private var session: URLSession?
+    private var finished = false
 
-            try FileManager.default.createDirectory(at: modelURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? FileManager.default.removeItem(at: modelURL)
-            try FileManager.default.moveItem(at: tempURL, to: modelURL)
-            state = .ready
+    init(onProgress: @escaping @Sendable (Double) -> Void,
+         onFinish: @escaping @Sendable (Result<Void, Error>) -> Void,
+         destination: URL,
+         expectedMD5: String) {
+        self.onProgress = onProgress
+        self.onFinish = onFinish
+        self.destination = destination
+        self.expectedMD5 = expectedMD5
+    }
+
+    func start(url: URL) {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 180      // tolerate a stalling CDN
+        configuration.timeoutIntervalForResource = 3600    // a slow hour is still success
+        configuration.waitsForConnectivity = true
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        self.session = session
+        session.downloadTask(with: url).resume()
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        // location is deleted when this method returns — finish synchronously.
+        do {
+            if let http = downloadTask.response as? HTTPURLResponse, http.statusCode != 200 {
+                throw URLError(.badServerResponse)
+            }
+            let digest = try Self.md5HexStreaming(of: location)
+            guard digest == expectedMD5 else {
+                throw NSError(domain: "FieldTheory", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Model checksum mismatch — try again",
+                ])
+            }
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+            finished = true
+            onFinish(.success(()))
         } catch {
-            state = .failed(error.localizedDescription)
+            finished = true
+            onFinish(.failure(error))
         }
+        session.invalidateAndCancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error, !finished {
+            finished = true
+            onFinish(.failure(error))
+        }
+        session.invalidateAndCancel()
+    }
+
+    /// MD5 in 1 MB chunks — never loads the whole model into memory.
+    private static func md5HexStreaming(of fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hasher = Insecure.MD5()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

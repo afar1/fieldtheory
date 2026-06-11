@@ -14,6 +14,8 @@ final class LibraryStore {
     private(set) var folders: [LibraryFolder] = []
     private(set) var docsByFolder: [String: [LibraryDocMeta]] = [:]
     private(set) var allDocs: [LibraryDocMeta] = []
+    /// Recently opened (visit-based, like the Mac sidebar), capped at 7.
+    private(set) var recents: [LibraryDocMeta] = []
 
     /// Bumped whenever a local edit should schedule a push.
     var onLocalChange: (() -> Void)?
@@ -51,9 +53,28 @@ final class LibraryStore {
                 )
             }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+
+            let bySourcePath = Dictionary(docs.map { ($0.sourcePath, $0) }, uniquingKeysWith: { a, _ in a })
+            let recentRows = try await db.query(
+                "SELECT source_path FROM recents ORDER BY last_opened_at_ms DESC LIMIT 7"
+            )
+            recents = recentRows.compactMap { row in
+                guard let path = row["source_path"]?.stringValue,
+                      let doc = bySourcePath[path], doc.materialized else { return nil }
+                return doc
+            }
         } catch {
             // Index unavailable; views show empty state.
         }
+    }
+
+    /// Records that the user opened a document — the Mac's "visit" semantic.
+    func recordVisit(sourcePath: String) async {
+        try? await db.run("""
+            INSERT INTO recents (source_path, last_opened_at_ms) VALUES (?, ?)
+            ON CONFLICT(source_path) DO UPDATE SET last_opened_at_ms = excluded.last_opened_at_ms
+            """, [.text(sourcePath), .int(Timestamps.nowMs())])
+        await reload()
     }
 
     private static func docFromRow(_ row: [String: SQLValue]) -> LibraryDocMeta {

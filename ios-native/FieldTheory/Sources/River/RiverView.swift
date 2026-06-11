@@ -39,39 +39,34 @@ struct RiverView: View {
     private var list: some View {
         List {
             ForEach(model.river.items) { item in
-                RiverCardView(item: item, unread: model.river.isUnread(item))
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
-                    .listRowBackground(Color.clear)
-                    .contentShape(Rectangle())
-                    .onTapGesture { openedItem = item }
-                    // The Mailbox grammar: swipe right → green, mark read;
-                    // swipe left → red, back to unread.
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if model.river.isUnread(item) {
-                            Button {
-                                Task { await model.river.markRead(item) }
-                            } label: {
-                                Label("Read", systemImage: "envelope.open")
-                            }
-                            .tint(Theme.markRead)
-                        } else {
-                            Button {
-                                Task { await model.river.markUnread(item) }
-                            } label: {
-                                Label("Unread", systemImage: "envelope.badge")
-                            }
-                            .tint(Theme.unread)
-                        }
+                Button {
+                    openedItem = item
+                } label: {
+                    RiverCardView(item: item, unread: model.river.isUnread(item))
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+                .listRowBackground(Color.clear)
+                // The Mailbox grammar, with stable action sets so the swipe
+                // never restructures mid-gesture: right → green read,
+                // left → red unread.
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    Button {
+                        Task { await model.river.markRead(item) }
+                    } label: {
+                        Label("Read", systemImage: "envelope.open")
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button {
-                            Task { await model.river.markUnread(item) }
-                        } label: {
-                            Label("Unread", systemImage: "envelope.badge")
-                        }
-                        .tint(Theme.unread)
+                    .tint(Theme.markRead)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button {
+                        Task { await model.river.markUnread(item) }
+                    } label: {
+                        Label("Unread", systemImage: "envelope.badge")
                     }
+                    .tint(Theme.unread)
+                }
                     .contextMenu {
                         Button {
                             UIPasteboard.general.string = item.clipboardText
