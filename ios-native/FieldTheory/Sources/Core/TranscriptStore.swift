@@ -121,18 +121,33 @@ final class TranscriptStore {
         await delete(ids: Array(others))
     }
 
-    /// Unstack: each segment becomes a standalone transcript again.
+    /// Unstack: each segment becomes a standalone transcript again. The
+    /// stack row goes first — its id usually belongs to one of the segments
+    /// (the original first transcription), which then reclaims it. Only
+    /// tombstone the stack id if no segment takes it over, otherwise the
+    /// delete would eat the row we just restored.
     func unstack(_ item: TranscriptItem) async {
         guard let segments = item.segments, segments.count > 1 else { return }
         let now = Timestamps.nowMs()
+
+        try? await db.run("DELETE FROM transcripts WHERE id = ?", [.text(item.id)])
+        let segmentIds = Set(segments.map(\.id))
+        if !segmentIds.contains(item.id) {
+            try? await db.run("""
+                INSERT INTO transcript_tombstones (id, deleted_at_ms) VALUES (?, ?)
+                ON CONFLICT(id) DO UPDATE SET deleted_at_ms = excluded.deleted_at_ms
+                """, [.text(item.id), .int(now)])
+        }
+
         for segment in segments {
             try? await db.run("""
                 INSERT INTO transcripts (id, text, created_at_ms, updated_at_ms, segments_json, dirty)
                 VALUES (?, ?, ?, ?, NULL, 1)
-                ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at_ms = ?, dirty = 1
+                ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at_ms = ?, segments_json = NULL, dirty = 1
                 """, [.text(segment.id), .text(segment.text), .int(segment.createdAt), .int(now), .int(now)])
         }
-        await delete(ids: [item.id])
+        await reload()
+        onLocalChange?()
     }
 
     /// Stacking a file from Library or River: the file arrives as a segment

@@ -51,6 +51,9 @@ struct RiverItem: Identifiable, Hashable {
     var createdBy: String
     var createdAtMs: Int64
     var updatedAtMs: Int64
+    /// Plain-text card preview, computed once at load (markdown stripping is
+    /// too hot for render passes).
+    var preview: String = ""
 
     var fileName: String {
         if let source = originalSourcePath?.split(separator: "/").last, !source.isEmpty {

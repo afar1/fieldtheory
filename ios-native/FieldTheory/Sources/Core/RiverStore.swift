@@ -30,10 +30,11 @@ final class RiverStore {
         do {
             let rows = try await db.query("SELECT * FROM river_items ORDER BY updated_at_ms DESC")
             items = rows.map { row in
-                RiverItem(
+                let content = row["content"]?.stringValue ?? ""
+                return RiverItem(
                     id: row["id"]?.stringValue ?? "",
                     title: row["title"]?.stringValue ?? "Untitled",
-                    content: row["content"]?.stringValue ?? "",
+                    content: content,
                     authorCallsign: row["author_callsign"]?.stringValue,
                     authorInitials: row["author_initials"]?.stringValue,
                     kind: row["kind"]?.stringValue ?? "document",
@@ -41,7 +42,8 @@ final class RiverStore {
                     revision: Int(row["revision"]?.intValue ?? 0),
                     createdBy: row["created_by"]?.stringValue ?? "",
                     createdAtMs: row["created_at_ms"]?.intValue ?? 0,
-                    updatedAtMs: row["updated_at_ms"]?.intValue ?? 0
+                    updatedAtMs: row["updated_at_ms"]?.intValue ?? 0,
+                    preview: Self.makePreview(content)
                 )
             }
             let stateRows = try await db.query("SELECT id, read_revision FROM river_read_state")
@@ -69,5 +71,19 @@ final class RiverStore {
     func markUnread(_ item: RiverItem) async {
         try? await db.run("DELETE FROM river_read_state WHERE id = ?", [.text(item.id)])
         readState[item.id] = nil
+    }
+
+    /// Markdown → plain preview text, done once per item at load time.
+    static func makePreview(_ content: String) -> String {
+        let stripped = MarkdownParser.stripFrontmatter(content)
+        let lines = stripped.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+            .map { line -> String in
+                line.replacingOccurrences(of: "^\\s*([-*+]|\\d+\\.)\\s+(\\[[ xX]\\]\\s*)?", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "[*_`>]", with: "", options: .regularExpression)
+            }
+        return String(lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(360))
     }
 }

@@ -37,54 +37,24 @@ struct RiverView: View {
     }
 
     private var list: some View {
-        List {
-            ForEach(model.river.items) { item in
-                Button {
-                    openedItem = item
-                } label: {
-                    RiverCardView(item: item, unread: model.river.isUnread(item))
-                }
-                .buttonStyle(.plain)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
-                .listRowBackground(Color.clear)
-                // The Mailbox grammar, with stable action sets so the swipe
-                // never restructures mid-gesture: right → green read,
-                // left → red unread.
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button {
-                        Task { await model.river.markRead(item) }
-                    } label: {
-                        Label("Read", systemImage: "envelope.open")
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                ForEach(model.river.items) { item in
+                    SwipeToTriageRow(
+                        onSwipeRight: { Task { await model.river.markRead(item) } },
+                        onSwipeLeft: { Task { await model.river.markUnread(item) } }
+                    ) {
+                        RiverCardView(item: item, unread: model.river.isUnread(item))
+                            .contentShape(Rectangle())
+                            .onTapGesture { openedItem = item }
                     }
-                    .tint(Theme.markRead)
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button {
-                        Task { await model.river.markUnread(item) }
-                    } label: {
-                        Label("Unread", systemImage: "envelope.badge")
-                    }
-                    .tint(Theme.unread)
-                }
-                    .contextMenu {
-                        Button {
-                            UIPasteboard.general.string = item.clipboardText
-                        } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
-                        }
-                        Button {
-                            Task {
-                                await model.transcripts.addFileSegment(fileName: item.fileName, content: item.content, into: nil)
-                            }
-                        } label: {
-                            Label("Add to Voice stack", systemImage: "square.stack.3d.up")
-                        }
-                    }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 120)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
         .background(Theme.background(colorScheme))
         .refreshable { await model.sync.syncNow() }
     }
@@ -110,6 +80,77 @@ struct RiverView: View {
     }
 }
 
+/// Mailbox-feel triage swipe: a short, velocity-assisted throw commits —
+/// right marks read (green), left marks unread (red). Rubber-bands past the
+/// commit point and springs home.
+struct SwipeToTriageRow<Content: View>: View {
+    let onSwipeRight: () -> Void
+    let onSwipeLeft: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var offset: CGFloat = 0
+    private let commitDistance: CGFloat = 64
+
+    var body: some View {
+        ZStack {
+            reveal
+            content()
+                .offset(x: offset)
+        }
+        .gesture(
+            DragGesture(minimumDistance: 14)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    guard abs(dx) > abs(value.translation.height) else { return }
+                    // Ease off past the commit point so it feels weighted.
+                    let past = max(0, abs(dx) - commitDistance)
+                    let damped = min(abs(dx), commitDistance) + past * 0.35
+                    offset = (dx < 0 ? -1 : 1) * damped
+                }
+                .onEnded { value in
+                    // A flick counts: blend actual travel with projected end.
+                    let projected = value.translation.width + value.predictedEndTranslation.width * 0.25
+                    if projected > commitDistance {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        onSwipeRight()
+                    } else if projected < -commitDistance {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        onSwipeLeft()
+                    }
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+                        offset = 0
+                    }
+                }
+        )
+    }
+
+    private var reveal: some View {
+        let committed = abs(offset) >= commitDistance
+        return HStack {
+            Label("Read", systemImage: "envelope.open")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.leading, 22)
+                .opacity(offset > 10 ? 1 : 0)
+                .scaleEffect(offset > 0 && committed ? 1.08 : 1)
+            Spacer()
+            Label("Unread", systemImage: "envelope.badge")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.trailing, 22)
+                .opacity(offset < -10 ? 1 : 0)
+                .scaleEffect(offset < 0 && committed ? 1.08 : 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(offset > 0 ? Theme.markRead : Theme.unread)
+                .opacity(abs(offset) > 10 ? (committed ? 1 : 0.75) : 0)
+        )
+        .animation(.easeOut(duration: 0.12), value: committed)
+    }
+}
+
 /// A generous preview card: callsign top-left, freshness top-right, title,
 /// and the opening lines of the document.
 struct RiverCardView: View {
@@ -118,18 +159,7 @@ struct RiverCardView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
 
-    private var preview: String {
-        let stripped = MarkdownParser.stripFrontmatter(item.content)
-        let lines = stripped.components(separatedBy: "\n")
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
-            .map { line -> String in
-                line.replacingOccurrences(of: "^\\s*([-*+]|\\d+\\.)\\s+(\\[[ xX]\\]\\s*)?", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "[*_`>]", with: "", options: .regularExpression)
-            }
-        return String(lines.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .prefix(360))
-    }
+    private var preview: String { item.preview }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
