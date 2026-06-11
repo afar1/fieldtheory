@@ -29,6 +29,20 @@ final class AppSettings {
         didSet { defaults.set(appearanceMode.rawValue, forKey: "appearance-mode") }
     }
 
+    /// Where the floating mic lives, as screen fractions; nil = default
+    /// bottom-trailing perch.
+    var micPositionFraction: CGPoint? {
+        didSet {
+            if let point = micPositionFraction {
+                defaults.set(Double(point.x), forKey: "mic-pos-x")
+                defaults.set(Double(point.y), forKey: "mic-pos-y")
+            } else {
+                defaults.removeObject(forKey: "mic-pos-x")
+                defaults.removeObject(forKey: "mic-pos-y")
+            }
+        }
+    }
+
     var newDocFolder: String {
         didSet { defaults.set(newDocFolder, forKey: "library-new-doc-location") }
     }
@@ -57,6 +71,10 @@ final class AppSettings {
         newDocFolder = defaults.string(forKey: "library-new-doc-location") ?? "scratchpad"
         autoCopyTranscripts = defaults.object(forKey: "voice-auto-copy") as? Bool ?? true
         syncedFolders = defaults.stringArray(forKey: "library-synced-folders")
+        if let x = defaults.object(forKey: "mic-pos-x") as? Double,
+           let y = defaults.object(forKey: "mic-pos-y") as? Double {
+            micPositionFraction = CGPoint(x: x, y: y)
+        }
     }
 }
 

@@ -24,8 +24,9 @@ struct ToastOverlay: View {
     let toast: ToastCenter
 
     var body: some View {
+        // Toasts drop from the top — the bottom belongs to the tab bar,
+        // record pill, and floating mic.
         VStack {
-            Spacer()
             if let message = toast.message {
                 HStack(spacing: 7) {
                     if let symbol = toast.symbol {
@@ -38,9 +39,10 @@ struct ToastOverlay: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(.regularMaterial, in: Capsule())
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .padding(.bottom, 86)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .padding(.top, 6)
             }
+            Spacer()
         }
         .animation(.spring(duration: 0.35), value: toast.message)
         .allowsHitTesting(false)

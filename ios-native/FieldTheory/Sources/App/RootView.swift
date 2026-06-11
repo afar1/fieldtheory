@@ -83,11 +83,9 @@ struct RootView: View {
                     }
                 }
         )
-        .overlay(alignment: .bottomTrailing) {
+        .overlay {
             if selectedTab != .voice {
-                FloatingMicButton()
-                    .padding(.trailing, 18)
-                    .padding(.bottom, 76)
+                DraggableMicOverlay()
             }
         }
         .overlay { ToastOverlay(toast: toast) }
@@ -122,6 +120,51 @@ struct RootView: View {
 }
 
 // MARK: - Floating mic (Library + River)
+
+/// The mic floats wherever you drop it; the perch persists across launches
+/// and rides above the keyboard automatically.
+struct DraggableMicOverlay: View {
+    @Environment(AppModel.self) private var model
+    @State private var dragOffset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geometry in
+            let home = restingPoint(in: geometry.size)
+            FloatingMicButton()
+                .position(x: home.x + dragOffset.width, y: home.y + dragOffset.height)
+                .gesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            dragOffset = value.translation
+                        }
+                        .onEnded { value in
+                            let landed = clamp(
+                                CGPoint(x: home.x + value.translation.width,
+                                        y: home.y + value.translation.height),
+                                in: geometry.size
+                            )
+                            model.settings.micPositionFraction = CGPoint(
+                                x: landed.x / max(geometry.size.width, 1),
+                                y: landed.y / max(geometry.size.height, 1)
+                            )
+                            dragOffset = .zero
+                        }
+                )
+        }
+    }
+
+    private func restingPoint(in size: CGSize) -> CGPoint {
+        let fraction = model.settings.micPositionFraction ?? CGPoint(x: 0.86, y: 0.84)
+        return clamp(CGPoint(x: fraction.x * size.width, y: fraction.y * size.height), in: size)
+    }
+
+    private func clamp(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, 44), size.width - 44),
+            y: min(max(point.y, 60), size.height - 44)
+        )
+    }
+}
 
 struct FloatingMicButton: View {
     @Environment(AppModel.self) private var model
