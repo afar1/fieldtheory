@@ -587,6 +587,12 @@ export class LibrarySyncService {
       const remote = remoteByClientId.get(doc.clientId);
       if (!remote) {
         result.uploaded++;
+      } else if (remote.deleted_at) {
+        // A tombstone never outvotes a file that exists on disk. Without
+        // this, files whose rows were tombstoned during a past migration are
+        // skipped forever because the tombstone's updated_at beats their
+        // mtime (this stranded briefs/ and most of scratchpad/).
+        result.uploaded++;
       } else if (rowContentHash(remote) !== doc.contentHash) {
         if (doc.updatedAtMs <= remoteUpdatedAtMs(remote) + CLOCK_SKEW_MS) {
           result.skipped++;
