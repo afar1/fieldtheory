@@ -1718,6 +1718,7 @@ interface HotMicAPI {
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
+  onHotkeyChanged: (callback: (hotkey: string | null) => void) => () => void;
   getPasteWords: () => Promise<string>;
   setPasteWords: (words: string) => Promise<string>;
   getShowWordCount: () => Promise<boolean>;
