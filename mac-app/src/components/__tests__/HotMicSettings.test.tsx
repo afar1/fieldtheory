@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HotMicSettings from '../HotMicSettings';
 
@@ -78,6 +78,7 @@ function makeHotMicApi({
     onStateChanged: vi.fn(() => () => {}),
     onStatusChanged: vi.fn(() => () => {}),
     onInputModeChanged: vi.fn(() => () => {}),
+    onHotkeyChanged: vi.fn(() => () => {}),
     onRuntimeStatusChanged: vi.fn(() => () => {}),
   };
 }
@@ -177,5 +178,27 @@ describe('HotMicSettings runtime engine display', () => {
     await waitFor(() => {
       expect((window as any).hotMicAPI.setBackgroundFilterEnabled).toHaveBeenCalledWith(true);
     });
+  });
+
+  it('updates the displayed mode toggle hotkey when another settings surface changes it', async () => {
+    const hotkeyListeners: Array<(hotkey: string | null) => void> = [];
+    (window as any).hotMicAPI = {
+      ...makeHotMicApi(),
+      getHotkey: vi.fn(async () => 'F13'),
+      onHotkeyChanged: vi.fn((callback: (hotkey: string | null) => void) => {
+        hotkeyListeners.push(callback);
+        return () => {};
+      }),
+    };
+
+    render(<HotMicSettings />);
+
+    expect(await screen.findByText('F13')).toBeTruthy();
+
+    await act(async () => {
+      hotkeyListeners.forEach((callback) => callback('Shift+Command+H'));
+    });
+
+    expect(await screen.findByText('Shift+Command+H')).toBeTruthy();
   });
 });

@@ -5638,6 +5638,14 @@ function broadcastInputMode(mode: InputMode): void {
   });
 }
 
+function broadcastHotMicHotkey(hotkey: string | null): void {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('hotmic:hotkeyChanged', hotkey);
+    }
+  });
+}
+
 async function applyInputMode(mode: InputMode): Promise<InputMode> {
   const normalized: InputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
   const shouldEnableHotMic = normalized === 'hot-mic';
@@ -15420,7 +15428,11 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:setHotkey', async (_event, hotkey: string | null) => {
       if (!hotMicManager) return false;
-      return hotMicManager.setHotkey(hotkey);
+      const success = await hotMicManager.setHotkey(hotkey);
+      if (success) {
+        broadcastHotMicHotkey(hotMicManager.getHotkey());
+      }
+      return success;
     });
 
     ipcMain.handle('hotmic:getPasteWords', () => {
