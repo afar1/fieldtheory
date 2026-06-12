@@ -95,6 +95,8 @@ type HotMicTextTarget =
   | { kind: 'field-theory-markdown' }
   | { kind: 'none' };
 
+type HotMicSubmitMode = 'none' | 'enter' | 'command-enter';
+
 /**
  * Hot Mic states:
  * - idle: Not active
@@ -899,9 +901,14 @@ export class HotMicManager extends EventEmitter {
     return target.kind === 'app' ? target.bundleId : null;
   }
 
-  private async insertTextIntoTarget(target: HotMicTextTarget, text: string, pressEnter: boolean): Promise<boolean> {
+  private async insertTextIntoTarget(
+    target: HotMicTextTarget,
+    text: string,
+    pressEnter: boolean,
+    submitMode?: HotMicSubmitMode
+  ): Promise<boolean> {
     if (target.kind === 'field-theory-markdown') {
-      const textToInsert = pressEnter ? `${text}\n` : text;
+      const textToInsert = pressEnter || submitMode === 'command-enter' ? `${text}\n` : text;
       return this.fieldTheoryMarkdownInsertionTarget?.insertText(textToInsert) ?? false;
     }
 
@@ -909,7 +916,7 @@ export class HotMicManager extends EventEmitter {
       return false;
     }
 
-    const result = await this.typeIntoAppWithClipboardSync(target.bundleId, text, pressEnter);
+    const result = await this.typeIntoAppWithClipboardSync(target.bundleId, text, pressEnter, submitMode);
     if (!result.success) {
       log.error('Hot Mic: typeIntoApp failed:', result.error);
       return false;
@@ -920,18 +927,58 @@ export class HotMicManager extends EventEmitter {
   private async typeIntoAppWithClipboardSync(
     bundleId: string,
     text: string,
-    pressEnter: boolean
+    pressEnter: boolean,
+    submitMode?: HotMicSubmitMode
   ): Promise<{ success: boolean; error?: string }> {
     const clipboardManager = this.clipboardManager;
     if (text) {
       clipboardManager?.setClipboardHashFromText?.(text);
     }
-    const result = await this.nativeHelper.typeIntoApp(bundleId, text, pressEnter);
+    const result = submitMode
+      ? await this.nativeHelper.typeIntoApp(bundleId, text, pressEnter, submitMode)
+      : await this.nativeHelper.typeIntoApp(bundleId, text, pressEnter);
     if (!result.success && text) {
       // Restore hash state from real clipboard content if helper injection failed.
       clipboardManager?.syncClipboardHash?.();
     }
     return result;
+  }
+
+  private async flushHotMicSubmitPhrase(
+    cleanedText: string,
+    bufferOverrideText: string | null,
+    submitMode: Extract<HotMicSubmitMode, 'enter' | 'command-enter'>
+  ): Promise<void> {
+    if (bufferOverrideText !== null) {
+      this.replaceBufferWithText(bufferOverrideText);
+    }
+    if (cleanedText.trim()) {
+      this.pushNormalizedTextToBuffer(cleanedText);
+    }
+
+    const target = this.getTextTarget();
+    const mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
+    const nativeSubmitMode = submitMode === 'command-enter' ? submitMode : undefined;
+
+    if (mappedText) {
+      void this.storeHotMicTranscript(mappedText);
+      if (target.kind !== 'none') {
+        const actionLabel = submitMode === 'command-enter' ? 'submitting buffer with Command-Enter' : 'submitting buffer';
+        log.info('Hot Mic: %s (%d chars) to %s', actionLabel, mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
+        if (LOG_TRANSCRIPT_PAYLOADS) {
+          log.debug('Hot Mic: submit buffer payload: "%s"', mappedText);
+        }
+        if (await this.insertTextIntoTarget(target, mappedText, true, nativeSubmitMode)) {
+          this.playSound('paste');
+        }
+      }
+      return;
+    }
+
+    if (target.kind === 'none') {
+      return;
+    }
+    await this.insertTextIntoTarget(target, '', true, nativeSubmitMode);
   }
 
   // ---------------------------------------------------------------------------
@@ -2421,6 +2468,24 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // Check for Command-Enter word
+    const commandEnterEval = this.checkCommandEnterPhrasesWithContext(trimmed);
+    const {
+      shouldCommandEnter,
+      cleanedText: commandEnterCleanedText,
+      bufferOverrideText: commandEnterBufferOverrideText,
+    } = commandEnterEval;
+
+    if (shouldCommandEnter) {
+      log.info('Hot Mic: command-enter phrase matched in chunk');
+      if (LOG_TRANSCRIPT_PAYLOADS) {
+        log.debug('Hot Mic: command-enter phrase chunk: "%s"', trimmed);
+      }
+      await this.flushHotMicSubmitPhrase(commandEnterCleanedText, commandEnterBufferOverrideText, 'command-enter');
+      this.resetBufferDiscardTimer();
+      return;
+    }
+
     // Check for submit word
     const submitEval = this.checkSubmitPhrasesWithContext(trimmed);
     const { shouldSubmit, cleanedText, bufferOverrideText } = submitEval;
@@ -2430,40 +2495,7 @@ export class HotMicManager extends EventEmitter {
       if (LOG_TRANSCRIPT_PAYLOADS) {
         log.debug('Hot Mic: submit phrase chunk: "%s"', trimmed);
       }
-      if (bufferOverrideText !== null) {
-        this.replaceBufferWithText(bufferOverrideText);
-      }
-      // Add any remaining text before the submit word to buffer
-      if (cleanedText.trim()) {
-        this.pushNormalizedTextToBuffer(cleanedText);
-      }
-
-      // Flush the entire buffer
-      const target = this.getTextTarget();
-      const mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
-
-      if (mappedText) {
-        void this.storeHotMicTranscript(mappedText);
-        if (target.kind !== 'none') {
-          log.info('Hot Mic: submitting buffer (%d chars) to %s', mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
-          if (LOG_TRANSCRIPT_PAYLOADS) {
-            log.debug('Hot Mic: submitting buffer payload: "%s"', mappedText);
-          }
-          if (await this.insertTextIntoTarget(target, mappedText, true)) {
-            this.playSound('paste');
-          }
-        }
-      } else {
-        const target = this.getTextTarget();
-        if (target.kind === 'none') {
-          this.resetBufferDiscardTimer();
-          return;
-        }
-        // Submit word alone — just hit Enter
-        await this.insertTextIntoTarget(target, '', true);
-      }
-
-      // Keep listening — user navigates on their own
+      await this.flushHotMicSubmitPhrase(cleanedText, bufferOverrideText, 'enter');
       this.resetBufferDiscardTimer();
       return;
     }
@@ -2484,6 +2516,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   private static readonly DEFAULT_SUBMIT_PHRASES = HOT_MIC_DEFAULTS.submitPhrases;
+  private static readonly DEFAULT_COMMAND_ENTER_PHRASES = HOT_MIC_DEFAULTS.commandEnterPhrases;
   private static readonly DEFAULT_PASTE_PHRASES = HOT_MIC_DEFAULTS.pastePhrases;
   private static readonly DEFAULT_CANCEL_PHRASES = HOT_MIC_DEFAULTS.cancelPhrases;
   private static readonly DEFAULT_SCRAP_PHRASES = HOT_MIC_DEFAULTS.scrapPhrases;
@@ -2517,6 +2550,16 @@ export class HotMicManager extends EventEmitter {
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SUBMIT_PHRASES;
+    return raw
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(p => p.length > 0)
+      .map(p => p.split(/\s+/));
+  }
+
+  private getCommandEnterPhrases(): string[][] {
+    const pref = this.preferences.getPreference('hotMicCommandEnterWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_COMMAND_ENTER_PHRASES;
     return raw
       .split(',')
       .map(p => p.trim().toLowerCase())
@@ -2638,6 +2681,56 @@ export class HotMicManager extends EventEmitter {
 
     return {
       shouldSubmit: true,
+      cleanedText: '',
+      bufferOverrideText: combinedMatch.cleanedText,
+    };
+  }
+
+  private checkCommandEnterPhrases(transcript: string): { shouldCommandEnter: boolean; cleanedText: string } {
+    const exactMatch = this.checkTrailingPhrase(transcript, this.getCommandEnterPhrases());
+    if (exactMatch.matched) {
+      return { shouldCommandEnter: true, cleanedText: exactMatch.cleanedText };
+    }
+
+    const tolerantMatch = this.checkTrailingPhraseWithNoiseSuffix(
+      transcript,
+      this.getCommandEnterPhrases(),
+      HotMicManager.SUBMIT_TRAILING_NOISE_MAX_WORDS
+    );
+    return { shouldCommandEnter: tolerantMatch.matched, cleanedText: tolerantMatch.cleanedText };
+  }
+
+  private checkCommandEnterPhrasesWithContext(transcript: string): {
+    shouldCommandEnter: boolean;
+    cleanedText: string;
+    bufferOverrideText: string | null;
+  } {
+    const directMatch = this.checkCommandEnterPhrases(transcript);
+    if (directMatch.shouldCommandEnter || !HotMicManager.ENABLE_SPLIT_CHUNK_SUBMIT_DETECTION) {
+      return {
+        shouldCommandEnter: directMatch.shouldCommandEnter,
+        cleanedText: directMatch.cleanedText,
+        bufferOverrideText: null,
+      };
+    }
+
+    if (this.transcriptBuffer.length === 0) {
+      return { shouldCommandEnter: false, cleanedText: transcript, bufferOverrideText: null };
+    }
+
+    const bufferedText = this.transcriptBuffer.join(' ').trim();
+    if (!bufferedText) {
+      return { shouldCommandEnter: false, cleanedText: transcript, bufferOverrideText: null };
+    }
+
+    const combined = `${bufferedText} ${transcript}`.trim();
+    const combinedMatch = this.checkCommandEnterPhrases(combined);
+    if (!combinedMatch.shouldCommandEnter) {
+      return { shouldCommandEnter: false, cleanedText: transcript, bufferOverrideText: null };
+    }
+
+    return {
+      shouldCommandEnter: true,
       cleanedText: '',
       bufferOverrideText: combinedMatch.cleanedText,
     };

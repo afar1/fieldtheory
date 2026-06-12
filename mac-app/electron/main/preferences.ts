@@ -312,6 +312,7 @@ interface Preferences {
   hotMicSoundsEnabled?: boolean;
   hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
   hotMicSubmitWord?: string; // Word that flushes the transcript buffer (default: "go")
+  hotMicCommandEnterWords?: string; // Comma-separated words that flush the buffer with Cmd+Enter
   hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
   hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
   hotMicCancelWords?: string; // Comma-separated words that send Ctrl+C to terminal
