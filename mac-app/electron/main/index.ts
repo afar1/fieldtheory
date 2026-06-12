@@ -15718,12 +15718,12 @@ if (!gotTheLock) {
       return KNOWN_TERMINALS;
     });
 
-    ipcMain.handle('hotmic:start', () => {
-      applyHotMicMode('activate');
+    ipcMain.handle('hotmic:start', async () => {
+      return await applyInputMode('hot-mic');
     });
 
-    ipcMain.handle('hotmic:stop', () => {
-      applyHotMicMode('deactivate');
+    ipcMain.handle('hotmic:stop', async () => {
+      return await applyInputMode('standard');
     });
 
     ipcMain.handle('hotmic:isHookInstalled', () => {
