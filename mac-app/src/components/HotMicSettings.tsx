@@ -42,6 +42,7 @@ export default function HotMicSettings() {
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
   const [submitWord, setSubmitWord] = useState('');
+  const [commandEnterWords, setCommandEnterWords] = useState('');
   const [pasteWords, setPasteWords] = useState('');
   const [cancelWords, setCancelWords] = useState('');
   const [scrapWords, setScrapWords] = useState('');
@@ -95,6 +96,7 @@ export default function HotMicSettings() {
         hotMicStatus,
         hookStatus,
         submit,
+        commandEnter,
         pw,
         cw,
         skw,
@@ -122,6 +124,7 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
+        window.hotMicAPI!.getCommandEnterWords(),
         window.hotMicAPI!.getPasteWords(),
         window.hotMicAPI!.getCancelWords(),
         window.hotMicAPI!.getScrapWords(),
@@ -150,6 +153,7 @@ export default function HotMicSettings() {
       setCurrentMuted(hotMicStatus.muted);
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
+      setCommandEnterWords(commandEnter);
       setPasteWords(pw);
       setCancelWords(cw);
       setScrapWords(skw);
@@ -244,6 +248,11 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !submitWord.trim()) return;
     await window.hotMicAPI.setSubmitWord(submitWord.trim());
   }, [submitWord]);
+
+  const handleCommandEnterWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !commandEnterWords.trim()) return;
+    await window.hotMicAPI.setCommandEnterWords(commandEnterWords.trim());
+  }, [commandEnterWords]);
 
   const handlePasteWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !pasteWords.trim()) return;
@@ -421,8 +430,9 @@ export default function HotMicSettings() {
     setResettingDefaults(true);
     try {
       await window.hotMicAPI.resetCommandDefaults();
-      const [submit, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds, rects] = await Promise.all([
+      const [submit, commandEnter, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds, rects] = await Promise.all([
         window.hotMicAPI.getSubmitWord(),
+        window.hotMicAPI.getCommandEnterWords(),
         window.hotMicAPI.getPasteWords(),
         window.hotMicAPI.getCancelWords(),
         window.hotMicAPI.getScrapWords(),
@@ -447,6 +457,7 @@ export default function HotMicSettings() {
       ]);
 
       setSubmitWord(submit);
+      setCommandEnterWords(commandEnter);
       setPasteWords(pw);
       setCancelWords(cw);
       setScrapWords(skw);
@@ -949,6 +960,22 @@ export default function HotMicSettings() {
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleSubmitWordSave}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Command Enter */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Command Enter</span>
+        <input
+          type="text"
+          value={commandEnterWords}
+          onChange={(e) => setCommandEnterWords(e.target.value)}
+          placeholder="command enter, command return"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleCommandEnterWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCommandEnterWordsSave()}
         />
       </div>
 
