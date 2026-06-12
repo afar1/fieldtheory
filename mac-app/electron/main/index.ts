@@ -15423,7 +15423,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getHotkey', () => {
-      return hotMicManager?.getHotkey() ?? null;
+      return hotMicManager?.getHotkey() ?? preferencesManager?.getPreference('hotMicHotkey') ?? null;
     });
 
     ipcMain.handle('hotmic:setHotkey', async (_event, hotkey: string | null) => {
