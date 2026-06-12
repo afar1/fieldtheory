@@ -156,4 +156,51 @@ describe('DynamicIsland floating pill', () => {
 
     expect(shell.style.opacity).toBe('0');
   });
+
+  it('reveals the floating shell again when hot mic activates after completion fade-out', async () => {
+    vi.useFakeTimers();
+    const callbacks: Record<string, Array<(value: any) => void>> = {
+      state: [],
+      audio: [],
+      stack: [],
+      hotmic: [],
+      meter: [],
+      resize: [],
+    };
+
+    (window as any).dynamicIslandAPI = {
+      onStateChange: (cb: (state: string) => void) => callbacks.state.push(cb),
+      onStandardAudioLevel: (cb: (level: number) => void) => callbacks.audio.push(cb),
+      onStackChanged: (cb: (count: number) => void) => callbacks.stack.push(cb),
+      onHotMicUpdate: (cb: (data: unknown) => void) => callbacks.hotmic.push(cb),
+      onHotMicFilterMeter: (cb: (data: unknown) => void) => callbacks.meter.push(cb),
+      onResize: (cb: (data: unknown) => void) => callbacks.resize.push(cb),
+      removeAllListeners: vi.fn(),
+    };
+    window.history.pushState({}, '', '/dynamic-island.html?side=floating&rightWidth=30');
+    vi.resetModules();
+
+    const { default: DynamicIsland } = await import('../DynamicIsland');
+    const { container } = render(<DynamicIsland />);
+    const shell = container.querySelector('.di-floating-shell') as HTMLElement;
+
+    await act(async () => {
+      callbacks.state.forEach((cb) => cb('recording'));
+      callbacks.audio.forEach((cb) => cb(0.2));
+      callbacks.state.forEach((cb) => cb('completing'));
+      vi.advanceTimersByTime(60);
+      callbacks.state.forEach((cb) => cb('idle'));
+    });
+    expect(shell.style.opacity).toBe('0');
+
+    await act(async () => {
+      callbacks.hotmic.forEach((cb) => cb({ active: true }));
+      callbacks.meter.forEach((cb) => cb({ rawLevel: 0.3 }));
+    });
+
+    expect(shell.style.opacity).toBe('1');
+    const waveformBars = Array.from(container.querySelectorAll('[data-waveform-bar="true"]')) as HTMLElement[];
+    expect(waveformBars).toHaveLength(7);
+    expect(waveformBars.every((bar) => bar.style.backgroundColor === 'rgba(249, 115, 22, 0.95)')).toBe(true);
+  });
 });

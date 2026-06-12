@@ -1825,9 +1825,15 @@ function FloatingPill() {
         setFadingOut(false);
       }
     });
+    api?.onHotMicUpdate?.((data: { active: boolean }) => {
+      if (data?.active) {
+        setFadingOut(false);
+      }
+    });
     return () => {
       api?.removeAllListeners('dynamic-island-resize');
       api?.removeAllListeners('dynamic-island-state');
+      api?.removeAllListeners('dynamic-island-hotmic');
       if (completeTimerRef.current) {
         clearTimeout(completeTimerRef.current);
         completeTimerRef.current = null;

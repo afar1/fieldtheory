@@ -746,8 +746,12 @@ export default function SettingsPanel({
     }
 
     // Load Hot Mic hotkey
+    let unsubscribeHotMicHotkey: (() => void) | undefined;
     if (window.hotMicAPI) {
       window.hotMicAPI.getHotkey().then(hotkey => {
+        setHotMicHotkey(hotkey);
+      });
+      unsubscribeHotMicHotkey = window.hotMicAPI.onHotkeyChanged?.((hotkey) => {
         setHotMicHotkey(hotkey);
       });
     }
@@ -788,6 +792,7 @@ export default function SettingsPanel({
 
     return () => {
       unsubscribeTier?.();
+      unsubscribeHotMicHotkey?.();
     };
   }, [refreshFieldTheorySyncStatus]);
   

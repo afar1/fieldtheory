@@ -613,8 +613,22 @@ export class DynamicIslandManager extends EventEmitter {
   setInputMode(mode: DynamicIslandInputMode): DynamicIslandInputMode {
     const normalized: DynamicIslandInputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
     this.inputMode = normalized;
+    if (normalized === 'hot-mic') {
+      this.hotMicActive = true;
+    } else {
+      this.hotMicActive = false;
+      this.hotMicWordCount = 0;
+      this.hotMicLastWord = '';
+    }
     this.updateWindowSize();
     this.sendInputModeToRenderers();
+    this.sendHotMicToRight();
+    if (this.shouldShowFloatingIndicator()) {
+      this.show();
+    } else if (!this.shouldShowIndicatorWindow()) {
+      this.hide();
+    }
+    this.tickAutoHide();
     return normalized;
   }
 
