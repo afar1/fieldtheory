@@ -1004,6 +1004,29 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(modeEvents[modeEvents.length - 1]?.args[0]).toBe('hot-mic');
   });
 
+  it('shows the floating orange hot-mic pill as soon as hot-mic mode is selected', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    expect(floating?.getOpacity()).toBe(0);
+
+    manager.setInputMode('hot-mic');
+
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(1);
+    const hotMicEvents = floating?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-hotmic'
+    ) ?? [];
+    expect(hotMicEvents[hotMicEvents.length - 1]?.args[0]).toMatchObject({
+      active: true,
+    });
+  });
+
   it('keeps one-chip standard recording within idle outer width', () => {
     manager = createNotchManager();
     manager.setClipboardManager({

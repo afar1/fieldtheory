@@ -203,6 +203,9 @@ export default function HotMicSettings() {
     const unsubInputMode = window.hotMicAPI!.onInputModeChanged?.((mode) => {
       setEnabled(mode === 'hot-mic');
     }) ?? (() => {});
+    const unsubHotkey = window.hotMicAPI!.onHotkeyChanged?.((hotkey) => {
+      setModeToggleHotkey(hotkey ?? '');
+    }) ?? (() => {});
 
     const unsubRuntime = window.hotMicAPI!.onRuntimeStatusChanged?.((status) => {
       setRuntimeStatus(status);
@@ -212,6 +215,7 @@ export default function HotMicSettings() {
       unsub();
       unsubStatus();
       unsubInputMode();
+      unsubHotkey();
       unsubRuntime?.();
     };
   }, []);

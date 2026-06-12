@@ -5206,6 +5206,15 @@ const hotMicAPI = {
   setHotkey: async (hotkey: string | null): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setHotkey', hotkey);
   },
+  onHotkeyChanged: (callback: (hotkey: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, hotkey: string | null) => {
+      callback(hotkey);
+    };
+    ipcRenderer.on('hotmic:hotkeyChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:hotkeyChanged', handler);
+    };
+  },
   getPasteWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getPasteWords');
   },
