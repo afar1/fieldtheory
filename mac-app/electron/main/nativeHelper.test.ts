@@ -197,4 +197,26 @@ describe('NativeHelper recording command sequencing', () => {
       eventTarget: 'pid',
     });
   });
+
+  it('passes command-enter submit mode to the native helper', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const typePromise = helper.typeIntoApp('com.mitchellh.ghostty', 'alpha beta', true, 'command-enter');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.mitchellh.ghostty',
+      text: 'alpha beta',
+      pressEnter: true,
+      submitMode: 'command-enter',
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+    });
+
+    await expect(typePromise).resolves.toMatchObject({ success: true });
+  });
 });

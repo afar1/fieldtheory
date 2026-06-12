@@ -5,6 +5,7 @@
 
 export const HOT_MIC_DEFAULTS = {
   submitPhrases: 'go ahead, send it, submit, do it',
+  commandEnterPhrases: 'command enter, command return',
   pastePhrases: 'paste, paste it, transcribe',
   cancelPhrases: 'stop, abort',
   scrapPhrases: 'scrap, scrap that',

@@ -5200,6 +5200,12 @@ const hotMicAPI = {
   setSubmitWord: async (word: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setSubmitWord', word);
   },
+  getCommandEnterWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getCommandEnterWords');
+  },
+  setCommandEnterWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setCommandEnterWords', words);
+  },
   getHotkey: async (): Promise<string | null> => {
     return ipcRenderer.invoke('hotmic:getHotkey');
   },

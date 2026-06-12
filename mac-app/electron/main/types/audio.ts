@@ -542,6 +542,7 @@ export interface TypeIntoAppCommand {
   bundleId: string;
   text: string;
   pressEnter: boolean;
+  submitMode?: 'none' | 'enter' | 'command-enter';
 }
 
 /**
