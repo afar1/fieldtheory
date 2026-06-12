@@ -910,8 +910,9 @@ export class ClipboardManager extends EventEmitter {
   ): Promise<number> {
     const hash = this.hashContent(imageBuffer);
     
-    // Check if already exists (unless it's part of a stack - stacks can have duplicates)
-    if (!stackId) {
+    // Screenshots are intentional captures, so repeated captures of the same
+    // pixels still need fresh rows for session-scoped figure tracking.
+    if (!stackId && type !== 'screenshot') {
       const existing = this.db
         .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
         .get(hash) as { id: number } | undefined;

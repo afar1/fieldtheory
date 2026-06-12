@@ -418,6 +418,50 @@ describe('ClipboardManager.checkClipboard', () => {
   });
 });
 
+describe('ClipboardManager.storeImage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not dedupe explicit screenshot captures by content hash', async () => {
+    const manager: any = new ClipboardManager();
+    manager.getFrontmostApp = vi.fn(async () => null);
+    manager.cleanupOldItems = vi.fn();
+
+    const insertRun = vi.fn(() => ({ lastInsertRowid: 77 }));
+    testState.dbPrepare.mockClear();
+    (testState.dbPrepare as any).mockImplementation((sql: string): any => {
+      if (sql.includes('SELECT id FROM clipboard_items WHERE content_hash = ?')) {
+        return { get: vi.fn(() => ({ id: 42 })) };
+      }
+      if (sql.includes('INSERT INTO clipboard_items')) {
+        return { run: insertRun };
+      }
+      return {
+        get: vi.fn(() => undefined),
+        run: vi.fn(),
+        all: vi.fn(() => []),
+      };
+    });
+
+    const image = {
+      getSize: () => ({ width: 100, height: 80 }),
+      resize: () => ({ toPNG: () => Buffer.from([0x01]) }),
+    };
+
+    const id = await manager.storeImage(
+      image,
+      Buffer.from([0x89, 0x50]),
+      'screenshot'
+    );
+
+    expect(id).toBe(77);
+    expect(insertRun).toHaveBeenCalledTimes(1);
+    const preparedSql = (testState.dbPrepare as any).mock.calls.map(([sql]: [unknown]) => String(sql));
+    expect(preparedSql.some((sql: string) => sql.includes('SELECT id FROM clipboard_items WHERE content_hash = ?'))).toBe(false);
+  });
+});
+
 describe('buildScreencaptureCommand', () => {
   it('removes window shadow in interactive capture mode', () => {
     expect(buildScreencaptureCommand({ region: true })).toBe('screencapture -i -o -c');
