@@ -1716,6 +1716,8 @@ interface HotMicAPI {
   setIslandAutoHide: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
+  getCommandEnterWords: () => Promise<string>;
+  setCommandEnterWords: (words: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   onHotkeyChanged: (callback: (hotkey: string | null) => void) => () => void;

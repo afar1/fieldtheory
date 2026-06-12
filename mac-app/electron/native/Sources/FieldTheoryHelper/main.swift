@@ -65,6 +65,7 @@ struct IncomingMessage: Codable {
     let bundleId: String?       // For typeIntoApp, focusWindowByTitle
     let text: String?           // For typeIntoApp
     let pressEnter: Bool?       // For typeIntoApp
+    let submitMode: String?     // For typeIntoApp ("none", "enter", "command-enter")
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
     let silenceMs: Int?         // For setHarvestMode — optional silence override (nil = use default)
@@ -2227,7 +2228,8 @@ final class MessageHandler {
                 return
             }
             let pressEnter = message.pressEnter ?? false
-            typeIntoApp(bundleId: bundleId, text: text, pressEnter: pressEnter)
+            let submitMode = message.submitMode ?? (pressEnter ? "enter" : "none")
+            typeIntoApp(bundleId: bundleId, text: text, submitMode: submitMode)
 
         case .focusWindowByTitle:
             guard let bundleId = message.bundleId, let titleSubstring = message.titleSubstring else {
@@ -2302,8 +2304,8 @@ final class MessageHandler {
     }
 
     /// Type text into a target application using pasteboard + CGEvent key simulation.
-    /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally Enter.
-    private func typeIntoApp(bundleId: String, text: String, pressEnter: Bool) {
+    /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally submit.
+    private func typeIntoApp(bundleId: String, text: String, submitMode: String) {
         let accessibilityTrusted = AXIsProcessTrusted()
 
         func sendTypeResult(
@@ -2405,14 +2407,26 @@ final class MessageHandler {
         // Delay for paste to complete before pressing Enter.
         usleep(200_000) // 200ms
 
-        // Optionally press Enter (clear flags to avoid Cmd+Enter triggering fullscreen).
-        if pressEnter {
-            let enterDownPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: true, flags: [], pid: targetPid)
-            let enterUpPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: false, flags: [], pid: targetPid)
-            guard enterDownPosted && enterUpPosted else {
+        if submitMode == "enter" {
+            let returnDownPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: true, flags: [], pid: targetPid)
+            let returnUpPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: false, flags: [], pid: targetPid)
+            guard returnDownPosted && returnUpPosted else {
                 sendTypeResult(
                     success: false,
                     error: "Failed to create enter key events",
+                    targetFrontmost: targetFrontmost,
+                    focusedTextInput: focusedTextInput,
+                    pasteboardWritten: pasteboardWritten,
+                    eventTarget: "pid"
+                )
+                return
+            }
+        } else if submitMode == "command-enter" {
+            let commandReturnPosted = postCommandReturnToPid(source: source, pid: targetPid)
+            guard commandReturnPosted else {
+                sendTypeResult(
+                    success: false,
+                    error: "Failed to create command-enter key events",
                     targetFrontmost: targetFrontmost,
                     focusedTextInput: focusedTextInput,
                     pasteboardWritten: pasteboardWritten,
@@ -2468,6 +2482,18 @@ final class MessageHandler {
         let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
 
         return commandDownPosted && pasteKeyDownPosted && pasteKeyUpPosted && commandUpPosted
+    }
+
+    private func postCommandReturnToPid(source: CGEventSource?, pid: pid_t) -> Bool {
+        let commandKey: CGKeyCode = 0x37
+        let returnKey: CGKeyCode = 0x24
+
+        let commandDownPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let returnKeyDownPosted = postKeyEventToPid(source: source, virtualKey: returnKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let returnKeyUpPosted = postKeyEventToPid(source: source, virtualKey: returnKey, keyDown: false, flags: .maskCommand, pid: pid)
+        let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
+
+        return commandDownPosted && returnKeyDownPosted && returnKeyUpPosted && commandUpPosted
     }
 
     /// Focus a specific window of an app by matching a substring in its title.

@@ -349,6 +349,57 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('submits buffered text with Command-Enter when command-enter phrase is spoken', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('alpha beta command enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      'alpha beta',
+      true,
+      'command-enter'
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('submits with Command-Enter when command-enter phrase is split across chunk boundary', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('alpha beta command');
+    await (manager as any).processListeningChunk('enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      'alpha beta',
+      true,
+      'command-enter'
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('sends Command-Enter by itself when command-enter phrase has no buffered text', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('command enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      '',
+      true,
+      'command-enter'
+    );
+
+    manager.destroy();
+  });
+
   it('dedupes overlapping boundary words across adjacent chunks', async () => {
     const { manager } = createManager();
     (manager as any).state = 'listening';

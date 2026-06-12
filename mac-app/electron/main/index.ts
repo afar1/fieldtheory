@@ -15422,6 +15422,15 @@ if (!gotTheLock) {
       return word;
     });
 
+    ipcMain.handle('hotmic:getCommandEnterWords', () => {
+      return preferencesManager?.getPreference('hotMicCommandEnterWords') ?? HOT_MIC_DEFAULTS.commandEnterPhrases;
+    });
+
+    ipcMain.handle('hotmic:setCommandEnterWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicCommandEnterWords: words });
+      return words;
+    });
+
     ipcMain.handle('hotmic:getHotkey', () => {
       return hotMicManager?.getHotkey() ?? null;
     });
@@ -15671,6 +15680,7 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:resetCommandDefaults', async () => {
       const resetPayload: Record<string, unknown> = {
         hotMicSubmitWord: HOT_MIC_DEFAULTS.submitPhrases,
+        hotMicCommandEnterWords: HOT_MIC_DEFAULTS.commandEnterPhrases,
         hotMicPasteWords: HOT_MIC_DEFAULTS.pastePhrases,
         hotMicCancelWords: HOT_MIC_DEFAULTS.cancelPhrases,
         hotMicScrapWords: HOT_MIC_DEFAULTS.scrapPhrases,

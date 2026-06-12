@@ -34,6 +34,7 @@ function makeHotMicApi({
     setBackgroundFilterStrength: vi.fn(async (value: number) => value),
     isHookInstalled: vi.fn(async () => false),
     getSubmitWord: vi.fn(async () => 'submit'),
+    getCommandEnterWords: vi.fn(async () => 'command enter'),
     getPasteWords: vi.fn(async () => 'paste'),
     getCancelWords: vi.fn(async () => 'cancel'),
     getScrapWords: vi.fn(async () => 'scrap'),
