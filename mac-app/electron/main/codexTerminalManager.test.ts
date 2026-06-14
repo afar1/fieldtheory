@@ -545,6 +545,8 @@ describe('CodexTerminalManager', () => {
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
       expect(ptys[0].written.at(-1)).toContain(`Read manifest command: cat ${quoteForPosixShell(result.filePath!)}`);
       expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
+      expect(ptys[0].written.at(-1)).toContain('For user-requested edits to Field Theory Library documents, prefer the Field Theory CLI');
+      expect(ptys[0].written.at(-1)).toContain('ft library update <path> --file <temp-file> --expected-sha256 <sha256>');
       expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
 
       const updatedResult = manager.attachPageContext(session.id, {
