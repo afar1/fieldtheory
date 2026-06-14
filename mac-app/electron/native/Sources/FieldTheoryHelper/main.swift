@@ -66,6 +66,7 @@ struct IncomingMessage: Codable {
     let text: String?           // For typeIntoApp
     let pressEnter: Bool?       // For typeIntoApp
     let submitMode: String?     // For typeIntoApp ("none", "enter", "command-enter")
+    let targetWindowBounds: WindowBoundsInput? // For typeIntoApp window disambiguation
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
     let silenceMs: Int?         // For setHarvestMode — optional silence override (nil = use default)
@@ -81,6 +82,13 @@ struct IncomingMessage: Codable {
     let sourceWidth: Int?       // Optional source frame for disambiguating duplicate titles
     let sourceHeight: Int?      // Optional source frame for disambiguating duplicate titles
     let targetFps: Int?         // For startGazeTracking
+}
+
+struct WindowBoundsInput: Codable {
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
 }
 
 // MARK: - Outgoing Message Types
@@ -2229,7 +2237,7 @@ final class MessageHandler {
             }
             let pressEnter = message.pressEnter ?? false
             let submitMode = message.submitMode ?? (pressEnter ? "enter" : "none")
-            typeIntoApp(bundleId: bundleId, text: text, submitMode: submitMode)
+            typeIntoApp(bundleId: bundleId, text: text, submitMode: submitMode, targetWindowBounds: message.targetWindowBounds)
 
         case .focusWindowByTitle:
             guard let bundleId = message.bundleId, let titleSubstring = message.titleSubstring else {
@@ -2305,7 +2313,7 @@ final class MessageHandler {
 
     /// Type text into a target application using pasteboard + CGEvent key simulation.
     /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally submit.
-    private func typeIntoApp(bundleId: String, text: String, submitMode: String) {
+    private func typeIntoApp(bundleId: String, text: String, submitMode: String, targetWindowBounds: WindowBoundsInput?) {
         let accessibilityTrusted = AXIsProcessTrusted()
 
         func sendTypeResult(
@@ -2361,7 +2369,10 @@ final class MessageHandler {
             return
         }
 
-        // Activate the target app.
+        // Activate the target app, preferring the exact window that launched the command.
+        if let targetWindowBounds = targetWindowBounds {
+            _ = focusWindowByBounds(app: targetApp, targetBounds: targetWindowBounds)
+        }
         targetApp.activate(options: .activateIgnoringOtherApps)
 
         let targetFrontmost = waitForFrontmostApp(bundleId: bundleId, timeoutMs: 750)
@@ -2444,6 +2455,59 @@ final class MessageHandler {
             pasteboardWritten: pasteboardWritten,
             eventTarget: "pid"
         )
+    }
+
+    private func focusWindowByBounds(app targetApp: NSRunningApplication, targetBounds: WindowBoundsInput) -> Bool {
+        let appElement = AXUIElementCreateApplication(targetApp.processIdentifier)
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue)
+        guard windowsResult == .success, let windows = windowsValue as? [AXUIElement] else {
+            return false
+        }
+
+        for window in windows {
+            guard let frame = axWindowFrame(window) else {
+                continue
+            }
+            if windowFrameMatches(frame, targetBounds) {
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window)
+                targetApp.activate(options: .activateIgnoringOtherApps)
+                usleep(50_000)
+                return true
+            }
+        }
+        return false
+    }
+
+    private func axWindowFrame(_ window: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let position = positionValue,
+              let size = sizeValue else {
+            return nil
+        }
+
+        var point = CGPoint.zero
+        var windowSize = CGSize.zero
+        guard CFGetTypeID(position) == AXValueGetTypeID(),
+              CFGetTypeID(size) == AXValueGetTypeID(),
+              AXValueGetValue(position as! AXValue, .cgPoint, &point),
+              AXValueGetValue(size as! AXValue, .cgSize, &windowSize) else {
+            return nil
+        }
+
+        return CGRect(origin: point, size: windowSize)
+    }
+
+    private func windowFrameMatches(_ frame: CGRect, _ targetBounds: WindowBoundsInput) -> Bool {
+        let tolerance: CGFloat = 24
+        return abs(frame.origin.x - CGFloat(targetBounds.x)) <= tolerance
+            && abs(frame.origin.y - CGFloat(targetBounds.y)) <= tolerance
+            && abs(frame.size.width - CGFloat(targetBounds.width)) <= tolerance
+            && abs(frame.size.height - CGFloat(targetBounds.height)) <= tolerance
     }
 
     private func waitForFrontmostApp(bundleId: String, timeoutMs: Int) -> Bool {
