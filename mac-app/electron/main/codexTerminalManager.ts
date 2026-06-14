@@ -746,7 +746,9 @@ export class CodexTerminalManager {
       `Display manifest path: ${filePath}`,
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
+      'For user-requested edits to Field Theory Library documents, prefer the Field Theory CLI: use ft library show <path> --json to read content and version.sha256, write the edited markdown to a temp file, then save with ft library update <path> --file <temp-file> --expected-sha256 <sha256>.',
       'When using shell commands, copy the command lines above instead of the display paths so spaces and apostrophes are preserved.',
+      'Field Theory command .md files are instruction documents, not executables. Read them with cat using a quoted path; do not run them as shell commands.',
       'Read the manifest or content files only when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;
