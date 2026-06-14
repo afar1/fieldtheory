@@ -370,45 +370,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
   const noDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties;
-  const setTool = useCallback((tool: string) => {
-    excalidrawAPI?.setActiveTool?.({ type: tool, locked: tool !== 'selection' });
-  }, [excalidrawAPI]);
-  const toolButtonStyle: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    padding: '3px 7px',
-    fontSize: '11px',
-    color: theme.isDark ? theme.text : '#555',
-    backgroundColor: theme.isDark ? theme.surface2 : '#f3f3f3',
-    border: `1px solid ${theme.isDark ? theme.border : '#ddd'}`,
-    borderRadius: '5px',
-    cursor: excalidrawAPI ? 'pointer' : 'default',
-    ...noDragStyle,
-  };
-  const keycapStyle: React.CSSProperties = {
-    display: 'inline-block',
-    padding: '1px 4px',
-    fontSize: '10px',
-    fontWeight: 500,
-    color: theme.isDark ? theme.text : '#555',
-    backgroundColor: theme.isDark ? theme.bgTertiary : '#e8e8e8',
-    borderRadius: '3px',
-  };
-  const renderToolButton = (label: string, keyName: string, tool: string) => (
-    <button
-      key={tool}
-      type="button"
-      onClick={() => setTool(tool)}
-      disabled={!excalidrawAPI}
-      style={toolButtonStyle}
-      title={`${label} (${keyName})`}
-      aria-label={`${label} tool`}
-    >
-      {label}
-      <kbd style={keycapStyle}>{keyName}</kbd>
-    </button>
-  );
 
   // When hideHeader is true, we're embedded in ClipboardHistory's flex layout.
   // Use relative positioning to fill the flex container instead of absolute overlay.
@@ -609,34 +570,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
             display: none !important;
           }
         `}</style>
-        <div
-          aria-label="Drawing tools"
-          style={{
-            position: 'absolute',
-            top: 10,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 5,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '5px',
-            borderRadius: '7px',
-            backgroundColor: theme.isDark ? 'rgba(24,24,27,0.92)' : 'rgba(255,255,255,0.92)',
-            border: `1px solid ${theme.border}`,
-            boxShadow: theme.isDark ? '0 8px 22px rgba(0,0,0,0.28)' : '0 8px 22px rgba(0,0,0,0.10)',
-            ...noDragStyle,
-          }}
-        >
-          {renderToolButton('select', 'v', 'selection')}
-          {renderToolButton('rect', 'r', 'rectangle')}
-          {renderToolButton('ellipse', 'o', 'ellipse')}
-          {renderToolButton('arrow', 'a', 'arrow')}
-          {renderToolButton('line', 'l', 'line')}
-          {renderToolButton('pencil', 'p', 'freedraw')}
-          {renderToolButton('text', 't', 'text')}
-          {renderToolButton('eraser', 'e', 'eraser')}
-        </div>
         <Excalidraw
           key={backgroundImage ? `with-image-${backgroundImage.dataUrl.length}` : 'no-image'}
           excalidrawAPI={(api) => setExcalidrawAPI(api)}
