@@ -739,14 +739,14 @@ export class CodexTerminalManager {
     const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
-      `Source: ${context.path || 'unknown'}`,
-      `Shell source: ${quoteForPosixShell(context.path || 'unknown')}`,
-      `Manifest: ${filePath}`,
-      `Shell manifest: ${quoteForPosixShell(filePath)}`,
-      `Shell content copy: ${quoteForPosixShell(path.join(path.dirname(filePath), 'active.md'))}`,
+      `Read source command: cat ${quoteForPosixShell(context.path || 'unknown')}`,
+      `Read manifest command: cat ${quoteForPosixShell(filePath)}`,
+      `Read content copy command: cat ${quoteForPosixShell(path.join(path.dirname(filePath), 'active.md'))}`,
+      `Display source path: ${context.path || 'unknown'}`,
+      `Display manifest path: ${filePath}`,
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
-      'When using shell commands for these paths, use the Shell lines above so spaces and apostrophes are preserved.',
+      'When using shell commands, copy the command lines above instead of the display paths so spaces and apostrophes are preserved.',
       'Read the manifest or content files only when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;

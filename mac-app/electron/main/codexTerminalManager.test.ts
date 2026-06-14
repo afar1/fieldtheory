@@ -543,7 +543,7 @@ describe('CodexTerminalManager', () => {
       expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
-      expect(ptys[0].written.at(-1)).toContain(`Manifest: ${result.filePath}`);
+      expect(ptys[0].written.at(-1)).toContain(`Read manifest command: cat ${quoteForPosixShell(result.filePath!)}`);
       expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
       expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
 
@@ -585,9 +585,10 @@ describe('CodexTerminalManager', () => {
       const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
       expect(manifest.activeDocument.shellQuotedPath).toBe(quoteForPosixShell(sourcePath));
       expect(manifest.activeDocument.shellQuotedContentPath).toBe(quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md')));
-      expect(ptys[0].written.at(-1)).toContain(`Shell source: ${quoteForPosixShell(sourcePath)}`);
-      expect(ptys[0].written.at(-1)).toContain(`Shell content copy: ${quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md'))}`);
-      expect(ptys[0].written.at(-1)).toContain('When using shell commands for these paths, use the Shell lines above');
+      expect(ptys[0].written.at(-1)).toContain(`Read source command: cat ${quoteForPosixShell(sourcePath)}`);
+      expect(ptys[0].written.at(-1)).toContain(`Read content copy command: cat ${quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md'))}`);
+      expect(ptys[0].written.at(-1)).toContain(`Display source path: ${sourcePath}`);
+      expect(ptys[0].written.at(-1)).toContain('When using shell commands, copy the command lines above');
     } finally {
       rmSync(contextDirPath, { recursive: true, force: true });
     }
