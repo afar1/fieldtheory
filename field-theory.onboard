@@ -1,6 +1,6 @@
 schema_version: 1
 name: "Field Theory"
-description: "Electron + desktop development environment with Swift native helpers, Supabase backend, and local AI inference"
+description: "Electron desktop development environment with Swift native helpers and local AI inference"
 
 dependencies:
   - id: xcode-cli
@@ -33,7 +33,7 @@ dependencies:
     name: Node.js
     icon_img: nodejs.svg
     icon_bg: "#333"
-    desc: Runtime for the Electron desktop app, desktop iOS app, and web services.
+    desc: Runtime for the Electron desktop app and local development tooling.
     check: which node
     install: brew install node
     depends_on: homebrew
@@ -42,18 +42,9 @@ dependencies:
     name: Python 3
     icon_img: python.svg
     icon_bg: "#306998"
-    desc: Used for build scripts, test evaluation, model conversion, and Claude Code hooks.
+    desc: Used for build scripts, test evaluation, local model tooling, and Claude Code hooks.
     check: which python3
     install: brew install python
-    depends_on: homebrew
-
-  - id: supabase
-    name: Supabase CLI
-    icon: "⚡"
-    icon_bg: "#3ECF8E"
-    desc: Manage edge functions, run migrations, and deploy the backend.
-    check: which supabase
-    install: brew install supabase/tap/supabase
     depends_on: homebrew
 
   - id: gh

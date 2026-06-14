@@ -42,7 +42,7 @@ Current surfaces inspected:
 - `mac-app/src/components/MarkdownCodeEditor.tsx`: current CodeMirror source editor and rendered presentation owner.
 - `mac-app/src/commandLauncherUtils.ts`: launcher/open-target content mode type.
 - `mac-app/electron/preload.ts`, `mac-app/electron/main/index.ts`, `mac-app/src/types/window.d.ts`: IPC/open-target type surfaces.
-- `archived-native/Package.swift` and `mac-app/electron/native/Package.swift`: native Swift package surfaces. No Typedown dependency was added.
+- `mac-app/electron/native/Package.swift`: native Swift package surface. No Typedown dependency was added.
 
 ## Current Spike State
 

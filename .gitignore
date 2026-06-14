@@ -13,7 +13,6 @@
 *~
 .vimspector.json
 /CMakeSettings.json
-ios/.claude/scheduled_tasks.lock
 
 # Environment variables
 .env
@@ -41,57 +40,11 @@ build_*/
 *.so
 *.exe
 *.metallib
-libwhisper.a
-libwhisper.so
 compile_commands.json
-
-# C++ specific
-.cache/
-.coreml/
-.test/
-.vs/
-/talk-llama.dSYM/
 
 # SPM
 .build/
 .swiftpm
-
-ggml-metal-embed.metal
-ggml-metal-embed.metal.tmp
-
-/main
-/stream
-/command
-/talk
-/talk-llama
-/bench
-/quantize
-/server
-/lsp
-
-arm_neon.h
-sync.sh
-
-examples/arm_neon.h
-archived examples.objc/whisper.objc.xcodeproj/xcshareddata
-archived examples.objc/whisper.objc.xcodeproj/xcuserdata/
-archived examples.objc/whisper.objc.xcodeproj/project.xcworkspace/xcuserdata
-
-extra/bench-gg.txt
-
-models/*.mlmodel
-models/*.mlmodelc
-models/*.mlpackage
-models/*-encoder-openvino.xml
-models/*-encoder-openvino-cache/
-archived bindingsjava/.gradle/
-archived bindingsjava/.idea/
-
-benchmark_results.csv
-cmake-build-debug/
-.cxx/
-.gradle/
-local.properties
 
 # Logs
 *.log
@@ -104,10 +57,7 @@ tmp/
 temp/
 *.tmp
 
-# archived mobile
-.expo/
-.expo-shared/
-web-build/
+# Signing and generated app assets
 *.jks
 *.p8
 *.p12
@@ -117,9 +67,6 @@ web-build/
 *.keystore
 **/__generated__/
 npm-debug.*
-
-# Local iOS keyboard model bundles
-ios/LittleAIKeyboard/Models/
 
 # Cursor plans and testing docs
 .cursor/plans/*.plan.md
