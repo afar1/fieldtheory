@@ -43,7 +43,7 @@ import {
   writeStoredCodexTerminalDarkMode,
 } from './codexTerminalTheme';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_MOBILE_SYNC_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
@@ -2149,18 +2149,28 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
-    const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
-    if (syncStatusPromise) {
-      syncStatusPromise.then(status => {
-        setFieldTheorySyncEnabled(status.enabled);
-        if (!status.enabled) {
-          setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
-        }
-      }).catch(() => setFieldTheorySyncEnabled(false));
+    if (FEATURE_MOBILE_SYNC_ENABLED) {
+      const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
+      if (syncStatusPromise) {
+        syncStatusPromise.then(status => {
+          setFieldTheorySyncEnabled(status.enabled);
+          if (!status.enabled) {
+            setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+          }
+        }).catch(() => setFieldTheorySyncEnabled(false));
+      }
+    } else {
+      setFieldTheorySyncEnabled(false);
+      setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
     }
 
     // Listen for todo view switch event (triggered when Cmd+Shift+T enables Tasks tab).
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
+      if (!FEATURE_MOBILE_SYNC_ENABLED) {
+        setFieldTheorySyncEnabled(false);
+        setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+        return;
+      }
       void (async () => {
         const status = await window.fieldTheorySyncAPI?.getStatus?.();
         if (!status?.enabled) return;
