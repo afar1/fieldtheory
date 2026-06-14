@@ -58,4 +58,11 @@ describe('markdown slash commands', () => {
     expect(edit.nextValue).toBe('before\n![Drawing](<./.assets/drawing.png>)\n\nafter');
     expect(edit.selectionStart).toBe(edit.nextValue.indexOf('after'));
   });
+
+  it('leaves a blank line after a drawing inserted at the end of the document', () => {
+    const edit = insertMarkdownBlockAt('', 0, '![Drawing](<./.assets/drawing.png>)');
+
+    expect(edit.nextValue).toBe('![Drawing](<./.assets/drawing.png>)\n\n');
+    expect(edit.selectionStart).toBe(edit.nextValue.length);
+  });
 });

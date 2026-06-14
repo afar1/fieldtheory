@@ -93,8 +93,7 @@ export function insertMarkdownBlockAt(
 ): MarkdownSlashCommandEdit {
   const insertion = Math.max(0, Math.min(offset, markdown.length));
   const needsLeadingBreak = insertion > 0 && markdown[insertion - 1] !== '\n';
-  const needsTrailingBreak = insertion < markdown.length && markdown[insertion] !== '\n';
-  const text = `${needsLeadingBreak ? '\n\n' : ''}${block.trim()}\n${needsTrailingBreak ? '\n' : ''}`;
+  const text = `${needsLeadingBreak ? '\n\n' : ''}${block.trim()}\n\n`;
   const selection = insertion + text.length;
   return {
     nextValue: `${markdown.slice(0, insertion)}${text}${markdown.slice(insertion)}`,
