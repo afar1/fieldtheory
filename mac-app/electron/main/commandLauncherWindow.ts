@@ -41,6 +41,7 @@ const COMMAND_LAUNCHER_CENTER_Y_OFFSET = -50;
 export interface RunningApp {
   bundleId: string;
   name: string;
+  windowBounds?: AnchorBounds | null;
 }
 
 type AnchorBounds = {
@@ -300,6 +301,7 @@ export class CommandLauncherWindow {
           this.previousApp = {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
+            ...(frontmostApp.windowBounds ? { windowBounds: frontmostApp.windowBounds } : {}),
           };
           this.launchOrigin = {
             kind: 'external-app',
@@ -311,6 +313,7 @@ export class CommandLauncherWindow {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
+            windowBounds: frontmostApp.windowBounds ?? null,
           });
         } else {
           const fieldTheorySurface = this.fieldTheoryActiveOnShow

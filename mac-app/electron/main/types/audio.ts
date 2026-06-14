@@ -543,6 +543,12 @@ export interface TypeIntoAppCommand {
   text: string;
   pressEnter: boolean;
   submitMode?: 'none' | 'enter' | 'command-enter';
+  targetWindowBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 /**

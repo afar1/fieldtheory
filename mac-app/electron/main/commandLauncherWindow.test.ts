@@ -269,8 +269,13 @@ describe('CommandLauncherWindow.show()', () => {
   });
 
   it('marks Field Theory inactive when shown over an external app', async () => {
+    const sourceWindowBounds = { x: 200, y: 160, width: 1200, height: 820 };
     const nativeHelper = {
-      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.openai.codex',
+        name: 'Codex',
+        windowBounds: sourceWindowBounds,
+      })),
       getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
     };
     const launcher = new CommandLauncherWindow(nativeHelper as any);
@@ -280,11 +285,19 @@ describe('CommandLauncherWindow.show()', () => {
       anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
     });
 
-    expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
+    expect(launcher.getPreviousApp()).toEqual({
+      bundleId: 'com.openai.codex',
+      name: 'Codex',
+      windowBounds: sourceWindowBounds,
+    });
     expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
     expect(launcher.getLaunchOrigin()).toEqual({
       kind: 'external-app',
-      app: { bundleId: 'com.apple.Safari', name: 'Safari' },
+      app: {
+        bundleId: 'com.openai.codex',
+        name: 'Codex',
+        windowBounds: sourceWindowBounds,
+      },
     });
   });
 

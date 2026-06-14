@@ -643,7 +643,8 @@ export class NativeHelper extends EventEmitter {
     bundleId: string,
     text: string,
     pressEnter: boolean,
-    submitMode?: 'none' | 'enter' | 'command-enter'
+    submitMode?: 'none' | 'enter' | 'command-enter',
+    targetWindowBounds?: { x: number; y: number; width: number; height: number } | null
   ): Promise<{
     success: boolean;
     error?: string;
@@ -689,6 +690,9 @@ export class NativeHelper extends EventEmitter {
       const command: HelperIncomingCommand = { type: 'typeIntoApp', bundleId, text, pressEnter };
       if (submitMode) {
         command.submitMode = submitMode;
+      }
+      if (targetWindowBounds) {
+        command.targetWindowBounds = targetWindowBounds;
       }
       this.send(command);
     });
