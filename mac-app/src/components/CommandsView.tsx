@@ -9,6 +9,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
+import { FEATURE_CLOUD_COMMANDS_ENABLED } from '../featureFlags';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import ContentModeToggleButton from './ContentModeToggleButton';
@@ -507,6 +508,12 @@ export default function CommandsView({
   }, [onFocusChromeActiveChange]);
 
   useEffect(() => {
+    if (!FEATURE_CLOUD_COMMANDS_ENABLED) {
+      setFieldTheorySyncEnabled(false);
+      setViewMode((current) => current === 'popular' ? 'mine' : current);
+      return;
+    }
+
     let alive = true;
     const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
     if (!syncStatusPromise) {

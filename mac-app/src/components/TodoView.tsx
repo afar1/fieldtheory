@@ -580,7 +580,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
           lineHeight: '1.5',
           maxWidth: '280px',
         }}>
-          Go to <strong>Settings → Mobile Sync</strong> and sign in with your iOS app account to see your tasks here.
+          Task sync is not available in this version of Field Theory.
         </div>
       </div>
     );

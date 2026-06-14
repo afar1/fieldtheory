@@ -110,7 +110,7 @@ export default function TranscriptionSettings() {
         setAbandonHotkey(currentAbandonHotkey);
         setHotMicHotkey(currentHotMicHotkey);
 
-        // Fetch current engine selection. Only Whisper and Parakeet variants are user-facing.
+        // Fetch current engine selection. Only Parakeet variants are user-facing.
         const currentEngine = mockMode === 'whisper-nudge' ? 'whisper' : (await window.transcribeAPI!.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
 
@@ -262,14 +262,10 @@ export default function TranscriptionSettings() {
     return getVisibleParakeetEngineStatus(parakeetStatus, engine);
   }, [parakeetStatus]);
 
-  const selectedParakeetEngineStatus = selectedEngine === 'whisper'
-    ? null
-    : getParakeetEngineStatus(selectedEngine);
-  const selectedParakeetProgress = selectedEngine === 'whisper'
-    ? null
-    : parakeetSetupProgress?.engine === selectedEngine
-      ? parakeetSetupProgress
-      : null;
+  const selectedParakeetEngineStatus = getParakeetEngineStatus(selectedEngine);
+  const selectedParakeetProgress = parakeetSetupProgress?.engine === selectedEngine
+    ? parakeetSetupProgress
+    : null;
   const selectedParakeetSetupActive = Boolean(
     selectedParakeetProgress &&
     selectedParakeetProgress.stage !== 'completed' &&
@@ -728,7 +724,7 @@ export default function TranscriptionSettings() {
               </div>
             );
           })}
-          {(selectedParakeetProgress || selectedParakeetSupportSummary) && selectedEngine !== 'whisper' && (
+          {(selectedParakeetProgress || selectedParakeetSupportSummary) && (
             <ParakeetSupportPanel
               theme={theme}
               title={
@@ -747,56 +743,6 @@ export default function TranscriptionSettings() {
               progress={selectedParakeetProgress}
             />
           )}
-
-          {/* Upgrade nudge - shown when whisper is active and parakeet is not installed */}
-          {selectedEngine === 'whisper' && !parakeetInstalled && (
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: '6px',
-                border: `1px solid ${theme.isDark ? 'rgba(59, 130, 246, 0.3)' : '#bfdbfe'}`,
-                backgroundColor: theme.isDark ? 'rgba(59, 130, 246, 0.08)' : '#eff6ff',
-                marginBottom: '4px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                Upgrade to Parakeet
-              </div>
-              <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
-                Parakeet is faster, more reliable, and produces higher quality transcriptions than Whisper.
-                Install above to switch — {PARAKEET_ONE_TIME_SETUP_NOTE.toLowerCase()} Your Whisper setup will remain as a fallback.
-              </div>
-            </div>
-          )}
-
-          {/* Whisper fallback - de-emphasized */}
-          <div
-            style={{
-              ...styles.modelCard,
-              borderLeft: selectedEngine === 'whisper'
-                ? `3px solid ${theme.isDark ? '#6b7280' : '#9ca3af'}`
-                : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-              backgroundColor: selectedEngine === 'whisper'
-                ? (theme.isDark ? 'rgba(107, 114, 128, 0.1)' : '#f9fafb')
-                : 'transparent',
-              opacity: selectedEngine === 'whisper' ? 0.85 : 0.6,
-              cursor: 'pointer',
-            }}
-            onClick={() => handleEngineChange('whisper')}
-          >
-            <div style={styles.modelCardContent}>
-              <div style={styles.modelCardHeader}>
-                <span style={{ ...styles.rowValue, fontWeight: selectedEngine === 'whisper' ? 600 : 500 }}>
-                  Whisper
-                </span>
-                <span style={{ fontSize: '10px', color: theme.textSecondary }}>Legacy</span>
-              </div>
-              <span style={styles.modelHint}>whisper.cpp — local fallback engine</span>
-            </div>
-            {selectedEngine === 'whisper' && (
-              <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Selected</span>
-            )}
-          </div>
 
           {/* Reinstall option - shown when parakeet is installed */}
           {parakeetInstalled && (
