@@ -1269,14 +1269,13 @@ export class HotMicManager extends EventEmitter {
       && (this.fieldTheoryMarkdownInsertionTarget?.isAvailable() ?? false);
 
     if (!this.targetBundleId && !hasFieldTheoryMarkdownTarget) {
-      log.error('No target app for Hot Mic');
-      this.cursorStatusManager?.showCriticalMessage('Hot Mic: No target app');
-      return;
+      log.info('Hot Mic activated without a current text target; will resolve target when text is submitted');
     }
 
-    log.info('Hot Mic activated, target: %s', this.targetBundleId ?? 'field-theory-markdown');
+    const activationTarget = this.targetBundleId ?? (hasFieldTheoryMarkdownTarget ? 'field-theory-markdown' : 'pending');
+    log.info('Hot Mic activated, target: %s', activationTarget);
     this.playSound('recordingStart');
-    this.emit('activated', this.targetBundleId ?? 'field-theory-markdown');
+    this.emit('activated', activationTarget);
 
     // Go straight into listening (buffer mode) — no queue needed
     this.startListening();
