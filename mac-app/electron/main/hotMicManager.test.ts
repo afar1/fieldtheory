@@ -770,7 +770,7 @@ describe('HotMicManager transcript dismissal', () => {
     expect((manager as any).transcriptBuffer).toEqual([]);
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
     expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 0, '');
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
 
     manager.destroy();
   });
@@ -1501,7 +1501,7 @@ describe('HotMicManager runtime status', () => {
     const status = manager.getRuntimeStatus();
 
     expect(status.engine).toMatchObject({
-      selectedEngine: 'mlx-whisper',
+      selectedEngine: 'parakeet',
       source: 'global',
       readiness: 'disabled',
       fallbackAvailable: false,
@@ -1665,7 +1665,7 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', 0);
     manager.destroy();
   });
 
@@ -1676,7 +1676,7 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).setRealtimeHarvestMode();
 
     expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
     manager.destroy();
   });
 
@@ -1691,8 +1691,8 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).chunkProcessingInFlight = false;
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', undefined);
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', 0);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', 0);
     manager.destroy();
   });
 
@@ -1730,11 +1730,11 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
-  it('uses longer forced snapshot interval for mlx and under queue pressure', () => {
+  it('uses longer forced snapshot interval under queue pressure', () => {
     const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
     const queue = (manager as any).pendingChunkQueue;
 
-    expect((manager as any).getForcedSnapshotMaxMs()).toBe(1000);
+    expect((manager as any).getForcedSnapshotMaxMs()).toBe(700);
 
     queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
     expect((manager as any).getForcedSnapshotMaxMs()).toBe(1400);

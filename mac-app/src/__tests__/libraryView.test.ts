@@ -2780,7 +2780,7 @@ describe('librarian selection persistence', () => {
     expect(state['librarian-last-selection']).toBeUndefined();
   });
 
-  it('does not persist native startup selection from browser library surfaces', () => {
+  it('persists native startup selection from browser library surfaces', () => {
     const state: Record<string, string> = {
       'librarian-last-selection': JSON.stringify({ type: 'wiki', relPath: 'scratchpad/Native' }),
     };
@@ -2796,12 +2796,11 @@ describe('librarian selection persistence', () => {
     expect(persistNativeLibrarianSelection(
       storage,
       { type: 'wiki', relPath: 'scratchpad/Codex Panel' },
-      true,
-    )).toBe(false);
+    )).toBe(true);
 
     expect(JSON.parse(state['librarian-last-selection'])).toEqual({
       type: 'wiki',
-      relPath: 'scratchpad/Native',
+      relPath: 'scratchpad/Codex Panel',
     });
   });
 
@@ -2819,7 +2818,6 @@ describe('librarian selection persistence', () => {
     expect(persistNativeLibrarianSelection(
       storage,
       { type: 'wiki', relPath: 'scratchpad/Mac App' },
-      false,
     )).toBe(true);
 
     expect(JSON.parse(state['librarian-last-selection'])).toEqual({

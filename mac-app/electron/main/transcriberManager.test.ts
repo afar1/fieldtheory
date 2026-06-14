@@ -68,61 +68,39 @@ describe('formatWhisperSpeakerTurnTranscript', () => {
 });
 
 function createWarmupHarness(prefValues: Record<string, unknown>) {
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
     },
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
-  return { manager, startMlxWhisperServer, startParakeetServer, startWhisperServer };
+  return { manager, startParakeetServer };
 }
 
 function createRestartHarness(prefValues: Record<string, unknown>) {
-  const stopMlxWhisperServer = vi.fn();
   const stopParakeetServer = vi.fn();
-  const stopWhisperServer = vi.fn();
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
     },
     stopParakeetServer,
-    stopMlxWhisperServer,
-    stopWhisperServer,
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
   return {
     manager,
-    stopMlxWhisperServer,
     stopParakeetServer,
-    stopWhisperServer,
-    startMlxWhisperServer,
     startParakeetServer,
-    startWhisperServer,
   };
 }
 
 function createHotMicWarmupHarness(prefValues: Record<string, unknown>) {
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
@@ -131,14 +109,10 @@ function createHotMicWarmupHarness(prefValues: Record<string, unknown>) {
       getSelectedModel: () => 'small',
     },
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
-  return { manager, startMlxWhisperServer, startParakeetServer, startWhisperServer };
+  return { manager, startParakeetServer };
 }
 
 describe('TranscriberManager warmup', () => {
@@ -146,128 +120,48 @@ describe('TranscriberManager warmup', () => {
     vi.clearAllMocks();
   });
 
-  it('warms MLX Whisper when primary transcription engine is mlx-whisper', async () => {
-    const { manager, startMlxWhisperServer } = createWarmupHarness({
+  it('normalizes legacy MLX Whisper and warms Parakeet', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'mlx-whisper',
       hotMicTranscriptionEngine: 'default',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('ignores legacy Hot Mic override values and warms only the global engine', async () => {
-    const { manager, startMlxWhisperServer, startWhisperServer } = createWarmupHarness({
+  it('ignores legacy Hot Mic override values and warms only Parakeet', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-    expect(startWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('ignores Hot Mic MLX override and uses global whisper warmup path', async () => {
-    const { manager, startMlxWhisperServer, startWhisperServer } = createWarmupHarness({
+  it('ignores Hot Mic MLX override and uses Parakeet warmup path', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'mlx-whisper',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-    expect(startWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('skips all server warmups when engine is whisper and no server binary', async () => {
-    const { manager, startMlxWhisperServer } = createWarmupHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'whisper',
+  it('skips warmup when Parakeet is not installed', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
+      transcriptionEngine: 'parakeet',
     });
-    manager.isWhisperServerAvailable = () => false;
-    manager.isMlxWhisperInstalled = () => false;
+    manager.isParakeetInstalled = () => false;
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-  });
-});
-
-describe('TranscriberManager whisper-server shutdown', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
-
-  it('waits for the tracked process to exit before clearing the reference', async () => {
-    const proc = new EventEmitter() as any;
-    proc.exitCode = null;
-    proc.signalCode = null;
-    proc.kill = vi.fn(() => true);
-
-    const manager: any = {
-      whisperServerProcess: proc,
-      whisperServerReady: true,
-      whisperServerReadyPromise: Promise.resolve(),
-      whisperServerShutdownPromise: null,
-      whisperServerLifecycleGeneration: 0,
-      whisperServerPort: 1234,
-      whisperServerModelPath: '/tmp/model.bin',
-      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const stopPromise = manager.stopWhisperServer();
-
-    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(manager.whisperServerProcess).toBe(proc);
-    expect(manager.whisperServerReady).toBe(false);
-
-    proc.exitCode = 0;
-    proc.emit('close', 0);
-    await stopPromise;
-
-    expect(manager.whisperServerProcess).toBeNull();
-    expect(manager.whisperServerShutdownPromise).toBeNull();
-    expect(manager.whisperServerPort).toBe(0);
-    expect(manager.whisperServerModelPath).toBeNull();
-  });
-
-  it('escalates to SIGKILL when the tracked process ignores SIGTERM', async () => {
-    vi.useFakeTimers();
-
-    const proc = new EventEmitter() as any;
-    proc.exitCode = null;
-    proc.signalCode = null;
-    proc.kill = vi.fn((signal: string) => {
-      if (signal === 'SIGKILL') {
-        proc.signalCode = 'SIGKILL';
-      }
-      return true;
-    });
-
-    const manager: any = {
-      whisperServerProcess: proc,
-      whisperServerReady: true,
-      whisperServerReadyPromise: Promise.resolve(),
-      whisperServerShutdownPromise: null,
-      whisperServerLifecycleGeneration: 0,
-      whisperServerPort: 1234,
-      whisperServerModelPath: '/tmp/model.bin',
-      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const stopPromise = manager.stopWhisperServer();
-    await vi.advanceTimersByTimeAsync(TranscriberManager['WHISPER_SERVER_STOP_TIMEOUT_MS']);
-
-    expect(proc.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
-    expect(proc.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
-
-    proc.emit('close', null);
-    await stopPromise;
+    expect(startParakeetServer).not.toHaveBeenCalled();
   });
 });
 
@@ -332,13 +226,13 @@ describe('TranscriberManager hot mic warmup', () => {
     vi.clearAllMocks();
   });
 
-  it('awaits MLX Whisper startup before resolving', async () => {
+  it('awaits Parakeet startup before resolving', async () => {
     let releaseStart!: () => void;
-    const { manager, startMlxWhisperServer } = createHotMicWarmupHarness({
-      transcriptionEngine: 'mlx-whisper',
+    const { manager, startParakeetServer } = createHotMicWarmupHarness({
+      transcriptionEngine: 'parakeet',
     });
 
-    startMlxWhisperServer.mockImplementationOnce(
+    startParakeetServer.mockImplementationOnce(
       () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
     );
 
@@ -349,31 +243,7 @@ describe('TranscriberManager hot mic warmup', () => {
 
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
-
-    releaseStart();
-    await warmupPromise;
-    expect(settled).toBe(true);
-  });
-
-  it('awaits Whisper server startup before resolving', async () => {
-    let releaseStart!: () => void;
-    const { manager, startWhisperServer } = createHotMicWarmupHarness({
-      transcriptionEngine: 'whisper',
-    });
-
-    startWhisperServer.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
-    );
-
-    let settled = false;
-    const warmupPromise = manager.warmupForHotMic().then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(startWhisperServer).toHaveBeenCalledWith('small');
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
 
     releaseStart();
     await warmupPromise;
@@ -381,12 +251,11 @@ describe('TranscriberManager hot mic warmup', () => {
   });
 
   it('defaults Hot Mic warmup to Parakeet when no engine is saved and Parakeet is installed', async () => {
-    const { manager, startParakeetServer, startWhisperServer } = createHotMicWarmupHarness({});
+    const { manager, startParakeetServer } = createHotMicWarmupHarness({});
 
     await manager.warmupForHotMic();
 
     expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
-    expect(startWhisperServer).not.toHaveBeenCalled();
   });
 });
 
@@ -395,7 +264,7 @@ describe('TranscriberManager runtime restart', () => {
     vi.clearAllMocks();
   });
 
-  it('restarts only the global engine and ignores Hot Mic override', async () => {
+  it('restarts only Parakeet and ignores legacy Hot Mic override', async () => {
     const h = createRestartHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
@@ -403,29 +272,23 @@ describe('TranscriberManager runtime restart', () => {
 
     await h.manager.restartTranscriptionRuntime();
 
-    // All servers should be stopped on restart.
-    expect(h.stopMlxWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.stopWhisperServer).toHaveBeenCalledTimes(1);
-
-    // Only the active engines should be re-started.
-    expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.startMlxWhisperServer).not.toHaveBeenCalled();
+    expect(h.stopParakeetServer).toHaveBeenCalledTimes(1);
+    expect(h.startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('stops all servers without restarting when both engines are whisper and no server binary', async () => {
+  it('stops Parakeet without restarting when Parakeet is not installed', async () => {
     const h = createRestartHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'whisper',
+      transcriptionEngine: 'parakeet',
     });
-    h.manager.isWhisperServerAvailable = () => false;
+    h.manager.isParakeetInstalled = () => false;
 
     await h.manager.restartTranscriptionRuntime();
 
-    expect(h.stopMlxWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.startMlxWhisperServer).not.toHaveBeenCalled();
+    expect(h.stopParakeetServer).toHaveBeenCalledTimes(1);
+    expect(h.startParakeetServer).not.toHaveBeenCalled();
   });
 
-  it('restarts mlx-whisper when it is the active engine', async () => {
+  it('normalizes legacy MLX Whisper to Parakeet on restart', async () => {
     const h = createRestartHarness({
       transcriptionEngine: 'mlx-whisper',
       hotMicTranscriptionEngine: 'default',
@@ -433,33 +296,7 @@ describe('TranscriberManager runtime restart', () => {
 
     await h.manager.restartTranscriptionRuntime();
 
-    expect(h.startMlxWhisperServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('waits for whisper shutdown before starting a replacement runtime', async () => {
-    let releaseStop!: () => void;
-    const h = createRestartHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'default',
-    });
-    h.stopWhisperServer.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseStop = resolve; })
-    );
-
-    let settled = false;
-    const restartPromise = h.manager.restartTranscriptionRuntime().then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(h.startWhisperServer).not.toHaveBeenCalled();
-    expect(settled).toBe(false);
-
-    releaseStop();
-    await restartPromise;
-
-    expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
-    expect(settled).toBe(true);
+    expect(h.startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 });
 
@@ -468,7 +305,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
     vi.clearAllMocks();
   });
 
-  it('respects disabled whisper fallback for hot mic transcriptions', async () => {
+  it('normalizes legacy MLX Whisper to Parakeet for Hot Mic transcriptions', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'ok');
     const manager: any = {
       preferences: {
@@ -489,13 +326,10 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'mlx-whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
-  it('disables whisper fallback by default for Hot Mic', async () => {
+  it('uses Parakeet by default for Hot Mic', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'ok');
     const manager: any = {
       preferences: {
@@ -515,10 +349,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'mlx-whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
   it('uses the global engine for Hot Mic even when override is set', async () => {
@@ -526,7 +357,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
     const manager: any = {
       preferences: {
         getPreference: (key: string) => {
-          if (key === 'transcriptionEngine') return 'whisper';
+          if (key === 'transcriptionEngine') return 'parakeet';
           if (key === 'hotMicTranscriptionEngine') return 'qwen';
           return undefined;
         },
@@ -540,10 +371,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
   it('defaults Hot Mic transcription to Parakeet when no engine is saved and Parakeet is installed', async () => {
@@ -562,10 +390,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 });
 
@@ -574,104 +399,60 @@ describe('TranscriberManager Hot Mic engine status', () => {
     vi.clearAllMocks();
   });
 
-  it('reports not-downloaded when global Whisper model is missing', () => {
+  it('reports not-installed when Parakeet runtime is missing', () => {
     const manager: any = {
       preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'missing' }),
       },
+      getParakeetStatus: () => ({ engines: [] }),
+      isParakeetInstalled: () => false,
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     const status = manager.getHotMicEngineStatus();
-    expect(status.selectedEngine).toBe('whisper');
-    expect(status.readiness).toBe('not-downloaded');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('not-installed');
   });
 
-  it('reports corrupt when global Whisper model is incomplete', () => {
+  it('reports ready when Parakeet server is ready', () => {
     const manager: any = {
       preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'corrupt' }),
       },
+      getParakeetStatus: () => ({ engines: [{ engine: 'parakeet' }] }),
+      isParakeetInstalled: () => true,
+      parakeetServer: { isReady: true },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     const status = manager.getHotMicEngineStatus();
-    expect(status.selectedEngine).toBe('whisper');
-    expect(status.readiness).toBe('corrupt');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('ready');
   });
 
-  it('reports unsupported-arch for mlx-whisper on non-Apple Silicon', () => {
+  it('normalizes legacy MLX Whisper status to Parakeet', () => {
     const manager: any = {
       preferences: {
         getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
       },
+      getParakeetStatus: () => ({ engines: [] }),
+      isParakeetInstalled: () => false,
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64');
     const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
 
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('unsupported-arch');
-    expect(status.fallbackAvailable).toBe(true);
-  });
-
-  it('reports warming when mlx-whisper server is starting', () => {
-    const manager: any = {
-      preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
-      },
-      modelManager: {
-        getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
-      },
-      isMlxWhisperInstalled: () => true,
-      mlxWhisperServer: { isStarting: true, isReady: false },
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
-    const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
-
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('warming');
-  });
-
-  it('reports disabled when mlx-whisper runtime has fatal session disable reason', () => {
-    const manager: any = {
-      preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
-      },
-      modelManager: {
-        getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
-      },
-      isMlxWhisperInstalled: () => true,
-      mlxWhisperServer: { disabledReason: 'ImportError: mlx_whisper not installed' },
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
-    const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
-
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('disabled');
-    expect(status.detail).toContain('ImportError');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('not-installed');
   });
 });
 
@@ -1252,7 +1033,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       transcribeWithEngineFallback: vi.fn(() => transcribePromise),
       getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
       insertFigureReferences: vi.fn((text: string) => text),
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1369,17 +1150,17 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     expect(session).toMatchObject({
       source: 'microphone',
-      transcriptionEngine: 'whisper',
+      transcriptionEngine: 'parakeet',
       speakerDiarizationSupported: false,
     });
     expect(manager.nativeHelper.startRecording).toHaveBeenCalledWith('microphone');
     expect(manager.nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'parakeet');
     expect(result).toMatchObject({
       transcriptText: 'Alice: Hello.\nBob: Hi.',
       audioPath: '/tmp/meeting.wav',
       source: 'microphone',
-      transcriptionEngine: 'whisper',
+      transcriptionEngine: 'parakeet',
       speakerDiarizationSupported: false,
     });
     expect(storeText).not.toHaveBeenCalled();
@@ -1390,7 +1171,7 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.status).toBe('idle');
   });
 
-  it('uses the local tinydiarize whisper model for meeting speaker turns when installed', async () => {
+  it('keeps meeting capture on Parakeet without speaker diarization', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'Speaker 1: Hello.\nSpeaker 2: Hi.');
     const manager: any = new EventEmitter();
     Object.assign(manager, {
@@ -1445,18 +1226,14 @@ describe('TranscriberManager standard real-time chunking', () => {
     const result = await manager.stopMeetingCapture();
 
     expect(session).toMatchObject({
-      transcriptionEngine: 'whisper',
-      whisperModelOverride: 'small-tdrz',
-      speakerDiarizationSupported: true,
+      transcriptionEngine: 'parakeet',
+      whisperModelOverride: null,
+      speakerDiarizationSupported: false,
     });
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small-tdrz',
-      enableTinyDiarize: true,
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'parakeet');
     expect(result).toMatchObject({
       transcriptText: 'Speaker 1: Hello.\nSpeaker 2: Hi.',
-      speakerDiarizationSupported: true,
+      speakerDiarizationSupported: false,
     });
   });
 
@@ -1468,7 +1245,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       activeMeetingCapture: {
         startedAt: '2026-05-14T00:00:00.000Z',
         source: 'microphone',
-        transcriptionEngine: 'whisper',
+        transcriptionEngine: 'parakeet',
         speakerDiarizationSupported: false,
       },
       status: 'recording',
@@ -1499,7 +1276,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       activeMeetingCapture: {
         startedAt: '2026-05-14T00:00:00.000Z',
         source: 'microphone',
-        transcriptionEngine: 'whisper',
+        transcriptionEngine: 'parakeet',
         speakerDiarizationSupported: false,
       },
       status: 'recording',
@@ -1522,7 +1299,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       activeMeetingCapture: {
         startedAt: '2026-05-14T00:00:00.000Z',
         source: 'microphone',
-        transcriptionEngine: 'whisper',
+        transcriptionEngine: 'parakeet',
         speakerDiarizationSupported: false,
       },
       status: 'recording',
@@ -1591,7 +1368,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       transcribeWithEngineFallback: vi.fn(async () => 'dictated text'),
       getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
       insertFigureReferences: vi.fn((text: string) => text),
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1642,13 +1419,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.processStandardChunkQueue).toHaveBeenCalledTimes(1);
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
     expect(manager.emit).toHaveBeenCalledWith('result', 'full file text');
@@ -1705,7 +1482,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1772,7 +1549,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1780,7 +1557,7 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     expect(manager.nativeHelper.snapshotRecording).not.toHaveBeenCalled();
     expect(manager.nativeHelper.stopRecording).toHaveBeenCalled();
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.emit).toHaveBeenCalledWith('result', 'full recording text');
   });
 
@@ -1830,7 +1607,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1888,7 +1665,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     });
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1968,13 +1745,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
     expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
   });
@@ -2046,7 +1823,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: '',
       standardLiveSegments: [],
       standardChunkCommandTriggered: false,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
       transcribeWithEngineFallback: vi.fn(async () => 'draft tile'),
       sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
       squaresManager: {
@@ -2122,7 +1899,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: '',
       standardLiveSegments: [],
       standardChunkCommandTriggered: false,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
       transcribeWithEngineFallback: vi
         .fn()
         .mockResolvedValueOnce('hello [Figure 1]')
@@ -2181,13 +1958,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.emit).toHaveBeenCalledWith('result', 'full file transcript [figure 1]');
   });
 
@@ -2238,13 +2015,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript [figure 1] [figure 2] [figure 3]');
   });
 
@@ -2288,7 +2065,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -2541,14 +2318,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('reverts qwen engine to whisper when parakeet is not installed', async () => {
+  it('reverts qwen engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'qwen',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -2563,14 +2340,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('reverts mlx-whisper engine to whisper when parakeet is not installed', async () => {
+  it('reverts mlx-whisper engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'mlx-whisper',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -2596,14 +2373,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('does not revert whisper engine when parakeet is not installed', async () => {
+  it('reverts whisper engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'whisper',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
-    expect(save).not.toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -2713,7 +2490,7 @@ describe('TranscriberManager hotkey clearing', () => {
 });
 
 describe('TranscriberManager parakeet uninstall', () => {
-  it('reverts engine to whisper when using parakeet and venv does not exist', async () => {
+  it('keeps engine on parakeet when uninstalling Parakeet', async () => {
     const save = vi.fn(async () => {});
     const manager: any = {
       stopParakeetServer: vi.fn(),
@@ -2730,7 +2507,7 @@ describe('TranscriberManager parakeet uninstall', () => {
     expect(result).toEqual({ success: true });
     expect(manager.stopParakeetServer).toHaveBeenCalled();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 

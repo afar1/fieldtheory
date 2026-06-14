@@ -3,7 +3,7 @@
 
 Runs Parakeet locally on CPU using ONNX Runtime. The model is downloaded
 automatically on first use and cached for subsequent calls.
-Same stdin/stdout JSON protocol as qwen-transcribe.py and mlx-whisper-transcribe.py.
+Same stdin/stdout JSON protocol as qwen-transcribe.py.
 
 Usage:
     python parakeet-transcribe.py --audio /path/to/recording.wav

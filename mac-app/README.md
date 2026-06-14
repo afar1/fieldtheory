@@ -74,9 +74,7 @@ The Supabase publishable key is public client configuration. It is not a service
 These surfaces exist in code but should not be treated as default public contributor features:
 
 - full Library sync, gated by `fieldTheoryInternalSyncEnabled` or `FIELD_THEORY_INTERNAL_SYNC_ENABLED`;
-- command mobile sync and todo setup, also tied to internal sync policy;
 - shared clipboard, currently disabled in the public-facing preload shape;
-- mobile transcript sync, currently inert in preload;
 - experimental updater access, which depends on private maintainer GitHub access or `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`.
 
 ## Packaging and Releases

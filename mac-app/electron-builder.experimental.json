@@ -52,7 +52,7 @@
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.plist",
     "extendInfo": {
-      "LSUIElement": true,
+      "LSUIElement": false,
       "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
       "NSCameraUsageDescription": "Used locally to detect gaze direction for window focus. No video is recorded or transmitted.",
       "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots and system audio for AI context.",
@@ -70,14 +70,6 @@
         "to": "assets"
       },
       {
-        "from": "../build-whisper/bin/whisper-cli",
-        "to": "whisper-cli"
-      },
-      {
-        "from": "../build-whisper/bin/whisper-server",
-        "to": "whisper-server"
-      },
-      {
         "from": "public/sounds",
         "to": "sounds"
       },
@@ -92,14 +84,6 @@
       {
         "from": "scripts/find-mlx-python.sh",
         "to": "scripts/find-mlx-python.sh"
-      },
-      {
-        "from": "scripts/mlx-whisper-transcribe.py",
-        "to": "scripts/mlx-whisper-transcribe.py"
-      },
-      {
-        "from": "scripts/setup-mlx-whisper.sh",
-        "to": "scripts/setup-mlx-whisper.sh"
       },
       {
         "from": "scripts/parakeet-transcribe.py",

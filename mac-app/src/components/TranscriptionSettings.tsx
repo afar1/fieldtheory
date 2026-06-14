@@ -231,7 +231,6 @@ export default function TranscriptionSettings() {
       const result = await window.transcribeAPI.uninstallParakeet?.();
       if (result?.success) {
         await refreshParakeetStatus();
-        // Engine will have been reverted to whisper by the backend
         const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
       } else {
