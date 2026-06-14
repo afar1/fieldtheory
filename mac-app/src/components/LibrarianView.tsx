@@ -3109,6 +3109,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
   const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
+  const handledInitialOpenTargetKeyRef = useRef<string | null>(null);
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
   const initialSelection = useMemo(
     () => resolveLibrarianInitialSelection(restoredSelection, restoredEditorSession, hadInitialOpenTargetRef.current),
@@ -8925,7 +8926,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useEffect(() => {
-    if (!initialOpenTarget) return;
+    if (!initialOpenTarget) {
+      handledInitialOpenTargetKeyRef.current = null;
+      return;
+    }
+    const targetKey = JSON.stringify(initialOpenTarget);
+    if (handledInitialOpenTargetKeyRef.current === targetKey) return;
+    handledInitialOpenTargetKeyRef.current = targetKey;
     if (initialOpenTarget.kind === 'wiki') {
       void (async () => {
         setSearchQuery('');
@@ -9379,27 +9386,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     let cancelled = false;
     setWikiSelectedPageLoading(true);
     (async () => {
-      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-      if (cancelled) return;
-      if (page) {
-        if (page.relPath !== wikiSelectedRelPath) {
-          setWikiSelectedRelPath(page.relPath);
-          setSelectedItemId(`wiki:${page.relPath}`);
+      try {
+        const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+        if (cancelled) return;
+        if (page) {
+          if (page.relPath !== wikiSelectedRelPath) {
+            setWikiSelectedRelPath(page.relPath);
+            setSelectedItemId(`wiki:${page.relPath}`);
+          }
+          setWikiSelectedPage(readingFromWikiPage(page));
+          void window.recentAPI?.visit({
+            kind: 'wiki',
+            path: page.relPath,
+            title: page.title,
+            lastOpenedAt: Date.now(),
+          });
+        } else {
+          // Target relPath disappeared between index refresh and navigation —
+          // clear the stale render so the reader sees empty state instead of
+          // the previous page, which would look like "the link did nothing".
+          setWikiSelectedPage(null);
         }
-        setWikiSelectedPage(readingFromWikiPage(page));
-        void window.recentAPI?.visit({
-          kind: 'wiki',
-          path: page.relPath,
-          title: page.title,
-          lastOpenedAt: Date.now(),
-        });
-      } else {
-        // Target relPath disappeared between index refresh and navigation —
-        // clear the stale render so the reader sees empty state instead of
-        // the previous page, which would look like "the link did nothing".
+      } catch (error) {
+        console.warn('[Librarian] Failed to load wiki page:', error);
+        if (cancelled) return;
         setWikiSelectedPage(null);
+      } finally {
+        if (!cancelled) setWikiSelectedPageLoading(false);
       }
-      setWikiSelectedPageLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -11189,23 +11203,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       activeReadingBreadcrumbLabel
                     )}
                   </span>
-                  {selectedItemType === 'external' && (
-                    <span
-                      style={{
-                        fontSize: '9px',
-                        fontWeight: 600,
-                        letterSpacing: '0.4px',
-                        textTransform: 'uppercase',
-                        color: theme.isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        padding: '2px 6px',
-                        borderRadius: '10px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      External
-                    </span>
-                  )}
                 </div>
               )}
               {focusToolbarControlsVisible && (
