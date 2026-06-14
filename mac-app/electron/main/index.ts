@@ -7357,6 +7357,16 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getReading(filePath);
   });
 
+  ipcMain.handle('librarian:traceNavigation', (_event, stage: string, payload: Record<string, unknown> = {}): void => {
+    log.info('[LibraryNavigationTrace] %s %j', stage, payload);
+    try {
+      const tracePath = path.join(app.getPath('userData'), 'librarian-navigation-trace.log');
+      fs.appendFileSync(tracePath, `${JSON.stringify({ timestamp: Date.now(), stage, payload })}\n`);
+    } catch (error) {
+      log.warn('[LibraryNavigationTrace] failed to append trace file:', error);
+    }
+  });
+
   // Save reading content to disk
   ipcMain.handle('librarian:saveReading', (_event, filePath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
     if (!librarianManager) {
