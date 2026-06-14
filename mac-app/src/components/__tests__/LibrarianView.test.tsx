@@ -2271,6 +2271,94 @@ describe('LibrarianView render', () => {
     expect(window.wikiAPI!.getPage).toHaveBeenCalledWith(relPath);
   });
 
+  it('keeps a clicked wiki page when a slow initial external command finishes later', async () => {
+    const commandPath = '/Users/afar/.fieldtheory/library/Commands/release.md';
+    const relPath = 'scratchpad/clicked-after-command';
+    let resolveExternalOpen: (() => void) | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn((absPath: string) => new Promise((resolve) => {
+          resolveExternalOpen = () => resolve({
+            path: absPath,
+            name: 'release.md',
+            content: 'Release command body',
+            mtime: 1,
+            documentVersion: { mtimeMs: 1, size: 20, sha256: 'release' },
+          });
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/Users/afar/.fieldtheory/library',
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+          name: 'clicked-after-command',
+          title: 'clicked-after-command',
+          lastUpdated: 10,
+        }],
+      }],
+    }]);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+        name: 'clicked-after-command',
+        title: 'clicked-after-command',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'clicked-after-command',
+      title: 'clicked-after-command',
+      lastUpdated: 10,
+      content: 'Clicked wiki body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'clicked' },
+    }));
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: commandPath }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(window.externalAPI!.open).toHaveBeenCalledWith(commandPath);
+    });
+    fireEvent.click(await screen.findByText('clicked-after-command'));
+    expect(await screen.findByText('Clicked wiki body')).toBeTruthy();
+
+    await act(async () => {
+      resolveExternalOpen?.();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Clicked wiki body')).toBeTruthy();
+    expect(screen.queryByText('Release command body')).toBeNull();
+  });
+
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
     const relPath = "scratchpad/Monday May 4th - to do's";
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;

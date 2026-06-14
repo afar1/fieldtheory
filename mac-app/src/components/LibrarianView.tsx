@@ -4045,15 +4045,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
+  const libraryNavigationRequestIdRef = useRef(0);
+  const beginLibraryNavigation = useCallback((): number => {
+    libraryNavigationRequestIdRef.current += 1;
+    return libraryNavigationRequestIdRef.current;
+  }, []);
+  const isCurrentLibraryNavigation = useCallback((requestId: number): boolean => (
+    libraryNavigationRequestIdRef.current === requestId
+  ), []);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`artifact:${artifactPath}`);
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
-  }, []);
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   // Load an external markdown file (outside wiki root) into the editor.
   // Deduped against the current external selection so re-opening the same
@@ -4062,8 +4072,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (externalOpenFile?.path === absPath && selectedItemType === 'external') {
       return externalOpenFile;
     }
+    const requestId = beginLibraryNavigation();
     await flushSaveRef.current?.();
+    if (!isCurrentLibraryNavigation(requestId)) return null;
     const file = await window.externalAPI?.open(absPath);
+    if (!isCurrentLibraryNavigation(requestId)) return null;
     if (!file) return null;
     const reading = readingFromExternalMarkdownFile(file);
     setExternalOpenFile(reading);
@@ -4080,18 +4093,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       lastOpenedAt: Date.now(),
     });
     return reading;
-  }, [externalOpenFile?.path, selectedItemType]);
+  }, [beginLibraryNavigation, externalOpenFile?.path, isCurrentLibraryNavigation, selectedItemType]);
 
-  const openWikiPage = useCallback((relPath: string) => {
+  const openWikiPage = useCallback((relPath: string): number | null => {
     const normalized = normalizeWikiRelPath(relPath);
-    if (!normalized) return;
+    if (!normalized) return null;
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
     setWikiSelectedPageLoading(true);
     setSelectedPath(null);
     setExternalOpenFile(null);
-  }, []);
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   useEffect(() => {
     if (hadInitialOpenTargetRef.current || initialSelection) return;
@@ -4128,6 +4143,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [openWikiPage]);
 
   const openBookmarksPane = useCallback(() => {
+    beginLibraryNavigation();
     setSelectedItemId(BOOKMARKS_ITEM_ID);
     setSelectedItemType('bookmarks');
     setSelectedPath(null);
@@ -4135,7 +4151,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
     setContentMode('rendered');
-  }, []);
+  }, [beginLibraryNavigation]);
 
   const openLinkAction = useCallback((action: LinkAction) => {
     switch (action.kind) {
@@ -8936,8 +8952,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (initialOpenTarget.kind === 'wiki') {
       void (async () => {
         setSearchQuery('');
-        openWikiPage(initialOpenTarget.path);
+        const requestId = openWikiPage(initialOpenTarget.path);
         const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
+        if (requestId !== null && !isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, page?.content);
         if (page) {
           dispatchLocalWikiAdded(page);
@@ -8946,12 +8963,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = page.content;
           lastSavedVersionRef.current = page.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'artifact') {
       void (async () => {
-        selectArtifactPath(initialOpenTarget.path);
+        const requestId = selectArtifactPath(initialOpenTarget.path);
         const reading = await window.librarianAPI?.getReading(initialOpenTarget.path);
+        if (!isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
         if (reading) {
           setSelectedReading(reading);
@@ -8959,11 +8978,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = reading.content;
           lastSavedVersionRef.current = reading.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'external') {
       void selectExternalFile(initialOpenTarget.path).then((reading) => {
-        applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
+        if (reading) applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading.content);
       }).finally(() => {
         onInitialOpenTargetConsumed?.();
       });
@@ -8986,7 +9006,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setContentMode('rendered');
       onInitialOpenTargetConsumed?.();
     }
-  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
+  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, isCurrentLibraryNavigation, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
   const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.builtin) return false;
@@ -9025,6 +9045,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedPath === autoPopArtifactPath;
 
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    beginLibraryNavigation();
     selectedItemIdRef.current = item.id;
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
@@ -9061,7 +9082,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+  }, [beginLibraryNavigation, flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
   const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
     const clearSource = isSidebarItemActiveDocument(item);
