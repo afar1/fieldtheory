@@ -316,14 +316,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           }
         }
       });
-
-      const allElements = document.querySelectorAll('.excalidraw *');
-      allElements.forEach((el) => {
-        const text = el.textContent || '';
-        if (text === 'Excalidraw links' || (text.includes('GitHub') && text.includes('Discord') && text.includes('Follow'))) {
-          (el as HTMLElement).style.display = 'none';
-        }
-      });
       
       // Hide Library button and diamond tool.
       const buttons = document.querySelectorAll('.excalidraw button');
@@ -354,16 +346,9 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const timer = setTimeout(hideFooterLinks, 500);
     const timer2 = setTimeout(hideFooterLinks, 1000);
 
-    const observer = new MutationObserver(hideFooterLinks);
-    const excalidrawContainer = document.querySelector('.excalidraw');
-    if (excalidrawContainer) {
-      observer.observe(excalidrawContainer, { childList: true, subtree: true });
-    }
-
     return () => {
       clearTimeout(timer);
       clearTimeout(timer2);
-      observer.disconnect();
     };
   }, [excalidrawAPI]);
 
@@ -385,6 +370,45 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
   const noDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties;
+  const setTool = useCallback((tool: string) => {
+    excalidrawAPI?.setActiveTool?.({ type: tool, locked: tool !== 'selection' });
+  }, [excalidrawAPI]);
+  const toolButtonStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '3px 7px',
+    fontSize: '11px',
+    color: theme.isDark ? theme.text : '#555',
+    backgroundColor: theme.isDark ? theme.surface2 : '#f3f3f3',
+    border: `1px solid ${theme.isDark ? theme.border : '#ddd'}`,
+    borderRadius: '5px',
+    cursor: excalidrawAPI ? 'pointer' : 'default',
+    ...noDragStyle,
+  };
+  const keycapStyle: React.CSSProperties = {
+    display: 'inline-block',
+    padding: '1px 4px',
+    fontSize: '10px',
+    fontWeight: 500,
+    color: theme.isDark ? theme.text : '#555',
+    backgroundColor: theme.isDark ? theme.bgTertiary : '#e8e8e8',
+    borderRadius: '3px',
+  };
+  const renderToolButton = (label: string, keyName: string, tool: string) => (
+    <button
+      key={tool}
+      type="button"
+      onClick={() => setTool(tool)}
+      disabled={!excalidrawAPI}
+      style={toolButtonStyle}
+      title={`${label} (${keyName})`}
+      aria-label={`${label} tool`}
+    >
+      {label}
+      <kbd style={keycapStyle}>{keyName}</kbd>
+    </button>
+  );
 
   // When hideHeader is true, we're embedded in ClipboardHistory's flex layout.
   // Use relative positioning to fill the flex container instead of absolute overlay.
@@ -531,10 +555,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           .excalidraw-library-menu,
           .excalidraw [class*="library"],
           .excalidraw [class*="Library"],
-          .excalidraw .mobile-misc-tools-container,
-          .excalidraw [class*="mobile"],
           .excalidraw .App-toolbar-container button[aria-label*="Library" i],
-          .excalidraw .shapes-section button[aria-label*="shapes" i],
           .excalidraw .Island .ToolIcon__library,
           .excalidraw button.ToolIcon_type_button[aria-label*="Library" i] {
             display: none !important;
@@ -558,7 +579,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           .excalidraw button[title*="rhombus" i],
           .excalidraw button[data-testid="toolbar-diamond"],
           .excalidraw .ToolIcon_type_diamond,
-          .excalidraw .App-toolbar__extra-tools-trigger,
           .excalidraw [class*="diamond"],
           .excalidraw .layer-ui__wrapper__top-right,
           .excalidraw [class*="top-right"],
@@ -589,6 +609,34 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
             display: none !important;
           }
         `}</style>
+        <div
+          aria-label="Drawing tools"
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '5px',
+            borderRadius: '7px',
+            backgroundColor: theme.isDark ? 'rgba(24,24,27,0.92)' : 'rgba(255,255,255,0.92)',
+            border: `1px solid ${theme.border}`,
+            boxShadow: theme.isDark ? '0 8px 22px rgba(0,0,0,0.28)' : '0 8px 22px rgba(0,0,0,0.10)',
+            ...noDragStyle,
+          }}
+        >
+          {renderToolButton('select', 'v', 'selection')}
+          {renderToolButton('rect', 'r', 'rectangle')}
+          {renderToolButton('ellipse', 'o', 'ellipse')}
+          {renderToolButton('arrow', 'a', 'arrow')}
+          {renderToolButton('line', 'l', 'line')}
+          {renderToolButton('pencil', 'p', 'freedraw')}
+          {renderToolButton('text', 't', 'text')}
+          {renderToolButton('eraser', 'e', 'eraser')}
+        </div>
         <Excalidraw
           key={backgroundImage ? `with-image-${backgroundImage.dataUrl.length}` : 'no-image'}
           excalidrawAPI={(api) => setExcalidrawAPI(api)}
