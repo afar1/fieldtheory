@@ -3848,6 +3848,9 @@ const librarianAPI = {
   // Get a single reading with full content (by path)
   getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
 
+  traceNavigation: (stage: string, payload: Record<string, unknown>): Promise<void> =>
+    ipcRenderer.invoke('librarian:traceNavigation', stage, payload),
+
   // Save reading content to disk
   saveReading: (filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
     ipcRenderer.invoke('librarian:saveReading', filePath, content, expectedVersion),

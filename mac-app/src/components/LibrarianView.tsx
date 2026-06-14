@@ -299,6 +299,15 @@ function libraryRenameTraceEnabled(): boolean {
   }
 }
 
+function traceLibraryNavigation(stage: string, extra: Record<string, unknown> = {}): void {
+  const payload = {
+    timestamp: Date.now(),
+    ...extra,
+  };
+  console.info('[LibraryNavigationTrace]', stage, payload);
+  void window.librarianAPI?.traceNavigation?.(stage, payload);
+}
+
 function traceLibraryRename(stage: string, event: LibraryRenameEvent, extra: Record<string, unknown> = {}): void {
   const data = {
     traceId: event.traceId,
@@ -3109,12 +3118,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
   const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
+  const handledInitialOpenTargetKeyRef = useRef<string | null>(null);
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
   const initialSelection = useMemo(
     () => resolveLibrarianInitialSelection(restoredSelection, restoredEditorSession, hadInitialOpenTargetRef.current),
     [restoredEditorSession, restoredSelection],
   );
   const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
+  const restoredExternalSessionOpenedRef = useRef(false);
+  const restoredInitialExternalSelectionOpenedRef = useRef(false);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(() => initialSelection?.type === 'artifact' ? initialSelection.path : null);
@@ -3186,6 +3198,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   });
   const selectedItemIdRef = useRef<string | null>(selectedItemId);
   const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => initialSelection?.type ?? null);
+  const selectedItemTypeRef = useRef<LibrarianSelectedItemType>(selectedItemType);
   const canUseFocusImmersive =
     selectedItemType === 'wiki' ||
     selectedItemType === 'artifact' ||
@@ -3216,7 +3229,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive, setFocusImmersive]);
   useLayoutEffect(() => {
     selectedItemIdRef.current = selectedItemId;
-  }, [selectedItemId]);
+    selectedItemTypeRef.current = selectedItemType;
+  }, [selectedItemId, selectedItemType]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const markdownEditorEdgeFadesRef = useRef({ top: false, bottom: false });
   const [markdownDocumentTopFade, setMarkdownDocumentTopFade] = useState(false);
@@ -4032,6 +4046,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
   const [externalOpenFile, setExternalOpenFile] = useState<Reading | null>(null);
+  const wikiSelectedRelPathRef = useRef<string | null>(wikiSelectedRelPath);
+  const externalOpenPathRef = useRef<string | null>(externalOpenFile?.path ?? null);
+  useLayoutEffect(() => {
+    wikiSelectedRelPathRef.current = wikiSelectedRelPath;
+    externalOpenPathRef.current = externalOpenFile?.path ?? null;
+  }, [externalOpenFile?.path, wikiSelectedRelPath]);
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
@@ -4044,26 +4064,48 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
+  const libraryNavigationRequestIdRef = useRef(0);
+  const beginLibraryNavigation = useCallback((): number => {
+    libraryNavigationRequestIdRef.current += 1;
+    return libraryNavigationRequestIdRef.current;
+  }, []);
+  const isCurrentLibraryNavigation = useCallback((requestId: number): boolean => (
+    libraryNavigationRequestIdRef.current === requestId
+  ), []);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`artifact:${artifactPath}`);
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
-  }, []);
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   // Load an external markdown file (outside wiki root) into the editor.
   // Deduped against the current external selection so re-opening the same
   // file is a no-op — preserves the editor's undo stack.
   const selectExternalFile = useCallback(async (absPath: string): Promise<Reading | null> => {
+    traceLibraryNavigation('select-external-start', {
+      absPath,
+      currentExternalPath: externalOpenFile?.path ?? null,
+      selectedItemType,
+    });
     if (externalOpenFile?.path === absPath && selectedItemType === 'external') {
+      traceLibraryNavigation('select-external-same-file', { absPath });
       return externalOpenFile;
     }
+    const requestId = beginLibraryNavigation();
     await flushSaveRef.current?.();
+    if (!isCurrentLibraryNavigation(requestId)) return null;
     const file = await window.externalAPI?.open(absPath);
-    if (!file) return null;
+    if (!isCurrentLibraryNavigation(requestId)) return null;
+    if (!file) {
+      traceLibraryNavigation('select-external-open-null', { absPath });
+      return null;
+    }
     const reading = readingFromExternalMarkdownFile(file);
     setExternalOpenFile(reading);
     setSelectedItemId(`external:${file.path}`);
@@ -4078,30 +4120,61 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       title: reading.title,
       lastOpenedAt: Date.now(),
     });
+    traceLibraryNavigation('select-external-done', {
+      requestedPath: absPath,
+      openedPath: file.path,
+      title: reading.title,
+    });
     return reading;
-  }, [externalOpenFile?.path, selectedItemType]);
+  }, [beginLibraryNavigation, externalOpenFile?.path, isCurrentLibraryNavigation, selectedItemType]);
+  const selectExternalFileRef = useRef(selectExternalFile);
+  useLayoutEffect(() => {
+    selectExternalFileRef.current = selectExternalFile;
+  }, [selectExternalFile]);
 
-  const openWikiPage = useCallback((relPath: string) => {
+  const openWikiPage = useCallback((relPath: string): number | null => {
     const normalized = normalizeWikiRelPath(relPath);
-    if (!normalized) return;
+    traceLibraryNavigation('open-wiki-request', { relPath, normalized });
+    if (!normalized) {
+      traceLibraryNavigation('open-wiki-empty', { relPath });
+      return null;
+    }
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
     setWikiSelectedPageLoading(true);
     setSelectedPath(null);
     setExternalOpenFile(null);
-  }, []);
+    traceLibraryNavigation('open-wiki-state-set', { relPath: normalized });
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   useEffect(() => {
+    traceLibraryNavigation('restore-editor-session-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      hasInitialSelection: Boolean(initialSelection),
+      sessionItemType: restoredEditorSessionRef.current?.itemType ?? null,
+      sessionItemPath: restoredEditorSessionRef.current?.itemPath ?? null,
+    });
     if (hadInitialOpenTargetRef.current || initialSelection) return;
+    if (restoredExternalSessionOpenedRef.current) return;
     const session = restoredEditorSessionRef.current;
     if (session?.itemType !== 'external') return;
+    restoredExternalSessionOpenedRef.current = true;
     void selectExternalFile(session.itemPath);
   }, [initialSelection, selectExternalFile]);
 
   useEffect(() => {
+    traceLibraryNavigation('restore-initial-selection-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      initialSelectionType: initialSelection?.type ?? null,
+      initialSelectionPath: initialSelection?.type === 'external' ? initialSelection.path : null,
+    });
     if (hadInitialOpenTargetRef.current) return;
     if (initialSelection?.type !== 'external') return;
+    if (restoredInitialExternalSelectionOpenedRef.current) return;
+    restoredInitialExternalSelectionOpenedRef.current = true;
     void selectExternalFile(initialSelection.path);
   }, [initialSelection, selectExternalFile]);
 
@@ -4127,6 +4200,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [openWikiPage]);
 
   const openBookmarksPane = useCallback(() => {
+    beginLibraryNavigation();
     setSelectedItemId(BOOKMARKS_ITEM_ID);
     setSelectedItemType('bookmarks');
     setSelectedPath(null);
@@ -4134,7 +4208,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
     setContentMode('rendered');
-  }, []);
+  }, [beginLibraryNavigation]);
 
   const openLinkAction = useCallback((action: LinkAction) => {
     switch (action.kind) {
@@ -8925,12 +8999,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useEffect(() => {
-    if (!initialOpenTarget) return;
+    if (!initialOpenTarget) {
+      traceLibraryNavigation('initial-open-target-cleared');
+      handledInitialOpenTargetKeyRef.current = null;
+      return;
+    }
+    const targetKey = JSON.stringify(initialOpenTarget);
+    if (handledInitialOpenTargetKeyRef.current === targetKey) {
+      traceLibraryNavigation('initial-open-target-skip-duplicate', { target: initialOpenTarget });
+      return;
+    }
+    handledInitialOpenTargetKeyRef.current = targetKey;
+    traceLibraryNavigation('initial-open-target-handle', { target: initialOpenTarget });
     if (initialOpenTarget.kind === 'wiki') {
       void (async () => {
         setSearchQuery('');
-        openWikiPage(initialOpenTarget.path);
+        const requestId = openWikiPage(initialOpenTarget.path);
         const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
+        if (requestId !== null && !isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, page?.content);
         if (page) {
           dispatchLocalWikiAdded(page);
@@ -8939,12 +9025,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = page.content;
           lastSavedVersionRef.current = page.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'artifact') {
       void (async () => {
-        selectArtifactPath(initialOpenTarget.path);
+        const requestId = selectArtifactPath(initialOpenTarget.path);
         const reading = await window.librarianAPI?.getReading(initialOpenTarget.path);
+        if (!isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
         if (reading) {
           setSelectedReading(reading);
@@ -8952,11 +9040,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = reading.content;
           lastSavedVersionRef.current = reading.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'external') {
       void selectExternalFile(initialOpenTarget.path).then((reading) => {
-        applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
+        if (reading) applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading.content);
       }).finally(() => {
         onInitialOpenTargetConsumed?.();
       });
@@ -8979,7 +9068,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setContentMode('rendered');
       onInitialOpenTargetConsumed?.();
     }
-  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
+  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, isCurrentLibraryNavigation, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
   const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.builtin) return false;
@@ -9018,10 +9107,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedPath === autoPopArtifactPath;
 
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    beginLibraryNavigation();
+    traceLibraryNavigation('handle-select-start', {
+      itemId: item.id,
+      itemType: item.type,
+      itemRelPath: item.relPath ?? null,
+      itemAbsPath: item.absPath ?? null,
+      previousSelectedItemId: selectedItemIdRef.current,
+      previousSelectedItemType: selectedItemType,
+      previousWikiRelPath: wikiSelectedRelPath,
+      previousExternalPath: externalOpenFile?.path ?? null,
+    });
     selectedItemIdRef.current = item.id;
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
     await flushCurrentEdit();
+    traceLibraryNavigation('handle-select-after-flush', {
+      itemId: item.id,
+      itemType: item.type,
+    });
     if (item.taggedDocId && item.hasUnread) {
       void window.taggedDocsAPI?.markRead(item.taggedDocId);
     }
@@ -9054,7 +9158,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+    traceLibraryNavigation('handle-select-done', {
+      itemId: item.id,
+      itemType: item.type,
+    });
+  }, [beginLibraryNavigation, flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded, externalOpenFile?.path, selectedItemType, wikiSelectedRelPath]);
 
   const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
     const clearSource = isSidebarItemActiveDocument(item);
@@ -9375,31 +9483,68 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
 
   useEffect(() => {
-    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); setWikiSelectedPageLoading(false); return; }
+    if (!wikiSelectedRelPath) {
+      traceLibraryNavigation('wiki-load-clear-empty-relpath');
+      setWikiSelectedPage(null);
+      setWikiSelectedPageLoading(false);
+      return;
+    }
     let cancelled = false;
     setWikiSelectedPageLoading(true);
+    traceLibraryNavigation('wiki-load-start', { relPath: wikiSelectedRelPath });
     (async () => {
-      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-      if (cancelled) return;
-      if (page) {
-        if (page.relPath !== wikiSelectedRelPath) {
-          setWikiSelectedRelPath(page.relPath);
-          setSelectedItemId(`wiki:${page.relPath}`);
+      try {
+        const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-cancelled', { relPath: wikiSelectedRelPath });
+          return;
         }
-        setWikiSelectedPage(readingFromWikiPage(page));
-        void window.recentAPI?.visit({
-          kind: 'wiki',
-          path: page.relPath,
-          title: page.title,
-          lastOpenedAt: Date.now(),
+        if (page) {
+          if (page.relPath !== wikiSelectedRelPath) {
+            traceLibraryNavigation('wiki-load-normalized-relpath', {
+              requestedRelPath: wikiSelectedRelPath,
+              pageRelPath: page.relPath,
+            });
+            setWikiSelectedRelPath(page.relPath);
+            setSelectedItemId(`wiki:${page.relPath}`);
+          }
+          setWikiSelectedPage(readingFromWikiPage(page));
+          traceLibraryNavigation('wiki-load-done', {
+            requestedRelPath: wikiSelectedRelPath,
+            pageRelPath: page.relPath,
+            absPath: page.absPath,
+            title: page.title,
+          });
+          void window.recentAPI?.visit({
+            kind: 'wiki',
+            path: page.relPath,
+            title: page.title,
+            lastOpenedAt: Date.now(),
+          });
+        } else {
+          // Target relPath disappeared between index refresh and navigation —
+          // clear the stale render so the reader sees empty state instead of
+          // the previous page, which would look like "the link did nothing".
+          traceLibraryNavigation('wiki-load-null-page', { relPath: wikiSelectedRelPath });
+          setWikiSelectedPage(null);
+        }
+      } catch (error) {
+        console.warn('[Librarian] Failed to load wiki page:', error);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-error-after-cancel', { relPath: wikiSelectedRelPath });
+          return;
+        }
+        traceLibraryNavigation('wiki-load-error', {
+          relPath: wikiSelectedRelPath,
+          error: error instanceof Error ? error.message : String(error),
         });
-      } else {
-        // Target relPath disappeared between index refresh and navigation —
-        // clear the stale render so the reader sees empty state instead of
-        // the previous page, which would look like "the link did nothing".
         setWikiSelectedPage(null);
+      } finally {
+        if (!cancelled) {
+          setWikiSelectedPageLoading(false);
+          traceLibraryNavigation('wiki-load-finish', { relPath: wikiSelectedRelPath });
+        }
       }
-      setWikiSelectedPageLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -10301,10 +10446,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // macOS `open-file` for paths outside the wiki root.
   useEffect(() => {
     const unsubscribe = window.externalAPI?.onOpenExternal((absPath) => {
-      void selectExternalFile(absPath);
+      traceLibraryNavigation('external-open-event', {
+        absPath,
+        selectedItemId: selectedItemIdRef.current,
+        selectedItemType: selectedItemTypeRef.current,
+        wikiSelectedRelPath: wikiSelectedRelPathRef.current,
+        externalOpenPath: externalOpenPathRef.current,
+      });
+      void selectExternalFileRef.current(absPath);
     });
     return () => unsubscribe?.();
-  }, [selectExternalFile]);
+  }, []);
 
   // Mirror the current file into the native macOS title bar (proxy icon +
   // Cmd-click menu showing the full path). Only external files get this —
@@ -11189,23 +11341,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       activeReadingBreadcrumbLabel
                     )}
                   </span>
-                  {selectedItemType === 'external' && (
-                    <span
-                      style={{
-                        fontSize: '9px',
-                        fontWeight: 600,
-                        letterSpacing: '0.4px',
-                        textTransform: 'uppercase',
-                        color: theme.isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        padding: '2px 6px',
-                        borderRadius: '10px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      External
-                    </span>
-                  )}
                 </div>
               )}
               {focusToolbarControlsVisible && (
