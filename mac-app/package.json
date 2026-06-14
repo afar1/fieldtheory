@@ -18,11 +18,11 @@
     "dev:native": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:native\"",
     "dev:vite": "vite",
     "dev:vite:quiet": "vite --logLevel warn",
-    "dev:electron": "npm run build:electron && wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
-    "dev:electron:quiet": "npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev:electron": "npm run ensure:native --silent && npm run build:electron && wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev:electron:quiet": "npm run ensure:native --silent && npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:electron:native": "bash scripts/dev-native-launcher.sh",
-    "dev:electron:active": "npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn LOG_ACTIVE_COMPONENTS_FILE=.active-components LOG_ACTIVE_FILE=.logs/active-debug.log LOG_ACTIVE_RESET=true ELECTRON_START_URL=http://localhost:5173 electron .",
-    "dev:electron:verbose": "npm run build:electron && wait-on tcp:5173 && LOG_LEVEL=debug ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev:electron:active": "npm run ensure:native --silent && npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn LOG_ACTIVE_COMPONENTS_FILE=.active-components LOG_ACTIVE_FILE=.logs/active-debug.log LOG_ACTIVE_RESET=true ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev:electron:verbose": "npm run ensure:native --silent && npm run build:electron && wait-on tcp:5173 && LOG_LEVEL=debug ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:experimental": "FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true npm run dev",
     "dev:mock": "VITE_MOCK=$MOCK npm run dev",
     "build": "npm run build:electron && npm run build:vite",
@@ -56,7 +56,8 @@
     "test:coverage": "vitest run --coverage",
     "quality:baseline": "node scripts/quality-baseline.mjs",
     "quality:baseline:checks": "node scripts/quality-baseline.mjs --run-checks",
-    "license:summary": "node scripts/generate-license-summary.mjs"
+    "license:summary": "node scripts/generate-license-summary.mjs",
+    "ensure:native": "bash scripts/ensure-native.sh"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
