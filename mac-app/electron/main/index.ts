@@ -1596,9 +1596,15 @@ async function runCommandLauncherQualityBenchmark(benchmarkId: string, mode: 'co
   });
 }
 
+type CommandLauncherTargetApp = {
+  bundleId: string;
+  name: string;
+  windowBounds?: { x: number; y: number; width: number; height: number } | null;
+};
+
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
-  targetApp: { bundleId: string; name: string } | null,
+  targetApp: CommandLauncherTargetApp | null,
   options: {
     beforePaste?: () => void | Promise<void>;
     clipboardTrace?: () => Record<string, unknown>;
@@ -1680,7 +1686,7 @@ async function activateAndPaste(
 }
 
 async function waitForCommandLauncherTargetAppFrontmost(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   tracePrefix: string,
 ): Promise<boolean> {
   if (!nativeHelper) {
@@ -1722,7 +1728,7 @@ function isCommandPayloadTraceEnabled(): boolean {
 
 function appendCommandLauncherVisibilityTrace(
   event: string,
-  targetApp: { bundleId: string; name: string } | null,
+  targetApp: CommandLauncherTargetApp | null,
   data: Record<string, unknown> = {},
 ): void {
   const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
@@ -1742,7 +1748,7 @@ function appendCommandLauncherVisibilityTrace(
 
 async function checkCommandLauncherFocusedTextInput(
   event: string,
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   details: Record<string, unknown> = {},
 ): Promise<boolean> {
   const focusedTextInput = (await nativeHelper?.checkFocusedTextInput().catch(() => false)) ?? false;
@@ -1894,7 +1900,7 @@ function scheduleBrowserLibraryClipboardRestore(input: {
 }
 
 async function activateCommandLauncherTargetApp(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   tracePrefix: string,
 ): Promise<boolean> {
   const bundleId = targetApp.bundleId;
@@ -1924,7 +1930,7 @@ async function activateCommandLauncherTargetApp(
 }
 
 function activateAndPasteFromCommandLauncher(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean; traceDetails?: Record<string, unknown> } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
@@ -1943,7 +1949,7 @@ function activateAndPasteFromCommandLauncher(
 }
 
 async function typeTextFromCommandLauncher(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   text: string,
   tracePrefix: 'invoke-command' | 'invoke-handoff',
   traceDetails: Record<string, unknown> = {},
@@ -1993,6 +1999,7 @@ async function typeTextFromCommandLauncher(
     tracePrefix,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
   });
   const frontmostBeforeType = nativeHelper.getFrontmostApp();
   appendCommandLauncherTrace(`${tracePrefix}-native-type-start`, {
@@ -2000,6 +2007,7 @@ async function typeTextFromCommandLauncher(
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
     textLength: text.length,
     clipboard: readCommandPasteClipboardTrace(),
     frontmostBundleId: frontmostBeforeType?.bundleId ?? null,
@@ -2008,7 +2016,7 @@ async function typeTextFromCommandLauncher(
 
   try {
     const nativeStartedAt = process.hrtime.bigint();
-    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false, undefined, targetApp.windowBounds ?? null);
     const nativeMs = elapsedMsSince(nativeStartedAt);
     const frontmost = nativeHelper.getFrontmostApp();
     appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
@@ -3880,7 +3888,7 @@ let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let sharedSyncService: SharedSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
-let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
+let lastExternalCommandTargetApp: CommandLauncherTargetApp | null = null;
 type ActiveLibraryFileContext = {
   type: 'wiki' | 'external';
   rootPath: string;
@@ -5428,13 +5436,14 @@ function getFieldTheoryCommandLauncherLaunchSurface(): CommandLauncherFieldTheor
   return { kind: 'none' };
 }
 
-function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
+function getCommandLauncherTargetApp(): CommandLauncherTargetApp | null {
   const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
   if (launchOrigin.kind === 'external-app' && isExternalCommandTargetBundleId(launchOrigin.app.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
       source: 'launch-origin',
       previousBundleId: launchOrigin.app.bundleId,
       previousName: launchOrigin.app.name,
+      hasWindowBounds: Boolean(launchOrigin.app.windowBounds),
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
     });
@@ -5451,7 +5460,7 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
   return null;
 }
 
-function getCommandLauncherInvocationTarget(targetApp: { bundleId: string; name: string } | null) {
+function getCommandLauncherInvocationTarget(targetApp: CommandLauncherTargetApp | null) {
   return resolveCommandLauncherInvocationTarget({
     launchOrigin: commandLauncherWindow?.getLaunchOrigin() ?? null,
     fieldTheoryActive: commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false,

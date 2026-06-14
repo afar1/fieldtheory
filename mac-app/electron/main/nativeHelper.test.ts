@@ -219,4 +219,27 @@ describe('NativeHelper recording command sequencing', () => {
 
     await expect(typePromise).resolves.toMatchObject({ success: true });
   });
+
+  it('passes target window bounds to the native helper when provided', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const targetWindowBounds = { x: 200, y: 160, width: 1200, height: 820 };
+
+    const typePromise = helper.typeIntoApp('com.openai.codex', '[release.md]\\n', false, undefined, targetWindowBounds);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.openai.codex',
+      text: '[release.md]\\n',
+      pressEnter: false,
+      targetWindowBounds,
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+    });
+
+    await expect(typePromise).resolves.toMatchObject({ success: true });
+  });
 });
