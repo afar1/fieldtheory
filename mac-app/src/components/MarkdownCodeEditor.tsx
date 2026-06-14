@@ -1631,6 +1631,35 @@ export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
+export function getRenderedMarkdownSelectedTaskDeleteEdit(
+  value: string,
+  from: number,
+  to: number,
+): { from: number; to: number; selection: number } | null {
+  const selectionFrom = Math.max(0, Math.min(value.length, Math.min(from, to)));
+  const selectionTo = Math.max(0, Math.min(value.length, Math.max(from, to)));
+  if (selectionFrom === selectionTo) return null;
+
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, selectionFrom);
+  if (selectionTo > lineEnd) return null;
+
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)(.*)$/.exec(lineText);
+  if (!taskMatch) return null;
+
+  const bodyStart = lineStart + taskMatch[0].length - taskMatch[5].length;
+  if (selectionFrom > bodyStart || selectionTo !== lineEnd) return null;
+  if (value.slice(bodyStart, selectionFrom).trim().length > 0) return null;
+
+  if (lineStart === 0 && lineEnd === value.length) {
+    return { from: 0, to: value.length, selection: 0 };
+  }
+  if (lineEnd < value.length) {
+    return { from: lineStart, to: lineEnd + 1, selection: lineStart };
+  }
+  return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
+}
+
 export function getRenderedMarkdownTaskMarkerDeleteBackwardEdit(
   value: string,
   offset: number,
@@ -1699,10 +1728,20 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
   if (isRenderedMarkdownSelectionInsideInlineHtmlBlock(view.state.doc.toString(), selection.from, selection.to)) {
     return true;
   }
-  if (!selection.empty) return false;
 
   if (input.inputType === 'deleteContentBackward' && !input.isComposing) {
     const value = view.state.doc.toString();
+    if (!selection.empty) {
+      const selectedTaskEdit = getRenderedMarkdownSelectedTaskDeleteEdit(value, selection.from, selection.to);
+      if (selectedTaskEdit) {
+        view.dispatch({
+          changes: { from: selectedTaskEdit.from, to: selectedTaskEdit.to },
+          selection: { anchor: selectedTaskEdit.selection, head: selectedTaskEdit.selection },
+        });
+        return true;
+      }
+      return false;
+    }
     const taskMarkerEdit = getRenderedMarkdownTaskMarkerDeleteBackwardEdit(value, selection.from);
     if (taskMarkerEdit) {
       view.dispatch({

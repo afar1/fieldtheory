@@ -107,6 +107,7 @@ import {
   getRenderedMarkdownBlockBodyStart,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
+  getRenderedMarkdownSelectedTaskDeleteEdit,
   getRenderedMarkdownTaskMarkerDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
@@ -2174,6 +2175,41 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
 
     expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('');
+    expect(view.state.selection.main.from).toBe(0);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes a rendered task row when Backspace deletes the last selected task text', () => {
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('- [ ] can', '- [ ] '.length, '- [ ] can'.length)).toEqual({
+      from: 0,
+      to: '- [ ] can'.length,
+      selection: 0,
+    });
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('before\n- [ ] can\nafter', 'before\n- [ ] '.length, 'before\n- [ ] can'.length)).toEqual({
+      from: 'before\n'.length,
+      to: 'before\n- [ ] can\n'.length,
+      selection: 'before\n'.length,
+    });
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('- [ ] candy', '- [ ] c'.length, '- [ ] candy'.length)).toBeNull();
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [ ] can',
+        selection: EditorSelection.range('- [ ] '.length, '- [ ] can'.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
     expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
       inputType: 'deleteContentBackward',
     }))).toBe(true);
