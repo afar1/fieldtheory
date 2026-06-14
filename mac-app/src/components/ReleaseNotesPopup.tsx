@@ -60,6 +60,15 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.0': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+  ],
   '0.2.1': [
     'Bookmarks canvas, scratchpad, and backlinks are easier to use across the Library',
     'The new markdown editor improves writing, task lists, and keyboard navigation',
@@ -345,6 +354,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.0': 'Jun 14 2026',
   '0.2.1': 'May 3 2026',
   '0.1.103': 'Apr 12 2026',
   '0.1.102': 'Apr 12 2026',
@@ -434,6 +444,29 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
 
   const isSectionNote = (note: string) => note.startsWith('__SECTION__:');
   const getSectionTitle = (note: string) => note.replace('__SECTION__:', '');
+  const renderNote = (note: string) => {
+    const match = note.match(/^(.*)\[([^\]]+)\]\((https?:\/\/[^)]+)\)(.*)$/);
+    if (!match) return note;
+
+    const [, before, label, href, after] = match;
+    return (
+      <>
+        {before}
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            color: theme.accent,
+            textDecoration: 'none',
+          }}
+        >
+          {label}
+        </a>
+        {after}
+      </>
+    );
+  };
 
   if (!isVisible) {
     return null;
@@ -584,7 +617,7 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
                 }}>
                   •
                 </span>
-                <span>{note}</span>
+                <span>{renderNote(note)}</span>
               </li>
             )
           ))}
