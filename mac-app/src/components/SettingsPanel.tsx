@@ -172,42 +172,6 @@ interface SettingsPanelProps {
   initialSection?: SettingsSection;
 }
 
-// =============================================================================
-// Island Geometry Sliders — self-contained, renders in the Appearance section.
-// =============================================================================
-
-interface IslandGeometrySettings {
-  notchWidthOverride: number;
-  pillWidth: number;
-  pillHeight: number;
-  offsetX: number;
-  offsetY: number;
-}
-
-const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
-  notchWidthOverride: 0,
-  pillWidth: 0,
-  pillHeight: 0,
-  offsetX: 0,
-  offsetY: 0,
-};
-
-const ISLAND_GEOMETRY_LIMITS = {
-  notchWidthOverride: { min: 0, max: 320, step: 1 },
-  pillWidth: { min: 0, max: 120, step: 1 },
-  pillHeight: { min: 0, max: 120, step: 1 },
-  offsetX: { min: -240, max: 240, step: 1 },
-  offsetY: { min: -160, max: 160, step: 1 },
-} as const;
-
-const ISLAND_GEOMETRY_FIELDS: Array<{ key: keyof IslandGeometrySettings; label: string; help: string }> = [
-  { key: 'notchWidthOverride', label: 'Notch Width', help: '0 = auto' },
-  { key: 'pillWidth', label: 'Pill Width', help: '0 = auto' },
-  { key: 'pillHeight', label: 'Pill Height', help: '0 = auto' },
-  { key: 'offsetX', label: 'Horizontal Offset', help: '' },
-  { key: 'offsetY', label: 'Vertical Offset', help: '' },
-];
-
 const LIBRARY_LOCAL_SHORTCUT_LABELS = [
   'Toggle focus mode',
   'Toggle sidebar',
@@ -219,180 +183,6 @@ const LIBRARY_LOCAL_SHORTCUTS = LIBRARY_LOCAL_SHORTCUT_LABELS.map((label) => {
   const shortcut = LIBRARIAN_KEYBOARD_SHORTCUTS.find((item) => item.label === label);
   return { label, keys: shortcut?.keys ?? '' };
 }).filter((shortcut) => shortcut.keys);
-
-function clampGeometry(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.max(min, Math.min(max, Math.round(value)));
-}
-
-interface ResolvedGeometry extends IslandGeometrySettings {
-  _detected?: { modeWidth: number; scaleFactor: number; menuBarHeight: number; isInternal: boolean };
-}
-
-function IslandGeometrySliders({ theme }: { theme: Theme }) {
-  const [geometry, setGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
-  const [resolved, setResolved] = useState<ResolvedGeometry | null>(null);
-  const [stayOnLaptop, setStayOnLaptop] = useState(false);
-  const [recordingIndicatorMode, setRecordingIndicatorMode] = useState<'auto' | 'notch' | 'floating'>('auto');
-
-  useEffect(() => {
-    window.hotMicAPI?.getIslandGeometry?.().then((g) => {
-      if (g) setGeometry(g);
-    }).catch(() => {});
-    window.hotMicAPI?.getResolvedIslandGeometry?.().then((r: ResolvedGeometry | null) => {
-      if (r) setResolved(r);
-    }).catch(() => {});
-    window.hotMicAPI?.getIslandStayOnLaptop?.().then((v) => {
-      setStayOnLaptop(v);
-    }).catch(() => {});
-    window.hotMicAPI?.getRecordingIndicatorMode?.().then((mode) => {
-      setRecordingIndicatorMode(mode);
-    }).catch(() => {});
-  }, []);
-
-  const isAllAuto = geometry.notchWidthOverride === 0 && geometry.pillWidth === 0 && geometry.pillHeight === 0
-    && geometry.offsetX === 0 && geometry.offsetY === 0;
-
-  const handleChange = useCallback((key: keyof IslandGeometrySettings, value: number) => {
-    const limits = ISLAND_GEOMETRY_LIMITS[key];
-    const normalized = clampGeometry(value, limits.min, limits.max);
-    setGeometry((prev) => ({ ...prev, [key]: normalized }));
-    void window.hotMicAPI?.setIslandGeometry({ [key]: normalized });
-  }, []);
-
-  const handleAuto = useCallback(async () => {
-    if (!window.hotMicAPI) return;
-    const reset = await window.hotMicAPI.resetIslandGeometry();
-    setGeometry(reset ?? DEFAULT_ISLAND_GEOMETRY);
-    const r = await window.hotMicAPI.getResolvedIslandGeometry?.();
-    if (r) setResolved(r);
-  }, []);
-
-  const formatValue = (key: keyof IslandGeometrySettings, val: number): string => {
-    const field = ISLAND_GEOMETRY_FIELDS.find((f) => f.key === key);
-    if (val === 0 && field?.help) {
-      return resolved ? `auto (${resolved[key]})` : 'auto';
-    }
-    return String(val);
-  };
-
-  const btnStyle = (active: boolean) => ({
-    padding: '4px 10px',
-    fontSize: '11px',
-    color: active ? theme.text : theme.textSecondary,
-    backgroundColor: active ? (theme.isDark ? theme.surface1 : '#fff') : 'transparent',
-    border: `1px solid ${active ? theme.border : 'transparent'}`,
-    borderRadius: '4px',
-    cursor: active ? 'default' as const : 'pointer' as const,
-    opacity: active ? 1 : 0.7,
-  });
-
-  const modeButtonStyle = (active: boolean) => ({
-    ...btnStyle(active),
-    minWidth: '68px',
-  });
-
-  const displayValues = isAllAuto && resolved
-    ? { ...resolved, _detected: undefined } as IslandGeometrySettings
-    : geometry;
-
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-        <span style={{ fontSize: '12px', color: theme.text, marginRight: '4px' }}>Recording indicator</span>
-        {(['auto', 'notch', 'floating'] as const).map((mode) => (
-          <button
-            key={mode}
-            onClick={() => {
-              setRecordingIndicatorMode(mode);
-              void window.hotMicAPI?.setRecordingIndicatorMode?.(mode);
-            }}
-            style={modeButtonStyle(recordingIndicatorMode === mode)}
-          >
-            {mode === 'auto' ? 'Auto' : mode === 'notch' ? 'Notch' : 'Floating'}
-          </button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-        <button onClick={() => void handleAuto()} style={btnStyle(isAllAuto)}>
-          Auto
-        </button>
-        <button
-          onClick={() => {
-            if (isAllAuto && resolved) {
-              const custom: IslandGeometrySettings = {
-                notchWidthOverride: resolved.notchWidthOverride,
-                pillWidth: resolved.pillWidth,
-                pillHeight: resolved.pillHeight,
-                offsetX: 0,
-                offsetY: 0,
-              };
-              setGeometry(custom);
-              void window.hotMicAPI?.setIslandGeometry(custom);
-            }
-          }}
-          style={btnStyle(!isAllAuto)}
-        >
-          Custom
-        </button>
-        {resolved?._detected && (
-          <span style={{ marginLeft: '4px', fontSize: '10px', color: theme.textSecondary }}>
-            {resolved._detected.modeWidth}pt {resolved._detected.scaleFactor}x
-            {resolved._detected.isInternal ? ' internal' : ' external'}
-            , menu bar {resolved._detected.menuBarHeight}pt
-          </span>
-        )}
-      </div>
-      {ISLAND_GEOMETRY_FIELDS.map(({ key, label }) => (
-        <div key={key} style={{ padding: '4px 0', opacity: isAllAuto ? 0.35 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-            <span style={{ fontSize: '12px', color: theme.text }}>{label}</span>
-            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              {formatValue(key, geometry[key])}
-            </span>
-          </div>
-          <input
-            type="range"
-            disabled={isAllAuto}
-            min={ISLAND_GEOMETRY_LIMITS[key].min}
-            max={ISLAND_GEOMETRY_LIMITS[key].max}
-            step={ISLAND_GEOMETRY_LIMITS[key].step}
-            value={displayValues[key]}
-            onChange={(e) => handleChange(key, Number(e.target.value))}
-            style={{
-              width: '100%',
-              height: '4px',
-              WebkitAppearance: 'none',
-              appearance: 'none',
-              background: theme.border,
-              borderRadius: '2px',
-              outline: 'none',
-              cursor: isAllAuto ? 'default' : 'pointer',
-            }}
-          />
-        </div>
-      ))}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0 0 0' }}>
-        <div>
-          <span style={{ fontSize: '12px', color: theme.text }}>Stay on laptop display</span>
-          <span style={{ display: 'block', fontSize: '10px', color: theme.textSecondary }}>
-            Keep the island on the built-in display when an external monitor is primary.
-          </span>
-        </div>
-        <input
-          type="checkbox"
-          checked={stayOnLaptop}
-          onChange={(e) => {
-            const next = e.target.checked;
-            setStayOnLaptop(next);
-            void window.hotMicAPI?.setIslandStayOnLaptop?.(next);
-          }}
-          style={{ cursor: 'pointer' }}
-        />
-      </div>
-    </>
-  );
-}
 
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
@@ -615,9 +405,6 @@ export default function SettingsPanel({
     };
   }, []);
 
-  // Dynamic Island auto-hide toggle.
-  const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
-
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
 
@@ -720,11 +507,6 @@ export default function SettingsPanel({
       });
 
       refreshFieldTheorySyncStatus().catch(() => {});
-
-      // Load Dynamic Island auto-hide setting.
-      window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
-        setDynamicIslandAutoHide(enabled);
-      }).catch(() => {});
 
       // Load launch at login setting
       window.clipboardAPI.getLaunchAtLogin?.().then(enabled => {
@@ -1511,12 +1293,28 @@ export default function SettingsPanel({
     },
   });
 
+  const teamFeaturesVisible = Boolean(
+    teamServiceState?.available ||
+    teamServiceState?.currentTeamScopeUserId ||
+    teamServiceState?.members.length ||
+    teamServiceState?.pendingIncoming.length
+  );
+  const visibleSections = teamFeaturesVisible
+    ? SECTIONS_ORDER
+    : SECTIONS_ORDER.filter((section) => section !== 'team');
+
+  useEffect(() => {
+    if (selectedSection === 'team' && teamServiceState && !teamFeaturesVisible) {
+      setSelectedSection('account');
+    }
+  }, [selectedSection, teamFeaturesVisible, teamServiceState]);
+
   return (
     <div style={styles.settingsLayout}>
       {/* Left Sidebar Navigation */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
-          {SECTIONS_ORDER.map((section) => {
+          {visibleSections.map((section) => {
             const active = selectedSection === section;
             return (
             <button
@@ -1705,42 +1503,6 @@ export default function SettingsPanel({
             <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
-      </div>
-
-      {/* Dynamic Island */}
-      <div style={styles.section}>
-        <SectionHeader title="Dynamic Island" styles={styles} />
-
-        <div style={styles.row}>
-          <div>
-            <span style={styles.rowLabel}>Auto-hide until active or hovered</span>
-            <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
-              Pills stay hidden until you move your cursor near the notch, or until a recording / hot-mic is active.
-            </span>
-          </div>
-          <button
-            disabled={dynamicIslandAutoHide === null}
-            onClick={async () => {
-              if (dynamicIslandAutoHide === null) return;
-              const next = !dynamicIslandAutoHide;
-              setDynamicIslandAutoHide(next);
-              try {
-                await window.hotMicAPI?.setIslandAutoHide?.(next);
-              } catch (err) {
-                console.error('Failed to toggle Dynamic Island auto-hide:', err);
-                setDynamicIslandAutoHide(!next);
-              }
-            }}
-            style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db', opacity: dynamicIslandAutoHide === null ? 0.6 : 1 }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(16px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
-        <p style={{ fontSize: '11px', color: theme.textSecondary, margin: '12px 0 8px 0' }}>
-          Tune notch alignment. Changes apply immediately.
-        </p>
-        <IslandGeometrySliders theme={theme} />
       </div>
 
       {/* System Access Section - Permission status with quick links to settings */}
@@ -2060,7 +1822,7 @@ export default function SettingsPanel({
           </div>
         </div>
 
-        {sharedFilesAvailable && (
+        {teamFeaturesVisible && sharedFilesAvailable && (
           <div style={styles.row}>
             <span style={styles.rowLabel}>
               River Sharing
@@ -2349,7 +2111,7 @@ export default function SettingsPanel({
       )}
 
       {/* Team Section */}
-      {selectedSection === 'team' && (
+      {selectedSection === 'team' && teamFeaturesVisible && (
       <div style={styles.sectionStack}>
         <TeamSettings
           state={teamSettingsState}
@@ -2402,7 +2164,9 @@ export default function SettingsPanel({
 
         return (
           <div style={styles.section}>
-            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} styles={styles} />
+            <SectionHeader title="Account" onHiddenReveal={() => {
+              if (teamFeaturesVisible) setShowInternalSyncToggle(true);
+            }} styles={styles} />
 
             {initialAuthLoading ? (
               <div style={styles.row}>
@@ -2578,7 +2342,7 @@ export default function SettingsPanel({
               </>
             )}
 
-            {(showInternalSyncToggle || syncLocalEnabled) && (
+            {teamFeaturesVisible && (showInternalSyncToggle || syncLocalEnabled) && (
               <div style={styles.row}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <span style={styles.rowLabel}>Field Theory Sync</span>

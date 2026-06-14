@@ -1,7 +1,7 @@
 import type { ParakeetSetupError } from '../types/window';
 
-export type VisibleTranscriptionEngine = 'whisper' | 'parakeet' | 'parakeet-multilingual';
-export type VisibleParakeetEngine = Exclude<VisibleTranscriptionEngine, 'whisper'>;
+export type VisibleTranscriptionEngine = 'parakeet' | 'parakeet-multilingual';
+export type VisibleParakeetEngine = VisibleTranscriptionEngine;
 
 export type VisibleParakeetEngineStatus = {
   engine: VisibleParakeetEngine;
@@ -58,7 +58,7 @@ export const PARAKEET_ONE_TIME_SETUP_NOTE =
 export function normalizeVisibleTranscriptionEngine(
   engine: string | null | undefined
 ): VisibleTranscriptionEngine {
-  if (engine === 'whisper' || engine === 'parakeet' || engine === 'parakeet-multilingual') {
+  if (engine === 'parakeet' || engine === 'parakeet-multilingual') {
     return engine;
   }
   return DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
