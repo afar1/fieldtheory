@@ -3722,7 +3722,9 @@ function CommandLauncher() {
         const result = await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
         if (!result.success) {
           showInvocationError('open-field-theory-target-error', result.error, 'Open failed');
+          return;
         }
+        closeForInvocation({ skipActivation: true });
         return;
       }
       if (options.insertWikiLink) {
