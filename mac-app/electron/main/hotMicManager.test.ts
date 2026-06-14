@@ -1413,6 +1413,19 @@ describe('HotMicManager runtime condition', () => {
     manager.destroy();
   });
 
+  it('activates without a current target and resolves the target later', async () => {
+    const { manager, nativeHelper } = createManager();
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+
+    manager.activate();
+    await flushAsyncWork();
+
+    expect(manager.getState()).toBe('listening');
+    expect(manager.getCondition()).toBe('ready');
+    expect(nativeHelper.startRecording).toHaveBeenCalled();
+    manager.destroy();
+  });
+
   it('sets condition to yielded during transcriber handoff', async () => {
     const { manager, nativeHelper } = createManager();
     (manager as any).state = 'listening';
