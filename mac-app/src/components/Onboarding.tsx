@@ -23,7 +23,7 @@ import ParakeetSupportPanel from './ParakeetSupportPanel';
 // Onboarding - 4-phase onboarding flow for Field Theory
 // Phase 1: Permissions (microphone, accessibility, screen recording)
 // Phase 2: Model (voice model selection and download)
-// Phase 3: Account (email sign-in required)
+// Phase 3: Account (optional email sign-in)
 // Phase 4: Shortcuts (keyboard shortcuts reference - no dot indicator)
 // =============================================================================
 
@@ -558,7 +558,7 @@ function ModelPhase({
 }
 
 // =============================================================================
-// Phase 3: Account (Email Sign-In)
+// Phase 3: Account (Email Sign-In or Local Setup)
 // =============================================================================
 
 interface AccountPhaseProps {
@@ -594,12 +594,51 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   // Loading state for completing onboarding (clicking "Done")
   const [isCompleting, setIsCompleting] = useState(false);
   const [isCompletingLocalSetup, setIsCompletingLocalSetup] = useState(false);
+  const [accountAuthConfigured, setAccountAuthConfigured] = useState<boolean | null>(null);
+  const accountAuthAvailable = accountAuthConfigured ?? Boolean(supabase);
+
+  const completeLocalSetup = async () => {
+    if (isCompletingLocalSetup) return;
+    setIsCompletingLocalSetup(true);
+    setError(null);
+    try {
+      await onLocalSetup();
+    } catch (err) {
+      console.error('[Onboarding] Failed to complete local setup:', err);
+      setError('Could not finish local setup. Please try again.');
+      setIsCompletingLocalSetup(false);
+    }
+  };
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
     window.clipboardAPI?.getLaunchAtLogin?.().then((enabled) => {
       setLaunchAtLogin(enabled);
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkAccountAuth = async () => {
+      if (!supabase) {
+        setAccountAuthConfigured(false);
+        return;
+      }
+
+      try {
+        const configured = await window.authAPI?.isConfigured?.();
+        if (!cancelled) setAccountAuthConfigured(configured ?? true);
+      } catch (err) {
+        console.warn('[Onboarding] Failed to check account auth availability:', err);
+        if (!cancelled) setAccountAuthConfigured(false);
+      }
+    };
+
+    void checkAccountAuth();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Check if user is already logged in on mount, and fetch their call sign.
@@ -649,6 +688,10 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || isRequestingOtp) return;
+    if (!accountAuthAvailable) {
+      setError('Account sign-in is not available in this build. Continue with local setup.');
+      return;
+    }
 
     setIsRequestingOtp(true);
     setError(null);
@@ -672,6 +715,10 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!otpCode.trim() || isVerifyingOtp) return;
+    if (!accountAuthAvailable) {
+      setError('Account sign-in is not available in this build. Continue with local setup.');
+      return;
+    }
 
     setIsVerifyingOtp(true);
     setError(null);
@@ -992,143 +1039,178 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
     <div style={styles.phase}>
       <h1 style={styles.title}>Use Field Theory</h1>
       <p style={styles.subtitle}>
-        Sign in for shared and account-backed features, or continue with local setup.
+        Sign in or sign up with an email code for shared features, or continue with local setup.
       </p>
 
       <div style={styles.accountForm}>
-        {!otpSent ? (
-          <form onSubmit={handleRequestOtp} style={styles.form}>
-            <input
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={isRequestingOtp}
-              style={styles.input}
-              autoFocus
-            />
+        {!accountAuthAvailable ? (
+          <>
+            <div style={styles.infoBanner}>
+              Account sign-in is not available in this build.
+            </div>
             <button
-              type="submit"
-              disabled={isRequestingOtp || !email.trim()}
+              type="button"
+              onClick={completeLocalSetup}
+              disabled={isCompletingLocalSetup}
               style={{
                 ...styles.primaryButton,
-                opacity: isRequestingOtp || !email.trim() ? 0.5 : 1,
-                cursor: isRequestingOtp || !email.trim() ? 'not-allowed' : 'pointer',
+                marginTop: '16px',
                 width: '100%',
+                opacity: isCompletingLocalSetup ? 0.6 : 1,
+                cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
               }}
             >
-              {isRequestingOtp ? 'Sending...' : 'Send Verification Code'}
+              {isCompletingLocalSetup ? 'Starting local setup...' : 'Continue with local setup'}
             </button>
-          </form>
+
+            <div style={{ marginTop: '16px' }}>
+              <label style={styles.launchAtLoginLabel}>
+                <input
+                  type="checkbox"
+                  checked={launchAtLogin}
+                  onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+                  style={styles.launchAtLoginCheckbox}
+                />
+                Launch Field Theory on login
+              </label>
+              {launchAtLoginError && (
+                <div style={styles.launchAtLoginError}>
+                  Enable in{' '}
+                  <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                    System Settings
+                  </span>
+                </div>
+              )}
+            </div>
+          </>
         ) : (
-          <form onSubmit={handleVerifyOtp} style={styles.form}>
-            <p style={styles.otpSentText}>
-              Code sent to {email}
-            </p>
-            <input
-              type="text"
-              placeholder="Enter code"
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value)}
-              disabled={isVerifyingOtp}
-              style={styles.otpInput}
-              autoFocus
-            />
-            <button
-              type="submit"
-              disabled={isVerifyingOtp || !otpCode.trim()}
-              style={{
-                ...styles.primaryButton,
-                opacity: isVerifyingOtp || !otpCode.trim() ? 0.5 : 1,
-                cursor: isVerifyingOtp || !otpCode.trim() ? 'not-allowed' : 'pointer',
-                width: '100%',
-              }}
-            >
-              {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setOtpSent(false); setOtpCode(''); setError(null); }}
-              style={styles.secondaryButton}
-            >
-              Use a different email
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                const result = await window.authAPI?.requestOtp(email.trim());
-                if (result?.error) {
-                  setError(result.error);
-                }
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: theme.textSecondary,
-                fontSize: '12px',
-                cursor: 'pointer',
-                marginTop: '8px',
-                textDecoration: 'underline',
-              }}
-            >
-              Resend code
-            </button>
-          </form>
-        )}
+          <>
+            {!otpSent ? (
+              <form onSubmit={handleRequestOtp} style={styles.form}>
+                <input
+                  type="email"
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isRequestingOtp}
+                  style={styles.input}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isRequestingOtp || !email.trim()}
+                  style={{
+                    ...styles.primaryButton,
+                    opacity: isRequestingOtp || !email.trim() ? 0.5 : 1,
+                    cursor: isRequestingOtp || !email.trim() ? 'not-allowed' : 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  {isRequestingOtp ? 'Sending...' : 'Send Verification Code'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyOtp} style={styles.form}>
+                <p style={styles.otpSentText}>
+                  Code sent to {email}
+                </p>
+                <input
+                  type="text"
+                  placeholder="Enter code"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  disabled={isVerifyingOtp}
+                  style={styles.otpInput}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isVerifyingOtp || !otpCode.trim()}
+                  style={{
+                    ...styles.primaryButton,
+                    opacity: isVerifyingOtp || !otpCode.trim() ? 0.5 : 1,
+                    cursor: isVerifyingOtp || !otpCode.trim() ? 'not-allowed' : 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setOtpSent(false); setOtpCode(''); setError(null); }}
+                  style={styles.secondaryButton}
+                >
+                  Use a different email
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setError(null);
+                    const result = await window.authAPI?.requestOtp(email.trim());
+                    if (result?.error) {
+                      setError(result.error);
+                    }
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: theme.textSecondary,
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    marginTop: '8px',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Resend code
+                </button>
+              </form>
+            )}
 
-        {error && (
-          <div style={styles.errorBanner}>
-            {error}
-          </div>
-        )}
-
-        {!otpSent && (
-          <div style={{ marginTop: '16px' }}>
-            <label style={styles.launchAtLoginLabel}>
-              <input
-                type="checkbox"
-                checked={launchAtLogin}
-                onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
-                style={styles.launchAtLoginCheckbox}
-              />
-              Launch Field Theory on login
-            </label>
-            {launchAtLoginError && (
-              <div style={styles.launchAtLoginError}>
-                Enable in{' '}
-                <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
-                  System Settings
-                </span>
+            {error && (
+              <div style={styles.errorBanner}>
+                {error}
               </div>
             )}
-          </div>
-        )}
 
-        {!otpSent && (
-          <a
-            href="#"
-            onClick={async (event) => {
-              event.preventDefault();
-              if (isCompletingLocalSetup) return;
-              setIsCompletingLocalSetup(true);
-              setError(null);
-              try {
-                await onLocalSetup();
-              } catch (err) {
-                console.error('[Onboarding] Failed to complete local setup:', err);
-                setError('Could not finish local setup. Please try again.');
-                setIsCompletingLocalSetup(false);
-              }
-            }}
-            style={{
-              ...styles.localSetupLink,
-              opacity: isCompletingLocalSetup ? 0.6 : 1,
-              cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
-            }}
-          >
-            {isCompletingLocalSetup ? 'Starting local setup...' : 'local setup'}
-          </a>
+            {!otpSent && (
+              <div style={{ marginTop: '16px' }}>
+                <label style={styles.launchAtLoginLabel}>
+                  <input
+                    type="checkbox"
+                    checked={launchAtLogin}
+                    onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+                    style={styles.launchAtLoginCheckbox}
+                  />
+                  Launch Field Theory on login
+                </label>
+                {launchAtLoginError && (
+                  <div style={styles.launchAtLoginError}>
+                    Enable in{' '}
+                    <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                      System Settings
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!otpSent && (
+              <a
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void completeLocalSetup();
+                }}
+                style={{
+                  ...styles.localSetupLink,
+                  opacity: isCompletingLocalSetup ? 0.6 : 1,
+                  cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
+                }}
+              >
+                {isCompletingLocalSetup ? 'Starting local setup...' : 'local setup'}
+              </a>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -2139,6 +2221,15 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.textSecondary,
     textAlign: 'center',
     margin: '0 0 4px 0',
+  },
+  infoBanner: {
+    backgroundColor: theme.isDark ? 'rgba(96, 165, 250, 0.12)' : 'rgba(37, 99, 235, 0.08)',
+    border: `1px solid ${theme.isDark ? 'rgba(96, 165, 250, 0.28)' : 'rgba(37, 99, 235, 0.18)'}`,
+    borderRadius: '4px',
+    padding: '8px 12px',
+    fontSize: '12px',
+    color: theme.info,
+    textAlign: 'center',
   },
   errorBanner: {
     backgroundColor: theme.errorBg,

@@ -828,6 +828,7 @@ interface AuthSessionState {
 }
 
 interface AuthAPI {
+  isConfigured?: () => Promise<boolean>;
   prepareForNewLogin: () => Promise<void>;
   requestOtp: (email: string) => Promise<{ error: string | null }>;
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
