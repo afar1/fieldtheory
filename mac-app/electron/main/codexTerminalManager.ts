@@ -208,6 +208,10 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
+export function quoteForPosixShell(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function writePageContextBundle(contextDirPath: string, sessionId: string, context: CodexTerminalPageContext): string {
   const dir = path.join(contextDirPath, 'sessions', sessionId);
   const manifestPath = path.join(dir, 'context.json');
@@ -234,10 +238,12 @@ function writePageContextBundle(contextDirPath: string, sessionId: string, conte
     activeDocument: {
       title: context.title || 'Field Theory Page',
       path: context.path || 'unknown',
+      shellQuotedPath: quoteForPosixShell(context.path || 'unknown'),
       kind: context.kind,
       contentMode: context.contentMode || 'unknown',
       contentHash: crypto.createHash('sha256').update(context.content || '').digest('hex'),
       contentPath: activePath,
+      shellQuotedContentPath: quoteForPosixShell(activePath),
       lineMapping: context.lineMapping ?? null,
     },
     selection: selectionText
@@ -734,9 +740,13 @@ export class CodexTerminalManager {
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
       `Source: ${context.path || 'unknown'}`,
+      `Shell source: ${quoteForPosixShell(context.path || 'unknown')}`,
       `Manifest: ${filePath}`,
+      `Shell manifest: ${quoteForPosixShell(filePath)}`,
+      `Shell content copy: ${quoteForPosixShell(path.join(path.dirname(filePath), 'active.md'))}`,
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
+      'When using shell commands for these paths, use the Shell lines above so spaces and apostrophes are preserved.',
       'Read the manifest or content files only when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;
