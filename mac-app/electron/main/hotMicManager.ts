@@ -90,8 +90,14 @@ type FieldTheoryMarkdownInsertionTarget = {
   insertText: (text: string) => boolean;
 };
 
+type FieldTheoryTerminalInsertionTarget = {
+  isAvailable: () => boolean;
+  insertText: (text: string) => boolean;
+};
+
 type HotMicTextTarget =
   | { kind: 'app'; bundleId: string }
+  | { kind: 'field-theory-terminal' }
   | { kind: 'field-theory-markdown' }
   | { kind: 'none' };
 
@@ -299,6 +305,7 @@ export class HotMicManager extends EventEmitter {
   private dynamicIslandManager: DynamicIslandManager | null = null;
   private metricsWordsRecorder: ((wordCount: number) => void) | null = null;
   private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
+  private fieldTheoryTerminalInsertionTarget: FieldTheoryTerminalInsertionTarget | null = null;
 
   private state: HotMicState = 'idle';
   private condition: HotMicCondition | null = null;
@@ -633,6 +640,10 @@ export class HotMicManager extends EventEmitter {
     this.fieldTheoryMarkdownInsertionTarget = target;
   }
 
+  setFieldTheoryTerminalInsertionTarget(target: FieldTheoryTerminalInsertionTarget | null): void {
+    this.fieldTheoryTerminalInsertionTarget = target;
+  }
+
   setCommandsManager(manager: CommandsManager): void {
     this.commandsManager = manager;
   }
@@ -883,6 +894,11 @@ export class HotMicManager extends EventEmitter {
       return { kind: 'app', bundleId: frontmost.bundleId };
     }
 
+    if (this.fieldTheoryTerminalInsertionTarget?.isAvailable()) {
+      log.debug('Hot Mic: typing into focused Field Theory terminal');
+      return { kind: 'field-theory-terminal' };
+    }
+
     if (this.fieldTheoryMarkdownInsertionTarget?.isAvailable()) {
       log.debug('Hot Mic: typing into focused Field Theory markdown editor');
       return { kind: 'field-theory-markdown' };
@@ -901,6 +917,10 @@ export class HotMicManager extends EventEmitter {
     return target.kind === 'app' ? target.bundleId : null;
   }
 
+  private getTextTargetLabel(target: HotMicTextTarget): string {
+    return target.kind === 'app' ? target.bundleId : target.kind;
+  }
+
   private async insertTextIntoTarget(
     target: HotMicTextTarget,
     text: string,
@@ -910,6 +930,11 @@ export class HotMicManager extends EventEmitter {
     if (target.kind === 'field-theory-markdown') {
       const textToInsert = pressEnter || submitMode === 'command-enter' ? `${text}\n` : text;
       return this.fieldTheoryMarkdownInsertionTarget?.insertText(textToInsert) ?? false;
+    }
+
+    if (target.kind === 'field-theory-terminal') {
+      const textToInsert = pressEnter || submitMode === 'command-enter' ? `${text}\r` : text;
+      return this.fieldTheoryTerminalInsertionTarget?.insertText(textToInsert) ?? false;
     }
 
     if (target.kind !== 'app') {
@@ -964,7 +989,7 @@ export class HotMicManager extends EventEmitter {
       void this.storeHotMicTranscript(mappedText);
       if (target.kind !== 'none') {
         const actionLabel = submitMode === 'command-enter' ? 'submitting buffer with Command-Enter' : 'submitting buffer';
-        log.info('Hot Mic: %s (%d chars) to %s', actionLabel, mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
+        log.info('Hot Mic: %s (%d chars) to %s', actionLabel, mappedText.length, this.getTextTargetLabel(target));
         if (LOG_TRANSCRIPT_PAYLOADS) {
           log.debug('Hot Mic: submit buffer payload: "%s"', mappedText);
         }
@@ -1267,12 +1292,15 @@ export class HotMicManager extends EventEmitter {
 
     const hasFieldTheoryMarkdownTarget = this.isFieldTheoryBundleId(frontmost?.bundleId)
       && (this.fieldTheoryMarkdownInsertionTarget?.isAvailable() ?? false);
+    const hasFieldTheoryTerminalTarget = this.isFieldTheoryBundleId(frontmost?.bundleId)
+      && (this.fieldTheoryTerminalInsertionTarget?.isAvailable() ?? false);
 
-    if (!this.targetBundleId && !hasFieldTheoryMarkdownTarget) {
+    if (!this.targetBundleId && !hasFieldTheoryMarkdownTarget && !hasFieldTheoryTerminalTarget) {
       log.info('Hot Mic activated without a current text target; will resolve target when text is submitted');
     }
 
-    const activationTarget = this.targetBundleId ?? (hasFieldTheoryMarkdownTarget ? 'field-theory-markdown' : 'pending');
+    const activationTarget = this.targetBundleId
+      ?? (hasFieldTheoryTerminalTarget ? 'field-theory-terminal' : hasFieldTheoryMarkdownTarget ? 'field-theory-markdown' : 'pending');
     log.info('Hot Mic activated, target: %s', activationTarget);
     this.playSound('recordingStart');
     this.emit('activated', activationTarget);
@@ -2443,7 +2471,7 @@ export class HotMicManager extends EventEmitter {
         // Trailing space so the next dictation flows naturally
         if (target.kind !== 'none') {
           mappedText = mappedText + ' ';
-          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
+          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, this.getTextTargetLabel(target));
           if (LOG_TRANSCRIPT_PAYLOADS) {
             log.debug('Hot Mic: pasting buffer payload: "%s"', mappedText);
           }

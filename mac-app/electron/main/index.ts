@@ -14228,6 +14228,10 @@ async function initTranscriberSystem(): Promise<void> {
       isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
       insertText: insertTextIntoFocusedFieldTheoryMarkdown,
     });
+    hotMicManager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+      insertText: writeTextIntoFocusedCodexTerminal,
+    });
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setMetricsWordsRecorder((wordCount: number) => {
       metricsManager?.recordHotMicTranscribedWords(wordCount);

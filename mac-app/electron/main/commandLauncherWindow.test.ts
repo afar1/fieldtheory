@@ -119,7 +119,7 @@ describe('CommandLauncherWindow.show()', () => {
     });
   });
 
-  it('prefers cached frontmost window bounds on the open hot path', async () => {
+  it('prefers fresh frontmost window bounds over stale cached bounds', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({
         bundleId: 'com.apple.Safari',
@@ -133,7 +133,30 @@ describe('CommandLauncherWindow.show()', () => {
 
     await launcher.show();
 
-    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+    expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: Math.round(1400 + (1100 - LAUNCHER_WIDTH) / 2),
+      y: Math.round(120 + (900 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_COLLAPSED_HEIGHT,
+    });
+  });
+
+  it('falls back to cached frontmost window bounds when fresh bounds are unavailable', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+      })),
+      getFrontmostWindowBounds: vi.fn(() => null),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
       y: Math.round(100 + (800 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
