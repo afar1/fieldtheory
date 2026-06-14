@@ -352,12 +352,14 @@ describe('HotMicManager transcript history persistence', () => {
   it('submits buffered text into the focused Field Theory terminal', async () => {
     const { manager, nativeHelper } = createManager();
     const insertTerminalText = vi.fn(() => true);
+    const submitTerminalText = vi.fn(() => true);
     const insertMarkdownText = vi.fn(() => true);
     (manager as any).state = 'listening';
     nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
     manager.setFieldTheoryTerminalInsertionTarget({
       isAvailable: () => true,
       insertText: insertTerminalText,
+      submitText: submitTerminalText,
     });
     manager.setFieldTheoryMarkdownInsertionTarget({
       isAvailable: () => true,
@@ -366,7 +368,8 @@ describe('HotMicManager transcript history persistence', () => {
 
     await (manager as any).processListeningChunk('alpha beta go ahead');
 
-    expect(insertTerminalText).toHaveBeenCalledWith('alpha beta\r');
+    expect(submitTerminalText).toHaveBeenCalledWith('alpha beta', 'enter');
+    expect(insertTerminalText).not.toHaveBeenCalled();
     expect(insertMarkdownText).not.toHaveBeenCalled();
     expect(nativeHelper.typeIntoApp).not.toHaveBeenCalled();
     expect((manager as any).transcriptBuffer).toEqual([]);

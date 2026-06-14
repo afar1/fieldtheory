@@ -93,6 +93,7 @@ type FieldTheoryMarkdownInsertionTarget = {
 type FieldTheoryTerminalInsertionTarget = {
   isAvailable: () => boolean;
   insertText: (text: string) => boolean;
+  submitText?: (text: string, submitMode: Extract<HotMicSubmitMode, 'enter' | 'command-enter'>) => boolean | Promise<boolean>;
 };
 
 type HotMicTextTarget =
@@ -933,8 +934,12 @@ export class HotMicManager extends EventEmitter {
     }
 
     if (target.kind === 'field-theory-terminal') {
-      const textToInsert = pressEnter || submitMode === 'command-enter' ? `${text}\r` : text;
-      return this.fieldTheoryTerminalInsertionTarget?.insertText(textToInsert) ?? false;
+      if (pressEnter || submitMode === 'command-enter') {
+        return await this.fieldTheoryTerminalInsertionTarget?.submitText?.(text, submitMode === 'command-enter' ? 'command-enter' : 'enter')
+          ?? this.fieldTheoryTerminalInsertionTarget?.insertText(`${text}\r`)
+          ?? false;
+      }
+      return this.fieldTheoryTerminalInsertionTarget?.insertText(text) ?? false;
     }
 
     if (target.kind !== 'app') {
