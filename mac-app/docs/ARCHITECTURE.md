@@ -43,8 +43,8 @@ Field's Mac app is an **Electron application** with three main layers:
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────┘  │
 │                                                                             │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐  │
-│  │ MobileSync  │ │ SocialSync  │ │ Audio       │ │ Preferences         │  │
-│  │ (iOS todos) │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
+│  │ LibrarySync │ │ SocialSync  │ │ Audio       │ │ Preferences         │  │
+│  │ (internal)  │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────┘  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -216,9 +216,9 @@ Each "domain" has a dedicated manager class:
 |---------|---------------|-----------|-----------|
 | `ClipboardManager` | Local clipboard history (SQLite) | No | No |
 | `SharedClipboardSync` | Team clipboard collaboration | Yes | **Yes** |
-| `MobileSync` | iOS transcripts, todos, sketches | Yes | **Yes** (todos) |
+| `LibrarySync` | Internal shared Library/River surfaces | Yes | Optional |
 | `SocialSync` | DMs, Hot Mic, Contacts | Yes | **Yes** |
-| `TranscriberManager` | Whisper transcription | No | No |
+| `TranscriberManager` | Parakeet transcription | No | No |
 | `VisionProcessor` | MLX image captioning | No | No |
 | `GazeTrackingManager` | Gaze capture/vision lifecycle + stream rebroadcast | No | No |
 | `AudioManager` | Priority mic, device mgmt | No | No |
@@ -353,9 +353,9 @@ mac-app/
 │   │   ├── index.ts             # Entry point, IPC handlers, app lifecycle
 │   │   ├── clipboardManager.ts  # Local clipboard history (SQLite)
 │   │   ├── sharedClipboardSync.ts # Team clipboard (Supabase + Realtime)
-│   │   ├── mobileSync.ts        # iOS transcript sync
+│   │   ├── fieldTheorySync.ts   # Internal shared Library/River sync
 │   │   ├── socialSync.ts        # DMs, Hot Mic (Supabase + Realtime)
-│   │   ├── transcriberManager.ts # Whisper voice transcription
+│   │   ├── transcriberManager.ts # Parakeet voice transcription
 │   │   ├── gaze/                 # Gaze capture/calibration/focus managers
 │   │   │   ├── gazeTrackingManager.ts
 │   │   │   ├── gazeCalibrationEngine.ts

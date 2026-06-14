@@ -571,9 +571,6 @@ export default function HotMicSettings() {
             )}
             <span>queue: {runtimeStatus.queueDepth}</span>
             <span>chunks: {runtimeStatus.chunksReceived}</span>
-            {runtimeStatus.whisperFallbackActive && (
-              <span style={{ color: '#f59e0b' }}>whisper fallback</span>
-            )}
             <span style={{ color: runtimeStatus.micHealthy ? '#10b981' : '#ef4444' }}>
               mic: {runtimeStatus.micHealthy ? 'healthy' : 'stale'}
             </span>
@@ -1172,9 +1169,7 @@ function getConditionColor(condition: string): string {
 
 function formatEngineLabel(engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
   if (engine === 'parakeet-multilingual') return 'Parakeet Multilingual';
-  if (engine === 'parakeet') return 'Parakeet English';
-  if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
-  return 'Whisper';
+  return 'Parakeet English';
 }
 
 function getStateColor(state: string): string {

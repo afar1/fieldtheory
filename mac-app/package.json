@@ -29,9 +29,8 @@
     "build:vite": "vite build",
     "build:electron": "node scripts/clean-electron-dist.mjs && tsc -p tsconfig.electron.json",
     "build:native": "bash scripts/setup-native.sh",
-    "build:whisper": "scripts/build-whisper.sh",
     "build:gemma": "bash scripts/setup-gemma.sh",
-    "build:all": "npm run build:native && npm run build:whisper && npm run build",
+    "build:all": "npm run build:native && npm run build",
     "build:experimental": "FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true npm run build",
     "guard:release-channel": "node scripts/check-release-channel.mjs production",
     "guard:release-channel:experimental": "node scripts/check-release-channel.mjs experimental",
@@ -173,7 +172,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "LSUIElement": true,
+        "LSUIElement": false,
         "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
         "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots and system audio for AI context.",
         "NSAppleEventsUsageDescription": "Field Theory needs automation permission to paste transcribed text into other applications."
@@ -186,14 +185,6 @@
         {
           "from": "electron/assets",
           "to": "assets"
-        },
-        {
-          "from": "../build-whisper/bin/whisper-cli",
-          "to": "whisper-cli"
-        },
-        {
-          "from": "../build-whisper/bin/whisper-server",
-          "to": "whisper-server"
         },
         {
           "from": "public/sounds",
@@ -210,14 +201,6 @@
         {
           "from": "scripts/find-mlx-python.sh",
           "to": "scripts/find-mlx-python.sh"
-        },
-        {
-          "from": "scripts/mlx-whisper-transcribe.py",
-          "to": "scripts/mlx-whisper-transcribe.py"
-        },
-        {
-          "from": "scripts/setup-mlx-whisper.sh",
-          "to": "scripts/setup-mlx-whisper.sh"
         },
         {
           "from": "scripts/parakeet-transcribe.py",

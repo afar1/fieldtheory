@@ -91,7 +91,7 @@ Important Mac app areas:
 - `mac-app/scripts`: development, build, native setup, packaging, and release helper scripts.
 - `mac-app/resources` and `mac-app/public`: packaged resources and static assets.
 
-Other top-level trees may contain mobile work, adjacent apps, runtime code, or project infrastructure. Start there only when the task clearly points there.
+The public repository keeps the Mac app and supporting project documents at the top level. Archived mobile experiments and vendored Whisper sources are intentionally excluded.
 
 ## Local Development
 

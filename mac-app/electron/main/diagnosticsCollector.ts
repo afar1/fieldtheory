@@ -331,7 +331,7 @@ export class DiagnosticsCollector {
     return {
       selectedEngine: this.transcriberManager?.getConfiguredTranscriptionEngine()
         ?? this.preferencesManager.getPreference('transcriptionEngine')
-        ?? 'whisper',
+        ?? 'parakeet',
       engineStatus: this.transcriberManager?.getHotMicEngineStatus() ?? null,
       whisperModels: await this.collectWhisperModels(),
       parakeet: this.transcriberManager?.getParakeetStatus() ?? null,

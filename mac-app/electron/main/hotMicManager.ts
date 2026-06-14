@@ -847,10 +847,10 @@ export class HotMicManager extends EventEmitter {
     }
 
     const configured = this.preferences.getPreference('transcriptionEngine') as string | undefined;
-    if (isTranscriptionEngine(configured)) {
+    if (isParakeetEngine(configured)) {
       return configured;
     }
-    return 'whisper';
+    return 'parakeet';
   }
 
   /**
@@ -1502,11 +1502,6 @@ export class HotMicManager extends EventEmitter {
       return 'dictation';
     }
 
-    const engine = this.getConfiguredTranscriptionEngineForLogs();
-    if (engine === 'mlx-whisper' && queueDepth > 0) {
-      return 'command';
-    }
-
     if (queueDepth >= HotMicManager.HARVEST_BACKPRESSURE_QUEUE_THRESHOLD) {
       return 'command';
     }
@@ -2031,11 +2026,6 @@ export class HotMicManager extends EventEmitter {
     const pressureDepth = this.getTranscriptionPressureDepth();
     if (pressureDepth > 0) {
       return HotMicManager.FORCE_SNAPSHOT_BACKPRESSURE_MS;
-    }
-
-    const engine = this.getConfiguredTranscriptionEngineForLogs();
-    if (engine === 'mlx-whisper') {
-      return HotMicManager.FORCE_SNAPSHOT_MLX_MS;
     }
 
     return HotMicManager.FORCE_SNAPSHOT_COMMAND_MS;
@@ -3537,81 +3527,7 @@ export class HotMicManager extends EventEmitter {
       return this.externalTranscribe(wavPath);
     }
 
-    // Fallback: cold-spawn whisper-cli directly
-    return this.transcribeWithWhisper(wavPath);
-  }
-
-  private transcribeWithWhisper(wavPath: string): Promise<string> {
-    const modelPath = this.modelManager.getModelPath();
-    const whisperPath = this.getWhisperPath();
-
-    return new Promise((resolve, reject) => {
-      const args = [
-        '-m', modelPath,
-        '-f', wavPath,
-        '--language', 'en',
-        '--no-timestamps',
-      ];
-
-      this.whisperProcess = spawn(whisperPath, args, {
-        env: { ...process.env, NO_COLOR: '1' },
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      this.whisperProcess.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      this.whisperProcess.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      this.whisperProcess.on('close', (code) => {
-        this.whisperProcess = null;
-
-        if (code !== 0) {
-          reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`));
-          return;
-        }
-
-        let cleaned = stdout.replace(/\u001b\[[0-9;]*m/g, '');
-        cleaned = cleaned.replace(/\[(?:SPEAKER_TURN|id:\s*\d+|start:|end:)[^\]]*\]/gi, '');
-        cleaned = cleaned.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
-
-        const text = cleaned
-          .trim()
-          .split('\n')
-          .filter(line => {
-            const t = line.trim();
-            if (!t) return false;
-            if (t.match(/^\[.*-->\s*\]/)) return false;
-            if (t.match(/^\[\d+:\d+:\d+/)) return false;
-            if (t.match(/^(###|Transcription|END|BEGIN)/i)) return false;
-            return true;
-          })
-          .map(line => line.trim())
-          .join(' ')
-          .trim();
-
-        resolve(text);
-      });
-
-      this.whisperProcess.on('error', (error) => {
-        this.whisperProcess = null;
-        reject(error);
-      });
-    });
-  }
-
-  private getWhisperPath(): string {
-    if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'whisper-cli');
-    } else {
-      const repoRoot = path.resolve(__dirname, '../../..');
-      return path.join(repoRoot, 'build-whisper', 'bin', 'whisper-cli');
-    }
+    throw new Error('Parakeet transcription runtime is not available.');
   }
 
   // ---------------------------------------------------------------------------
