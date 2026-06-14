@@ -596,6 +596,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   const [isCompletingLocalSetup, setIsCompletingLocalSetup] = useState(false);
   const [accountAuthConfigured, setAccountAuthConfigured] = useState<boolean | null>(null);
   const accountAuthAvailable = accountAuthConfigured ?? Boolean(supabase);
+  const accountAuthUnavailableMessage = 'You are running a development build. Sign in and sign up are available in the official Field Theory app for account sync.';
 
   const completeLocalSetup = async () => {
     if (isCompletingLocalSetup) return;
@@ -689,7 +690,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
     e.preventDefault();
     if (!email.trim() || isRequestingOtp) return;
     if (!accountAuthAvailable) {
-      setError('Account sign-in is not available in this build. Continue with local setup.');
+      setError(accountAuthUnavailableMessage);
       return;
     }
 
@@ -716,7 +717,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
     e.preventDefault();
     if (!otpCode.trim() || isVerifyingOtp) return;
     if (!accountAuthAvailable) {
-      setError('Account sign-in is not available in this build. Continue with local setup.');
+      setError(accountAuthUnavailableMessage);
       return;
     }
 
@@ -1046,7 +1047,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
         {!accountAuthAvailable ? (
           <>
             <div style={styles.infoBanner}>
-              Account sign-in is not available in this build.
+              {accountAuthUnavailableMessage}
             </div>
             <button
               type="button"
