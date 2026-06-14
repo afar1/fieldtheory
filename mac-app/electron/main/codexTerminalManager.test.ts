@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexTerminalIPCChannels, CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
+import { CodexTerminalIPCChannels, CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, quoteForPosixShell, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
 
 const { sentMessages } = vi.hoisted(() => ({ sentMessages: [] as Array<{ channel: string; payload: any }> }));
 
@@ -84,6 +84,11 @@ describe('CodexTerminalManager', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('quotes source paths for POSIX shell commands', () => {
+    expect(quoteForPosixShell('/tmp/Sunday Jun 14th.md')).toBe("'/tmp/Sunday Jun 14th.md'");
+    expect(quoteForPosixShell("/tmp/Andrew's note.md")).toBe("'/tmp/Andrew'\\''s note.md'");
   });
 
   it('buffers PTY output so a renderer can replay scrollback after remount', () => {
@@ -555,6 +560,34 @@ describe('CodexTerminalManager', () => {
       expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(ptys[0].written).toHaveLength(1);
+    } finally {
+      rmSync(contextDirPath, { recursive: true, force: true });
+    }
+  });
+
+  it('includes shell-safe context paths for files with spaces', () => {
+    const contextDirPath = mkdtempSync(join(tmpdir(), 'codex-terminal-context-spaces-'));
+    const { manager, ptys } = createManager(1024, {
+      contextDirPath,
+    });
+    const session = manager.createSession();
+
+    try {
+      const sourcePath = '/Users/afar/.fieldtheory/library/scratchpad/Sunday Jun 14th.md';
+      const result = manager.attachPageContext(session.id, {
+        title: 'Sunday Jun 14th',
+        path: sourcePath,
+        kind: 'wiki',
+        contentMode: 'markdown',
+        content: 'Draft notes.',
+      });
+
+      const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
+      expect(manifest.activeDocument.shellQuotedPath).toBe(quoteForPosixShell(sourcePath));
+      expect(manifest.activeDocument.shellQuotedContentPath).toBe(quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md')));
+      expect(ptys[0].written.at(-1)).toContain(`Shell source: ${quoteForPosixShell(sourcePath)}`);
+      expect(ptys[0].written.at(-1)).toContain(`Shell content copy: ${quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md'))}`);
+      expect(ptys[0].written.at(-1)).toContain('When using shell commands for these paths, use the Shell lines above');
     } finally {
       rmSync(contextDirPath, { recursive: true, force: true });
     }
