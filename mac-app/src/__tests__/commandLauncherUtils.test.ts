@@ -2078,7 +2078,7 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
     })).toEqual({ kind: 'external', path: '/Users/afar/Notes/Roadmap.md' });
   });
 
-  it('opens handoff markdown files and root file-search markdown files as external Field Theory files', () => {
+  it('opens handoff markdown files and root file-search files as external Field Theory files', () => {
     expect(getLauncherFieldTheoryMarkdownTarget({
       id: 'handoff-daily',
       type: 'handoff',
@@ -2096,6 +2096,24 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
       isDirectory: false,
       keywords: ['note.md'],
     })).toEqual({ kind: 'external', path: '/Users/afar/Downloads/note.md' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-styles',
+      type: 'file',
+      name: 'styles.css',
+      displayName: 'styles.css',
+      filePath: '/Users/afar/Downloads/styles.css',
+      isDirectory: false,
+      keywords: ['styles.css'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/Downloads/styles.css' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-folder',
+      type: 'file',
+      name: 'Downloads',
+      displayName: 'Downloads',
+      filePath: '/Users/afar/Downloads',
+      isDirectory: true,
+      keywords: ['Downloads'],
+    })).toBeNull();
   });
 
   it('keeps wiki pages, artifacts, and commands on their existing target kinds', () => {

@@ -1664,7 +1664,7 @@ export function getLauncherFieldTheoryMarkdownTarget(
   if (item.type === 'handoff' && item.filePath) {
     return { kind: 'external', path: item.filePath };
   }
-  if (item.type === 'file' && item.filePath && !item.isDirectory && /\.(md|markdown)$/i.test(item.filePath)) {
+  if (item.type === 'file' && item.filePath && !item.isDirectory) {
     return { kind: 'external', path: item.filePath };
   }
   return null;
