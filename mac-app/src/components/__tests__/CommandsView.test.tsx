@@ -187,7 +187,7 @@ describe('CommandsView command naming', () => {
     });
   });
 
-  it('does not show fake shared commands when the real shared source is unavailable', async () => {
+  it('hides shared commands in the main app', async () => {
     window.fieldTheorySyncAPI!.getStatus = vi.fn(async () => ({
       localEnabled: true,
       authenticated: true,
@@ -199,9 +199,8 @@ describe('CommandsView command naming', () => {
 
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
-    fireEvent.click(await screen.findByText('Shared'));
-
     await waitFor(() => {
+      expect(screen.queryByText('Shared')).toBeNull();
       expect(screen.queryByText('learn')).toBeNull();
       expect(screen.queryByText('refactor')).toBeNull();
       expect(screen.queryByText('review')).toBeNull();

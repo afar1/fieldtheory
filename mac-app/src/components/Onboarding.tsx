@@ -35,11 +35,6 @@ type PermissionStatus = {
   screenRecording: boolean;
 };
 
-type ModelSize = 'small';
-
-// Model selection order (used for auto-selecting a downloaded model).
-const MODEL_ORDER: ModelSize[] = ['small'];
-
 // Phase to step number mapping for persistence.
 const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
   permissions: 0,
@@ -223,12 +218,6 @@ interface AIIntegrationStatus {
 }
 
 interface ModelPhaseProps {
-  selectedModel: ModelSize;
-  modelDownloadStatus: Record<string, boolean>;
-  downloadingModel: string | null;
-  downloadProgress: number;
-  onDownloadModel: (model: ModelSize) => void;
-  onCancelDownload: () => void;
   onFinish: () => void;
   selectedEngine: VisibleTranscriptionEngine;
   onSelectEngine: (engine: VisibleTranscriptionEngine) => void;
@@ -243,12 +232,6 @@ interface ModelPhaseProps {
 }
 
 function ModelPhase({
-  selectedModel,
-  modelDownloadStatus,
-  downloadingModel,
-  downloadProgress,
-  onDownloadModel,
-  onCancelDownload,
   onFinish,
   selectedEngine,
   onSelectEngine,
@@ -261,20 +244,12 @@ function ModelPhase({
   theme,
   styles,
 }: ModelPhaseProps) {
-  const isWhisperReady = modelDownloadStatus[selectedModel] || false;
-
   // Can finish if the chosen engine is ready.
-  const canFinish = selectedEngine === 'whisper'
-    ? isWhisperReady
-    : isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine);
-  const selectedParakeetEngineStatus = selectedEngine === 'whisper'
-    ? null
-    : getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
-  const selectedParakeetProgress = selectedEngine === 'whisper'
-    ? null
-    : parakeetSetupProgress?.engine === selectedEngine
-      ? parakeetSetupProgress
-      : null;
+  const canFinish = isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine);
+  const selectedParakeetEngineStatus = getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
+  const selectedParakeetProgress = parakeetSetupProgress?.engine === selectedEngine
+    ? parakeetSetupProgress
+    : null;
   const selectedParakeetSetupActive = Boolean(
     selectedParakeetProgress &&
     selectedParakeetProgress.stage !== 'completed' &&
@@ -336,7 +311,7 @@ function ModelPhase({
   };
 
   // Show AI integration section when either engine is ready
-  const showAIIntegration = canFinish || downloadingModel !== null;
+  const showAIIntegration = canFinish || settingUpParakeet;
   const hasAnyAITool = aiStatus && (aiStatus.claudeCode.available || aiStatus.cursor.available);
 
   return (
@@ -412,7 +387,7 @@ function ModelPhase({
             </div>
           );
         })}
-        {(selectedParakeetProgress || selectedParakeetSupportSummary) && selectedEngine !== 'whisper' && (
+        {(selectedParakeetProgress || selectedParakeetSupportSummary) && (
           <ParakeetSupportPanel
             theme={theme}
             title={
@@ -432,72 +407,6 @@ function ModelPhase({
           />
         )}
 
-        {/* Whisper fallback - de-emphasized */}
-        <div
-          onClick={() => onSelectEngine('whisper')}
-          style={{
-            ...styles.modelCard,
-            borderColor: selectedEngine === 'whisper' ? (theme.isDark ? '#6b7280' : '#9ca3af') : theme.border,
-            boxShadow: 'none',
-            backgroundColor: selectedEngine === 'whisper'
-              ? (theme.isDark ? 'rgba(107, 114, 128, 0.1)' : '#f9fafb')
-              : 'transparent',
-            opacity: 0.6,
-            cursor: 'pointer',
-          }}
-        >
-          <div style={styles.modelCardCheck}>
-            {selectedEngine === 'whisper' ? (
-              <span style={{ ...styles.checkmark, color: '#6b7280' }}>✓</span>
-            ) : (
-              <span style={styles.unchecked}>○</span>
-            )}
-          </div>
-          <div style={styles.modelCardLeft}>
-            <div style={styles.modelCardHeader}>
-              <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
-                Whisper
-              </span>
-              <span style={{ fontSize: '10px', color: theme.textSecondary }}>Legacy</span>
-            </div>
-            <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-              whisper.cpp — slower, less accurate than Parakeet
-            </div>
-            {selectedEngine === 'whisper' && downloadingModel && (
-              <div style={styles.progressContainer}>
-                <div style={styles.progressBar}>
-                  <div style={{ ...styles.progressFill, width: `${downloadProgress}%` }} />
-                </div>
-                <span style={styles.progressText}>{Math.round(downloadProgress)}%</span>
-              </div>
-            )}
-          </div>
-          <div style={styles.modelCardRight}>
-            {selectedEngine === 'whisper' && (
-              isWhisperReady ? (
-                <span style={{ fontSize: '11px', color: theme.textSecondary, fontWeight: 500 }}>Downloaded</span>
-              ) : downloadingModel ? (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              ) : (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDownloadModel(selectedModel); }}
-                  disabled={downloadingModel !== null}
-                  style={{
-                    ...styles.downloadButton,
-                    opacity: downloadingModel !== null ? 0.5 : 1,
-                  }}
-                >
-                  Download
-                </button>
-              )
-            )}
-          </div>
-        </div>
       </div>
 
       {/* AI Integration Section - shown when either engine is ready */}
@@ -1547,12 +1456,6 @@ export default function Onboarding() {
     screenRecording: false,
   });
 
-  // Model state.
-  const [selectedModel, setSelectedModel] = useState<ModelSize>('small');
-  const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
-  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_PARAKEET_ENGINE);
   const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
@@ -1591,35 +1494,8 @@ export default function Onboarding() {
         const state = await window.onboardingAPI.getState();
         setPermissions(state.permissions);
 
-        // Load current hotkeys, selected model, and download status for all models.
+        // Load engine selection and Parakeet status.
         if (window.transcribeAPI) {
-          // Load the currently selected model.
-          let currentModel = await window.transcribeAPI.getSelectedModel();
-
-          // Load download status for all models.
-          const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-          setModelDownloadStatus(downloadStatus);
-
-          // If the current model isn't downloaded but another model is, auto-select a downloaded model.
-          if (currentModel && !downloadStatus[currentModel]) {
-            const downloadedModel = MODEL_ORDER.find(m => downloadStatus[m]);
-            if (downloadedModel) {
-              currentModel = downloadedModel;
-              await window.transcribeAPI.setSelectedModel(downloadedModel);
-            }
-          }
-
-          if (currentModel === 'small') {
-            setSelectedModel(currentModel);
-          }
-
-          // Check if a download is already in progress.
-          const downloadingModels = await window.transcribeAPI.getDownloadingModels?.() ?? [];
-          if (downloadingModels.length > 0) {
-            setDownloadingModel(downloadingModels[0]);
-          }
-
-          // Load engine selection and parakeet status.
           const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
           const normalizedEngine = normalizeVisibleTranscriptionEngine(currentEngine);
           setSelectedEngine(normalizedEngine);
@@ -1635,25 +1511,6 @@ export default function Onboarding() {
     };
     loadState();
   }, []);
-
-  // Listen for model download progress.
-  useEffect(() => {
-    if (!window.transcribeAPI) return;
-
-    const unsubscribe = window.transcribeAPI.onModelDownloadProgress(async (downloaded, total) => {
-      const percent = total > 0 ? (downloaded / total) * 100 : 0;
-      setDownloadProgress(percent);
-
-      // When download completes, refresh the download status.
-      if (downloaded >= total && total > 0 && downloadingModel) {
-        const downloadStatus = await window.transcribeAPI!.getModelDownloadStatus();
-        setModelDownloadStatus(downloadStatus);
-        setDownloadingModel(null);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [downloadingModel]);
 
   useEffect(() => {
     if (!window.transcribeAPI?.onParakeetSetupProgress) return;
@@ -1692,31 +1549,6 @@ export default function Onboarding() {
     await window.onboardingAPI.openScreenRecordingSettings();
   }, []);
 
-  // Model handlers.
-  const downloadModel = useCallback(async (modelToDownload: ModelSize) => {
-    if (!window.transcribeAPI || downloadingModel) return;
-    setDownloadingModel(modelToDownload);
-    setDownloadProgress(0);
-
-    try {
-      await window.transcribeAPI.downloadModel(modelToDownload);
-      // Set as selected model after download completes.
-      setSelectedModel(modelToDownload);
-      await window.transcribeAPI.setSelectedModel(modelToDownload);
-    } catch (error) {
-      console.error('Model download failed:', error);
-      setDownloadingModel(null);
-    }
-  }, [downloadingModel]);
-  
-  // Cancel a download in progress.
-  // Note: This clears the UI state but the download continues in background.
-  // True cancellation would require backend support.
-  const cancelDownload = useCallback(() => {
-    setDownloadingModel(null);
-    setDownloadProgress(0);
-  }, []);
-  
   // Engine selection handlers.
   const handleEngineChange = useCallback((engine: VisibleTranscriptionEngine) => {
     setSelectedEngine(engine);
@@ -1831,12 +1663,6 @@ export default function Onboarding() {
       case 'model':
         return (
           <ModelPhase
-            selectedModel={selectedModel}
-            modelDownloadStatus={modelDownloadStatus}
-            downloadingModel={downloadingModel}
-            downloadProgress={downloadProgress}
-            onDownloadModel={downloadModel}
-            onCancelDownload={cancelDownload}
             onFinish={goToAccount}
             selectedEngine={selectedEngine}
             onSelectEngine={handleEngineChange}
