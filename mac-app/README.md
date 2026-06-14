@@ -16,11 +16,13 @@ npm run dev
 `npm run dev` starts Vite on port `5173` and launches Electron against the dev server.
 
 Login is optional for local tools. Fill in Supabase values in `.env.local` only when testing authenticated or account-backed surfaces.
+For maintainer auth testing, `npm run dev -- --env login` verifies `mac-app/.env.local` and can copy ignored config from a sibling private checkout when available.
 
 ## Useful Commands
 
 ```bash
 npm run dev
+npm run dev -- --env login
 npm run dev:verbose
 npm run dev:active
 npm run dev:native

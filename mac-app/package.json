@@ -11,7 +11,8 @@
   },
   "main": "electron-dist/main/index.js",
   "scripts": {
-    "dev": "npm run dev:quiet",
+    "dev": "node scripts/dev.mjs",
+    "dev:login": "node scripts/dev.mjs --env login",
     "dev:quiet": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:quiet\"",
     "dev:active": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:active\"",
     "dev:verbose": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron:verbose\"",
