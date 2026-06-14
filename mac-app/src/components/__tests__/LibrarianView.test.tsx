@@ -2208,6 +2208,27 @@ describe('LibrarianView render', () => {
           {
             kind: 'wiki' as const,
             path: relPath,
+            title: 'Caching Lessons For Field Theory',
+            lastOpenedAt: 10,
+          },
+        ]),
+        onChanged: vi.fn(() => () => {}),
+        visit: vi.fn(async () => []),
+      },
+    });
+    Object.defineProperty(window, 'recentAPI', {
+      configurable: true,
+      value: {
+        list: vi.fn(async () => [
+          {
+            kind: 'external' as const,
+            path: commandPath,
+            title: 'release',
+            lastOpenedAt: 20,
+          },
+          {
+            kind: 'wiki' as const,
+            path: relPath,
             title: '2026-05-28',
             lastOpenedAt: 10,
           },
@@ -2269,6 +2290,81 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('Scratchpad body')).toBeTruthy();
     expect(screen.queryByText('Release command body')).toBeNull();
     expect(window.wikiAPI!.getPage).toHaveBeenCalledWith(relPath);
+  });
+
+  it('does not replay a restored external selection after clicking a wiki document', async () => {
+    const commandPath = '/Users/afar/.fieldtheory/library/Commands/release.md';
+    const relPath = 'scratchpad/Caching Lessons For Field Theory';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'external', path: commandPath });
+      if (key === 'wiki-expanded-folders') return expandedScratchpadFolders;
+      return null;
+    });
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn(async (absPath: string) => ({
+          path: absPath,
+          name: 'release.md',
+          content: 'Release command body',
+          mtime: 1,
+          documentVersion: { mtimeMs: 1, size: 20, sha256: 'release' },
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/Users/afar/.fieldtheory/library',
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+          name: 'Caching Lessons For Field Theory',
+          title: 'Caching Lessons For Field Theory',
+          lastUpdated: 10,
+        }],
+      }],
+    }]);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+        name: 'Caching Lessons For Field Theory',
+        title: 'Caching Lessons For Field Theory',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'Caching Lessons For Field Theory',
+      title: 'Caching Lessons For Field Theory',
+      lastUpdated: 10,
+      content: 'Caching lessons body',
+      documentVersion: { mtimeMs: 1, size: 20, sha256: 'caching' },
+    }));
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('Release command body')).toBeTruthy();
+    const openCountBeforeClick = vi.mocked(window.externalAPI!.open).mock.calls.length;
+
+    fireEvent.click(await screen.findByText('Caching Lessons For Field Theory'));
+
+    expect(await screen.findByText('Caching lessons body')).toBeTruthy();
+    expect(screen.queryByText('Release command body')).toBeNull();
+    expect(window.externalAPI!.open).toHaveBeenCalledTimes(openCountBeforeClick);
   });
 
   it('keeps a clicked wiki page when a slow initial external command finishes later', async () => {
@@ -5573,7 +5669,7 @@ describe('LibrarianView render', () => {
     });
   }, 10000);
 
-  it('reveals the collapsed sidebar only when the edge strip is clicked', async () => {
+  it('reveals the collapsed sidebar when the pointer reaches the edge strip', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
       path: '/tmp/library/example.md',
       title: 'example.md',
@@ -5621,9 +5717,17 @@ describe('LibrarianView render', () => {
     expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
     fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    expect(getHoverStrip()).toBeNull();
+    expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
+    expect(getResizeHandle()?.style.borderRight).toBe('0px solid transparent');
+
+    fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 20 });
+    expect(getHoverStrip()).toBeNull();
+
+    fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.click(getHoverStrip()!);

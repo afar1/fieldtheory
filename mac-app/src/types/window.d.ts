@@ -1814,6 +1814,7 @@ interface ThemeAPI {
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
+  traceNavigation?: (stage: string, payload: Record<string, unknown>) => Promise<void>;
   saveReading: (path: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   deleteReading: (path: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
