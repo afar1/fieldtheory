@@ -2514,6 +2514,10 @@ type TaggedDocsAPI = typeof taggedDocsAPI;
 // =============================================================================
 
 const authAPI = {
+  // Whether account-backed auth is configured in this build.
+  isConfigured: (): Promise<boolean> =>
+    ipcRenderer.invoke('auth:isConfigured'),
+
   // Sign up with email and password.
   signUp: (email: string, password: string) =>
     ipcRenderer.invoke('auth:signUp', email, password),

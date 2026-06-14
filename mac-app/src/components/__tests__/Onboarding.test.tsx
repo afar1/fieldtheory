@@ -85,6 +85,7 @@ describe('Onboarding local setup', () => {
     (window as any).onboardingAPI = makeOnboardingApi();
     (window as any).transcribeAPI = makeTranscribeApi();
     (window as any).authAPI = {
+      isConfigured: vi.fn(async () => true),
       getSession: vi.fn(async () => null),
       requestOtp: vi.fn(async () => ({ error: null })),
     };
@@ -117,5 +118,27 @@ describe('Onboarding local setup', () => {
     });
     expect(window.authAPI?.requestOtp).not.toHaveBeenCalled();
     expect(supabaseMock.from).not.toHaveBeenCalled();
+  });
+
+  it('uses local setup when account auth is not configured', async () => {
+    (window as any).authAPI = {
+      ...window.authAPI,
+      isConfigured: vi.fn(async () => false),
+    };
+
+    render(<Onboarding />);
+
+    const localSetup = await screen.findByRole('button', { name: 'Continue with local setup' });
+
+    expect(screen.queryByRole('button', { name: 'Send Verification Code' })).toBeNull();
+
+    await act(async () => {
+      localSetup.click();
+    });
+
+    await waitFor(() => {
+      expect(window.onboardingAPI?.completeLocalSetup).toHaveBeenCalled();
+    });
+    expect(window.authAPI?.requestOtp).not.toHaveBeenCalled();
   });
 });

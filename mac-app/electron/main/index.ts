@@ -10661,6 +10661,10 @@ function setupClipboardIPCHandlers(): void {
   // Password Authentication IPC Handlers
   // =========================================================================
 
+  ipcMain.handle('auth:isConfigured', () => {
+    return Boolean(authManager?.getSupabaseClient());
+  });
+
   ipcMain.handle('auth:signUp', async (_event, email: string, password: string) => {
     if (!authManager) {
       return { error: 'Auth manager not initialized' };
