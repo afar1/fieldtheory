@@ -745,7 +745,7 @@ export class CodexTerminalManager {
       'If an edit reports that the file changed on disk, run ft current --json again, merge the requested change into the returned content, and retry once with the new version.sha256.',
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
-      'For user-requested edits to the current Field Theory document, use only the current-document commands above. Pipe multiline Markdown on stdin; do not pass Markdown as command arguments. Do not use sed, awk, cat against the source path, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',
+      'For user-requested edits to the current Field Theory document, use only the current-document commands above. Pipe multiline Markdown on stdin; do not pass Markdown as command arguments. Do not use sed, awk, cat against the source path, apply_patch, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',
       'Field Theory command .md files are instruction documents, not executables. Read command docs through the Field Theory CLI; do not run them as shell commands.',
       'Use ft current when the user asks something that needs document details.',
       '',
