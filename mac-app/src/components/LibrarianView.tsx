@@ -501,6 +501,44 @@ export function getRenderedDisplayReadingContent(input: {
 
 type CodexTerminalLineMapping = NonNullable<CodexTerminalPageContextInput['lineMapping']>;
 
+type ActiveLibraryFileSelectionContext = {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
+};
+
+function getActiveLibraryFileContextKey(context: ActiveLibraryFileSelectionContext | null): string {
+  if (!context) return 'null';
+  return JSON.stringify([
+    context.type,
+    context.rootPath,
+    context.relPath,
+    context.filePath,
+    context.title,
+    context.selectionStart ?? null,
+    context.selectionEnd ?? null,
+    context.selectionText ?? null,
+  ]);
+}
+
+export function hasActiveLibraryFileSelectionContext(context: ActiveLibraryFileSelectionContext | null): boolean {
+  return typeof context?.selectionStart === 'number'
+    && typeof context.selectionEnd === 'number'
+    && context.selectionStart !== context.selectionEnd;
+}
+
+export function shouldReportActiveLibraryFileContextForSelection(
+  snapshot: Pick<MarkdownCodeEditorSelectionSnapshot, 'isCollapsed'>,
+  hasReportedSelection: boolean,
+): boolean {
+  return !snapshot.isCollapsed || hasReportedSelection;
+}
+
 export function buildSourceLineMapping(content: string, options: {
   contentMode: MarkdownContentMode;
   sourceLineOffset?: number;
@@ -837,6 +875,7 @@ const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
 const LIBRARIAN_READER_SCROLLBAR_GUTTER_PX = 14;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS = 180;
+const CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS = 500;
 const FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
 const RENDERED_SAVE_INITIAL_DELAY_MS = 400;
 const RENDERED_SAVE_QUIET_DELAY_MS = 750;
@@ -3273,6 +3312,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const renderedMarkdownEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
   const activeReadingPathRef = useRef<string | null>(null);
   const activeReadingContentRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileContextRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileHasSelectionRef = useRef(false);
   const markdownEditorFocusedRef = useRef(false);
   const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
@@ -5100,21 +5141,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, []);
 
-  type ActiveLibraryFileSelectionContext = {
-    type: 'wiki' | 'external';
-    rootPath: string;
-    relPath: string;
-    filePath: string;
-    title: string;
-    selectionStart?: number;
-    selectionEnd?: number;
-    selectionText?: string;
-  };
-
   const withActiveLibraryFileSelectionContext = useCallback((context: ActiveLibraryFileSelectionContext): ActiveLibraryFileSelectionContext => {
     const selection = getActiveLibraryFileSelectionContext();
     return selection ? { ...context, ...selection } : context;
   }, [getActiveLibraryFileSelectionContext]);
+
+  const publishActiveLibraryFileContext = useCallback((
+    context: ActiveLibraryFileSelectionContext | null,
+    options: { force?: boolean } = {},
+  ) => {
+    const nextKey = getActiveLibraryFileContextKey(context);
+    if (!options.force && lastReportedActiveLibraryFileContextRef.current === nextKey) return;
+    lastReportedActiveLibraryFileContextRef.current = nextKey;
+    lastReportedActiveLibraryFileHasSelectionRef.current = hasActiveLibraryFileSelectionContext(context);
+    void window.commandsAPI?.setActiveLibraryFileContext?.(context);
+  }, []);
 
   const inferWikiRootPathForContext = useCallback((filePath: string, relPath: string): string => {
     const normalizedFilePath = filePath.replace(/\\/g, '/');
@@ -5123,9 +5164,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return normalizedFilePath.endsWith(suffix) ? normalizedFilePath.slice(0, -suffix.length) : '';
   }, []);
 
-  const reportActiveLibraryFileContext = useCallback(() => {
+  const reportActiveLibraryFileContext = useCallback((options: { force?: boolean } = {}) => {
     if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')) {
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
@@ -5134,47 +5175,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     ));
     if (!sidebarItem?.rootPath || !sidebarItem.relPath || (sidebarItem.type !== 'wiki' && sidebarItem.type !== 'external')) {
       if (selectedItemType === 'wiki' && wikiSelectedRelPath && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'wiki',
           rootPath: inferWikiRootPathForContext(activeReading.path, wikiSelectedRelPath),
           relPath: wikiSelectedRelPath,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
       if (selectedItemType === 'external' && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'external',
           rootPath: '',
           relPath: activeReading.path,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
       if (selectedItemType === 'artifact' && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'external',
           rootPath: '',
           relPath: activeReading.path,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
-    void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+    publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
       type: sidebarItem.type,
       rootPath: sidebarItem.rootPath,
       relPath: sidebarItem.relPath,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
-    }));
-  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
+    }), options);
+  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, publishActiveLibraryFileContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
 
   useEffect(() => {
     reportActiveLibraryFileContext();
@@ -5183,7 +5224,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     const reportCurrentContext = () => {
-      reportActiveLibraryFileContext();
+      reportActiveLibraryFileContext({ force: true });
     };
     window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentContext);
     return () => {
@@ -5769,6 +5810,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
+  const codexTerminalPageContextSourceContent = contentMode === 'markdown' ? editContent : displaySourceBody;
+  const codexTerminalPageContextIdentity = `${selectedItemType ?? 'none'}:${activeReadingPath ?? ''}:${contentMode}`;
+  const [debouncedCodexTerminalPageContextContent, setDebouncedCodexTerminalPageContextContent] = useState({
+    identity: codexTerminalPageContextIdentity,
+    content: codexTerminalPageContextSourceContent,
+  });
+  const codexTerminalPageContextSourceContentRef = useRef(codexTerminalPageContextSourceContent);
+  codexTerminalPageContextSourceContentRef.current = codexTerminalPageContextSourceContent;
+  useEffect(() => {
+    // File changes should attach immediately; content-only edits stay off the keystroke path.
+    setDebouncedCodexTerminalPageContextContent({
+      identity: codexTerminalPageContextIdentity,
+      content: codexTerminalPageContextSourceContentRef.current,
+    });
+  }, [codexTerminalPageContextIdentity]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCodexTerminalPageContextContent({
+        identity: codexTerminalPageContextIdentity,
+        content: codexTerminalPageContextSourceContent,
+      });
+    }, CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [codexTerminalPageContextIdentity, codexTerminalPageContextSourceContent]);
+  const codexTerminalPageContextContent =
+    debouncedCodexTerminalPageContextContent.identity === codexTerminalPageContextIdentity
+      ? debouncedCodexTerminalPageContextContent.content
+      : codexTerminalPageContextSourceContent;
   const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
     if (!activeReading) return null;
     const kind: CodexTerminalPageContextInput['kind'] =
@@ -5776,41 +5845,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         ? selectedItemType
         : 'unknown';
     const selectionText = window.getSelection()?.toString().trim() || undefined;
-    const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(activeReading.content);
-    const renderedVisualRows = renderedMarkdownEditorRef.current?.getVisualLineMap() ?? [];
-    const renderedLineMapping: CodexTerminalLineMapping = renderedVisualRows.length > 0
-      ? {
-          activeLineKind: 'renderedVisual',
-          contentMode,
-          visibleRowsOnly: true,
-          lines: renderedVisualRows.slice(0, 400).map((line) => ({
-            visibleLine: line.visualLine,
-            sourceLine: bodyStartLineIndex + line.sourceLine,
-            rowInSourceLine: line.rowInSourceLine,
-            rowsInSourceLine: line.rowsInSourceLine,
-            text: line.sourceLineText,
-          })),
-        }
-      : {
-          ...buildSourceLineMapping(displaySourceBody, {
-            contentMode,
-            sourceLineOffset: bodyStartLineIndex,
-          }),
-          activeLineKind: 'renderedVisual',
-          visibleRowsOnly: false,
-        };
     return {
       title: activeReading.title,
       path: activeReading.path,
       kind,
       contentMode,
-      content: contentMode === 'markdown' ? editContent : displaySourceBody,
+      content: codexTerminalPageContextContent,
       selectionText,
-      lineMapping: contentMode === 'markdown'
-        ? buildSourceLineMapping(editContent, { contentMode })
-        : renderedLineMapping,
     };
-  }, [activeReading, contentMode, displaySourceBody, editContent, selectedItemType]);
+  }, [activeReading, codexTerminalPageContextContent, contentMode, selectedItemType]);
   const shouldLoadMarkdownLinkRelationDocuments = (
     active
     && !!activeReading
@@ -7320,7 +7363,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       renderedEditUndoStackRef.current = [];
     }
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
-    reportActiveLibraryFileContext();
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
     showSelectionPastePopoverFromEditorSnapshot(snapshot);
     updateRenderedEditorWikiLinkCompletion(snapshot);
     scheduleEditorSessionPersistRef.current?.();
@@ -7869,7 +7914,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ) => {
     const reason = snapshot.docChanged ? 'markdown-input' : 'markdown-selection';
     latestMarkdownCursorSnapshotRef.current = { ...snapshot, timestamp: Date.now(), stage: reason };
-    reportActiveLibraryFileContext();
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
     recordRenderedEditorDebug('markdown-cursor-change', () => ({
       reason,
       cursor: getMarkdownCursorDebugState(reason, snapshot),
@@ -8705,7 +8752,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (contentMode !== 'markdown') return;
     const frame = requestAnimationFrame(() => updateMarkdownEditorFades(markdownCodeEditorRef.current));
     return () => cancelAnimationFrame(frame);
-  }, [activeReading?.path, contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
+  }, [activeReading?.path, contentMode, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
 
   useEffect(() => {
     if (!markdownUrlPasteChoice) return;
@@ -10706,6 +10753,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSidebarHoverExpanded(false);
   }, []);
 
+  const inlineDrawUsesMarkdownOverlay = inlineDrawInsertion?.mode === 'markdown';
   const inlineDrawSurface = inlineDrawInsertion ? (
     <div
       role="region"
@@ -10714,9 +10762,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       style={{
         position: 'relative',
         width: '100%',
-        height: 'min(520px, calc(100vh - 180px))',
-        minHeight: '360px',
-        margin: '8px 0 18px 0',
+        height: inlineDrawUsesMarkdownOverlay ? '100%' : 'min(520px, calc(100vh - 180px))',
+        minHeight: inlineDrawUsesMarkdownOverlay ? 0 : '360px',
+        margin: inlineDrawUsesMarkdownOverlay ? 0 : '8px 0 18px 0',
         overflow: 'hidden',
         borderRadius: '8px',
         border: `1px solid ${theme.border}`,
@@ -11736,19 +11784,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     blockCursorOpacity={renderedBlockCursorOpacity}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
-	                    dataAttributes={{
-	                      'data-ft-quality-editor': 'markdown',
-	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
-	                      'data-ft-agent-file-path': activeReading.path,
-	                      'data-ft-agent-title': activeReading.title,
-	                    }}
-	                  />
+                    dataAttributes={{
+                      'data-ft-quality-editor': 'markdown',
+                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
+                      'data-ft-agent-file-path': activeReading.path,
+                      'data-ft-agent-title': activeReading.title,
+                    }}
+                  />
                 </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
                 {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
-                {inlineDrawInsertion?.mode === 'markdown' ? inlineDrawSurface : null}
+                {inlineDrawUsesMarkdownOverlay ? (
+                  <div
+                    data-ft-inline-draw-overlay="markdown"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      zIndex: 4,
+                      backgroundColor: theme.bg,
+                    }}
+                  >
+                    {inlineDrawSurface}
+                  </div>
+                ) : null}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -11932,12 +11992,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       width: '100%',
                       minHeight: '160px',
                       height: 'auto',
-	                    }}
-	                  />
-	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
-	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
-	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
-	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
+                    }}
+                  />
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
+                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
+                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
                   {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
