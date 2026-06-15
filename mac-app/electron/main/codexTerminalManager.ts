@@ -739,17 +739,15 @@ export class CodexTerminalManager {
     const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
-      `Read source command: cat ${quoteForPosixShell(context.path || 'unknown')}`,
-      `Read manifest command: cat ${quoteForPosixShell(filePath)}`,
-      `Read content copy command: cat ${quoteForPosixShell(path.join(path.dirname(filePath), 'active.md'))}`,
-      `Display source path: ${context.path || 'unknown'}`,
-      `Display manifest path: ${filePath}`,
+      'Read current document command: ft current --json',
+      'Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>',
+      'After each successful edit, use the newly printed sha256 for the next edit to the same document.',
+      'If an edit reports that the file changed on disk, run ft current --json again, merge the requested change into the returned content, and retry once with the new version.sha256.',
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
-      'For user-requested edits to Field Theory Library documents, prefer the Field Theory CLI: use ft library show <path> --json to read content and version.sha256, write the edited markdown to a temp file, then save with ft library update <path> --file <temp-file> --expected-sha256 <sha256>.',
-      'When using shell commands, copy the command lines above instead of the display paths so spaces and apostrophes are preserved.',
-      'Field Theory command .md files are instruction documents, not executables. Read them with cat using a quoted path; do not run them as shell commands.',
-      'Read the manifest or content files only when the user asks something that needs document details.',
+      'For user-requested edits to the current Field Theory document, use only the current-document commands above. Pipe multiline Markdown on stdin; do not pass Markdown as command arguments. Do not use sed, awk, cat against the source path, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',
+      'Field Theory command .md files are instruction documents, not executables. Read command docs through the Field Theory CLI; do not run them as shell commands.',
+      'Use ft current when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;
     if (prompt) session.process?.write(prompt);

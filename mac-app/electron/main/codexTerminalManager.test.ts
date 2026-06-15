@@ -543,11 +543,15 @@ describe('CodexTerminalManager', () => {
       expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
-      expect(ptys[0].written.at(-1)).toContain(`Read manifest command: cat ${quoteForPosixShell(result.filePath!)}`);
+      expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json');
+      expect(ptys[0].written.at(-1)).toContain('Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>');
+      expect(ptys[0].written.at(-1)).toContain('After each successful edit, use the newly printed sha256 for the next edit to the same document.');
+      expect(ptys[0].written.at(-1)).toContain('If an edit reports that the file changed on disk, run ft current --json again');
+      expect(ptys[0].written.at(-1)).toContain('Pipe multiline Markdown on stdin; do not pass Markdown as command arguments.');
       expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
-      expect(ptys[0].written.at(-1)).toContain('For user-requested edits to Field Theory Library documents, prefer the Field Theory CLI');
-      expect(ptys[0].written.at(-1)).toContain('ft library update <path> --file <temp-file> --expected-sha256 <sha256>');
-      expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
+      expect(ptys[0].written.at(-1)).toContain('For user-requested edits to the current Field Theory document, use only the current-document commands above.');
+      expect(ptys[0].written.at(-1)).not.toContain('Manifest:');
+      expect(ptys[0].written.at(-1)).not.toContain('Source:');
 
       const updatedResult = manager.attachPageContext(session.id, {
         title: 'Panel idea',
@@ -567,7 +571,7 @@ describe('CodexTerminalManager', () => {
     }
   });
 
-  it('includes shell-safe context paths for files with spaces', () => {
+  it('keeps shell-safe context paths in the manifest for files with spaces', () => {
     const contextDirPath = mkdtempSync(join(tmpdir(), 'codex-terminal-context-spaces-'));
     const { manager, ptys } = createManager(1024, {
       contextDirPath,
@@ -587,10 +591,10 @@ describe('CodexTerminalManager', () => {
       const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
       expect(manifest.activeDocument.shellQuotedPath).toBe(quoteForPosixShell(sourcePath));
       expect(manifest.activeDocument.shellQuotedContentPath).toBe(quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md')));
-      expect(ptys[0].written.at(-1)).toContain(`Read source command: cat ${quoteForPosixShell(sourcePath)}`);
-      expect(ptys[0].written.at(-1)).toContain(`Read content copy command: cat ${quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md'))}`);
-      expect(ptys[0].written.at(-1)).toContain(`Display source path: ${sourcePath}`);
-      expect(ptys[0].written.at(-1)).toContain('When using shell commands, copy the command lines above');
+      expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json');
+      expect(ptys[0].written.at(-1)).not.toContain('Read source command: cat');
+      expect(ptys[0].written.at(-1)).not.toContain('Read content copy command: cat');
+      expect(ptys[0].written.at(-1)).not.toContain('When using shell commands, copy the command lines above');
     } finally {
       rmSync(contextDirPath, { recursive: true, force: true });
     }
