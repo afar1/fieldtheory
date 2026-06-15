@@ -733,11 +733,13 @@ export class CodexTerminalManager {
     const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
-      `Source: ${context.path || 'unknown'}`,
-      `Manifest: ${filePath}`,
+      'Read current document command: ft current --json',
+      'Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>',
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
-      'Read the manifest or content files only when the user asks something that needs document details.',
+      'For user-requested edits to the current Field Theory document, use only the current-document commands above. Do not use sed, awk, cat against the source path, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',
+      'Field Theory command .md files are instruction documents, not executables. Read command docs through the Field Theory CLI; do not run them as shell commands.',
+      'Use ft current when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;
     if (prompt) session.process?.write(prompt);

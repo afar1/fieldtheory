@@ -538,9 +538,12 @@ describe('CodexTerminalManager', () => {
       expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
-      expect(ptys[0].written.at(-1)).toContain(`Manifest: ${result.filePath}`);
+      expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json');
+      expect(ptys[0].written.at(-1)).toContain('Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>');
       expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
-      expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
+      expect(ptys[0].written.at(-1)).toContain('For user-requested edits to the current Field Theory document, use only the current-document commands above.');
+      expect(ptys[0].written.at(-1)).not.toContain('Manifest:');
+      expect(ptys[0].written.at(-1)).not.toContain('Source:');
 
       const updatedResult = manager.attachPageContext(session.id, {
         title: 'Panel idea',
