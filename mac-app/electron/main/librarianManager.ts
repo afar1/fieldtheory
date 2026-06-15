@@ -1851,13 +1851,13 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
-   * Get the central librarian directory (user-specific).
+   * Get the central librarian directory.
+   *
+   * Artifacts are intentionally global. Agent hooks run outside the app and do
+   * not reliably know the signed-in user, so a user-scoped artifacts root splits
+   * dev and packaged output into different folders.
    */
   getCentralLibrarianDir(): string {
-    if (this.userDataManager?.isLoggedIn()) {
-      return this.userDataManager.getFieldTheoryPath('librarian');
-    }
-    // Fallback to legacy path
     return path.join(os.homedir(), '.fieldtheory', 'librarian');
   }
 
@@ -2964,6 +2964,78 @@ export class LibrarianManager extends EventEmitter {
       }
     } catch (error) {
       log.warn('Failed to seed central artifacts README:', error);
+    }
+  }
+
+  private isUserScopedArtifactsDir(dirPath: string): boolean {
+    const usersRoot = path.join(os.homedir(), '.fieldtheory', 'users');
+    const normalizedPath = this.normalizePath(this.expandPath(dirPath));
+    const relPath = path.relative(usersRoot, normalizedPath);
+    if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) return false;
+    const parts = relPath.split(path.sep);
+    return parts.length === 3 && parts[1] === 'librarian' && parts[2] === 'artifacts';
+  }
+
+  private resolveArtifactMigrationTarget(artifactsDir: string, fileName: string, userId: string, srcPath: string): string | null {
+    const firstTarget = path.join(artifactsDir, fileName);
+    if (!fs.existsSync(firstTarget)) return firstTarget;
+
+    try {
+      if (fs.readFileSync(firstTarget, 'utf-8') === fs.readFileSync(srcPath, 'utf-8')) {
+        return null;
+      }
+    } catch {
+      // Fall through to a collision-safe filename.
+    }
+
+    const ext = path.extname(fileName);
+    const base = path.basename(fileName, ext);
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '-');
+    for (let index = 1; index < 1000; index += 1) {
+      const suffix = index === 1 ? safeUserId : `${safeUserId}-${index}`;
+      const candidate = path.join(artifactsDir, `${base}-${suffix}${ext}`);
+      if (!fs.existsSync(candidate)) return candidate;
+      try {
+        if (fs.readFileSync(candidate, 'utf-8') === fs.readFileSync(srcPath, 'utf-8')) {
+          return null;
+        }
+      } catch {
+        // Keep trying a new filename.
+      }
+    }
+
+    return null;
+  }
+
+  private migrateUserScopedArtifactsToCentral(artifactsDir: string): boolean {
+    const usersRoot = path.join(os.homedir(), '.fieldtheory', 'users');
+    if (!fs.existsSync(usersRoot)) return true;
+
+    try {
+      const userDirs = fs.readdirSync(usersRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+
+      for (const userDir of userDirs) {
+        const sourceDir = path.join(usersRoot, userDir.name, 'librarian', 'artifacts');
+        if (!fs.existsSync(sourceDir) || this.libraryRootKey(sourceDir) === this.libraryRootKey(artifactsDir)) {
+          continue;
+        }
+
+        const files = fs.readdirSync(sourceDir, { withFileTypes: true });
+        for (const file of files) {
+          if (!file.isFile() || file.name === 'README.md' || !isMarkdownDocumentPath(file.name)) {
+            continue;
+          }
+          const srcPath = path.join(sourceDir, file.name);
+          const dstPath = this.resolveArtifactMigrationTarget(artifactsDir, file.name, userDir.name, srcPath);
+          if (!dstPath) continue;
+          fs.copyFileSync(srcPath, dstPath);
+        }
+      }
+      return true;
+    } catch (error) {
+      log.warn('Failed to migrate user-scoped artifacts to central directory:', error);
+      return false;
     }
   }
 
@@ -6363,19 +6435,28 @@ exit 0
    * This runs on startup so users don't need to configure anything.
    */
   private ensureCentralArtifactsDir(): void {
-    // Use global path - hooks write artifacts here, not per-user path
-    const globalLibrarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
-    const artifactsDir = path.join(globalLibrarianDir, 'artifacts');
+    const artifactsDir = this.getCentralArtifactsDir();
 
     // Create directory if it doesn't exist
     if (!fs.existsSync(artifactsDir)) {
       fs.mkdirSync(artifactsDir, { recursive: true });
     }
+    const artifactsMigrated = this.migrateUserScopedArtifactsToCentral(artifactsDir);
     this.ensureCentralArtifactsReadme(artifactsDir);
 
-    // Add to watched dirs if not already present
-    if (!this.settings.watchedDirs.includes(artifactsDir)) {
-      this.settings.watchedDirs.push(artifactsDir);
+    const watchedDirs = artifactsMigrated
+      ? this.settings.watchedDirs.filter((dirPath) => !this.isUserScopedArtifactsDir(dirPath))
+      : [...this.settings.watchedDirs];
+    let changed = watchedDirs.length !== this.settings.watchedDirs.length;
+
+    // Add to watched dirs if not already present.
+    if (!watchedDirs.some((dirPath) => this.libraryRootKey(dirPath) === this.libraryRootKey(artifactsDir))) {
+      watchedDirs.push(artifactsDir);
+      changed = true;
+    }
+
+    if (changed) {
+      this.settings.watchedDirs = watchedDirs;
       this.saveSettings();
     }
   }

@@ -46,6 +46,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2057,6 +2058,60 @@ describe('default folder readmes', () => {
     const readme = fs.readFileSync(path.join(artifactsDir, 'README.md'), 'utf-8');
     expect(readme).toContain('~/.fieldtheory/librarian/artifacts/');
     expect(readme).toContain('Show in Finder');
+  });
+
+  it('migrates user-scoped artifacts back to the central artifacts directory', () => {
+    const homeDir = makeTempDir();
+    vi.stubEnv('HOME', homeDir);
+    const centralArtifacts = path.join(homeDir, '.fieldtheory', 'librarian', 'artifacts');
+    const sessionArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'session-user', 'librarian', 'artifacts');
+    const userArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'current-user', 'librarian', 'artifacts');
+    fs.mkdirSync(sessionArtifacts, { recursive: true });
+    fs.mkdirSync(userArtifacts, { recursive: true });
+    fs.writeFileSync(path.join(sessionArtifacts, 'artifact.md'), '# From session user\n', 'utf-8');
+    fs.writeFileSync(path.join(userArtifacts, 'artifact.md'), '# From current user\n', 'utf-8');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      settingsPath: string;
+      ensureCentralArtifactsDir: () => void;
+    };
+    manager.settings = { watchedDirs: [sessionArtifacts, userArtifacts] };
+    manager.settingsPath = path.join(homeDir, 'librarian-settings.json');
+
+    manager.ensureCentralArtifactsDir();
+
+    const migratedContents = fs.readdirSync(centralArtifacts)
+      .filter((fileName) => fileName !== 'README.md')
+      .map((fileName) => fs.readFileSync(path.join(centralArtifacts, fileName), 'utf-8'))
+      .sort();
+    expect(migratedContents).toEqual([
+      '# From current user\n',
+      '# From session user\n',
+    ]);
+    expect(fs.existsSync(path.join(centralArtifacts, 'README.md'))).toBe(true);
+    expect(manager.settings.watchedDirs).toEqual([centralArtifacts]);
+  });
+
+  it('keeps user-scoped artifact folders watched when migration fails', () => {
+    const homeDir = makeTempDir();
+    vi.stubEnv('HOME', homeDir);
+    const centralArtifacts = path.join(homeDir, '.fieldtheory', 'librarian', 'artifacts');
+    const userArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'current-user', 'librarian', 'artifacts');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      settingsPath: string;
+      ensureCentralArtifactsDir: () => void;
+      migrateUserScopedArtifactsToCentral: () => boolean;
+    };
+    manager.settings = { watchedDirs: [userArtifacts] };
+    manager.settingsPath = path.join(homeDir, 'librarian-settings.json');
+    manager.migrateUserScopedArtifactsToCentral = () => false;
+
+    manager.ensureCentralArtifactsDir();
+
+    expect(manager.settings.watchedDirs).toEqual([userArtifacts, centralArtifacts]);
   });
 
   it('does not overwrite an existing README and still marks the folder handled', () => {
