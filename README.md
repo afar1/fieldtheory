@@ -128,6 +128,7 @@ The repo family uses a split-license model:
 - [`afar1/fieldtheory`](https://github.com/afar1/fieldtheory): AGPL-3.0-or-later for Field Theory-owned app/source code.
 - [`afar1/fieldtheory-cli`](https://github.com/afar1/fieldtheory-cli): MIT.
 - [`afar1/fieldtheory-plugin`](https://github.com/afar1/fieldtheory-plugin): MIT.
+- [`afar1/field-releases`](https://github.com/afar1/field-releases): public binary release feed.
 - Examples and protocol docs: MIT unless they are tightly app-coupled.
 - Brand assets: trademark protected.
 
