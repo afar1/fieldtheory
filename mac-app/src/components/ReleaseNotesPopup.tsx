@@ -60,6 +60,15 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.2': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+  ],
   '0.3.1': [
     'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
     'New document editor (supports markdown)',
@@ -363,6 +372,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.2': 'Jun 14 2026',
   '0.3.1': 'Jun 14 2026',
   '0.3.0': 'Jun 14 2026',
   '0.2.1': 'May 3 2026',
