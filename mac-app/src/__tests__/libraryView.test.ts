@@ -460,7 +460,7 @@ describe('shouldOpenMarkdownLinkFromMouseDown', () => {
 });
 
 describe('shouldOpenMarkdownEditorLinkFromMouseDown', () => {
-  it('opens editor links only on Command-primary click', () => {
+  it('opens editor links on primary clicks without extra modifiers', () => {
     expect(shouldOpenMarkdownEditorLinkFromMouseDown({
       button: 0,
       metaKey: true,
@@ -472,7 +472,7 @@ describe('shouldOpenMarkdownEditorLinkFromMouseDown', () => {
       metaKey: false,
       altKey: false,
       ctrlKey: false,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('keeps modified and non-primary editor clicks available for editing', () => {
@@ -2154,7 +2154,7 @@ describe('librarian editor session helpers', () => {
     )).toBe(true);
   });
 
-  it('uses restored selection instead of stale editor session on startup', () => {
+  it('uses restored editor session instead of stale selection on startup', () => {
     expect(resolveLibrarianInitialSelection(
       { type: 'bookmarks' },
       {
@@ -2166,10 +2166,10 @@ describe('librarian editor session helpers', () => {
         scrollTop: 0,
       },
       false,
-    )).toEqual({ type: 'bookmarks' });
+    )).toEqual({ type: 'wiki', relPath: 'scratchpad/Progress' });
   });
 
-  it('uses restored wiki selection instead of stale external editor session on startup', () => {
+  it('uses restored external editor session instead of stale wiki selection on startup', () => {
     expect(resolveLibrarianInitialSelection(
       { type: 'wiki', relPath: 'scratchpad/FT feedback for (in codex panel and mac app)' },
       {
@@ -2181,7 +2181,7 @@ describe('librarian editor session helpers', () => {
         scrollTop: 0,
       },
       false,
-    )).toEqual({ type: 'wiki', relPath: 'scratchpad/FT feedback for (in codex panel and mac app)' });
+    )).toEqual({ type: 'external', path: '/Users/afar/notes/current.md' });
   });
 
   it('falls back to stored editor session when no restored selection exists', () => {

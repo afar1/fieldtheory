@@ -2,17 +2,20 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
+const migrationsDir = path.resolve(process.cwd(), '..', 'supabase', 'migrations');
+const describeSupabaseMigrations = fs.existsSync(migrationsDir) ? describe : describe.skip;
+
 function migrationSql(fileName: string): string {
-  return fs.readFileSync(path.resolve(process.cwd(), '..', 'supabase', 'migrations', fileName), 'utf-8');
+  return fs.readFileSync(path.resolve(migrationsDir, fileName), 'utf-8');
 }
 
 function migrationFiles(): string[] {
-  return fs.readdirSync(path.resolve(process.cwd(), '..', 'supabase', 'migrations'))
+  return fs.readdirSync(migrationsDir)
     .filter((fileName) => fileName.endsWith('.sql'))
     .sort();
 }
 
-describe('Supabase River migrations', () => {
+describeSupabaseMigrations('Supabase River migrations', () => {
   it('keeps migration numeric prefixes unique', () => {
     const prefixes = migrationFiles().map((fileName) => fileName.split('_')[0]);
     expect(prefixes).toHaveLength(new Set(prefixes).size);

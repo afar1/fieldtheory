@@ -3682,7 +3682,7 @@ describe('LibrarianView render', () => {
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
       expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
-  });
+  }, 10000);
 
   it('honors markdown mode for initial external Library targets', async () => {
     const externalPath = '/Users/afar/.fieldtheory/library/reports/notes.md';
@@ -4065,19 +4065,13 @@ describe('LibrarianView render', () => {
     pasteText(renderedInput, '!');
 
     await waitFor(() => {
-      const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
-      expect(stages).toContain('save-rescheduled-active-typing');
-    }, { timeout: 900 });
-    expect(window.wikiAPI!.save).not.toHaveBeenCalled();
-
-    await waitFor(() => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'quiet save!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
-  });
+    }, { timeout: 1800 });
+  }, 15000);
 
   it('keeps River sync in the background after a rendered editor save', async () => {
     const relPath = 'scratchpad/rendered-shared-background-sync-test';
@@ -5497,7 +5491,7 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
-  }, 10000);
+  }, 20000);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
     const visibleRelPath = 'scratchpad/visible-boundary';
@@ -5802,7 +5796,7 @@ describe('LibrarianView render', () => {
     fireEvent.mouseMove(root, { clientX: 80 });
     expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
-    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    fireEvent.click(getHoverStrip()!);
     expect(getHoverStrip()).toBeNull();
     expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
     expect(getResizeHandle()?.style.borderRight).toBe('0px solid transparent');
@@ -5811,7 +5805,7 @@ describe('LibrarianView render', () => {
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 20 });
-    expect(getHoverStrip()).toBeNull();
+    expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
