@@ -18,6 +18,7 @@ import LibrarianView, {
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
+  hasActiveLibraryFileSelectionContext,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldAnimateResponsiveSidebar,
@@ -25,6 +26,7 @@ import LibrarianView, {
   restoreLibrarianLineNumbersMode,
   restoreLibrarianSidebarWidth,
   restoreLibrarianTextSize,
+  shouldReportActiveLibraryFileContextForSelection,
   shouldPreserveEditorSelectionPastePopover,
 } from '../LibrarianView';
 
@@ -106,6 +108,33 @@ describe('LibrarianView render', () => {
         isCollapsed: false,
       } as EditorSelectionSnapshot,
     })).toBe(false);
+  });
+
+  it('skips active file context reports for collapsed caret-only updates', () => {
+    expect(hasActiveLibraryFileSelectionContext(null)).toBe(false);
+    expect(hasActiveLibraryFileSelectionContext({
+      type: 'wiki',
+      rootPath: '/library',
+      relPath: 'note',
+      filePath: '/library/note.md',
+      title: 'Note',
+      selectionStart: 4,
+      selectionEnd: 4,
+    })).toBe(false);
+    expect(hasActiveLibraryFileSelectionContext({
+      type: 'wiki',
+      rootPath: '/library',
+      relPath: 'note',
+      filePath: '/library/note.md',
+      title: 'Note',
+      selectionStart: 4,
+      selectionEnd: 8,
+      selectionText: 'text',
+    })).toBe(true);
+
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: true }, false)).toBe(false);
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: true }, true)).toBe(true);
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: false }, false)).toBe(true);
   });
 
   it('uses the drawn CodeMirror selection bands when browser selection geometry is empty', () => {
@@ -3265,6 +3294,63 @@ describe('LibrarianView render', () => {
     fireEvent.keyDown(markdownInput, { key: 'Enter' });
 
     expect(await screen.findByRole('region', { name: 'Drawing' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
+  });
+
+  it('opens inline draw above the markdown editor in focus immersive mode', async () => {
+    const relPath = 'scratchpad/immersive-markdown-draw-command-test';
+    const content = '/draw';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'immersive-markdown-draw-command-test',
+      title: 'immersive-markdown-draw-command-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'immersive-markdown-draw-command-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: content.length,
+          selectionEnd: content.length,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(
+      <LibrarianView
+        focusChromeEnabled
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'markdown' }}
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    const markdownInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-quality-editor="markdown"] .cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('/draw');
+      return input;
+    });
+    if (!markdownInput) throw new Error('Markdown editor input missing');
+
+    fireEvent.keyDown(markdownInput, { key: 'Enter' });
+
+    const drawingRegion = await screen.findByRole('region', { name: 'Drawing' });
+    const overlay = container.querySelector('[data-ft-inline-draw-overlay="markdown"]') as HTMLElement | null;
+    expect(drawingRegion).toBeTruthy();
+    expect(overlay).toBeTruthy();
+    expect(overlay?.style.position).toBe('absolute');
+    expect(overlay?.style.zIndex).toBe('4');
+    expect((drawingRegion as HTMLElement).style.height).toBe('100%');
     expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
   });
 

@@ -2297,6 +2297,27 @@ function writeTextIntoFocusedCodexTerminal(text: string, sessionId = focusedCode
   return wrote;
 }
 
+async function submitTextIntoFocusedCodexTerminal(
+  text: string,
+  _submitMode: 'enter' | 'command-enter',
+  sessionId = focusedCodexTerminalLauncherSessionId,
+): Promise<boolean> {
+  if (!sessionId) return false;
+  const manager = getCodexTerminalManager();
+  if (text && !manager.writeInput(sessionId, text)) {
+    if (sessionId === focusedCodexTerminalLauncherSessionId) {
+      focusedCodexTerminalLauncherSessionId = null;
+    }
+    return false;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const submitted = manager.writeInput(sessionId, '\r');
+  if (!submitted && sessionId === focusedCodexTerminalLauncherSessionId) {
+    focusedCodexTerminalLauncherSessionId = null;
+  }
+  return submitted;
+}
+
 async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
@@ -14227,6 +14248,11 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.setFieldTheoryMarkdownInsertionTarget({
       isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
       insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+    });
+    hotMicManager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+      insertText: writeTextIntoFocusedCodexTerminal,
+      submitText: submitTextIntoFocusedCodexTerminal,
     });
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setMetricsWordsRecorder((wordCount: number) => {

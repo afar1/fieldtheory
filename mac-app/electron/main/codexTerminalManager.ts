@@ -208,6 +208,10 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
+export function quoteForPosixShell(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function writePageContextBundle(contextDirPath: string, sessionId: string, context: CodexTerminalPageContext): string {
   const dir = path.join(contextDirPath, 'sessions', sessionId);
   const manifestPath = path.join(dir, 'context.json');
@@ -234,10 +238,12 @@ function writePageContextBundle(contextDirPath: string, sessionId: string, conte
     activeDocument: {
       title: context.title || 'Field Theory Page',
       path: context.path || 'unknown',
+      shellQuotedPath: quoteForPosixShell(context.path || 'unknown'),
       kind: context.kind,
       contentMode: context.contentMode || 'unknown',
       contentHash: crypto.createHash('sha256').update(context.content || '').digest('hex'),
       contentPath: activePath,
+      shellQuotedContentPath: quoteForPosixShell(activePath),
       lineMapping: context.lineMapping ?? null,
     },
     selection: selectionText

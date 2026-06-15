@@ -126,6 +126,7 @@ export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_GUTTER_ATTR = 'data-ft-line-number
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_COLOR_VAR = '--ft-line-number-color';
 export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_OPACITY_VAR = '--ft-line-number-opacity';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_COLOR_VAR = '--ft-selected-line-number-color';
+export const MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS = 240;
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
 export const RENDERED_MARKDOWN_EDITOR_ROW_LINE_HEIGHT = 'var(--ft-line-number-row-height)';
 const DRAWING_ALT_PREFIX = 'Drawing: ';
@@ -209,6 +210,14 @@ export interface MarkdownCodeEditorSelectionSnapshot {
   inputType?: string;
   inputData?: string | null;
 }
+
+type MarkdownCodeEditorSelectionSnapshotInput = {
+  docChanged?: boolean;
+  inputType?: string;
+  inputData?: string | null;
+  value?: string;
+  includeGeometry?: boolean;
+};
 
 export interface MarkdownCodeEditorImagePreview {
   src: string;
@@ -512,6 +521,11 @@ function getMarkdownCodeEditorLineNumberOverlayHost(view: EditorView): HTMLEleme
   return shell?.querySelector<HTMLElement>(`[${MARKDOWN_CODE_EDITOR_LINE_NUMBER_GUTTER_ATTR}="true"]`) ?? view.dom;
 }
 
+export function getVisualLineNumberOverlayMeasureDelay(input: Pick<ViewUpdate, 'docChanged' | 'viewportChanged' | 'geometryChanged'>): number {
+  if (!input.docChanged || input.viewportChanged || input.geometryChanged) return 0;
+  return MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS;
+}
+
 function buildVisualLineNumberOverlayRows(
   view: EditorView,
   overlayHost: HTMLElement = getMarkdownCodeEditorLineNumberOverlayHost(view),
@@ -604,6 +618,9 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
     private readonly handleHitAreaMouseDown: (event: MouseEvent) => void;
     private lineNumberSelectionCleanup: (() => void) | null = null;
     private pendingMeasure = false;
+    private delayedMeasureTimer: number | null = null;
+    private deferMeasureUntil = 0;
+    private destroyed = false;
     private signature = '';
 
     constructor(view: EditorView) {
@@ -652,15 +669,23 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
 
     update(update: ViewUpdate) {
       if (update.docChanged || update.viewportChanged || update.geometryChanged || update.selectionSet) {
-        this.scheduleMeasure(update.view);
+        const delayMs = getVisualLineNumberOverlayMeasureDelay(update);
+        this.deferMeasureUntil = delayMs > 0 ? Date.now() + delayMs : 0;
+        this.scheduleMeasure(update.view, delayMs);
       }
     }
 
     docViewUpdate(view: EditorView) {
-      this.scheduleMeasure(view);
+      const delayMs = Math.max(0, this.deferMeasureUntil - Date.now());
+      this.scheduleMeasure(view, delayMs);
     }
 
     destroy() {
+      this.destroyed = true;
+      if (this.delayedMeasureTimer !== null) {
+        window.clearTimeout(this.delayedMeasureTimer);
+        this.delayedMeasureTimer = null;
+      }
       this.view.dom.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange);
       this.hitArea.removeEventListener('mousedown', this.handleHitAreaMouseDown);
       this.lineNumberSelectionCleanup?.();
@@ -668,7 +693,23 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
       this.dom.remove();
     }
 
-    private scheduleMeasure(view: EditorView): void {
+    private scheduleMeasure(view: EditorView, delayMs = 0): void {
+      if (delayMs > 0) {
+        if (this.delayedMeasureTimer !== null) {
+          window.clearTimeout(this.delayedMeasureTimer);
+        }
+        this.delayedMeasureTimer = window.setTimeout(() => {
+          this.delayedMeasureTimer = null;
+          this.deferMeasureUntil = 0;
+          if (this.destroyed) return;
+          this.scheduleMeasure(view);
+        }, delayMs);
+        return;
+      }
+      if (this.delayedMeasureTimer !== null) {
+        window.clearTimeout(this.delayedMeasureTimer);
+        this.delayedMeasureTimer = null;
+      }
       if (this.pendingMeasure) return;
       this.pendingMeasure = true;
       const overlayHost = getMarkdownCodeEditorLineNumberOverlayHost(view);
@@ -676,6 +717,7 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
         read: (measuredView) => buildVisualLineNumberOverlayRows(measuredView, overlayHost),
         write: (result, measuredView) => {
           this.pendingMeasure = false;
+          if (this.destroyed) return;
           if (result.signature === this.signature) return;
           this.signature = result.signature;
           this.render(result.rows, measuredView);
@@ -2897,6 +2939,30 @@ function getCodeEditorSelectionRect(
   };
 }
 
+function lineBeforeMarkdownCaret(doc: Text, position: number): string {
+  const caret = Math.max(0, Math.min(position, doc.length));
+  const line = doc.lineAt(caret);
+  return line.text.slice(0, caret - line.from);
+}
+
+function isMarkdownCompletionContextBeforeCaret(beforeCaret: string): boolean {
+  return /\[\[[^\]\n|]*$/.test(beforeCaret)
+    || /(^|[^\w@])@[\w-]{0,64}$/.test(beforeCaret)
+    || /(^|[\s([{'"`]):[a-zA-Z0-9_+-]{1,32}$/.test(beforeCaret)
+    || /^\/[a-zA-Z0-9_-]{0,32}$/.test(beforeCaret);
+}
+
+export function shouldIncludeSelectionSnapshotGeometry(
+  view: EditorView,
+  input: Pick<MarkdownCodeEditorSelectionSnapshotInput, 'docChanged' | 'inputData'>,
+): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return true;
+  if (!input.docChanged) return true;
+  if (input.inputData === '[') return true;
+  return isMarkdownCompletionContextBeforeCaret(lineBeforeMarkdownCaret(view.state.doc, selection.head));
+}
+
 export function getMarkdownCodeEditorSourcePosition(
   value: string,
   offset: number,
@@ -2926,10 +2992,11 @@ function getMarkdownCodeEditorSourcePositionFromDoc(
 
 export function getMarkdownCodeEditorSelectionSnapshot(
   view: EditorView,
-  input: { docChanged?: boolean; inputType?: string; inputData?: string | null; value?: string } = {},
+  input: MarkdownCodeEditorSelectionSnapshotInput = {},
 ): MarkdownCodeEditorSelectionSnapshot {
   const value = input.value ?? view.state.doc.toString();
   const selection = view.state.selection.main;
+  const includeGeometry = input.includeGeometry !== false;
   return {
     value,
     selectionStart: selection.from,
@@ -2940,9 +3007,9 @@ export function getMarkdownCodeEditorSelectionSnapshot(
     selectionStartSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.from),
     selectionEndSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.to),
     selectionHeadSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.head),
-    caretPosition: getCodeEditorCaretPosition(view, selection.head),
-    caretRect: getCodeEditorCaretRect(view, selection.head),
-    selectionRect: getCodeEditorSelectionRect(view, selection.from, selection.to),
+    caretPosition: includeGeometry ? getCodeEditorCaretPosition(view, selection.head) : null,
+    caretRect: includeGeometry ? getCodeEditorCaretRect(view, selection.head) : null,
+    selectionRect: includeGeometry ? getCodeEditorSelectionRect(view, selection.from, selection.to) : null,
     scroll: {
       top: view.scrollDOM.scrollTop,
       height: view.scrollDOM.scrollHeight,
@@ -3893,6 +3960,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                 inputType: input?.inputType,
                 inputData: input?.data,
                 value: lastAppliedValueRef.current,
+                includeGeometry: shouldIncludeSelectionSnapshotGeometry(update.view, {
+                  docChanged: update.docChanged,
+                  inputData: input?.data,
+                }),
               });
               onSelectionChangeRef.current?.(snapshot);
               if (startedAt > 0) {

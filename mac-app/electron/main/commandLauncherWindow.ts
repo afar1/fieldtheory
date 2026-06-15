@@ -340,7 +340,7 @@ export class CommandLauncherWindow {
       let y: number;
 
       let freshWindowBounds: AnchorBounds | null = null;
-      if (!options.anchorBounds && this.nativeHelper && !frontmostApp?.windowBounds) {
+      if (!options.anchorBounds && this.nativeHelper) {
         const boundsStartedAt = Date.now();
         try {
           freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds(COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS);

@@ -349,8 +349,10 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const terminalBodyRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
+  const pendingInputRef = useRef(new Map<string, string>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
   const fitFrameRef = useRef<number | null>(null);
+  const inputFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     onResizeActiveChange?.(isResizing);
@@ -463,6 +465,22 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     fitFrameRef.current = window.requestAnimationFrame(fitActiveTerminal);
   }, [fitActiveTerminal]);
 
+  const flushPendingTerminalInput = useCallback(() => {
+    inputFrameRef.current = null;
+    const entries = Array.from(pendingInputRef.current.entries());
+    pendingInputRef.current.clear();
+    for (const [sessionId, data] of entries) {
+      void window.codexTerminalAPI?.input(sessionId, data);
+    }
+  }, []);
+
+  const queueTerminalInput = useCallback((sessionId: string, data: string) => {
+    if (!data) return;
+    pendingInputRef.current.set(sessionId, `${pendingInputRef.current.get(sessionId) ?? ''}${data}`);
+    if (inputFrameRef.current !== null) return;
+    inputFrameRef.current = window.requestAnimationFrame(flushPendingTerminalInput);
+  }, [flushPendingTerminalInput]);
+
   useEffect(() => (
     () => {
       if (fitFrameRef.current === null) return;
@@ -470,6 +488,16 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       fitFrameRef.current = null;
     }
   ), []);
+
+  useEffect(() => (
+    () => {
+      if (inputFrameRef.current !== null) {
+        window.cancelAnimationFrame(inputFrameRef.current);
+        inputFrameRef.current = null;
+      }
+      flushPendingTerminalInput();
+    }
+  ), [flushPendingTerminalInput]);
 
   const focusActiveTerminal = useCallback(() => {
     if (!activeSessionId) return false;
@@ -911,9 +939,9 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       }, 30);
     });
     term.onData((data) => {
-      void window.codexTerminalAPI?.input(sessionId, data);
+      queueTerminalInput(sessionId, data);
     });
-  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, scheduleFitActiveTerminal, terminalDarkMode]);
+  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, queueTerminalInput, scheduleFitActiveTerminal, terminalDarkMode]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);

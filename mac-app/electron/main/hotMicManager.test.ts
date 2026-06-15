@@ -349,6 +349,34 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('submits buffered text into the focused Field Theory terminal', async () => {
+    const { manager, nativeHelper } = createManager();
+    const insertTerminalText = vi.fn(() => true);
+    const submitTerminalText = vi.fn(() => true);
+    const insertMarkdownText = vi.fn(() => true);
+    (manager as any).state = 'listening';
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+    manager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertTerminalText,
+      submitText: submitTerminalText,
+    });
+    manager.setFieldTheoryMarkdownInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertMarkdownText,
+    });
+
+    await (manager as any).processListeningChunk('alpha beta go ahead');
+
+    expect(submitTerminalText).toHaveBeenCalledWith('alpha beta', 'enter');
+    expect(insertTerminalText).not.toHaveBeenCalled();
+    expect(insertMarkdownText).not.toHaveBeenCalled();
+    expect(nativeHelper.typeIntoApp).not.toHaveBeenCalled();
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
   it('submits buffered text with Command-Enter when command-enter phrase is spoken', async () => {
     const { manager, nativeHelper } = createManager();
     (manager as any).state = 'listening';
@@ -1410,6 +1438,19 @@ describe('HotMicManager runtime condition', () => {
     await (manager as any).startListening();
 
     expect(manager.getCondition()).toBe('ready');
+    manager.destroy();
+  });
+
+  it('activates without a current target and resolves the target later', async () => {
+    const { manager, nativeHelper } = createManager();
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+
+    manager.activate();
+    await flushAsyncWork();
+
+    expect(manager.getState()).toBe('listening');
+    expect(manager.getCondition()).toBe('ready');
+    expect(nativeHelper.startRecording).toHaveBeenCalled();
     manager.destroy();
   });
 
