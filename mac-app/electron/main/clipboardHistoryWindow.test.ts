@@ -472,13 +472,15 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
-  it('keeps the app-mode window visible after paste', () => {
+  it('hides the app-mode window after paste so the target keeps focus', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const hide = vi.spyOn(window, 'hide').mockImplementation(() => {});
+    const disableFocus = vi.spyOn(window, 'temporarilyDisableAppWindowFocus').mockReturnValue(true);
 
     window.hideAfterPaste('paste-item');
 
-    expect(hide).not.toHaveBeenCalled();
+    expect(disableFocus).toHaveBeenCalledWith('hide-after-paste:paste-item');
+    expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
   it('keeps the Dock and application visible when hiding the app-mode window', () => {

@@ -6637,41 +6637,24 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           })
         )}
         
-        {/* Load more - gated for free users */}
+        {/* Load more */}
         {hasMore && listRows.length > 0 && (
-          cachedTier === 'pro' ? (
-            <button
-              onClick={handleLoadMore}
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.text,
-                cursor: loading ? 'wait' : 'pointer',
-                fontSize: '12px',
-              }}
-            >
-              {loading ? 'Loading...' : 'Load More'}
-            </button>
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.textSecondary,
-                fontSize: '12px',
-                textAlign: 'center',
-              }}
-            >
-              Load More <span style={{ opacity: 0.7 }}>(Full history available with Pro plan)</span>
-            </div>
-          )
+          <button
+            onClick={handleLoadMore}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: 'none',
+              borderTop: `1px solid ${theme.border}`,
+              backgroundColor: theme.bgSecondary,
+              color: theme.text,
+              cursor: loading ? 'wait' : 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {loading ? 'Loading...' : 'Load More'}
+          </button>
         )}
         </div>
         </div>
