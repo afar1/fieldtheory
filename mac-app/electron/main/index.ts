@@ -6,6 +6,7 @@ import fs from 'fs';
 import { createLogger } from './logger';
 import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
+import { loadGeneratedPublicRuntimeConfig } from './publicRuntimeConfig';
 import { NativeHelper } from './nativeHelper';
 import { isAlfredApp } from './alfredVisibility';
 import {
@@ -2501,9 +2502,12 @@ function getOptionalEnvValue(key: string): string | undefined {
 // Load environment variables for Supabase public config.
 // Source/dev builds must not silently fall back to production Cloud.
 function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string } {
-  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
+  const generatedConfig = loadGeneratedPublicRuntimeConfig();
+  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL')
+    ?? generatedConfig.supabaseUrl;
   const supabasePublishableKey = getOptionalEnvValue('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY')
-    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
+    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY')
+    ?? generatedConfig.supabasePublishableKey;
 
   if (supabaseUrl && supabasePublishableKey) {
     return {
