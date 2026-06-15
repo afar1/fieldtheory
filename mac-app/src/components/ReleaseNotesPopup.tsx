@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.4': [
+    'Restored missing Librarian artifacts by using one shared artifacts folder across dev and packaged builds',
+    'Safely migrates older user-scoped artifacts without deleting originals or overwriting conflicting files',
+    'Fixed updater install state so failed install attempts return to "Update ready" instead of staying on "Installing..."',
+  ],
   '0.3.3': [
     'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
     'New document editor (supports markdown)',
@@ -384,6 +389,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.4': 'Jun 15 2026',
   '0.3.3': 'Jun 15 2026',
   '0.3.2': 'Jun 14 2026',
   '0.3.1': 'Jun 14 2026',

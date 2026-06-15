@@ -16,11 +16,14 @@ describe('updater state transitions', () => {
     expect(resolveUpdaterStatusTransition('ready', 'installing')).toBe('installing');
   });
 
-  it('keeps installing sticky until explicitly forced or failed', () => {
-    expect(resolveUpdaterStatusTransition('installing', 'ready')).toBe('installing');
+  it('keeps installing sticky across background statuses', () => {
     expect(resolveUpdaterStatusTransition('installing', 'idle')).toBe('installing');
     expect(resolveUpdaterStatusTransition('installing', 'error')).toBe('error');
     expect(resolveUpdaterStatusTransition('installing', 'idle', { force: true })).toBe('idle');
+  });
+
+  it('returns from installing to ready when install does not quit the app', () => {
+    expect(resolveUpdaterStatusTransition('installing', 'ready')).toBe('ready');
   });
 
   it('allows ordinary pre-download transitions', () => {

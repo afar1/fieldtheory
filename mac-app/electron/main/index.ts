@@ -5894,16 +5894,32 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 type PendingUpdateStatus = Extract<UpdateStatus, 'available' | 'downloading' | 'ready' | 'installing'>;
 
 let pendingUpdateInfo: { status: PendingUpdateStatus; version: string } | null = null;
+let installFallbackTimer: NodeJS.Timeout | null = null;
+
+function clearInstallFallbackTimer(): void {
+  if (!installFallbackTimer) return;
+  clearTimeout(installFallbackTimer);
+  installFallbackTimer = null;
+}
 
 function shouldApplyUpdaterStatus(next: UpdateStatus): boolean {
   const current = pendingUpdateInfo?.status ?? 'idle';
   return resolveUpdaterStatusTransition(current, next) === next;
 }
 
-function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string): boolean {
-  if (!shouldApplyUpdaterStatus(status)) return false;
+function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string, options: { force?: boolean } = {}): boolean {
+  if (!options.force && !shouldApplyUpdaterStatus(status)) return false;
   pendingUpdateInfo = { status, version: version ?? pendingUpdateInfo?.version ?? '' };
   return true;
+}
+
+function sendUpdateDownloaded(version: string): void {
+  browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version } });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:updateDownloaded', { version });
+    }
+  });
 }
 
 function sendUpdateNotAvailable(): void {
@@ -5918,6 +5934,11 @@ function sendUpdateNotAvailable(): void {
 
 function sendUpdaterErrorMessage(message: string): void {
   if (!shouldApplyUpdaterStatus('error')) return;
+  if (pendingUpdateInfo?.status === 'installing') {
+    pendingUpdateInfo = null;
+    clearInstallFallbackTimer();
+    appQuitConfirmedWithLocalWork = false;
+  }
   browserHelperServer?.emitNativeEvent({ type: 'updater:error', error: message });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
@@ -5949,12 +5970,22 @@ function downloadAppUpdate(): unknown {
 function installAppUpdate(): void {
   if (!isAutoUpdaterEnabled) return;
   if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
+  const version = pendingUpdateInfo?.version ?? '';
+  clearInstallFallbackTimer();
   browserHelperServer?.emitNativeEvent({ type: 'updater:installing' });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:installing');
     }
   });
+  installFallbackTimer = setTimeout(() => {
+    installFallbackTimer = null;
+    if (pendingUpdateInfo?.status !== 'installing') return;
+    appQuitConfirmedWithLocalWork = false;
+    log.warn('Update install did not quit the app; returning updater UI to ready state');
+    setPendingUpdateStatus('ready', version, { force: true });
+    sendUpdateDownloaded(version);
+  }, 15000);
   setTimeout(() => {
     try {
       appQuitConfirmedWithLocalWork = true;
@@ -5967,6 +5998,7 @@ function installAppUpdate(): void {
 }
 
 function dismissAppUpdate(): void {
+  clearInstallFallbackTimer();
   pendingUpdateInfo = null;
 }
 
@@ -16061,12 +16093,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('update-downloaded', (info) => {
         if (!setPendingUpdateStatus('ready', info.version)) return;
-        browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version: info.version } });
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (!window.isDestroyed()) {
-            window.webContents.send('updater:updateDownloaded', { version: info.version });
-          }
-        });
+        sendUpdateDownloaded(info.version);
       });
     }
 
