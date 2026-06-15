@@ -50,6 +50,50 @@ function getStoredSessionUserId(userDataPath: string): string | null {
   return null;
 }
 
+function getClipboardItemCount(dbPath: string): number | null {
+  let db: { prepare: (sql: string) => { get: () => unknown }; close: () => void } | null = null;
+  try {
+    // Load lazily so user-data migration still works in test/dev shells where
+    // the native module may be built for Electron instead of the current Node.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const BetterSqlite = require('better-sqlite3');
+    const Database = (BetterSqlite.default ?? BetterSqlite) as new (
+      path: string,
+      options: { readonly: boolean; fileMustExist: boolean }
+    ) => { prepare: (sql: string) => { get: () => unknown }; close: () => void };
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const table = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'clipboard_items'
+    `).get();
+    if (!table) return 0;
+
+    const row = db.prepare('SELECT COUNT(*) as count FROM clipboard_items').get() as { count: number };
+    return row.count;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+async function removeClipboardDbSet(dbPath: string): Promise<void> {
+  await fs.remove(dbPath);
+  await fs.remove(`${dbPath}-wal`);
+  await fs.remove(`${dbPath}-shm`);
+}
+
+async function moveClipboardDbSet(srcDb: string, dstDb: string): Promise<void> {
+  await fs.move(srcDb, dstDb);
+  for (const suffix of ['-wal', '-shm']) {
+    const srcSidecar = `${srcDb}${suffix}`;
+    const dstSidecar = `${dstDb}${suffix}`;
+    if (await fs.pathExists(srcSidecar)) {
+      await fs.move(srcSidecar, dstSidecar, { overwrite: true });
+    }
+  }
+}
+
 export class UserDataManager extends EventEmitter {
   private currentCallsign: string | null = null;
   private baseUserDataPath: string;
@@ -232,36 +276,6 @@ export class UserDataManager extends EventEmitter {
   async migrateExistingData(callsign: string): Promise<void> {
     const userDir = path.join(this.baseUserDataPath, 'users', callsign);
 
-    // Skip if user directory already exists
-    if (await fs.pathExists(userDir)) {
-      return;
-    }
-
-    // Check if this is the first user (no other users exist)
-    const usersDir = path.join(this.baseUserDataPath, 'users');
-    let existingUsers: string[] = [];
-    try {
-      existingUsers = await fs.readdir(usersDir);
-      // Filter out hidden files like .DS_Store
-      existingUsers = existingUsers.filter(f => !f.startsWith('.'));
-    } catch {
-      // users directory doesn't exist yet
-    }
-
-    if (existingUsers.length > 0) {
-      await fs.ensureDir(userDir);
-      return;
-    }
-
-    // Check if legacy data exists
-    const legacyPrefs = path.join(this.baseUserDataPath, 'preferences.json');
-    const hasLegacyData = await fs.pathExists(legacyPrefs);
-
-    if (!hasLegacyData) {
-      await fs.ensureDir(userDir);
-      return;
-    }
-
     // Files to migrate from Application Support
     const filesToMigrate = [
       'preferences.json',
@@ -274,6 +288,35 @@ export class UserDataManager extends EventEmitter {
       'commands-settings.json',
     ];
 
+    // Check if this is the first user (no other users exist)
+    const usersDir = path.join(this.baseUserDataPath, 'users');
+    let existingUsers: string[] = [];
+    try {
+      existingUsers = await fs.readdir(usersDir);
+      // Filter out hidden files like .DS_Store
+      existingUsers = existingUsers.filter(f => !f.startsWith('.') && f !== callsign);
+    } catch {
+      // users directory doesn't exist yet
+    }
+
+    if (existingUsers.length > 0) {
+      await fs.ensureDir(userDir);
+      return;
+    }
+
+    // Check if legacy data exists
+    const legacyDataChecks = await Promise.all(
+      filesToMigrate.map(file => fs.pathExists(path.join(this.baseUserDataPath, file)))
+    );
+    const hasLegacyData = legacyDataChecks.some(Boolean)
+      || await fs.pathExists(path.join(this.baseUserDataPath, 'figures'))
+      || await fs.pathExists(path.join(this.baseFieldTheoryPath, 'librarian'));
+
+    if (!hasLegacyData) {
+      await fs.ensureDir(userDir);
+      return;
+    }
+
     await fs.ensureDir(userDir);
 
     for (const file of filesToMigrate) {
@@ -281,6 +324,28 @@ export class UserDataManager extends EventEmitter {
       const dst = path.join(userDir, file);
       if (await fs.pathExists(src)) {
         try {
+          if (file === 'clipboard.db' && await fs.pathExists(dst)) {
+            const targetCount = getClipboardItemCount(dst);
+            const legacyCount = getClipboardItemCount(src);
+            const [targetStats, legacyStats] = await Promise.all([fs.stat(dst), fs.stat(src)]);
+            const shouldReplaceEmptyTarget = targetCount === 0 && legacyCount !== null && legacyCount > 0;
+            const shouldReplaceEmptyFileFallback = targetCount === null && targetStats.size === 0 && legacyStats.size > 0;
+            if (shouldReplaceEmptyTarget || shouldReplaceEmptyFileFallback) {
+              await removeClipboardDbSet(dst);
+              await moveClipboardDbSet(src, dst);
+            }
+            continue;
+          }
+          if (file === 'clipboard.db') {
+            await moveClipboardDbSet(src, dst);
+            continue;
+          }
+          if (file.startsWith('clipboard.db-') && await fs.pathExists(path.join(userDir, 'clipboard.db'))) {
+            continue;
+          }
+          if (await fs.pathExists(dst)) {
+            continue;
+          }
           await fs.move(src, dst);
         } catch (err) {
           log.error(`Failed to migrate ${file}:`, err);

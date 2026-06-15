@@ -8,8 +8,9 @@ import { AudioManager } from './audioManager';
 import { AudioDevice } from './types/audio';
 import { DEFAULT_SQUARES_CONFIG, type SquaresConfig } from './types/squares';
 import type { HotMicEngineStatus } from './types/hotMic';
+import type { HotMicRuntimeStatus } from './hotMicManager';
 import type { ParakeetStatus } from './types/transcribe';
-import type { TranscriberManager } from './transcriberManager';
+import type { StandardRecordingDiagnostics, TranscriberManager } from './transcriberManager';
 import { createLogger } from './logger';
 
 const log = createLogger('Diagnostics');
@@ -25,7 +26,7 @@ interface ModelDiagnostics {
 
 type DiagnosticsTranscriber = Pick<
   TranscriberManager,
-  'getConfiguredTranscriptionEngine' | 'getHotMicEngineStatus' | 'getParakeetStatus'
+  'getConfiguredTranscriptionEngine' | 'getHotMicEngineStatus' | 'getParakeetStatus' | 'getStandardRecordingDiagnostics'
 >;
 
 export interface DiagnosticsReport {
@@ -59,6 +60,7 @@ export interface DiagnosticsReport {
       activeDownloads: string[];
     };
     parakeet: ParakeetStatus | null;
+    standardRecording: StandardRecordingDiagnostics | null;
   };
   audio: {
     priorityMode: boolean;
@@ -82,6 +84,7 @@ export interface DiagnosticsReport {
     backgroundFilterEnabled: boolean;
     backgroundFilterStrength: number | null;
     drawerTextSize: number | null;
+    runtime: HotMicRuntimeStatus | null;
   };
   windowManagement: {
     enabled: boolean;
@@ -124,6 +127,7 @@ export class DiagnosticsCollector {
   private modelManager: ModelManager | null = null;
   private audioManager: AudioManager | null = null;
   private transcriberManager: DiagnosticsTranscriber | null = null;
+  private hotMicRuntimeStatusGetter: (() => HotMicRuntimeStatus) | null = null;
 
   constructor(preferencesManager: PreferencesManager) {
     this.preferencesManager = preferencesManager;
@@ -139,6 +143,10 @@ export class DiagnosticsCollector {
 
   setTranscriberManager(transcriberManager: DiagnosticsTranscriber): void {
     this.transcriberManager = transcriberManager;
+  }
+
+  setHotMicRuntimeStatusGetter(getter: () => HotMicRuntimeStatus): void {
+    this.hotMicRuntimeStatusGetter = getter;
   }
 
   async collect(): Promise<DiagnosticsReport> {
@@ -238,6 +246,16 @@ export class DiagnosticsCollector {
     } else {
       lines.push('- Parakeet: unavailable');
     }
+    if (report.transcription.standardRecording) {
+      const standard = report.transcription.standardRecording;
+      lines.push(`- Standard Recording Status: ${standard.status}`);
+      lines.push(`- Standard Recording Source: ${standard.activeSource ?? standard.source}`);
+      lines.push(`- Standard Recording Age: ${standard.recordingAgeMs === null ? 'not recording' : `${standard.recordingAgeMs}ms`}`);
+      lines.push(`- Standard Helper Recording Active: ${standard.helperRecordingActive === null ? 'unknown' : formatBoolean(standard.helperRecordingActive)}`);
+      lines.push(`- Standard Live Transcript Chars: ${standard.liveTranscriptChars}`);
+      lines.push(`- Standard Queue Depth: ${standard.queueDepth}`);
+      lines.push(`- Standard Chunk Processing: ${formatBoolean(standard.chunkProcessingInFlight)}`);
+    }
     lines.push('');
 
     lines.push('### Audio');
@@ -258,6 +276,19 @@ export class DiagnosticsCollector {
     lines.push(`- Background Filter: ${formatBoolean(report.hotMic.backgroundFilterEnabled)}`);
     lines.push(`- Background Filter Strength: ${report.hotMic.backgroundFilterStrength ?? 'unset'}`);
     lines.push(`- Drawer Text Size: ${report.hotMic.drawerTextSize ?? 'unset'}`);
+    if (report.hotMic.runtime) {
+      lines.push(`- Runtime State: ${report.hotMic.runtime.state}`);
+      lines.push(`- Runtime Condition: ${formatOptionalText(report.hotMic.runtime.condition)}`);
+      lines.push(`- Runtime Chunks Received: ${report.hotMic.runtime.chunksReceived}`);
+      lines.push(`- Runtime Last Chunk Age: ${report.hotMic.runtime.lastChunkAgeMs === null ? 'never' : `${report.hotMic.runtime.lastChunkAgeMs}ms`}`);
+      lines.push(`- Runtime Mic Healthy: ${formatBoolean(report.hotMic.runtime.micHealthy)}`);
+      lines.push(`- Runtime Queue Depth: ${report.hotMic.runtime.queueDepth}`);
+      lines.push(`- Runtime Engine Ready: ${formatBoolean(report.hotMic.runtime.engineReady)}`);
+      lines.push(`- Runtime Whisper Fallback Active: ${formatBoolean(report.hotMic.runtime.whisperFallbackActive)}`);
+      lines.push(`- Runtime Chunk Interval: ${report.hotMic.runtime.timing.chunkIntervalMs === null ? 'unset' : `${report.hotMic.runtime.timing.chunkIntervalMs}ms`}`);
+      lines.push(`- Runtime Queue Wait: ${report.hotMic.runtime.timing.queueWaitMs === null ? 'unset' : `${report.hotMic.runtime.timing.queueWaitMs}ms`}`);
+      lines.push(`- Runtime Transcribe Time: ${report.hotMic.runtime.timing.transcribeMs === null ? 'unset' : `${report.hotMic.runtime.timing.transcribeMs}ms`}`);
+    }
     lines.push('');
 
     lines.push('### Window Management');
@@ -335,6 +366,7 @@ export class DiagnosticsCollector {
       engineStatus: this.transcriberManager?.getHotMicEngineStatus() ?? null,
       whisperModels: await this.collectWhisperModels(),
       parakeet: this.transcriberManager?.getParakeetStatus() ?? null,
+      standardRecording: this.transcriberManager?.getStandardRecordingDiagnostics() ?? null,
     };
   }
 
@@ -437,6 +469,13 @@ export class DiagnosticsCollector {
   }
 
   private collectHotMicInfo(): DiagnosticsReport['hotMic'] {
+    let runtime: HotMicRuntimeStatus | null = null;
+    try {
+      runtime = this.hotMicRuntimeStatusGetter?.() ?? null;
+    } catch {
+      runtime = null;
+    }
+
     return {
       enabled: this.preferencesManager.getPreference('hotMicEnabled') ?? false,
       muted: this.preferencesManager.getPreference('hotMicMuted') ?? false,
@@ -448,6 +487,7 @@ export class DiagnosticsCollector {
       backgroundFilterEnabled: this.preferencesManager.getPreference('hotMicBackgroundFilterEnabled') ?? false,
       backgroundFilterStrength: this.preferencesManager.getPreference('hotMicBackgroundFilterStrength') ?? null,
       drawerTextSize: this.preferencesManager.getPreference('hotMicDrawerTextSize') ?? null,
+      runtime,
     };
   }
 
@@ -490,6 +530,10 @@ export class DiagnosticsCollector {
   }
 
   private collectInterfaceInfo(): DiagnosticsReport['interface'] {
+    const launchAtLogin = process.platform === 'darwin' && app.isPackaged
+      ? app.getLoginItemSettings().openAtLogin
+      : this.preferencesManager.getPreference('launchAtLogin') ?? false;
+
     return {
       transcriptionHotkey: this.preferencesManager.getPreference('transcriptionHotkey') ?? null,
       clipboardHistoryHotkey: this.preferencesManager.getPreference('clipboardHistoryHotkey') ?? null,
@@ -504,7 +548,7 @@ export class DiagnosticsCollector {
       showInDock: this.preferencesManager.getPreference('showInDock') ?? true,
       darkMode: this.preferencesManager.getPreference('darkMode') ?? false,
       performanceHudEnabled: this.preferencesManager.getPreference('performanceHudEnabled') ?? false,
-      launchAtLogin: this.preferencesManager.getPreference('launchAtLogin') ?? false,
+      launchAtLogin,
       dataRetentionDays: this.preferencesManager.getPreference('dataRetentionDays') ?? null,
     };
   }

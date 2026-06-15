@@ -7,6 +7,8 @@ const mockElectronState = vi.hoisted(() => ({
   userDataPath: '',
 }));
 
+const mockSqliteCounts = vi.hoisted(() => new Map<string, number>());
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn((name: string) => {
@@ -27,6 +29,21 @@ vi.mock('./logger', () => ({
   }),
 }));
 
+vi.mock('better-sqlite3', () => ({
+  default: class MockDatabase {
+    constructor(private dbPath: string) {}
+
+    prepare(sql: string): { get: () => unknown } {
+      if (sql.includes('sqlite_master')) {
+        return { get: () => ({ name: 'clipboard_items' }) };
+      }
+      return { get: () => ({ count: mockSqliteCounts.get(this.dbPath) ?? 0 }) };
+    }
+
+    close(): void {}
+  },
+}));
+
 import { UserDataManager } from './userDataManager';
 
 const tempDirs: string[] = [];
@@ -35,12 +52,18 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.removeSync(dir);
   }
+  mockSqliteCounts.clear();
 });
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-user-data-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function createClipboardDb(dbPath: string, rows: string[]): void {
+  fs.writeFileSync(dbPath, rows.join('\n'));
+  mockSqliteCounts.set(dbPath, rows.length);
 }
 
 describe('UserDataManager', () => {
@@ -72,5 +95,47 @@ describe('UserDataManager', () => {
     await expect(fs.readJson(path.join(mockElectronState.userDataPath, 'current-user.json'))).resolves.toEqual({
       callsign: 'session-user',
     });
+  });
+
+  it('migrates legacy clipboard history after setCurrentUser creates the user directory', async () => {
+    mockElectronState.userDataPath = makeTempDir();
+    const manager = new UserDataManager();
+    const legacyDb = path.join(mockElectronState.userDataPath, 'clipboard.db');
+    const legacyWal = path.join(mockElectronState.userDataPath, 'clipboard.db-wal');
+    await fs.writeFile(legacyDb, 'legacy clipboard rows');
+    await fs.writeFile(legacyWal, 'legacy wal rows');
+
+    await manager.setCurrentUser('session-user');
+    await manager.migrateExistingData('session-user');
+
+    await expect(fs.readFile(path.join(
+      mockElectronState.userDataPath,
+      'users',
+      'session-user',
+      'clipboard.db'
+    ), 'utf8')).resolves.toBe('legacy clipboard rows');
+    await expect(fs.readFile(path.join(
+      mockElectronState.userDataPath,
+      'users',
+      'session-user',
+      'clipboard.db-wal'
+    ), 'utf8')).resolves.toBe('legacy wal rows');
+    await expect(fs.pathExists(legacyDb)).resolves.toBe(false);
+  });
+
+  it('replaces an empty per-user clipboard database with legacy history', async () => {
+    mockElectronState.userDataPath = makeTempDir();
+    const manager = new UserDataManager();
+    const legacyDb = path.join(mockElectronState.userDataPath, 'clipboard.db');
+    createClipboardDb(legacyDb, ['legacy row']);
+
+    await manager.setCurrentUser('session-user');
+    const targetDb = path.join(mockElectronState.userDataPath, 'users', 'session-user', 'clipboard.db');
+    createClipboardDb(targetDb, []);
+
+    await manager.migrateExistingData('session-user');
+
+    await expect(fs.readFile(targetDb, 'utf8')).resolves.toBe('legacy row');
+    await expect(fs.pathExists(legacyDb)).resolves.toBe(false);
   });
 });

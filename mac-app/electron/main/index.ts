@@ -6080,12 +6080,20 @@ function migrateFromLegacyPaths(): void {
       }
     }
 
-    // Migrate clipboard.db
+    // Migrate clipboard.db plus SQLite sidecars. Recent rows may still live in
+    // WAL/SHM files if the old app did not checkpoint before upgrade.
     const legacyDb = path.join(legacyPath, 'clipboard.db');
     const newDb = path.join(newUserData, 'clipboard.db');
     if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
       try {
         fs.copyFileSync(legacyDb, newDb);
+        for (const suffix of ['-wal', '-shm']) {
+          const legacySidecar = `${legacyDb}${suffix}`;
+          const newSidecar = `${newDb}${suffix}`;
+          if (fs.existsSync(legacySidecar) && !fs.existsSync(newSidecar)) {
+            fs.copyFileSync(legacySidecar, newSidecar);
+          }
+        }
         migrated = true;
       } catch (err) {
         log.error(`Failed to copy clipboard.db: ${err}`);
@@ -14424,6 +14432,7 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
     diagnosticsCollector.setTranscriberManager(transcriberManager);
   }
+  diagnosticsCollector.setHotMicRuntimeStatusGetter(getHotMicRuntimeStatusSnapshot);
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
   }

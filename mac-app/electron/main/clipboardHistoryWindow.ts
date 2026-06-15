@@ -1319,8 +1319,7 @@ export class ClipboardHistoryWindow {
 
   hideAfterPaste(reason: string): void {
     if (this.shouldUseAppWindow()) {
-      this.logLifecycle('hide-after-paste:skipped-app-mode', `reason=${reason}`);
-      return;
+      this.temporarilyDisableAppWindowFocus(`hide-after-paste:${reason}`);
     }
     this.hide(false, reason);
   }

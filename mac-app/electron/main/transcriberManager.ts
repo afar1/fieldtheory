@@ -116,6 +116,17 @@ type ParakeetProcessError = Error & {
  */
 export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
+export interface StandardRecordingDiagnostics {
+  status: TranscriptionStatus;
+  source: RecordingInputSource;
+  activeSource: RecordingInputSource | null;
+  recordingAgeMs: number | null;
+  helperRecordingActive: boolean | null;
+  liveTranscriptChars: number;
+  queueDepth: number;
+  chunkProcessingInFlight: boolean;
+}
+
 export interface MeetingCaptureSession {
   startedAt: string;
   source: RecordingInputSource;
@@ -2778,6 +2789,23 @@ export class TranscriberManager extends EventEmitter {
    */
   getStatus(): TranscriptionStatus {
     return this.status;
+  }
+
+  getStandardRecordingDiagnostics(): StandardRecordingDiagnostics {
+    return {
+      status: this.status,
+      source: this.getRecordingSource(),
+      activeSource: this.activeRecordingSource,
+      recordingAgeMs: this.recordingStartTime > 0
+        ? Math.max(0, Date.now() - this.recordingStartTime)
+        : null,
+      helperRecordingActive: typeof this.nativeHelper.isRecordingActive === 'function'
+        ? this.nativeHelper.isRecordingActive()
+        : null,
+      liveTranscriptChars: this.standardLiveTranscript.trim().length,
+      queueDepth: this.getStandardRealtimePressureDepth(),
+      chunkProcessingInFlight: this.standardChunkProcessingInFlight,
+    };
   }
 
   /**
