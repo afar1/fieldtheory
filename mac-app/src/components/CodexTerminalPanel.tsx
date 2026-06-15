@@ -53,7 +53,6 @@ const TERMINAL_LINE_HEIGHT = 1.28;
 const TERMINAL_APPROX_CHAR_WIDTH = 7.2;
 const TERMINAL_PADDING_X = 24;
 const TERMINAL_PADDING_Y = 20;
-const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 const HISTORY_OVERLAY_WIDTH = 420;
 const INITIAL_REPLAY_RESIZE_SUPPRESSION_MS = 600;
 const INITIAL_REPLAY_ECHO_DEDUPE_MS = 900;
@@ -359,7 +358,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     onResizeActiveChange?.(isResizing);
   }, [isResizing, onResizeActiveChange]);
   const autoAttachedContextRef = useRef(new Set<string>());
-  const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
   const onVisibilityToggleShortcutRef = useRef<CodexTerminalPanelProps['onVisibilityToggleShortcut']>(undefined);
   const terminalFocusRequestedRef = useRef(false);
@@ -1003,32 +1001,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       cancelled = true;
     };
   }, [activeSession, pageContext, refreshSessions, visible]);
-
-  useEffect(() => {
-    if (liveContextUpdateRef.current !== null) {
-      window.clearTimeout(liveContextUpdateRef.current);
-      liveContextUpdateRef.current = null;
-    }
-    if (!pageContext || !activeSession || activeSession.restored || activeSession.exitedAt) return;
-    const hasLiveAttachment = activeSession.attachedContexts.some((context) => context.sourcePath === pageContext.path);
-    if (!hasLiveAttachment) return;
-
-    liveContextUpdateRef.current = window.setTimeout(() => {
-      liveContextUpdateRef.current = null;
-      void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext, { notifyTerminal: false }).then((result) => {
-        if (!result?.ok) {
-          setTerminalStatus(result?.error ?? 'Could not refresh current document context.');
-        }
-      });
-    }, LIVE_CONTEXT_UPDATE_DELAY_MS);
-
-    return () => {
-      if (liveContextUpdateRef.current !== null) {
-        window.clearTimeout(liveContextUpdateRef.current);
-        liveContextUpdateRef.current = null;
-      }
-    };
-  }, [activeSession, pageContext]);
 
   const compactRightDockToolbar = shouldUseCompactRightDockToolbar({ dockSide, dockSideOverride, rightWidth });
   const panelSize: CSSProperties = effectiveDockSide === 'bottom'

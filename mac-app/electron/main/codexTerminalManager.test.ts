@@ -545,6 +545,7 @@ describe('CodexTerminalManager', () => {
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
       expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json');
       expect(ptys[0].written.at(-1)).toContain('Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>');
+      expect(ptys[0].written.at(-1)).toContain('Line-number questions: inspect ft current --json lineNumbers.');
       expect(ptys[0].written.at(-1)).toContain('After each successful edit, use the newly printed sha256 for the next edit to the same document.');
       expect(ptys[0].written.at(-1)).toContain('If an edit reports that the file changed on disk, run ft current --json again');
       expect(ptys[0].written.at(-1)).toContain('Pipe multiline Markdown on stdin; do not pass Markdown as command arguments.');

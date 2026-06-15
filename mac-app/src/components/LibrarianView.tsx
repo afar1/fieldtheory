@@ -3412,7 +3412,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
   const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
-  const [codexTerminalLineMapRevision, setCodexTerminalLineMapRevision] = useState(0);
   const [terminalPastePopover, setTerminalPastePopover] = useState<TerminalPastePopover>(null);
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -3424,7 +3423,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
   const userResizingPanel = isResizing || codexTerminalResizing;
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
-  const codexTerminalLineMapRefreshFrameRef = useRef<number | null>(null);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
     containerWidth: responsivePanelSize.width,
@@ -4008,20 +4006,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const next = !!scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight > 1 && scrollEl.scrollTop > 1;
     setRenderedDocumentTopFade((current) => current === next ? current : next);
   }, []);
-  const scheduleCodexTerminalLineMapRefresh = useCallback(() => {
-    if (!codexTerminalVisible || codexTerminalLineMapRefreshFrameRef.current !== null) return;
-    codexTerminalLineMapRefreshFrameRef.current = window.requestAnimationFrame(() => {
-      codexTerminalLineMapRefreshFrameRef.current = null;
-      setCodexTerminalLineMapRevision((revision) => revision + 1);
-    });
-  }, [codexTerminalVisible]);
-  useEffect(() => () => {
-    if (codexTerminalLineMapRefreshFrameRef.current !== null) {
-      window.cancelAnimationFrame(codexTerminalLineMapRefreshFrameRef.current);
-      codexTerminalLineMapRefreshFrameRef.current = null;
-    }
-  }, []);
-
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
@@ -5826,7 +5810,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         ? buildSourceLineMapping(editContent, { contentMode })
         : renderedLineMapping,
     };
-  }, [activeReading, codexTerminalLineMapRevision, contentMode, displaySourceBody, editContent, selectedItemType]);
+  }, [activeReading, contentMode, displaySourceBody, editContent, selectedItemType]);
   const shouldLoadMarkdownLinkRelationDocuments = (
     active
     && !!activeReading
@@ -11590,7 +11574,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           onScroll={(e) => {
             if (contentMode !== 'markdown') {
               updateRenderedDocumentTopFade(e.currentTarget);
-              scheduleCodexTerminalLineMapRefresh();
             }
           }}
           style={{
