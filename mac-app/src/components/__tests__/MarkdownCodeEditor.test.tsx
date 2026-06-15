@@ -15,6 +15,7 @@ import {
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
@@ -82,6 +83,7 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSelectionWithoutTrailingLineStart,
   getMarkdownCodeEditorSourcePosition,
+  getVisualLineNumberOverlayMeasureDelay,
   getVisualLineRowTopsFromLineBox,
   getMarkdownListArrowRightBoundaryEdit,
   getMarkdownListMarkerProtectedDeleteBackwardEdit,
@@ -128,6 +130,7 @@ import {
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   isVisualLineNumberRowSelected,
+  shouldIncludeSelectionSnapshotGeometry,
   shouldMoveCaretToDocumentEndFromClick,
   startMarkdownCodeEditorBlankSpaceSelection,
   startMarkdownCodeEditorLineNumberSelection,
@@ -426,6 +429,98 @@ describe('MarkdownCodeEditor cursor telemetry', () => {
     view.destroy();
     parent.remove();
   });
+
+  it('can skip geometry reads for hot-path typing snapshots', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'alpha\nbeta',
+        selection: EditorSelection.cursor(8),
+      }),
+      parent,
+    });
+    const coordsSpy = vi.spyOn(view, 'coordsAtPos');
+    const rectSpy = vi.spyOn(view.dom, 'getBoundingClientRect');
+
+    const snapshot = getMarkdownCodeEditorSelectionSnapshot(view, {
+      docChanged: true,
+      inputType: 'insertText',
+      inputData: 'x',
+      includeGeometry: false,
+    });
+
+    expect(snapshot.selectionHeadSource).toMatchObject({ line: 2, column: 3 });
+    expect(snapshot.caretPosition).toBeNull();
+    expect(snapshot.caretRect).toBeNull();
+    expect(snapshot.selectionRect).toBeNull();
+    expect(coordsSpy).not.toHaveBeenCalled();
+    expect(rectSpy).not.toHaveBeenCalled();
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps selection geometry for completion and range contexts', () => {
+    const completionCases = [
+      { doc: 'See [[Ada', inputData: 'a' },
+      { doc: 'Ask @ada', inputData: 'a' },
+      { doc: 'Mood :smile', inputData: 'e' },
+      { doc: '/draw', inputData: 'w' },
+    ];
+
+    for (const completionCase of completionCases) {
+      const parent = document.createElement('div');
+      document.body.appendChild(parent);
+      const view = new EditorView({
+        state: EditorState.create({
+          doc: completionCase.doc,
+          selection: EditorSelection.cursor(completionCase.doc.length),
+        }),
+        parent,
+      });
+
+      expect(shouldIncludeSelectionSnapshotGeometry(view, {
+        docChanged: true,
+        inputData: completionCase.inputData,
+      })).toBe(true);
+
+      view.destroy();
+      parent.remove();
+    }
+
+    const plainParent = document.createElement('div');
+    document.body.appendChild(plainParent);
+    const plainView = new EditorView({
+      state: EditorState.create({
+        doc: 'plain typing',
+        selection: EditorSelection.cursor('plain typing'.length),
+      }),
+      parent: plainParent,
+    });
+    expect(shouldIncludeSelectionSnapshotGeometry(plainView, {
+      docChanged: true,
+      inputData: 'g',
+    })).toBe(false);
+    plainView.destroy();
+    plainParent.remove();
+
+    const rangeParent = document.createElement('div');
+    document.body.appendChild(rangeParent);
+    const rangeView = new EditorView({
+      state: EditorState.create({
+        doc: 'selected text',
+        selection: EditorSelection.range(0, 8),
+      }),
+      parent: rangeParent,
+    });
+    expect(shouldIncludeSelectionSnapshotGeometry(rangeView, {
+      docChanged: true,
+      inputData: 'x',
+    })).toBe(true);
+    rangeView.destroy();
+    rangeParent.remove();
+  });
 });
 
 describe('MarkdownCodeEditor blank-space clicks', () => {
@@ -715,6 +810,29 @@ describe('MarkdownCodeEditor line numbers', () => {
     expect(MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX).toBeGreaterThan(
       MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
     );
+  });
+
+  it('defers visual line-number measurement after document-only changes', () => {
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: false,
+      geometryChanged: false,
+    })).toBe(MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: false,
+      viewportChanged: false,
+      geometryChanged: false,
+    })).toBe(0);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: true,
+      geometryChanged: false,
+    })).toBe(0);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: false,
+      geometryChanged: true,
+    })).toBe(0);
   });
 
   it('marks selected line numbers distinctly', () => {
