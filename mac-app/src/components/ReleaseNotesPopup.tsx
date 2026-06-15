@@ -68,6 +68,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
     'Run Gemma 4 12b locally',
     'Native x.com bookmark viewer',
     'Upgraded context launcher',
+    'Fixed account sign-in availability in packaged builds',
     'Fixed paste focus after using clipboard history or the context launcher',
     'Restored clipboard history for users upgrading from older versions',
   ],
