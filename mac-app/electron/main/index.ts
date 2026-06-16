@@ -5690,6 +5690,10 @@ async function applyInputMode(mode: InputMode): Promise<InputMode> {
     hotMicManager.stop();
   }
 
+  if (!shouldEnableHotMic && transcriberManager?.getRecordingSource() === 'system-audio') {
+    await transcriberManager.setRecordingSource('microphone');
+  }
+
   broadcastInputMode(normalized);
   return normalized;
 }
