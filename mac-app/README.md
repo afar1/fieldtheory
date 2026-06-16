@@ -25,7 +25,6 @@ npm run dev
 npm run dev -- --env login
 npm run dev:verbose
 npm run dev:active
-npm run dev:native
 npm run dev:experimental
 ```
 

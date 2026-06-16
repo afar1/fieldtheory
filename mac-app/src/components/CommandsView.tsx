@@ -1594,6 +1594,8 @@ export default function CommandsView({
       targetDir = watchedDirs[0].path;
     }
     if (!targetDir) return;
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(targetDir);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1603,6 +1605,8 @@ export default function CommandsView({
   // Create new command in a specific directory
   // Start inline input for new command
   const startCreatingCommand = useCallback((dirPath: string) => {
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(dirPath);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1634,6 +1638,8 @@ export default function CommandsView({
         filePath: result.path,
       };
       setCommands((current) => upsertCommandItem(current, command));
+      setSearchQuery('');
+      setSearchOpen(false);
       setSelectedPath(result.path);
       const loaded = await window.commandsAPI?.getCommandByPath(result.path);
       if (loaded) {

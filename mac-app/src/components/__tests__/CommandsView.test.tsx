@@ -174,6 +174,45 @@ describe('CommandsView command naming', () => {
     expect(input.value).toBe('existing-two');
   });
 
+  it('clears command search when creating a new command', async () => {
+    window.commandsAPI!.createCommand = vi.fn(async () => ({
+      path: '/tmp/commands/fresh.md',
+      name: 'fresh',
+    }));
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      name: filePath.endsWith('fresh.md') ? 'fresh' : 'existing',
+      displayName: filePath.endsWith('fresh.md') ? 'fresh' : 'existing',
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('fresh.md')
+        ? '# fresh\n\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findAllByText('existing');
+    fireEvent.click(screen.getByTitle('Search'));
+    const searchInput = await screen.findByPlaceholderText('Search commands (/)') as HTMLInputElement;
+    fireEvent.change(searchInput, { target: { value: 'existing' } });
+
+    fireEvent.click(screen.getAllByTitle('Create new command')[0]);
+
+    expect(screen.queryByPlaceholderText('Search commands (/)')).toBeNull();
+    const input = await screen.findByPlaceholderText('command name...');
+    fireEvent.change(input, { target: { value: 'fresh' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.createCommand).toHaveBeenCalledWith(
+        '/tmp/commands',
+        'fresh',
+        '# fresh\n\n'
+      );
+    });
+    expect(await screen.findByText('fresh')).toBeTruthy();
+  });
+
   it('adds a watched directory from the sidebar context menu', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
