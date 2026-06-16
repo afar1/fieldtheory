@@ -5991,13 +5991,16 @@ function installAppUpdate(): void {
     sendUpdateDownloaded(version);
   }, 15000);
   setTimeout(() => {
-    try {
-      appQuitConfirmedWithLocalWork = true;
-      getAutoUpdater().quitAndInstall(false, true);
-    } catch (err) {
-      appQuitConfirmedWithLocalWork = false;
-      reportAutoUpdaterError('Update install failed', err);
-    }
+    void (async () => {
+      try {
+        appQuitConfirmedWithLocalWork = true;
+        await cleanupFileWatchersBeforeQuit();
+        getAutoUpdater().quitAndInstall(false, true);
+      } catch (err) {
+        appQuitConfirmedWithLocalWork = false;
+        reportAutoUpdaterError('Update install failed', err);
+      }
+    })();
   }, 250);
 }
 

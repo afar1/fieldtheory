@@ -7038,7 +7038,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                       e.currentTarget.style.opacity = '1';
                     }}
                   >
-                    {updateStatus === 'ready' ? 'Install' : 'Update'}
+                    {updateStatus === 'ready' ? 'Restart & Install' : 'Update'}
                   </button>
                 </>
               )}
