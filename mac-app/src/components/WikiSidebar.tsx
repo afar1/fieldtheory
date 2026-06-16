@@ -1013,12 +1013,22 @@ export function libraryRootsHaveBuiltinRelPath(roots: LibraryRoot[], relPath: st
   return roots.some((root) => root.builtin && nodesHaveRelPath(root.tree, relPath));
 }
 
+function libraryRootsHaveRelPath(roots: LibraryRoot[], rootPath: string, relPath: string): boolean {
+  return roots.some((root) => root.path === rootPath && nodesHaveRelPath(root.tree, relPath));
+}
+
 function nodesHaveRelPath(nodes: WikiNode[], relPath: string): boolean {
   return nodes.some((node) => {
     if (node.kind === 'file') return node.relPath === relPath;
     return nodesHaveRelPath(node.children, relPath);
   });
 }
+
+type PendingCreatedPage = {
+  page: WikiPageMeta;
+  rootPath: string;
+  builtin: boolean;
+};
 
 /** Pin Scratchpad at the top when the wiki tree doesn't already expose it, so
  * the user can create ad-hoc docs without running a backfill first. */
@@ -1828,6 +1838,7 @@ function WikiSidebar({
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const defaultCreateInFlightRef = useRef<Set<string>>(new Set());
   const [defaultCreateInFlightKeys, setDefaultCreateInFlightKeys] = useState<Set<string>>(new Set());
+  const pendingCreatedPagesRef = useRef<Map<string, PendingCreatedPage>>(new Map());
   const [nearCreateButtonNodeId, setNearCreateButtonNodeId] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
@@ -1919,14 +1930,20 @@ function WikiSidebar({
     setLibraryRoots((prev) => removeWikiRelPathFromLibraryRoots(prev, relPath));
   }, []);
 
+  const rememberCreatedPage = useCallback((page: WikiPageMeta, rootPath: string, builtin: boolean) => {
+    if (!page.relPath || deletedWikiRelPathsRef.current.has(page.relPath)) return;
+    pendingCreatedPagesRef.current.set(`${rootPath}::${page.relPath}`, { page, rootPath, builtin });
+  }, []);
+
   const patchChangedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
     if ((event.type !== 'file-added' && event.type !== 'file-changed') || !event.page) return false;
+    if (event.type === 'file-added') rememberCreatedPage(event.page, event.rootPath, event.builtin);
     if (event.builtin) {
       setWikiTree((prev) => addWikiPageToTree(prev, event.page!));
     }
     setLibraryRoots((prev) => addPageToLibraryRoot(prev, event.rootPath, event.page!));
     return true;
-  }, []);
+  }, [rememberCreatedPage]);
 
   const patchDeletedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
     if (event.type !== 'file-deleted') return false;
@@ -1975,6 +1992,28 @@ function WikiSidebar({
       const existsInTree = treeResult ? wikiTreeHasRelPath(treeResult, relPath) : true;
       const existsInRoots = rootsResult ? libraryRootsHaveBuiltinRelPath(rootsResult, relPath) : true;
       if (!existsInTree && !existsInRoots) deletedWikiRelPathsRef.current.delete(relPath);
+    }
+    for (const [key, pending] of pendingCreatedPagesRef.current) {
+      if (deletedWikiRelPathsRef.current.has(pending.page.relPath)) {
+        pendingCreatedPagesRef.current.delete(key);
+        continue;
+      }
+      if (pending.builtin && nextTree) nextTree = addWikiPageToTree(nextTree, pending.page);
+      if (nextRoots) {
+        nextRoots = pending.builtin
+          ? addWikiPageToLibraryRoots(nextRoots, pending.page)
+          : addPageToLibraryRoot(nextRoots, pending.rootPath, pending.page);
+      }
+
+      const existsInTree = pending.builtin && treeResult
+        ? wikiTreeHasRelPath(treeResult, pending.page.relPath)
+        : false;
+      const existsInRoots = rootsResult
+        ? pending.builtin
+          ? libraryRootsHaveBuiltinRelPath(rootsResult, pending.page.relPath)
+          : libraryRootsHaveRelPath(rootsResult, pending.rootPath, pending.page.relPath)
+        : false;
+      if (existsInTree || existsInRoots) pendingCreatedPagesRef.current.delete(key);
     }
 
     if (nextTree) setWikiTree(nextTree);
@@ -2091,6 +2130,7 @@ function WikiSidebar({
       const page = (localEvent as CustomEvent<WikiPage>).detail;
       if (!page) return;
       if (deletedWikiRelPathsRef.current.has(page.relPath)) return;
+      rememberCreatedPage(page, libraryRootsRef.current.find((root) => root.builtin)?.path ?? '', true);
       setWikiTree((prev) => {
         return addWikiPageToTree(prev, page);
       });
@@ -2150,6 +2190,9 @@ function WikiSidebar({
     const unsubBookmarks = window.bookmarksAPI?.onChanged?.(() => {
       loadTree('bookmarks:changed');
     });
+    const unsubCommands = window.commandsAPI?.onCommandsChanged?.(() => {
+      loadTree('commands:changed');
+    });
     const onLocalRiverChanged = () => {
       loadTree('river:changed-local');
       loadSharedPins();
@@ -2187,11 +2230,12 @@ function WikiSidebar({
       unsubTaggedDocs?.();
       unsubSharedPins?.();
       unsubBookmarks?.();
+      unsubCommands?.();
       window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, onBrowserHelperReconnect);
     };
-  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, pruneDeletedWikiPage]);
+  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, patchDeletedLibraryFile, pruneDeletedWikiPage, rememberCreatedPage]);
 
   useEffect(() => {
     if (!persistPreferences) return;
@@ -2412,10 +2456,14 @@ function WikiSidebar({
       if (defaultCreateInFlightRef.current.has(locationKey)) return;
       defaultCreateInFlightRef.current.add(locationKey);
       setDefaultCreateInFlightKeys((prev) => new Set(prev).add(locationKey));
+      onSearchQueryChange('');
       void (async () => {
         try {
           const created = await onCreateDefaultFile(location);
-          if (created !== false) expandCreateLocation(location);
+          if (created !== false) {
+            onSearchQueryChange('');
+            expandCreateLocation(location);
+          }
         } catch (error) {
           console.warn('Failed to create default wiki page:', error);
         } finally {
@@ -2430,10 +2478,11 @@ function WikiSidebar({
       return;
     }
     expandCreateLocation(location);
+    onSearchQueryChange('');
     setCreating({ kind: 'file', location });
     setNewName('');
     setCreateError(null);
-  }, [expandCreateLocation, onCreateDefaultFile, resolveCreateTarget]);
+  }, [expandCreateLocation, onCreateDefaultFile, onSearchQueryChange, resolveCreateTarget]);
 
   const beginCreateDir = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, '');
@@ -2475,9 +2524,14 @@ function WikiSidebar({
         const created = await onCreateFile(creating.location, name);
         if (created !== false) {
           createdSuccessfully = true;
+          onSearchQueryChange('');
           if (creating.location.builtin) {
             expandCreateLocation(creating.location, joinLibraryRelPath(creating.location.relPath, name));
+            if (created && typeof created === 'object') {
+              rememberCreatedPage(created, creating.location.rootPath, true);
+            }
           } else if (created && typeof created === 'object') {
+            rememberCreatedPage(created, creating.location.rootPath, false);
             setLibraryRoots((prev) => addPageToLibraryRoot(prev, creating.location.rootPath, created));
             expandCreateLocation(creating.location, created.relPath);
           } else {
@@ -2490,6 +2544,7 @@ function WikiSidebar({
         const created = await onCreateDir(nextLocation);
         if (created !== false) {
           createdSuccessfully = true;
+          onSearchQueryChange('');
           setLibraryRoots((prev) => addDirToLibraryRoot(prev, nextLocation.rootPath, nextLocation.relPath));
           expandCreateLocation(nextLocation);
           void reloadTreeAndExpandLocation(nextLocation);
@@ -2506,7 +2561,7 @@ function WikiSidebar({
     }
     setCreating(null);
     setNewName('');
-  }, [newName, creating, onCreateFile, onCreateDir, expandCreateLocation, reloadTreeAndExpandLocation, cancelCreate]);
+  }, [newName, creating, onCreateFile, onCreateDir, onSearchQueryChange, rememberCreatedPage, expandCreateLocation, reloadTreeAndExpandLocation, cancelCreate]);
 
   const sidebarRoots = useMemo(() => {
     const roots: SidebarNode[] = [];

@@ -4,9 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 HELPER="$APP_DIR/electron/native/build/FieldTheoryHelper"
-LAUNCHER="$APP_DIR/electron/native/build/FieldTheoryLauncher"
 
-if [[ -x "$HELPER" && -x "$LAUNCHER" ]]; then
+if [[ -x "$HELPER" ]]; then
   exit 0
 fi
 

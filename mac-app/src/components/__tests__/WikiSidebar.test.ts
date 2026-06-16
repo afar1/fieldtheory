@@ -8,6 +8,7 @@ import WikiSidebar, {
   addDirToLibraryRoot,
   canDropLibraryItem,
   collectSidebarIconTargetIds,
+  dispatchLocalWikiAdded,
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
   getMovedLibraryFileSelectionItem,
@@ -16,6 +17,7 @@ import WikiSidebar, {
   getSidebarShortcutVisibility,
   type LibraryCreateLocation,
   type WikiArchiveController,
+  type WikiCreationController,
   type UnifiedItem,
   isPointerNearRect,
   isRiverSidebarItemId,
@@ -151,6 +153,12 @@ function mockSidebarNativeApis(
       onChanged: vi.fn(() => undefined),
     },
   });
+  Object.defineProperty(window, 'commandsAPI', {
+    configurable: true,
+    value: {
+      onCommandsChanged: vi.fn(() => undefined),
+    },
+  });
 }
 
 function renderSidebarForTest(options: {
@@ -159,6 +167,9 @@ function renderSidebarForTest(options: {
   selectedId?: string | null;
   onSelectItem?: (item: UnifiedItem) => void;
   onCreateFile?: (location: LibraryCreateLocation, fileName: string) => boolean | Promise<boolean>;
+  searchQuery?: string;
+  onSearchQueryChange?: (query: string) => void;
+  creationControllerRef?: { current: WikiCreationController | null };
   archiveControllerRef?: { current: WikiArchiveController | null };
 } = {}) {
   mockSidebarNativeApis(options.tree ?? [], options.roots);
@@ -170,8 +181,9 @@ function renderSidebarForTest(options: {
     onCreateFile: options.onCreateFile ?? vi.fn(async () => false),
     onCreateDir: vi.fn(async () => false),
     flatItemsRef,
-    searchQuery: '',
-    onSearchQueryChange: vi.fn(),
+    searchQuery: options.searchQuery ?? '',
+    onSearchQueryChange: options.onSearchQueryChange ?? vi.fn(),
+    creationControllerRef: options.creationControllerRef,
     archiveControllerRef: options.archiveControllerRef,
   }));
 }
@@ -225,6 +237,7 @@ afterEach(() => {
   delete (window as Partial<Window>).taggedDocsAPI;
   delete (window as Partial<Window>).sharedFilesAPI;
   delete (window as Partial<Window>).bookmarksAPI;
+  delete (window as Partial<Window>).commandsAPI;
 });
 
 function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${name}/note`, 'note')]): TestSidebarNode {
@@ -743,6 +756,159 @@ describe('WikiSidebar River root helpers', () => {
 
     expect(screen.getByText('Instant')).toBeTruthy();
     expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a locally added wiki file when an older root reload finishes later', async () => {
+    const notesRoot = {
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Notes',
+        relPath: 'Notes',
+        children: [],
+      }],
+    };
+    const staleRootsLoad = deferred<TestLibraryRoot[]>();
+    let rootsChanged: (() => void) | undefined;
+    mockSidebarNativeApis([], [notesRoot]);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockResolvedValueOnce([notesRoot])
+      .mockImplementationOnce(async () => staleRootsLoad.promise)
+      .mockResolvedValue([notesRoot]);
+    vi.mocked(window.libraryAPI!.onRootsChanged).mockImplementation((callback: () => void) => {
+      rootsChanged = callback;
+      return () => undefined;
+    });
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    fireEvent.click(await screen.findByText('Notes'));
+    act(() => {
+      rootsChanged?.();
+    });
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      dispatchLocalWikiAdded({
+        relPath: 'Notes/Instant',
+        absPath: `${libraryRootPath}/Notes/Instant.md`,
+        name: 'Instant',
+        title: 'Instant',
+        lastUpdated: 2,
+        content: '',
+        documentVersion: { mtimeMs: 2, size: 0, sha256: 'instant' },
+      });
+    });
+    expect(await screen.findByText('Instant')).toBeTruthy();
+
+    await act(async () => {
+      staleRootsLoad.resolve([notesRoot]);
+      await staleRootsLoad.promise;
+    });
+
+    expect(screen.getByText('Instant')).toBeTruthy();
+  });
+
+  it('reloads the library sidebar when command files change', async () => {
+    let commandsChanged: (() => void) | undefined;
+    const initialRoots: TestLibraryRoot[] = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Commands',
+        relPath: 'Commands',
+        children: [],
+      }],
+    }];
+    const commandRoots: TestLibraryRoot[] = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Commands',
+        relPath: 'Commands',
+        children: [{
+          kind: 'file' as const,
+          relPath: 'Commands/review',
+          absPath: `${libraryRootPath}/Commands/review.md`,
+          name: 'review',
+          title: 'review',
+          lastUpdated: 2,
+        }],
+      }],
+    }];
+
+    mockSidebarNativeApis([], initialRoots);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockResolvedValueOnce(initialRoots)
+      .mockResolvedValue(commandRoots);
+    vi.mocked(window.commandsAPI!.onCommandsChanged).mockImplementation((callback) => {
+      commandsChanged = () => callback([]);
+      return () => undefined;
+    });
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    fireEvent.click(await screen.findByText('Commands'));
+    expect(screen.queryByText('review')).toBeNull();
+
+    act(() => {
+      commandsChanged?.();
+    });
+
+    expect(await screen.findByText('review')).toBeTruthy();
+    expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears library search when file creation starts', async () => {
+    const onSearchQueryChange = vi.fn();
+    const creationControllerRef = { current: null as WikiCreationController | null };
+    renderSidebarForTest({
+      tree: [{
+        kind: 'dir',
+        name: 'Projects',
+        relPath: 'Projects',
+        children: [],
+      }],
+      searchQuery: 'does-not-match-new-page',
+      onSearchQueryChange,
+      creationControllerRef,
+    });
+
+    await waitFor(() => expect(creationControllerRef.current).not.toBeNull());
+
+    act(() => {
+      creationControllerRef.current?.beginCreateFile({
+        rootPath: libraryRootPath,
+        relPath: 'Projects',
+        builtin: true,
+      });
+    });
+
+    expect(onSearchQueryChange).toHaveBeenCalledWith('');
   });
 
   it('patches external library file delete deltas without reloading the tree', async () => {

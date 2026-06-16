@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Field Theory local-first macOS app.",
   "private": true,
   "license": "AGPL-3.0-or-later",
@@ -16,12 +16,10 @@
     "dev:quiet": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:quiet\"",
     "dev:active": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:active\"",
     "dev:verbose": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron:verbose\"",
-    "dev:native": "concurrently --raw -k \"npm:dev:vite:quiet\" \"npm:dev:electron:native\"",
     "dev:vite": "vite",
     "dev:vite:quiet": "vite --logLevel warn",
     "dev:electron": "npm run ensure:native --silent && npm run build:electron && wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:electron:quiet": "npm run ensure:native --silent && npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn ELECTRON_START_URL=http://localhost:5173 electron .",
-    "dev:electron:native": "bash scripts/dev-native-launcher.sh",
     "dev:electron:active": "npm run ensure:native --silent && npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn LOG_ACTIVE_COMPONENTS_FILE=.active-components LOG_ACTIVE_FILE=.logs/active-debug.log LOG_ACTIVE_RESET=true ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:electron:verbose": "npm run ensure:native --silent && npm run build:electron && wait-on tcp:5173 && LOG_LEVEL=debug ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:experimental": "FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true npm run dev",
@@ -120,7 +118,6 @@
     "appId": "com.fieldtheory.app",
     "productName": "Field Theory",
     "beforeBuild": "scripts/electron-builder-before-build.js",
-    "afterPack": "scripts/electron-builder-after-pack.js",
     "afterSign": "scripts/notarize.js",
     "extraMetadata": {
       "fieldTheoryBuildChannel": "production"
