@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.6': [
+    'New documents and commands now appear in the left nav immediately after you create them',
+    'Packaged builds now launch as a single Field Theory app without the extra native launcher process',
+    'Restart & Install now cleans up local watchers before handing off to the macOS updater',
+  ],
   '0.3.5': [
     'New documents and commands now appear in the left nav immediately after you create them',
     'Packaged builds now launch as a single Field Theory app without the extra native launcher process',
@@ -394,6 +399,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.6': 'Jun 16 2026',
   '0.3.5': 'Jun 16 2026',
   '0.3.4': 'Jun 15 2026',
   '0.3.3': 'Jun 15 2026',
