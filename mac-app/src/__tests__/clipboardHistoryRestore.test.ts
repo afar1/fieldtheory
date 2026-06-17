@@ -13,6 +13,7 @@ import {
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  resolveInitialViewMode,
   shouldKeepLibrarianMounted,
 } from '../utils/clipboardHistoryRestore';
 
@@ -34,6 +35,13 @@ function createStorage(initial: Record<string, string> = {}) {
 }
 
 describe('clipboardHistoryRestore', () => {
+  it('uses explicit initial view params before persisted restore state', () => {
+    expect(resolveInitialViewMode('?initialView=library')).toBe('librarian');
+    expect(resolveInitialViewMode('?initialView=clipboard')).toBe('clipboard');
+    expect(resolveInitialViewMode('?initialView=feedback')).toBeNull();
+    expect(resolveInitialViewMode('')).toBeNull();
+  });
+
   it('restores settings while dropping the retired Commands surface as the base view', () => {
     const storage = createStorage({
       [FIELD_THEORY_VIEW_STORAGE_KEY]: 'commands',

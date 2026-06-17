@@ -640,19 +640,20 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('restores a hidden app-mode window without resetting renderer state', () => {
+  it('restores a hidden app-mode window with an explicit library view', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const send = vi.fn();
     const windowRef = attachExistingWindow(window, send);
     windowRef.isVisible.mockReturnValue(false);
 
-    expect(window.restoreExistingAppWindow('app-activate')).toBe(true);
+    expect(window.restoreExistingAppWindow('app-activate', 'library')).toBe(true);
 
+    expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
     expect(windowRef.show).toHaveBeenCalled();
     expect(windowRef.moveTop).toHaveBeenCalled();
     expect(windowRef.focus).toHaveBeenCalled();
     expect(mockApp.show).toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(windowRef.show.mock.invocationCallOrder[0]);
   });
 
   it('does not restore a hidden panel-mode window through app activation', () => {

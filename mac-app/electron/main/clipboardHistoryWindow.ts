@@ -29,6 +29,10 @@ type ClipboardContextMenuActions = {
 
 type ClipboardHistoryInitialViewMode = 'clipboard' | 'library';
 
+function clipboardHistoryPageForInitialView(initialViewMode: ClipboardHistoryInitialViewMode): string {
+  return `clipboard-history.html?initialView=${initialViewMode}`;
+}
+
 export function buildClipboardContextMenuTemplate(
   params: ClipboardContextMenuParams,
   actions: ClipboardContextMenuActions
@@ -813,9 +817,6 @@ export class ClipboardHistoryWindow {
         this.window.setAlwaysOnTop(true, 'screen-saver', 1);
       }
 
-      this.revealWindow(activateWindow, showInDock);
-      this.logLifecycle('show:existing-window-complete');
-
       // Notify renderer to reset search query.
       this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
       if (transcriptHistoryMode) {
@@ -825,6 +826,9 @@ export class ClipboardHistoryWindow {
         this.sendRendererEvent('clipboard:showSettings');
       }
       this.sendTargetAppInfo();
+
+      this.revealWindow(activateWindow, showInDock);
+      this.logLifecycle('show:existing-window-complete');
 
       // Fetch fresh app data in background.
       this.refreshAppDataInBackground();
@@ -1064,7 +1068,6 @@ export class ClipboardHistoryWindow {
       }
       if (this.window && !this.window.isDestroyed()) {
         this.prepareWindowForShow();
-        this.revealWindow(activateWindow, showInDock);
         // Notify renderer to reset search query.
         this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
         if (transcriptHistoryMode) {
@@ -1076,19 +1079,21 @@ export class ClipboardHistoryWindow {
         }
         // Send target app info.
         this.sendTargetAppInfo();
+        this.revealWindow(activateWindow, showInDock);
       }
     });
 
     // Load clipboard history HTML.
     const startUrl = process.env.ELECTRON_START_URL;
+    const page = clipboardHistoryPageForInitialView(initialViewMode);
     if (startUrl) {
-      loadDevServerURLWithRetry(this.window, startUrl, 'clipboard-history.html', {
+      loadDevServerURLWithRetry(this.window, startUrl, page, {
         label: 'ClipboardHistory',
         logger: log,
       });
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'clipboard-history.html');
-      this.window.loadFile(htmlPath);
+      this.window.loadFile(htmlPath, { search: `?initialView=${initialViewMode}` });
 
       this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
         log.error('Failed to load:', errorCode, errorDescription, validatedURL);
@@ -1137,10 +1142,14 @@ export class ClipboardHistoryWindow {
     return true;
   }
 
-  restoreExistingAppWindow(reason: string = 'unspecified'): boolean {
+  restoreExistingAppWindow(
+    reason: string = 'unspecified',
+    initialViewMode?: ClipboardHistoryInitialViewMode,
+  ): boolean {
     if (!this.shouldUseAppWindow() || !this.window || this.window.isDestroyed()) {
       appendVisibilityTrace('clipboard.restore-existing-app-window.skipped', {
         reason,
+        initialViewMode: initialViewMode ?? null,
         hasWindow: Boolean(this.window),
         destroyed: this.window?.isDestroyed() ?? null,
         visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
@@ -1151,11 +1160,15 @@ export class ClipboardHistoryWindow {
 
     appendVisibilityTrace('clipboard.restore-existing-app-window.begin', {
       reason,
+      initialViewMode: initialViewMode ?? null,
       visible: this.window.isVisible(),
       focused: this.getWindowFocusedForTrace(),
       showing: this._isShowing,
     });
     this._isShowing = true;
+    if (initialViewMode) {
+      this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
+    }
     this.revealWindow(true, true);
     this.logLifecycle('restore-existing-app-window', `reason=${reason}`);
     return true;
