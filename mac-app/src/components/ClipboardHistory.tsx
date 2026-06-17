@@ -110,6 +110,7 @@ import {
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  resolveInitialViewMode,
   shouldKeepLibrarianMounted,
   type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
@@ -489,7 +490,11 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => initialLibraryOpenTarget ? 'librarian' : resolveClipboardRestoreState(localStorage).viewMode);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (
+    initialLibraryOpenTarget
+      ? 'librarian'
+      : resolveInitialViewMode(window.location.search) ?? resolveClipboardRestoreState(localStorage).viewMode
+  ));
   const [librarianEverRendered, setLibrarianEverRendered] = useState(() => viewMode === 'librarian');
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);

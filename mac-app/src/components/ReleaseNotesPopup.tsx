@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.8': [
+    'Field Theory now opens to Library reliably on startup',
+    'Restored hidden app windows now keep the intended Library view instead of falling back to Clipboard',
+  ],
   '0.3.7': [
     'Removed the legacy safe storage prompt from auth startup',
     'Restored reliable command pastes into the Codex app',
@@ -404,6 +408,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.8': 'Jun 17 2026',
   '0.3.7': 'Jun 17 2026',
   '0.3.6': 'Jun 16 2026',
   '0.3.5': 'Jun 16 2026',
