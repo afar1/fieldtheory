@@ -609,10 +609,57 @@ describe('WikiSidebar River root helpers', () => {
       await rootsLoad.promise;
     });
 
+    expect(screen.queryByText(/No pages yet/)).toBeNull();
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/No pages yet/)).toBeTruthy();
   });
 
-  it('accepts empty library roots when there is no previous sidebar state to preserve', async () => {
+  it('retries a first empty library roots load before settling the sidebar', async () => {
+    const notesTree: LibraryRoot['tree'] = [{
+      kind: 'dir',
+      name: 'Notes',
+      relPath: 'Notes',
+      children: [{
+        kind: 'file',
+        relPath: 'Notes/note',
+        absPath: `${libraryRootPath}/Notes/note.md`,
+        name: 'note',
+        title: 'note',
+        lastUpdated: 1,
+      }],
+    }];
+    mockSidebarNativeApis([], [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: notesTree,
+    }]);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockImplementationOnce(async () => [])
+      .mockImplementation(async () => ([{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: notesTree,
+      }]));
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByText('Notes'));
+    expect(await screen.findByText('note')).toBeTruthy();
+  });
+
+  it('accepts empty library roots after the cold-start retry is still empty', async () => {
     mockSidebarNativeApis([], []);
 
     render(createElement(WikiSidebar, {
@@ -626,10 +673,8 @@ describe('WikiSidebar River root helpers', () => {
       onSearchQueryChange: vi.fn(),
     }));
 
-    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/No pages yet/)).toBeTruthy();
-    await new Promise((resolve) => window.setTimeout(resolve, 350));
-    expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
   });
 
   it('ignores duplicate builtin library change payloads after wiki deltas', async () => {

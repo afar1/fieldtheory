@@ -2019,7 +2019,7 @@ function WikiSidebar({
     if (nextTree) setWikiTree(nextTree);
     if (hiddenFoldersResult) setHiddenDefaultFolders(hiddenFoldersResult);
     if (nextRoots) {
-      if (nextRoots.length === 0 && libraryRootsRef.current.length > 0 && reason !== 'empty-roots-retry') {
+      if (nextRoots.length === 0 && reason !== 'empty-roots-retry') {
         traceLibrarySidebar('sidebar-loadTree-empty-roots-retry', {
           reason,
           requestId,

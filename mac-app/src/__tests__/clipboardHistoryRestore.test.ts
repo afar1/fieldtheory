@@ -15,6 +15,7 @@ import {
   resolveClipboardRestoreState,
   resolveInitialViewMode,
   shouldKeepLibrarianMounted,
+  viewModeAfterSignedOut,
 } from '../utils/clipboardHistoryRestore';
 
 function createStorage(initial: Record<string, string> = {}) {
@@ -127,6 +128,14 @@ describe('clipboardHistoryRestore', () => {
     expect(shouldKeepLibrarianMounted({ viewMode: 'clipboard', librarianEverRendered: true })).toBe(true);
     expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: false })).toBe(true);
     expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: true })).toBe(false);
+  });
+
+  it('keeps local surfaces in place when auth signs out later', () => {
+    expect(viewModeAfterSignedOut('librarian')).toBe('librarian');
+    expect(viewModeAfterSignedOut('clipboard')).toBe('clipboard');
+    expect(viewModeAfterSignedOut('possible')).toBe('possible');
+    expect(viewModeAfterSignedOut('feedback')).toBe('clipboard');
+    expect(viewModeAfterSignedOut('todo')).toBe('clipboard');
   });
 
   it('recognizes plain Command bracket navigation only', () => {
