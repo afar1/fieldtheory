@@ -286,6 +286,12 @@ export class UserDataManager extends EventEmitter {
       'librarian-settings.json',
       'librarian-index.json',
       'commands-settings.json',
+      'recent.json',
+      'browser-library-renderer-storage.json',
+      'library-index.db',
+      'artifact-embeddings.db',
+      'tagged.db',
+      'maxwell.db',
     ];
 
     // Check if this is the first user (no other users exist)

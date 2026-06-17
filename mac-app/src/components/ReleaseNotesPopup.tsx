@@ -60,6 +60,14 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.14': [
+    'Fixed a first-open focus race that could hide the Library window immediately after launch',
+    'Startup Library now waits briefly before allowing click-away blur dismissal',
+  ],
+  '0.3.13': [
+    'Fixed the macOS app menu showing fieldtheory-mac instead of Field Theory',
+    'Removed a first-launch migration path that could make startup appear unresponsive',
+  ],
   '0.3.12': [
     'Field Theory now stores app data under the branded Field Theory folder on macOS',
     'Existing local app data is carried forward from the old fieldtheory-mac folder',
@@ -424,6 +432,8 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.14': 'Jun 17 2026',
+  '0.3.13': 'Jun 17 2026',
   '0.3.12': 'Jun 17 2026',
   '0.3.11': 'Jun 17 2026',
   '0.3.10': 'Jun 17 2026',

@@ -123,6 +123,23 @@ describe('UserDataManager', () => {
     await expect(fs.pathExists(legacyDb)).resolves.toBe(false);
   });
 
+  it('migrates small app state files into the restored user directory', async () => {
+    mockElectronState.userDataPath = makeTempDir();
+    const manager = new UserDataManager();
+    await fs.writeJson(path.join(mockElectronState.userDataPath, 'recent.json'), [{ path: 'Commands/release' }]);
+    await fs.writeJson(path.join(mockElectronState.userDataPath, 'browser-library-renderer-storage.json'), { view: 'library' });
+    await fs.writeFile(path.join(mockElectronState.userDataPath, 'library-index.db'), 'index rows');
+
+    await manager.setCurrentUser('session-user');
+    await manager.migrateExistingData('session-user');
+
+    const userDir = path.join(mockElectronState.userDataPath, 'users', 'session-user');
+    await expect(fs.readJson(path.join(userDir, 'recent.json'))).resolves.toEqual([{ path: 'Commands/release' }]);
+    await expect(fs.readJson(path.join(userDir, 'browser-library-renderer-storage.json'))).resolves.toEqual({ view: 'library' });
+    await expect(fs.readFile(path.join(userDir, 'library-index.db'), 'utf8')).resolves.toBe('index rows');
+    await expect(fs.pathExists(path.join(mockElectronState.userDataPath, 'recent.json'))).resolves.toBe(false);
+  });
+
   it('replaces an empty per-user clipboard database with legacy history', async () => {
     mockElectronState.userDataPath = makeTempDir();
     const manager = new UserDataManager();

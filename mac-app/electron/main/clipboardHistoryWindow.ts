@@ -612,6 +612,13 @@ export class ClipboardHistoryWindow {
     this.immersiveDismissableOnBlur = dismissable;
   }
 
+  suppressBlurDismiss(durationMs: number): void {
+    this.blurDismissSuppressedUntil = Math.max(
+      this.blurDismissSuppressedUntil,
+      Date.now() + durationMs
+    );
+  }
+
   getCurrentSizeKey(): ClipboardHistorySizeKey {
     return this.currentSizeKey;
   }

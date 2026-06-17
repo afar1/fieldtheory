@@ -2601,38 +2601,14 @@ function getAutoUpdater(): import('electron-updater').AppUpdater {
   return autoUpdaterInstance;
 }
 
-function bootstrapBrandedUserDataPath(targetUserDataPath: string): void {
-  if (startupBenchmarkUserData) return;
-
-  const oldUserDataPath = path.join(app.getPath('appData'), 'fieldtheory-mac');
-  if (path.resolve(oldUserDataPath) === path.resolve(targetUserDataPath)) return;
-  if (!fs.existsSync(oldUserDataPath)) return;
-  if (fs.existsSync(targetUserDataPath)) return;
-
-  try {
-    fs.cpSync(oldUserDataPath, targetUserDataPath, {
-      recursive: true,
-      filter: (source) => {
-        const name = path.basename(source);
-        return !name.startsWith('Singleton');
-      },
-    });
-  } catch (err) {
-    log.warn('Failed to bootstrap branded Field Theory user data path:', err);
-  }
-}
-
 // Pin userData paths explicitly so auth/session storage uses the branded app name.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
 const startupBenchmarkUserData = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim();
 const productionUserData = startupBenchmarkUserData
   ? path.resolve(startupBenchmarkUserData)
   : path.join(app.getPath('appData'), 'Field Theory');
-bootstrapBrandedUserDataPath(productionUserData);
 app.setPath('userData', productionUserData);
-if (isExperimentalBuild) {
-  app.setName('Field Theory Experimental');
-}
+app.setName(isExperimentalBuild ? 'Field Theory Experimental' : 'Field Theory');
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -6119,6 +6095,38 @@ function migrateFromLegacyPaths(): void {
   const newUserData = app.getPath('userData');
   const migrationMarker = path.join(newUserData, '.migration-v1-complete');
 
+  const copyFileIfMissing = (source: string, target: string): boolean => {
+    if (!fs.existsSync(source) || fs.existsSync(target)) return false;
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+      return true;
+    } catch (err) {
+      log.error(`Failed to copy ${path.basename(source)}: ${err}`);
+      return false;
+    }
+  };
+
+  const copySqliteSetIfMissing = (sourceDb: string, targetDb: string): boolean => {
+    if (!copyFileIfMissing(sourceDb, targetDb)) return false;
+    for (const suffix of ['-wal', '-shm']) {
+      copyFileIfMissing(`${sourceDb}${suffix}`, `${targetDb}${suffix}`);
+    }
+    return true;
+  };
+
+  const legacyCurrentUserCallsign = (legacyPath: string): string | null => {
+    try {
+      const currentUserPath = path.join(legacyPath, 'current-user.json');
+      const parsed = JSON.parse(fs.readFileSync(currentUserPath, 'utf8')) as { callsign?: unknown };
+      return typeof parsed.callsign === 'string' && parsed.callsign.trim().length > 0
+        ? parsed.callsign.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
   // Skip if already migrated
   if (fs.existsSync(migrationMarker)) {
     return;
@@ -6132,6 +6140,7 @@ function migrateFromLegacyPaths(): void {
   ];
 
   let migrated = false;
+  fs.mkdirSync(newUserData, { recursive: true });
 
   for (const legacyPath of legacyPaths) {
     if (!fs.existsSync(legacyPath)) {
@@ -6150,35 +6159,50 @@ function migrateFromLegacyPaths(): void {
       }
     }
 
-    // Migrate clipboard.db plus SQLite sidecars. Recent rows may still live in
-    // WAL/SHM files if the old app did not checkpoint before upgrade.
-    const legacyDb = path.join(legacyPath, 'clipboard.db');
-    const newDb = path.join(newUserData, 'clipboard.db');
-    if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
-      try {
-        fs.copyFileSync(legacyDb, newDb);
-        for (const suffix of ['-wal', '-shm']) {
-          const legacySidecar = `${legacyDb}${suffix}`;
-          const newSidecar = `${newDb}${suffix}`;
-          if (fs.existsSync(legacySidecar) && !fs.existsSync(newSidecar)) {
-            fs.copyFileSync(legacySidecar, newSidecar);
-          }
-        }
-        migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy clipboard.db: ${err}`);
-      }
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'current-user.json'),
+      path.join(newUserData, 'current-user.json')
+    )) {
+      migrated = true;
     }
 
-    // Migrate preferences.json (for very old versions)
-    const legacyPrefs = path.join(legacyPath, 'preferences.json');
-    const newPrefs = path.join(newUserData, 'preferences.json');
-    if (fs.existsSync(legacyPrefs) && !fs.existsSync(newPrefs)) {
-      try {
-        fs.copyFileSync(legacyPrefs, newPrefs);
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'supabase-session.json'),
+      path.join(newUserData, 'supabase-session.json')
+    )) {
+      migrated = true;
+    }
+
+    const callsign = legacyCurrentUserCallsign(legacyPath);
+    const sourceDirs = callsign
+      ? [path.join(legacyPath, 'users', callsign), legacyPath]
+      : [legacyPath];
+    const filesToMigrate = [
+      'preferences.json',
+      'user-metrics.json',
+      'librarian-settings.json',
+      'librarian-index.json',
+      'commands-settings.json',
+      'recent.json',
+      'browser-library-renderer-storage.json',
+      'library-index.db',
+      'artifact-embeddings.db',
+      'tagged.db',
+      'maxwell.db',
+    ];
+
+    for (const sourceDir of sourceDirs) {
+      for (const file of filesToMigrate) {
+        if (copyFileIfMissing(path.join(sourceDir, file), path.join(newUserData, file))) {
+          migrated = true;
+        }
+      }
+
+      if (copySqliteSetIfMissing(
+        path.join(sourceDir, 'clipboard.db'),
+        path.join(newUserData, 'clipboard.db')
+      )) {
         migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy preferences.json: ${err}`);
       }
     }
   }
@@ -7148,6 +7172,7 @@ function showClipboardHistoryOnStartup(): void {
   }
 
   appendVisibilityTrace('app-startup.show-clipboard.action', { action: 'show', initialViewMode: 'library' });
+  clipboardHistoryWindow?.suppressBlurDismiss(1500);
   showClipboardHistoryOnActivate();
 }
 

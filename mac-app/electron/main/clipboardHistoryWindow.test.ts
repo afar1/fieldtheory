@@ -220,6 +220,22 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
   });
 
+  it('temporarily suppresses blur dismissal', () => {
+    vi.useFakeTimers();
+    try {
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+
+      window.suppressBlurDismiss(1500);
+
+      expect(window.shouldAutoHideOnBlur()).toBe(false);
+
+      vi.advanceTimersByTime(1501);
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refreshes the default paste target when a visible app window sees a new external app', () => {
     const appWindow = new ClipboardHistoryWindow({
       get: vi.fn(() => ({ fieldTheoryWindowMode: 'app', clickAwayToDismiss: true })),
