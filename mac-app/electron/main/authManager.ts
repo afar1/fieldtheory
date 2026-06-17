@@ -16,7 +16,7 @@ import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
 import { getUserDataManager, UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 
@@ -27,7 +27,7 @@ const CLI_SESSION_PATH = path.join(os.homedir(), '.fieldtheory', 'session.json')
 // FileStorage - Persists session to disk for survival across app updates
 // =============================================================================
 
-class FileStorage implements SupportedStorage {
+export class FileStorage implements SupportedStorage {
   private storage: Map<string, string> = new Map();
   private filePath: string;
   private protectedFilePath: string;
@@ -85,43 +85,45 @@ class FileStorage implements SupportedStorage {
 
   private loadFromDisk(): void {
     try {
-      if (fs.existsSync(this.protectedFilePath)) {
-        if (!this.canUseProtectedStorage()) {
-          log.warn('Protected session exists but safeStorage is unavailable');
-          return;
+      if (fs.existsSync(this.filePath)) {
+        try {
+          fs.chmodSync(this.filePath, 0o600);
+          const data = fs.readFileSync(this.filePath, 'utf-8');
+          const parsed = JSON.parse(data);
+          this.storage = new Map(Object.entries(parsed));
+          const keys = Array.from(this.storage.keys());
+          log.debug('Loaded session from disk, keys present:', keys.length > 0 ? keys : '(none)');
+          fs.rmSync(this.protectedFilePath, { force: true });
+          if (keys.length > 0) {
+            return;
+          }
+        } catch (err) {
+          log.warn('Failed to load session file:', err);
+          this.storage = new Map();
+          this.writeSessionFile({});
+          fs.rmSync(this.protectedFilePath, { force: true });
         }
-        const encrypted = fs.readFileSync(this.protectedFilePath);
-        const decrypted = safeStorage.decryptString(encrypted);
-        const parsed = JSON.parse(decrypted);
-        this.storage = new Map(Object.entries(parsed));
-        const keys = Array.from(this.storage.keys());
-        log.debug('Loaded protected session from disk, keys present:', keys.length > 0 ? keys : '(none)');
         return;
       }
 
-      if (fs.existsSync(this.filePath)) {
-        const data = fs.readFileSync(this.filePath, 'utf-8');
-        const parsed = JSON.parse(data);
-        this.storage = new Map(Object.entries(parsed));
-        const keys = Array.from(this.storage.keys());
-        log.debug('Loaded legacy session from disk, keys present:', keys.length > 0 ? keys : '(none)');
-        if (keys.length > 0) {
-          this.saveToDisk();
-        }
-      } else {
-        log.debug('No session file exists yet');
+      if (fs.existsSync(this.protectedFilePath)) {
+        fs.rmSync(this.protectedFilePath, { force: true });
+        log.info('Removed legacy protected session; safeStorage is no longer used for auth');
+        return;
       }
+
+      log.debug('No session file exists yet');
     } catch (err) {
       log.warn('Failed to load session from disk:', err);
     }
   }
 
-  private canUseProtectedStorage(): boolean {
-    try {
-      return safeStorage.isEncryptionAvailable();
-    } catch {
-      return false;
-    }
+  private writeSessionFile(obj: Record<string, string>): void {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    const tempPath = `${this.filePath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(obj));
+    fs.chmodSync(tempPath, 0o600);
+    fs.renameSync(tempPath, this.filePath);
   }
 
   private saveToDisk(): void {
@@ -142,19 +144,8 @@ class FileStorage implements SupportedStorage {
       }
       this.hasLoggedEmptySkip = false;  // Reset flag when we have real data to save
 
-      fs.mkdirSync(path.dirname(this.protectedFilePath), { recursive: true });
-      if (!this.canUseProtectedStorage()) {
-        log.warn('safeStorage unavailable; refusing to persist token-bearing session data');
-        fs.writeFileSync(this.filePath, '{}');
-        return;
-      }
-
-      const encrypted = safeStorage.encryptString(JSON.stringify(obj));
-      const tempPath = `${this.protectedFilePath}.tmp`;
-      fs.writeFileSync(tempPath, encrypted);
-      fs.chmodSync(tempPath, 0o600);
-      fs.renameSync(tempPath, this.protectedFilePath);
-      fs.writeFileSync(this.filePath, '{}');
+      this.writeSessionFile(obj);
+      fs.rmSync(this.protectedFilePath, { force: true });
     } catch (err) {
       log.warn('Failed to save session to disk:', err);
     }
@@ -167,7 +158,7 @@ class FileStorage implements SupportedStorage {
   clearStorage(): void {
     this.storage.clear();
     try {
-      fs.writeFileSync(this.filePath, '{}');
+      this.writeSessionFile({});
       fs.rmSync(this.protectedFilePath, { force: true });
       log.info('Storage cleared (explicit sign-out)');
     } catch (err) {
@@ -389,8 +380,6 @@ export class AuthManager extends EventEmitter {
   }
 
   private isSessionStorageUsable(userDataPath: string): boolean {
-    const protectedSessionPath = path.join(userDataPath, 'supabase-session.enc');
-    if (fs.existsSync(protectedSessionPath)) return true;
     return this.isSessionFileUsable(path.join(userDataPath, 'supabase-session.json'));
   }
 
@@ -721,7 +710,7 @@ export class AuthManager extends EventEmitter {
     // Start a new refresh operation
     this.emitDebug('REFRESH_STARTED', {
       source,
-      tokenPrefix: refreshToken.substring(0, 8) + '...',
+      hasRefreshToken: refreshToken.length > 0,
     }, 'info');
 
     // Create a promise that other callers can wait on
@@ -851,13 +840,13 @@ export class AuthManager extends EventEmitter {
       const rawSession = this.fileStorage?.getRawSessionData();
       if (!rawSession?.refresh_token) {
         this.emitDebug('RECOVERY_NO_DISK_SESSION', {
-          path: path.join(app.getPath('userData'), 'supabase-session.enc'),
+          path: path.join(app.getPath('userData'), 'supabase-session.json'),
         }, 'info');
         return false;
       }
 
       this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
-        tokenPrefix: rawSession.refresh_token.substring(0, 8) + '...',
+        hasRefreshToken: true,
         user: rawSession.user?.email,
       }, 'recovery');
       return await this.coordinatedRefresh(rawSession.refresh_token, 'recovery');

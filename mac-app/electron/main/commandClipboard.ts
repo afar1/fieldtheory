@@ -148,8 +148,10 @@ export function shouldUseNativeCommandFileTyping(input: {
   mode: CommandFilePasteMode;
   isTerminal: boolean;
   isIDE: boolean;
+  isCodexApp?: boolean;
 }): boolean {
   if (input.mode === 'markdown-content') return true;
+  if (input.mode === 'text-reference' && input.isCodexApp === true) return true;
   return false;
 }
 
@@ -157,6 +159,7 @@ export function resolveCommandFilePasteDelivery(input: {
   mode: CommandFilePasteMode;
   isTerminal: boolean;
   isIDE: boolean;
+  isCodexApp?: boolean;
 }): CommandFilePasteDelivery {
   return shouldUseNativeCommandFileTyping(input) ? 'native-helper' : 'clipboard-paste';
 }

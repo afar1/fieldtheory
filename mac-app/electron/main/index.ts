@@ -1603,6 +1603,10 @@ type CommandLauncherTargetApp = {
   windowBounds?: { x: number; y: number; width: number; height: number } | null;
 };
 
+function isCodexDesktopApp(bundleId: string | null | undefined): boolean {
+  return bundleId === 'com.openai.codex';
+}
+
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
   targetApp: CommandLauncherTargetApp | null,
@@ -10694,48 +10698,19 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // Mobile Sync IPC Handlers - Sync iOS transcriptions to clipboard history
+  // Mobile Sync IPC Handlers - disabled for public release.
   // =========================================================================
 
-  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
-    if (!authManager) {
-      return false;
-    }
-    await authManager.setSession(accessToken, refreshToken);
-    return true;
+  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async () => {
+    return false;
   });
 
   ipcMain.handle(ClipboardIPCChannels.CLEAR_SYNC_SESSION, async () => {
-    if (authManager) {
-      authManager.clearSession();
-    }
     return true;
   });
 
-  // Get session from main process for recovery when renderer localStorage is cleared.
-  // This allows the renderer to recover auth state without re-login.
   ipcMain.handle(ClipboardIPCChannels.GET_SYNC_SESSION, async () => {
-    if (!authManager) {
-      return null;
-    }
-    const session = authManager.getSession();
-    if (!session) {
-      return null;
-    }
-    // Only return tokens if session is not expired.
-    const now = Math.floor(Date.now() / 1000);
-    if (session.expires_at && session.expires_at <= now) {
-      return null;
-    }
-    return {
-      accessToken: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresAt: session.expires_at,
-      user: session.user ? {
-        id: session.user.id,
-        email: session.user.email,
-      } : null,
-    };
+    return null;
   });
 
   // =========================================================================
@@ -12578,6 +12553,7 @@ function setupClipboardIPCHandlers(): void {
       return await runWithCommandLauncherExternalInvocation(async () => {
         const isTerminal = isTerminalApp(targetApp.bundleId);
         const isIDE = isIDEWithTerminal(targetApp.bundleId);
+        const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
         const pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
         const handoffText = formatCommandFilePasteText({
           kind: 'handoff',
@@ -12604,9 +12580,13 @@ function setupClipboardIPCHandlers(): void {
 
         let pasted = false;
         let fallbackRan = false;
-        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
         if (pasteDelivery === 'native-helper') {
           pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+          if (!pasted) {
+            cursorStatusManager?.showNoTargetError('Portable command paste failed');
+            return { success: false, error: 'Could not paste into target app' };
+          }
         } else {
           appendCommandLauncherTrace('invoke-handoff-native-type-skipped', {
             filePath,
@@ -12614,15 +12594,6 @@ function setupClipboardIPCHandlers(): void {
             targetName: targetApp.name,
             contentMode: pasteMode,
             delivery: pasteDelivery,
-          });
-        }
-        if (!pasted) {
-          fallbackRan = true;
-          appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
-            filePath,
-            targetBundleId: targetApp.bundleId,
-            targetName: targetApp.name,
-            contentMode: pasteMode,
           });
         }
         if (!pasted) {
@@ -12741,6 +12712,7 @@ function setupClipboardIPCHandlers(): void {
       }
       const isTerminal = isTerminalApp(targetApp.bundleId);
       const isIDE = isIDEWithTerminal(targetApp.bundleId);
+      const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
@@ -12777,9 +12749,13 @@ function setupClipboardIPCHandlers(): void {
           });
 
           let pasted = false;
-          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
           if (pasteDelivery === 'native-helper') {
             pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', invocationTrace);
+            if (!pasted) {
+              cursorStatusManager?.showNoTargetError('Portable command paste failed');
+              return { success: false, error: 'Could not paste into target app' };
+            }
           } else {
             appendCommandLauncherTrace('invoke-command-native-type-skipped', {
               ...invocationTrace,
@@ -12788,16 +12764,6 @@ function setupClipboardIPCHandlers(): void {
               targetName: targetApp.name,
               contentMode: pasteMode,
               delivery: pasteDelivery,
-            });
-          }
-          if (!pasted) {
-            fallbackRan = true;
-            appendCommandLauncherTrace('invoke-command-native-type-fallback', {
-              ...invocationTrace,
-              commandName,
-              targetBundleId: targetApp.bundleId,
-              targetName: targetApp.name,
-              contentMode: pasteMode,
             });
           }
           if (!pasted) {

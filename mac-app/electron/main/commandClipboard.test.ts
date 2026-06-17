@@ -230,12 +230,21 @@ describe('shouldUseNativeCommandFileTyping', () => {
     })).toBe(false);
   });
 
-  it('skips native typing for IDE text references so target inputs keep normal paste focus', () => {
+  it('skips native typing for generic IDE text references so target inputs keep normal paste focus', () => {
     expect(shouldUseNativeCommandFileTyping({
       mode: 'text-reference',
       isTerminal: false,
       isIDE: true,
     })).toBe(false);
+  });
+
+  it('uses native typing for Codex app text references so captured app windows receive the paste', () => {
+    expect(shouldUseNativeCommandFileTyping({
+      mode: 'text-reference',
+      isTerminal: false,
+      isIDE: true,
+      isCodexApp: true,
+    })).toBe(true);
   });
 
   it('keeps native typing available for markdown content targets', () => {
@@ -248,12 +257,21 @@ describe('shouldUseNativeCommandFileTyping', () => {
 });
 
 describe('resolveCommandFilePasteDelivery', () => {
-  it('uses normal paste for IDE command-file references so typing can continue afterward', () => {
+  it('uses normal paste for generic IDE command-file references so typing can continue afterward', () => {
     expect(resolveCommandFilePasteDelivery({
       mode: 'text-reference',
       isTerminal: false,
       isIDE: true,
     })).toBe('clipboard-paste');
+  });
+
+  it('uses native helper for Codex app command-file references', () => {
+    expect(resolveCommandFilePasteDelivery({
+      mode: 'text-reference',
+      isTerminal: false,
+      isIDE: true,
+      isCodexApp: true,
+    })).toBe('native-helper');
   });
 
   it('uses normal paste for terminal command-file references so typing can continue afterward', () => {
