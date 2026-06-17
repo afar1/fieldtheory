@@ -60,6 +60,22 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.12': [
+    'Field Theory now stores app data under the branded Field Theory folder on macOS',
+    'Existing local app data is carried forward from the old fieldtheory-mac folder',
+  ],
+  '0.3.11': [
+    'Fixed a delayed auth state update that could move Library back to Clipboard after startup',
+    'Signing out now only leaves auth-backed surfaces instead of interrupting local Library work',
+  ],
+  '0.3.10': [
+    'Fixed a startup race that could drop the Library open request and fall back to Clipboard',
+    'Library view-switch requests now wait for the app window to finish loading',
+  ],
+  '0.3.9': [
+    'Startup preloading now keeps Field Theory on the intended Library view',
+    'Library retries a first empty roots load instead of settling on a partial sidebar',
+  ],
   '0.3.8': [
     'Field Theory now opens to Library reliably on startup',
     'Restored hidden app windows now keep the intended Library view instead of falling back to Clipboard',
@@ -408,6 +424,10 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.12': 'Jun 17 2026',
+  '0.3.11': 'Jun 17 2026',
+  '0.3.10': 'Jun 17 2026',
+  '0.3.9': 'Jun 17 2026',
   '0.3.8': 'Jun 17 2026',
   '0.3.7': 'Jun 17 2026',
   '0.3.6': 'Jun 16 2026',

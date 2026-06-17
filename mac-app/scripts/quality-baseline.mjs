@@ -36,7 +36,7 @@ const QUALITY_IMMERSIVE_WIKI_REL_PATH = 'scratchpad/Quality Benchmark Immersive 
 
 const appSupportDir = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim()
   ? path.resolve(process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR.trim())
-  : path.join(os.homedir(), 'Library', 'Application Support', 'fieldtheory-mac');
+  : path.join(os.homedir(), 'Library', 'Application Support', 'Field Theory');
 const repoRoot = process.cwd();
 const paths = {
   launcherTrace: path.join(appSupportDir, 'command-launcher-trace.log'),

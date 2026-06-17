@@ -112,6 +112,7 @@ import {
   resolveClipboardRestoreState,
   resolveInitialViewMode,
   shouldKeepLibrarianMounted,
+  viewModeAfterSignedOut,
   type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
 import {
@@ -839,7 +840,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   
   const handleRendererSignedOut = useCallback(() => {
     setHasUnreadFeedback(false);
-    setViewMode('clipboard');
+    setViewMode(viewModeAfterSignedOut);
   }, []);
 
   const {

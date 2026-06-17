@@ -285,7 +285,17 @@ export class ClipboardHistoryWindow {
       return;
     }
 
-    this.window.webContents.send(channel);
+    const send = () => {
+      if (!this.window || this.window.isDestroyed()) return;
+      this.window.webContents.send(channel);
+    };
+
+    if (typeof this.window.webContents.isLoadingMainFrame === 'function' && this.window.webContents.isLoadingMainFrame()) {
+      this.window.webContents.once('did-finish-load', send);
+      return;
+    }
+
+    send();
   }
 
   openScratchpad(payload: { relPath: string }): void {
@@ -870,11 +880,14 @@ export class ClipboardHistoryWindow {
    * Call once at app startup after systems are initialized.
    * @param savedBounds Optional saved bounds for position/size
    */
-  preload(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+  preload(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
+  ): void {
     if (this.window && !this.window.isDestroyed()) {
       return; // Already preloaded
     }
-    this.createWindow(savedBounds, false, true);
+    this.createWindow(savedBounds, false, true, false, true, initialViewMode);
   }
 
   /**

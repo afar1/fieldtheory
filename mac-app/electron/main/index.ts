@@ -2601,12 +2601,34 @@ function getAutoUpdater(): import('electron-updater').AppUpdater {
   return autoUpdaterInstance;
 }
 
-// Pin userData paths explicitly so auth/session storage is shared across release channels.
+function bootstrapBrandedUserDataPath(targetUserDataPath: string): void {
+  if (startupBenchmarkUserData) return;
+
+  const oldUserDataPath = path.join(app.getPath('appData'), 'fieldtheory-mac');
+  if (path.resolve(oldUserDataPath) === path.resolve(targetUserDataPath)) return;
+  if (!fs.existsSync(oldUserDataPath)) return;
+  if (fs.existsSync(targetUserDataPath)) return;
+
+  try {
+    fs.cpSync(oldUserDataPath, targetUserDataPath, {
+      recursive: true,
+      filter: (source) => {
+        const name = path.basename(source);
+        return !name.startsWith('Singleton');
+      },
+    });
+  } catch (err) {
+    log.warn('Failed to bootstrap branded Field Theory user data path:', err);
+  }
+}
+
+// Pin userData paths explicitly so auth/session storage uses the branded app name.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
 const startupBenchmarkUserData = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim();
 const productionUserData = startupBenchmarkUserData
   ? path.resolve(startupBenchmarkUserData)
-  : path.join(app.getPath('appData'), 'fieldtheory-mac');
+  : path.join(app.getPath('appData'), 'Field Theory');
+bootstrapBrandedUserDataPath(productionUserData);
 app.setPath('userData', productionUserData);
 if (isExperimentalBuild) {
   app.setName('Field Theory Experimental');
@@ -6104,6 +6126,7 @@ function migrateFromLegacyPaths(): void {
 
   const homeDir = app.getPath('home');
   const legacyPaths = [
+    path.join(homeDir, 'Library', 'Application Support', 'fieldtheory-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'littleai-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'Oscar'),
   ];
@@ -15960,7 +15983,7 @@ if (!gotTheLock) {
     if (!clipboardHistoryWindow) {
       clipboardHistoryWindow = initClipboardHistoryWindow();
       const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.preload(boundsToUse);
+      clipboardHistoryWindow.preload(boundsToUse, 'library');
     }
     startupMark('clipboard-window-preload-called');
     maybeExitStartupBenchmark('clipboard-window-preload-called');

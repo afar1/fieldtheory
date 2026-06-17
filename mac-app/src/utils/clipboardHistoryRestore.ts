@@ -99,6 +99,10 @@ export function isLibrarianSurfaceVisible(state: { viewMode: ViewMode; showSetti
   return !state.showSettings && state.viewMode === 'librarian';
 }
 
+export function viewModeAfterSignedOut(viewMode: ViewMode): ViewMode {
+  return viewMode === 'feedback' || viewMode === 'todo' ? 'clipboard' : viewMode;
+}
+
 export function getAppBracketNavigationDirection(event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): -1 | 1 | null {
   if (!event.metaKey || event.shiftKey || event.altKey || event.ctrlKey) return null;
   if (event.key === '[' || event.code === 'BracketLeft') return -1;
