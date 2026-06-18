@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.15': [
+    'River sharing now supports explicit destinations for contacts and teams',
+    'Team and River access can be rolled out to entitled users without exposing it to everyone',
+    'River stays available from the local session when the network is unavailable',
+    'Shared River documents now use explicit recipient grants for tighter access control',
+  ],
   '0.3.14': [
     'Fixed a first-open focus race that could hide the Library window immediately after launch',
     'Startup Library now waits briefly before allowing click-away blur dismissal',
@@ -432,6 +438,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.15': 'Jun 18 2026',
   '0.3.14': 'Jun 17 2026',
   '0.3.13': 'Jun 17 2026',
   '0.3.12': 'Jun 17 2026',
