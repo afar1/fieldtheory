@@ -139,7 +139,7 @@ export interface SharedFilePresenceUser {
 export interface SharedFilePinResult {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 }
 
@@ -147,7 +147,7 @@ export interface SharedFilesAvailability {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
 }
 

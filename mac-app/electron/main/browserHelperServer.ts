@@ -195,6 +195,7 @@ export type BrowserHelperNativeBridge = {
   setActivePresence?: (sharedId: string | null) => unknown[] | Promise<unknown[]>;
   getPinnedItemIds?: () => string[] | Promise<string[]>;
   setPinned?: (filePath: string, pinned: boolean) => unknown | Promise<unknown>;
+  getTeamEntitlement?: () => unknown | Promise<unknown>;
   initializeCommands?: () => void | Promise<void>;
   getWatchedCommandDirs?: () => unknown[] | Promise<unknown[]>;
   addWatchedCommandDir?: (dirPath: string) => unknown | Promise<unknown>;
@@ -1330,6 +1331,11 @@ export class BrowserHelperServer {
         const pinned = body.pinned === true;
         const result = filePath ? await this.nativeBridge.setPinned?.(filePath, pinned) : { ok: false, reason: 'missing_path' };
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/team/entitlement') {
+        writeJson(res, 200, { ok: true, entitlement: await this.nativeBridge.getTeamEntitlement?.() ?? { allowed: false, reason: 'not_authenticated', stale: false, userId: null, checkedAt: null } }, req.headers.origin);
         return;
       }
 

@@ -58,6 +58,7 @@ type SettingsSection =
 type FieldTheoryWindowMode = 'panel' | 'app';
 type SettingsStyles = Record<string, CSSProperties>;
 type TeamServiceState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getState']>>;
+type TeamEntitlementState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getEntitlement']>>;
 type TeamMutationResult = Awaited<ReturnType<NonNullable<Window['teamAPI']>['inviteMember']>>;
 const TEAM_SETTINGS_BACKGROUND_REFRESH_MS = 30000;
 
@@ -290,6 +291,7 @@ export default function SettingsPanel({
   const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [teamServiceState, setTeamServiceState] = useState<TeamServiceState | null>(null);
+  const [teamEntitlementState, setTeamEntitlementState] = useState<TeamEntitlementState | null>(null);
   const [teamLoading, setTeamLoading] = useState(false);
   const [teamError, setTeamError] = useState<string | null>(null);
 
@@ -309,6 +311,11 @@ export default function SettingsPanel({
   const loadSharedFilesAvailability = useCallback(async () => {
     const availability = await window.sharedFilesAPI?.getAvailability?.();
     setSharedFilesAvailable(availability?.available === true);
+  }, []);
+
+  const loadTeamEntitlement = useCallback(async () => {
+    const entitlement = await window.teamAPI?.getEntitlement?.();
+    setTeamEntitlementState(entitlement ?? null);
   }, []);
 
   const loadTeamState = useCallback(async (options: { showLoading?: boolean } = {}) => {
@@ -331,15 +338,19 @@ export default function SettingsPanel({
     void loadSharedFilesAvailability().catch(() => {
       if (!cancelled) setSharedFilesAvailable(false);
     });
+    void loadTeamEntitlement().catch(() => {
+      if (!cancelled) setTeamEntitlementState(null);
+    });
     const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
       void loadSharedFilesAvailability();
+      void loadTeamEntitlement();
       void loadTeamState();
     });
     return () => {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [loadSharedFilesAvailability, loadTeamState]);
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
 
   const {
     session,
@@ -736,21 +747,25 @@ export default function SettingsPanel({
   useEffect(() => {
     if (!session?.user?.id) {
       setTeamServiceState(null);
+      setTeamEntitlementState(null);
       setTeamError(null);
       return;
     }
+    void loadTeamEntitlement();
     void loadTeamState();
-  }, [loadTeamState, session?.user?.id]);
+  }, [loadTeamEntitlement, loadTeamState, session?.user?.id]);
 
   useEffect(() => {
     if (selectedSection !== 'team' || !session?.user?.id) return;
     void loadTeamState();
+    void loadTeamEntitlement();
     const interval = window.setInterval(() => {
       void loadTeamState({ showLoading: false });
+      void loadTeamEntitlement();
       void loadSharedFilesAvailability();
     }, TEAM_SETTINGS_BACKGROUND_REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [loadSharedFilesAvailability, loadTeamState, selectedSection, session?.user?.id]);
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState, selectedSection, session?.user?.id]);
 
   // Fetch callsign when session changes
   useEffect(() => {
@@ -1277,9 +1292,10 @@ export default function SettingsPanel({
       return false;
     }
     await loadTeamState();
+    await loadTeamEntitlement();
     await loadSharedFilesAvailability();
     return true;
-  }, [loadSharedFilesAvailability, loadTeamState]);
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
 
   const teamSettingsState = buildTeamSettingsState({
     loading: teamLoading,
@@ -1293,21 +1309,16 @@ export default function SettingsPanel({
     },
   });
 
-  const teamFeaturesVisible = Boolean(
-    teamServiceState?.available ||
-    teamServiceState?.currentTeamScopeUserId ||
-    teamServiceState?.members.length ||
-    teamServiceState?.pendingIncoming.length
-  );
+  const teamFeaturesVisible = teamEntitlementState?.allowed === true;
   const visibleSections = teamFeaturesVisible
     ? SECTIONS_ORDER
     : SECTIONS_ORDER.filter((section) => section !== 'team');
 
   useEffect(() => {
-    if (selectedSection === 'team' && teamServiceState && !teamFeaturesVisible) {
+    if (selectedSection === 'team' && teamEntitlementState && !teamFeaturesVisible) {
       setSelectedSection('account');
     }
-  }, [selectedSection, teamFeaturesVisible, teamServiceState]);
+  }, [selectedSection, teamEntitlementState, teamFeaturesVisible]);
 
   return (
     <div style={styles.settingsLayout}>

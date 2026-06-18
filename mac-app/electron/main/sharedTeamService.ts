@@ -5,6 +5,7 @@ const log = createLogger('SharedTeam');
 
 export type SharedTeamUnavailableReason =
   | 'not_authenticated'
+  | 'not_entitled'
   | 'no_team_members'
   | 'pending_only'
   | 'ambiguous_team_scope'

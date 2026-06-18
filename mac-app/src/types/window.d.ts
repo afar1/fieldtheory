@@ -1961,14 +1961,14 @@ interface SharedFilesAvailability {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
 }
 
 interface SharedFilePinResult {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 }
 
@@ -1988,10 +1988,19 @@ interface SharedFilesAPI {
 
 type SharedTeamUnavailableReason =
   | 'not_authenticated'
+  | 'not_entitled'
   | 'no_team_members'
   | 'pending_only'
   | 'ambiguous_team_scope'
   | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
 
 interface SharedTeamMember {
   contactId: string;
@@ -2026,6 +2035,7 @@ interface SharedTeamMutationResult {
 }
 
 interface TeamAPI {
+  getEntitlement: () => Promise<SharedTeamEntitlementState>;
   getState: () => Promise<SharedTeamState>;
   inviteMember: (email: string) => Promise<SharedTeamMutationResult>;
   respondToInvite: (contactId: string, accept: boolean) => Promise<SharedTeamMutationResult>;
