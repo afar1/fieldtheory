@@ -128,11 +128,6 @@ export class SharedTeamEntitlementService {
     const userId = this.authManager.getSession()?.user?.id ?? null;
     if (!userId) return notAuthenticated();
     if (this.cachedState?.userId === userId) return this.cachedState;
-    const cached = this.readAllowedCache(userId);
-    if (cached) {
-      this.cachedState = allowedState(userId, cached.checkedAt, true);
-      return this.cachedState;
-    }
     return lookupFailed(userId);
   }
 

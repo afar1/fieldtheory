@@ -95,6 +95,8 @@ window.sharedClipboardAPI.onTeamItemAdded((item) => { /* update state */ });
 For collaborative features that are enabled, we use **Supabase Realtime** instead of polling.
 Shared clipboard is historical and disabled for release; clipboard items must remain local-only.
 
+Teams and River are account-backed and entitlement-gated before their normal team membership, River availability, and write checks run. The production database and RLS policies own the eligibility answer for the signed-in account; the app does not encode rollout membership locally. If the entitlement read fails or is denied, main-process IPC and renderer UI fail closed. The only exception is offline continuity: a same-user last-known allowed entitlement can keep Teams/River UI visible during offline or network loss, and a later successful online revocation overrides that cached allowance.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                         DATA FLOW: SHARED CLIPBOARD                       │

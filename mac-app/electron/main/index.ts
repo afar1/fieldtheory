@@ -3386,7 +3386,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
         if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
-        return sharedSyncService.getAvailability();
+        return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
       },
       getSharedFileStatus: async (filePath) => {
         const entitlement = await getSharedFeatureEntitlement();
@@ -4730,12 +4730,22 @@ function sharedFeaturesDisabledError(): string {
 }
 
 function sharedUnavailableAvailability(entitlement: SharedTeamEntitlementState) {
-  return {
+  const availability = {
     available: false,
     canWrite: false,
     hasTeamMembers: false,
     reason: entitlement.reason ?? 'lookup_failed',
   };
+  return entitlement.stale ? { ...availability, stale: true } : availability;
+}
+
+function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
+  availability: T,
+  entitlement: SharedTeamEntitlementState,
+): T {
+  return entitlement.stale && availability.stale !== true
+    ? { ...availability, stale: true }
+    : availability;
 }
 
 function refreshFieldTheorySyncServices(): void {
@@ -7756,8 +7766,8 @@ function setupLibrarianIPCHandlers(): void {
     const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
     if (localConflict) return localConflict;
 
-    refreshFieldTheorySyncServices();
     const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
     if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: 'error' };
 
     const result = await sharedSyncService.updateSharedContent(
@@ -8873,7 +8883,7 @@ function setupLibrarianIPCHandlers(): void {
     const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
     if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
-    return sharedSyncService.getAvailability();
+    return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
   });
 
   ipcMain.handle('sharedFiles:getStatus', async (_event, filePath: string) => {

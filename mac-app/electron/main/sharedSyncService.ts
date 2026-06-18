@@ -149,6 +149,7 @@ export interface SharedFilesAvailability {
   hasTeamMembers: boolean;
   reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
+  stale?: boolean;
 }
 
 interface TeamDocumentRow {

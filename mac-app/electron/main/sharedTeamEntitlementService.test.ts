@@ -103,6 +103,39 @@ describe('SharedTeamEntitlementService', () => {
     });
   });
 
+  it('keeps synchronous cached snapshots fail-closed until an async entitlement read succeeds', async () => {
+    const service = new SharedTeamEntitlementService(makeAuthManager({ enabled: true }).authManager, { cachePath });
+
+    expect(service.getCachedState()).toMatchObject({
+      allowed: false,
+      reason: 'lookup_failed',
+      stale: false,
+      userId: 'user-1',
+    });
+
+    await expect(service.getState()).resolves.toMatchObject({ allowed: true, stale: false, userId: 'user-1' });
+    expect(service.getCachedState()).toMatchObject({ allowed: true, stale: false, userId: 'user-1' });
+  });
+
+  it('restores cached snapshots after an async offline lookup uses same-user allowed cache', async () => {
+    await expect(new SharedTeamEntitlementService(makeAuthManager({ enabled: true }).authManager, { cachePath }).getState())
+      .resolves.toMatchObject({ allowed: true, stale: false, userId: 'user-1' });
+
+    const offlineService = new SharedTeamEntitlementService(
+      makeAuthManager({ throws: new Error('network offline') }).authManager,
+      { cachePath },
+    );
+
+    expect(offlineService.getCachedState()).toMatchObject({
+      allowed: false,
+      reason: 'lookup_failed',
+      stale: false,
+      userId: 'user-1',
+    });
+    await expect(offlineService.getState()).resolves.toMatchObject({ allowed: true, stale: true, userId: 'user-1' });
+    expect(offlineService.getCachedState()).toMatchObject({ allowed: true, stale: true, userId: 'user-1' });
+  });
+
   it('does not use another user cache entry after sign-in changes', async () => {
     const service = new SharedTeamEntitlementService(makeAuthManager({ enabled: true, userId: 'user-1' }).authManager, { cachePath });
     await expect(service.getState()).resolves.toMatchObject({ allowed: true, userId: 'user-1' });
