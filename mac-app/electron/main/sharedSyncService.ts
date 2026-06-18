@@ -617,12 +617,13 @@ export class SharedSyncService extends EventEmitter {
   private async resolveShareRecipients(targets: SharedFileShareTarget[] | undefined): Promise<{ recipients: string[]; error?: string }> {
     const destinations = await this.getDestinations();
     const accepted = destinations.filter((destination) => destination.status === 'accepted');
+    const defaultDestination = accepted.find((destination) => destination.isDefault);
     const selectedTargets = targets?.length
       ? targets
-      : accepted.find((destination) => destination.isDefault)
-        ? [accepted.find((destination) => destination.isDefault)!]
+      : defaultDestination
+        ? [defaultDestination]
         : accepted.slice(0, 1);
-    if (!selectedTargets.length) return { recipients: [], error: 'Add an approved contact before sharing to River' };
+    if (!selectedTargets.length) return this.resolveLegacyTeamRecipients();
 
     const byId = new Map(accepted.map((destination) => [destination.id, destination]));
     const recipientIds = new Set<string>();
@@ -634,8 +635,12 @@ export class SharedSyncService extends EventEmitter {
       for (const recipientUserId of destination.recipientUserIds) recipientIds.add(recipientUserId);
     }
     if (recipientIds.size > 0) return { recipients: [...recipientIds] };
+    return this.resolveLegacyTeamRecipients();
+  }
 
+  private async resolveLegacyTeamRecipients(): Promise<{ recipients: string[]; error?: string }> {
     const teamState = await this.sharedTeamService.getTeamState();
+    const recipientIds = new Set<string>();
     if (teamState.available && !canWriteTeamDocuments(teamState)) {
       return { recipients: [], error: 'Accept the team invite before sharing to River' };
     }
