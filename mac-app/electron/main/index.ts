@@ -3394,6 +3394,12 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         return sharedSyncService.getShareStatus(filePath);
       },
+      getSharedFileDestinations: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getDestinations(query);
+      },
       shareSharedFile: async (input) => {
         if (!canWriteFieldTheoryContent()) return { shared: false };
         const entitlement = await getSharedFeatureEntitlement();
@@ -8891,6 +8897,13 @@ function setupLibrarianIPCHandlers(): void {
     refreshFieldTheorySyncServices();
     if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     return sharedSyncService.getShareStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getDestinations(query);
   });
 
   ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {

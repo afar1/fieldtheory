@@ -188,6 +188,7 @@ export type BrowserHelperNativeBridge = {
   rescanTaggedDocs?: () => unknown[] | Promise<unknown[]>;
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
+  getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
   shareSharedFile?: (input: unknown) => unknown | Promise<unknown>;
   unshareSharedFile?: (filePath: string) => boolean | Promise<boolean>;
   syncSharedFiles?: () => unknown | Promise<unknown>;
@@ -1273,6 +1274,13 @@ export class BrowserHelperServer {
         const filePath = String(parsed.searchParams.get('path') ?? '');
         const status = filePath ? await this.nativeBridge.getSharedFileStatus?.(filePath) ?? { shared: false } : { shared: false };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/destinations') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const destinations = await this.nativeBridge.getSharedFileDestinations?.(query) ?? [];
+        writeJson(res, 200, { ok: true, destinations }, req.headers.origin);
         return;
       }
 

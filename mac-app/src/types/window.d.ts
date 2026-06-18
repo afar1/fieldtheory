@@ -1935,11 +1935,30 @@ interface SharedFileStatus {
   error?: string;
 }
 
+type SharedFileDestinationKind = 'contact' | 'team';
+
+interface SharedFileShareTarget {
+  id: string;
+  kind: SharedFileDestinationKind;
+}
+
+interface SharedFileDestination {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
+}
+
 interface SharedFileShareInput {
   filePath: string;
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
 }
 
 interface SharedFileUpdateResult {
@@ -1976,6 +1995,7 @@ interface SharedFilePinResult {
 interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
+  getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
   share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
   unshare: (filePath: string) => Promise<boolean>;
   sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;

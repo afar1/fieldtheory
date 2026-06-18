@@ -21,35 +21,47 @@ describeSupabaseMigrations('Supabase River migrations', () => {
     expect(prefixes).toHaveLength(new Set(prefixes).size);
   });
 
-  it('puts River documents and shared pins in the realtime publication', () => {
-    const sql = migrationSql('018_team_document_pins.sql');
+  it('puts River documents, grants, and pins in the realtime publication', () => {
+    const sql = migrationSql('019_river_document_grants.sql');
 
-    expect(sql).toContain("tablename = 'team_documents'");
-    expect(sql).toContain('alter publication supabase_realtime add table public.team_documents');
-    expect(sql).toContain("tablename = 'team_document_pins'");
-    expect(sql).toContain('alter publication supabase_realtime add table public.team_document_pins');
+    expect(sql).toContain("tablename = 'river_documents'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_documents');
+    expect(sql).toContain("tablename = 'river_document_audience'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_document_audience');
+    expect(sql).toContain("tablename = 'river_document_pins'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_document_pins');
   });
 
-  it('stores River pins as one team-wide row per shared document', () => {
-    const sql = migrationSql('018_team_document_pins.sql');
+  it('stores River documents separately from recipient grants', () => {
+    const sql = migrationSql('019_river_document_grants.sql');
 
-    expect(sql).toContain('create table if not exists public.team_document_pins');
-    expect(sql).toContain('document_id uuid not null references public.team_documents (id) on delete cascade');
-    expect(sql).toContain('primary key (team_scope_user_id, document_id)');
+    expect(sql).toContain('create table if not exists public.river_documents');
+    expect(sql).toContain('constraint river_documents_created_client_unique unique (created_by, client_id)');
+    expect(sql).toContain('create table if not exists public.river_document_audience');
+    expect(sql).toContain('primary key (document_id, recipient_user_id, source_type, source_id)');
   });
 
-  it('keeps River pin reads broader than writes', () => {
-    const sql = migrationSql('018_team_document_pins.sql');
+  it('keeps author ownership separate from recipient grants', () => {
+    const sql = migrationSql('019_river_document_grants.sql');
 
-    expect(sql).toContain('using (public.is_team_document_scope_reader(team_scope_user_id))');
-    expect(sql).toContain('public.is_team_document_scope_participant(team_scope_user_id)');
-    expect(sql).toContain('and pinned_by = auth.uid()');
+    expect(sql).toMatch(/created_by = auth\.uid\(\)[\s\S]*river_document_audience/);
+    expect(sql).toContain('recipient_user_id = auth.uid()');
+    expect(sql).toContain('granted_by_user_id = auth.uid()');
   });
 
-  it('requires inserted and updated River pins to target undeleted documents in the same team scope', () => {
-    const sql = migrationSql('018_team_document_pins.sql');
+  it('stores River pins per user and only for visible documents', () => {
+    const sql = migrationSql('019_river_document_grants.sql');
 
-    expect(sql).toMatch(/for insert[\s\S]*d\.team_scope_user_id = team_document_pins\.team_scope_user_id[\s\S]*d\.deleted_at is null/);
-    expect(sql).toMatch(/for update[\s\S]*d\.team_scope_user_id = team_document_pins\.team_scope_user_id[\s\S]*d\.deleted_at is null/);
+    expect(sql).toContain('create table if not exists public.river_document_pins');
+    expect(sql).toContain('primary key (user_id, document_id)');
+    expect(sql).toMatch(/for all[\s\S]*user_id = auth\.uid\(\)[\s\S]*d\.deleted_at is null/);
+  });
+
+  it('backfills legacy team documents into River documents and audience grants', () => {
+    const sql = migrationSql('019_river_document_grants.sql');
+
+    expect(sql).toContain('from public.team_documents td');
+    expect(sql).toContain('from public.contacts c');
+    expect(sql).toContain('from public.team_document_pins');
   });
 });

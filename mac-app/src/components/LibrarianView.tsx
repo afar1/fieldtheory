@@ -238,6 +238,22 @@ interface SharedFileStatus {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
+}
+type SharedFileDestinationKind = 'contact' | 'team';
+interface SharedFileShareTarget {
+  id: string;
+  kind: SharedFileDestinationKind;
+}
+interface SharedFileDestination {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
 }
 interface SharedFilePresenceUser {
   userId: string;
@@ -3381,6 +3397,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
   const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
   const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [riverSharePickerOpen, setRiverSharePickerOpen] = useState(false);
+  const [riverDestinationQuery, setRiverDestinationQuery] = useState('');
+  const [riverDestinations, setRiverDestinations] = useState<SharedFileDestination[]>([]);
+  const [selectedRiverDestinationIds, setSelectedRiverDestinationIds] = useState<string[]>([]);
+  const [riverDestinationIndex, setRiverDestinationIndex] = useState(0);
+  const [riverDestinationsLoading, setRiverDestinationsLoading] = useState(false);
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
@@ -3430,6 +3452,37 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
     return () => window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
   }, []);
+
+  useEffect(() => {
+    if (!riverSharePickerOpen) return;
+    let cancelled = false;
+    setRiverDestinationsLoading(true);
+    void window.sharedFilesAPI?.getDestinations?.(riverDestinationQuery)
+      .then((destinations) => {
+        if (cancelled) return;
+        const nextDestinations = destinations ?? [];
+        setRiverDestinations(nextDestinations);
+        setRiverDestinationIndex(0);
+        setSelectedRiverDestinationIds((current) => {
+          if (current.length > 0 && current.every((id) => nextDestinations.some((destination) => destination.id === id && destination.status === 'accepted'))) {
+            return current;
+          }
+          const defaultDestination = nextDestinations.find((destination) => destination.status === 'accepted' && destination.isDefault)
+            ?? nextDestinations.find((destination) => destination.status === 'accepted');
+          return defaultDestination ? [defaultDestination.id] : [];
+        });
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River destination lookup failed:', error);
+        if (!cancelled) setRiverDestinations([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRiverDestinationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [riverDestinationQuery, riverSharePickerOpen]);
 
   // Narration state
   const [narrationStatus, setNarrationStatus] = useState<{
@@ -9315,38 +9368,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  const handleToggleSharedFile = useCallback(async () => {
+  const openRiverSharePicker = useCallback(() => {
+    setRiverDestinationQuery('');
+    setSelectedRiverDestinationIds([]);
+    setRiverDestinationIndex(0);
+    setRiverSharePickerOpen(true);
+  }, []);
+
+  const shareToRiverDestinations = useCallback(async (destinations: SharedFileShareTarget[]) => {
     if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
     if (!sharedFileStatus?.shared && !sharedFilesCanWrite) {
-      flashCopyFeedback('Accept team invite to share');
+      flashCopyFeedback('Add an approved contact to share');
       return;
     }
 
     setIsTogglingSharedFile(true);
     try {
       await flushCurrentEdit();
-      if (sharedFileStatus?.shared) {
-        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
-        if (success) {
-          setSharedFileStatus({ shared: false });
-          window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
-          flashCopyFeedback('Removed from River');
-        } else {
-          flashCopyFeedback('River remove failed');
-        }
-        return;
-      }
-
       const content = activeReadingContentRef.current ?? activeReading.content;
       const status = await window.sharedFilesAPI?.share({
         filePath: activeReadingPath,
         title: activeReading.title,
         content,
         type: inferSharedFileTypeForActiveReading(activeReadingPath),
+        destinations,
       });
       const nextStatus = status ?? { shared: false, error: 'River share failed' };
       setSharedFileStatus(nextStatus);
       if (nextStatus.shared) {
+        setRiverSharePickerOpen(false);
         window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
         flashCopyFeedback('Added to River');
       } else {
@@ -9359,6 +9409,33 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setIsTogglingSharedFile(false);
     }
   }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite]);
+
+  const handleToggleSharedFile = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+
+    if (!sharedFileStatus?.shared) {
+      openRiverSharePicker();
+      return;
+    }
+
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+      if (success) {
+        setSharedFileStatus({ shared: false });
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback('Removed from River');
+      } else {
+        flashCopyFeedback('River remove failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River remove error:', err);
+      flashCopyFeedback('River remove failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, openRiverSharePicker, sharedFileStatus?.shared, sharedFilesAvailable]);
 
   const toggleActiveHtmlLayout = useCallback(() => {
     if (!activeIsHtmlDocument || !activeReadingPath) return;
@@ -10991,6 +11068,218 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
+  const acceptedRiverDestinations = riverDestinations.filter((destination) => destination.status === 'accepted');
+  const highlightedRiverDestination = acceptedRiverDestinations[Math.min(riverDestinationIndex, Math.max(0, acceptedRiverDestinations.length - 1))] ?? null;
+  const selectedRiverDestinations = riverDestinations.filter((destination) => selectedRiverDestinationIds.includes(destination.id));
+  const selectedRiverAcceptedDestinations = selectedRiverDestinations.filter((destination) => destination.status === 'accepted');
+  const selectedRiverTargets: SharedFileShareTarget[] = selectedRiverAcceptedDestinations.map((destination) => ({
+    id: destination.id,
+    kind: destination.kind,
+  }));
+  const riverPrimaryLabel = selectedRiverAcceptedDestinations.length === 1
+    ? `Share to ${selectedRiverAcceptedDestinations[0]?.label ?? 'River'}`
+    : selectedRiverAcceptedDestinations.length > 1
+      ? `Share to ${selectedRiverAcceptedDestinations.length} contacts`
+      : 'Choose a destination';
+
+  const toggleRiverDestination = (destination: SharedFileDestination) => {
+    if (destination.status !== 'accepted') return;
+    setSelectedRiverDestinationIds((current) => {
+      if (destination.kind === 'team') return current.includes(destination.id) ? [] : [destination.id];
+      const withoutTeams = current.filter((id) => !riverDestinations.some((candidate) => candidate.id === id && candidate.kind === 'team'));
+      return withoutTeams.includes(destination.id)
+        ? withoutTeams.filter((id) => id !== destination.id)
+        : [...withoutTeams, destination.id];
+    });
+  };
+
+  const confirmRiverShare = () => {
+    if (selectedRiverTargets.length === 0) return;
+    void shareToRiverDestinations(selectedRiverTargets);
+  };
+
+  const riverSharePicker = riverSharePickerOpen ? (
+    <div
+      role="dialog"
+      aria-label="Share to River"
+      aria-modal="true"
+      onMouseDown={() => setRiverSharePickerOpen(false)}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.46)' : 'rgba(15,23,42,0.18)',
+      }}
+    >
+      <div
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(460px, 100%)',
+          maxHeight: 'min(560px, calc(100vh - 40px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: theme.text, fontSize: '15px', fontWeight: 650 }}>Share to River</div>
+            <div style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeReading?.title ?? 'Selected document'}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setRiverSharePickerOpen(false)}
+            style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <input
+          autoFocus
+          value={riverDestinationQuery}
+          onChange={(event) => setRiverDestinationQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              setRiverDestinationIndex((index) => Math.min(index + 1, Math.max(0, acceptedRiverDestinations.length - 1)));
+              return;
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault();
+              setRiverDestinationIndex((index) => Math.max(0, index - 1));
+              return;
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              if (riverDestinationQuery.trim() && highlightedRiverDestination) {
+                toggleRiverDestination(highlightedRiverDestination);
+                return;
+              }
+              confirmRiverShare();
+              return;
+            }
+            if (event.key === 'Escape') setRiverSharePickerOpen(false);
+          }}
+          placeholder="Search contacts or teams"
+          style={{
+            height: '34px',
+            borderRadius: '6px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.bg,
+            color: theme.text,
+            padding: '0 10px',
+            fontSize: '13px',
+            outline: 'none',
+          }}
+        />
+        <div
+          role="listbox"
+          aria-label="River destinations"
+          style={{
+            minHeight: '96px',
+            maxHeight: '280px',
+            overflowY: 'auto',
+            borderRadius: '6px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.surface2 ?? theme.bg,
+            padding: '4px',
+          }}
+        >
+          {riverDestinationsLoading && (
+            <div style={{ padding: '14px', color: theme.textSecondary, fontSize: '12px' }}>Loading destinations...</div>
+          )}
+          {!riverDestinationsLoading && riverDestinations.length === 0 && (
+            <div style={{ padding: '14px', color: theme.textSecondary, fontSize: '12px' }}>No approved contacts yet.</div>
+          )}
+          {!riverDestinationsLoading && riverDestinations.map((destination) => {
+            const selected = selectedRiverDestinationIds.includes(destination.id);
+            const disabled = destination.status !== 'accepted';
+            const highlighted = highlightedRiverDestination?.id === destination.id;
+            return (
+              <button
+                key={destination.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                disabled={disabled}
+                onClick={() => toggleRiverDestination(destination)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  minHeight: '42px',
+                  padding: '7px 8px',
+                  border: 'none',
+                  borderRadius: '5px',
+                  textAlign: 'left',
+                  backgroundColor: selected
+                    ? (theme.isDark ? 'rgba(96,165,250,0.22)' : 'rgba(37,99,235,0.12)')
+                    : highlighted
+                      ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+                      : 'transparent',
+                  color: disabled ? theme.textSecondary : theme.text,
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.62 : 1,
+                }}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {destination.label}
+                  </span>
+                  <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {destination.status === 'pending' ? 'Invite pending' : destination.kind === 'team' ? destination.detail ?? 'Team' : destination.detail ?? 'Contact'}
+                  </span>
+                </span>
+                <span style={{ flexShrink: 0, color: selected ? theme.accent : theme.textSecondary, fontSize: '12px' }}>
+                  {selected ? 'Selected' : destination.kind === 'team' ? 'Team' : 'Contact'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          disabled={selectedRiverTargets.length === 0 || isTogglingSharedFile}
+          onClick={confirmRiverShare}
+          style={{
+            height: '34px',
+            borderRadius: '6px',
+            border: `1px solid ${selectedRiverTargets.length === 0 ? theme.border : theme.accent}`,
+            backgroundColor: selectedRiverTargets.length === 0 ? (theme.surface2 ?? theme.bg) : theme.accent,
+            color: selectedRiverTargets.length === 0 ? theme.textSecondary : '#fff',
+            cursor: selectedRiverTargets.length === 0 || isTogglingSharedFile ? 'not-allowed' : 'pointer',
+            fontSize: '13px',
+            fontWeight: 650,
+          }}
+        >
+          {isTogglingSharedFile ? 'Sharing...' : riverPrimaryLabel}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -11014,6 +11303,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     >
       <ScrollDiagnosticsHUD />
       {readerStatusFeedback}
+      {riverSharePicker}
       {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
         <div
           aria-hidden="true"

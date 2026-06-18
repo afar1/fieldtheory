@@ -4146,6 +4146,25 @@ type SharedFileStatus = {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
+};
+
+type SharedFileDestinationKind = 'contact' | 'team';
+
+type SharedFileShareTarget = {
+  id: string;
+  kind: SharedFileDestinationKind;
+};
+
+type SharedFileDestination = {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
 };
 
 type SharedFileShareInput = {
@@ -4153,6 +4172,7 @@ type SharedFileShareInput = {
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
 };
 
 type SharedFileUpdateResult = {
@@ -4191,6 +4211,8 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getAvailability'),
   getStatus: (filePath: string): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
+    ipcRenderer.invoke('sharedFiles:getDestinations', query),
   share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:share', input),
   unshare: (filePath: string): Promise<boolean> =>
