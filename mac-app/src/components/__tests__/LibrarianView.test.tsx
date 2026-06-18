@@ -2652,6 +2652,49 @@ describe('LibrarianView render', () => {
     expect(riverButton.style.borderStyle).toBe('none');
   });
 
+  it('shows the River button for entitled markdown documents before a writable destination exists', async () => {
+    const relPath = 'scratchpad/river-no-destination-toolbar-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'river-no-destination-toolbar-test',
+      title: 'river-no-destination-toolbar-test',
+      lastUpdated: 1,
+      content: 'River button body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'river-no-destination' },
+    };
+    const getDestinations = vi.fn(async () => []);
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: false, hasTeamMembers: false })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getDestinations,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('River button body');
+    const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
+
+    fireEvent.click(riverButton);
+
+    expect(await screen.findByRole('dialog', { name: 'Share to River' })).toBeTruthy();
+    expect(await screen.findByText('No approved contacts yet.')).toBeTruthy();
+    expect(getDestinations).toHaveBeenCalledWith('');
+  });
+
   it('keeps the Library document toolbar in Browser mode while excluding terminal controls', async () => {
     const relPath = 'scratchpad/browser-library-terminal-exclusion-test';
     const page: WikiPage = {
