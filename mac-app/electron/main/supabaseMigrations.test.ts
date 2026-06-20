@@ -64,4 +64,54 @@ describeSupabaseMigrations('Supabase River migrations', () => {
     expect(sql).toContain('from public.contacts c');
     expect(sql).toContain('from public.team_document_pins');
   });
+
+  it('adds River targets, defaults, source preferences, and invite preferences', () => {
+    const sql = migrationSql('020_river_timeline_targets.sql');
+
+    expect(sql).toContain('create table if not exists public.river_document_targets');
+    expect(sql).toContain("target_kind text not null check (target_kind = any (array['person'::text, 'group'::text, 'public'::text]))");
+    expect(sql).toContain("check (target_kind <> 'public' or target_id = 'public')");
+    expect(sql).toContain('create table if not exists public.river_default_destinations');
+    expect(sql).toContain('create table if not exists public.river_source_preferences');
+    expect(sql).toContain('create table if not exists public.river_invite_preferences');
+    expect(sql).toContain('create table if not exists public.river_share_group_invites');
+    expect(sql).toContain("status = any (array['pending'::text, 'accepted'::text, 'declined'::text, 'revoked'::text, 'left'::text])");
+    expect(sql).toContain('invited_email text');
+  });
+
+  it('uses security definer helpers for River target visibility policies', () => {
+    const sql = migrationSql('020_river_timeline_targets.sql');
+
+    expect(sql).toContain('create or replace function public.is_shared_team_beta_user');
+    expect(sql).toContain('security definer');
+    expect(sql).toContain('create or replace function public.river_document_visible_to_user');
+    expect(sql).toContain('create or replace function public.river_target_visible_to_user');
+    expect(sql).toContain('create or replace function public.river_group_owned_by_user');
+    expect(sql).toContain('create or replace function public.river_group_member_can_respond');
+    expect(sql).toContain('public.river_document_visible_to_user(river_documents.id, auth.uid())');
+  });
+
+  it('keeps private group access target-backed while preserving legacy grants', () => {
+    const sql = migrationSql('020_river_timeline_targets.sql');
+
+    expect(sql).toContain("or a.source_type = 'legacy_team'");
+    expect(sql).toContain('a.source_id = t.id::text');
+    expect(sql).toContain("t.target_kind = 'group'");
+    expect(sql).toContain('t.revoked_at is null');
+    expect(sql).toContain("source_type = 'legacy_team'");
+    expect(sql).toContain("target_kind = 'group'");
+  });
+
+  it('puts River target and group membership tables in realtime', () => {
+    const sql = migrationSql('020_river_timeline_targets.sql');
+
+    expect(sql).toContain("tablename = 'river_document_targets'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_document_targets');
+    expect(sql).toContain("tablename = 'river_share_group_members'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_share_group_members');
+    expect(sql).toContain("tablename = 'river_default_destinations'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_default_destinations');
+    expect(sql).toContain("tablename = 'river_source_preferences'");
+    expect(sql).toContain('alter publication supabase_realtime add table public.river_source_preferences');
+  });
 });
