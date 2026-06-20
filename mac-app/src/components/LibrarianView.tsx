@@ -8907,6 +8907,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetTitle = activeReading.title;
     const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = removeEmptyMarkdownCommentPlaceholders(editContent);
+    const previousSavedContent = lastSavedContentRef.current;
     const targetSharedFileStatus = sharedFileStatus;
     let done = false;
     const doSave = async () => {
@@ -8914,7 +8915,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       done = true;
       setSaveStatus('saving');
       try {
-        const portableContent = targetReadingPath
+        const portableContent = targetReadingPath && markdownPortableImagesChanged(previousSavedContent, targetContent)
           ? (await window.markdownImagesAPI?.makeImagesPortable(targetReadingPath, targetContent))?.content ?? targetContent
           : targetContent;
         let result: DocumentSaveResult | null | undefined;
