@@ -3728,7 +3728,7 @@ function WikiSidebar({
                   padding: 0,
                 }}
               >
-                <SidebarPeopleChipIcon color="currentColor" />
+                <SidebarRiverIcon color="currentColor" style={{ opacity: 0.72 }} />
               </button>
             )}
             onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
@@ -5383,31 +5383,6 @@ function SidebarRiverShareIndicator({
       }}
     >
       <SidebarRiverIcon color="currentColor" style={{ opacity: 0.58 }} />
-    </span>
-  );
-}
-
-function SidebarPeopleChipIcon({ color }: { color: string }) {
-  return (
-    <span
-      title="Shared River"
-      aria-label="Shared River"
-      style={{ color, opacity: 0.62, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-    >
-      <svg width="16" height="14" viewBox="0 0 18 16" fill="none" aria-hidden="true">
-        <path
-          d="M6.75 7.25a2.45 2.45 0 1 0 0-4.9 2.45 2.45 0 0 0 0 4.9zM2.55 13.15c.55-2.45 2.05-3.7 4.2-3.7s3.65 1.25 4.2 3.7"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-        <path
-          d="M11.6 7.05a2.05 2.05 0 1 0 0-4.1M12.85 9.55c1.35.35 2.25 1.45 2.6 3.25"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-      </svg>
     </span>
   );
 }

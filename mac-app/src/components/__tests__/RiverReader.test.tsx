@@ -41,6 +41,17 @@ const targets = [{
   status: 'accepted' as const,
   committable: true,
   recipientUserIds: ['user-2'],
+}, {
+  id: 'person:andrew',
+  kind: 'person' as const,
+  targetId: 'andrew',
+  label: 'Andrew Farah',
+  callsign: 'AMB-MAC',
+  initials: 'AF',
+  detail: 'AMB-MAC',
+  status: 'accepted' as const,
+  committable: true,
+  recipientUserIds: ['user-3'],
 }];
 
 afterEach(() => {
@@ -91,7 +102,7 @@ describe('RiverReader', () => {
     expect(screen.getByLabelText('River location').textContent).toContain('River');
   });
 
-  it('switches public tab and sends selected source filters', async () => {
+  it('switches public tab and sends private source filters', async () => {
     const getTimeline = vi.fn(async () => timelineItems);
     Object.defineProperty(window, 'sharedFilesAPI', {
       configurable: true,
@@ -104,14 +115,14 @@ describe('RiverReader', () => {
     render(<RiverReader />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit River sources' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Design' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Design/ }));
     await waitFor(() => {
-      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['group:design'], limit: 50 });
+      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['person:andrew'], limit: 50 });
     });
 
     fireEvent.click(screen.getByRole('tab', { name: 'Public' }));
     await waitFor(() => {
-      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'public', sourceIds: ['group:design'], limit: 50 });
+      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'public', sourceIds: [], limit: 50 });
     });
   });
 });

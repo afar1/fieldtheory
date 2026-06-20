@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { SidebarRiverIcon } from './SidebarIcons';
 
@@ -6,6 +6,17 @@ type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
 type RiverTimelineItem = Awaited<ReturnType<SharedFilesClient['getTimeline']>>[number];
 type RiverTimelineScope = Parameters<SharedFilesClient['getTimeline']>[0]['scope'];
 type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+type RiverReaderColors = {
+  bg: string;
+  body: string;
+  chrome: string;
+  faint: string;
+  line: string;
+  muted: string;
+  panel: string;
+  panelTint: string;
+  text: string;
+};
 
 interface RiverReaderProps {
   active?: boolean;
@@ -50,6 +61,12 @@ function targetFilterLabel(target: RiverTarget): string {
   return target.callsign ?? target.label;
 }
 
+function targetFilterDetail(target: RiverTarget): string | null {
+  if (target.kind === 'group') return target.detail ?? 'Group';
+  if (target.kind === 'person') return target.detail ?? target.callsign ?? null;
+  return target.detail ?? null;
+}
+
 function authorInitials(item: RiverTimelineItem): string {
   const raw = item.authorInitials || item.authorCallsign || 'R';
   const letters = raw.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase();
@@ -57,9 +74,38 @@ function authorInitials(item: RiverTimelineItem): string {
 }
 
 function authorLabel(item: RiverTimelineItem): string {
-  if (item.authorCallsign) return item.authorCallsign;
   if (item.authorInitials) return item.authorInitials;
+  if (item.authorCallsign) return item.authorCallsign;
   return 'River';
+}
+
+function shouldClampExcerpt(excerpt: string): boolean {
+  return excerpt.length > 190;
+}
+
+function riverActionStyle(color: string): CSSProperties {
+  return {
+    border: 'none',
+    background: 'transparent',
+    color,
+    cursor: 'pointer',
+    fontSize: '13px',
+    lineHeight: 1,
+    padding: 0,
+  };
+}
+
+function sourceAccent(target: RiverTarget, fallback: string): string {
+  if (target.tint) return target.tint;
+  if (target.kind === 'group') return '#79a585';
+  if (target.kind === 'person') return '#6f8fb0';
+  return fallback;
+}
+
+function sourceInitials(target: RiverTarget): string {
+  const raw = target.initials || target.callsign || target.label || '?';
+  const letters = raw.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase();
+  return letters || '?';
 }
 
 function RiverNavigationButton({
@@ -108,6 +154,194 @@ function RiverNavigationButton({
   );
 }
 
+function BookmarkActionIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} aria-hidden="true">
+      <path
+        d="M4.25 2.75h7.5v10.5L8 10.9l-3.75 2.35V2.75z"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RiverSourceRow({
+  accent,
+  colors,
+  included,
+  isDark,
+  target,
+  onToggle,
+}: {
+  accent: string;
+  colors: RiverReaderColors;
+  included: boolean;
+  isDark: boolean;
+  target: RiverTarget;
+  onToggle: (targetId: string) => void;
+}) {
+  const isPerson = target.kind === 'person';
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(target.id)}
+      style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        border: 'none',
+        borderRadius: '7px',
+        backgroundColor: 'transparent',
+        color: included ? colors.text : colors.faint,
+        cursor: 'pointer',
+        opacity: included ? 1 : 0.48,
+        padding: isPerson ? '6px 8px' : '7px 8px',
+        textAlign: 'left',
+      }}
+    >
+      {isPerson ? (
+        <span
+          aria-hidden="true"
+          style={{
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            backgroundColor: included ? '#e9e5f2' : '#efeee8',
+            color: included ? '#5a4b86' : colors.faint,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '9.5px',
+            fontWeight: 700,
+            flex: '0 0 auto',
+          }}
+        >
+          {sourceInitials(target)}
+        </span>
+      ) : (
+        <span
+          aria-hidden="true"
+          style={{
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            backgroundColor: included ? sourceAccent(target, accent) : 'transparent',
+            border: included ? 'none' : `1.5px solid ${colors.faint}`,
+            flex: '0 0 auto',
+          }}
+        />
+      )}
+      <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13.5px' }}>
+        {isPerson ? (target.label || target.callsign || 'River contact') : targetFilterLabel(target)}
+      </span>
+      {isPerson && target.callsign ? (
+        <span style={{
+          borderRadius: '4px',
+          backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : '#ece9e2',
+          color: included ? (isDark ? 'rgba(255,255,255,0.66)' : '#79766d') : colors.faint,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          fontSize: '9.5px',
+          padding: '1px 6px',
+          flex: '0 0 auto',
+        }}>
+          {target.callsign}
+        </span>
+      ) : targetFilterDetail(target) ? (
+        <span style={{ color: included ? colors.muted : colors.faint, fontSize: '11px', flex: '0 0 auto' }}>
+          {targetFilterDetail(target)}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function RiverSourceRail({
+  accent,
+  activeSourceSet,
+  colors,
+  groups,
+  isDark,
+  people,
+  onClose,
+  onToggleSource,
+}: {
+  accent: string;
+  activeSourceSet: ReadonlySet<string>;
+  colors: RiverReaderColors;
+  groups: RiverTarget[];
+  isDark: boolean;
+  people: RiverTarget[];
+  onClose: () => void;
+  onToggleSource: (targetId: string) => void;
+}) {
+  const sections = [
+    ['GROUPS', groups],
+    ['PEOPLE', people],
+  ] as const;
+
+  return (
+    <aside
+      aria-label="River source filters"
+      style={{
+        position: 'sticky',
+        top: '8px',
+        borderLeft: `1px solid ${colors.line}`,
+        backgroundColor: colors.panelTint,
+        padding: '28px 0 28px 18px',
+        minHeight: '420px',
+        width: 'min(100%, 260px)',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px' }}>
+        <div style={{ fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif', fontSize: '15px', color: colors.body }}>
+          Showing
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            border: 'none',
+            backgroundColor: 'transparent',
+            color: accent,
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 650,
+            padding: 0,
+          }}
+        >
+          Done
+        </button>
+      </div>
+      <div style={{ color: colors.muted, fontSize: '12px', lineHeight: 1.45, marginBottom: '14px' }}>
+        Click a source to include or hide it from your private River.
+      </div>
+
+      {sections.map(([label, sectionTargets]) => sectionTargets.length > 0 && (
+        <div key={label} style={{ marginTop: label === 'PEOPLE' ? '15px' : 0 }}>
+          <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '10px', letterSpacing: '0.12em', color: colors.muted, padding: '0 0 7px' }}>
+            {label}
+          </div>
+          {sectionTargets.map((target) => (
+            <RiverSourceRow
+              key={target.id}
+              accent={accent}
+              colors={colors}
+              included={activeSourceSet.has(target.id)}
+              isDark={isDark}
+              target={target}
+              onToggle={onToggleSource}
+            />
+          ))}
+        </div>
+      ))}
+    </aside>
+  );
+}
+
 export default function RiverReader({
   active = true,
   canNavigateBack = false,
@@ -123,13 +357,53 @@ export default function RiverReader({
   const [targets, setTargets] = useState<RiverTarget[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedSourceSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
   const sourceTargets = useMemo(() => (
     targets.filter((target) => target.status === 'accepted' && target.kind !== 'public')
   ), [targets]);
+  const activeSourceIds = useMemo(() => (
+    selectedSourceIds.length === 0 ? sourceTargets.map((target) => target.id) : selectedSourceIds
+  ), [selectedSourceIds, sourceTargets]);
+  const activeSourceSet = useMemo(() => new Set(activeSourceIds), [activeSourceIds]);
+  const groupedSourceTargets = useMemo(() => ({
+    groups: sourceTargets.filter((target) => target.kind === 'group'),
+    people: sourceTargets.filter((target) => target.kind === 'person'),
+  }), [sourceTargets]);
+  const privateSourceSummary = useMemo(() => {
+    if (scope === 'public') return 'Public timeline';
+    if (sourceTargets.length === 0) return 'All private';
+    if (selectedSourceIds.length === 0) return `${items.length} documents · all private sources`;
+    return `${items.length} documents · ${selectedSourceIds.length} of ${sourceTargets.length} sources`;
+  }, [items.length, scope, selectedSourceIds.length, sourceTargets.length]);
+  const timelineSourceIds = useMemo(() => (
+    scope === 'private' ? selectedSourceIds : []
+  ), [scope, selectedSourceIds]);
+  const riverColors = theme.isDark
+    ? {
+      bg: theme.bg,
+      body: theme.textSecondary,
+      chrome: theme.surface1 ?? theme.bg,
+      faint: theme.textSecondary,
+      line: theme.border,
+      muted: theme.textSecondary,
+      panel: theme.surface1 ?? theme.bg,
+      panelTint: 'rgba(255,255,255,0.04)',
+      text: theme.text,
+    }
+    : {
+      bg: '#faf9f6',
+      body: '#4a4842',
+      chrome: '#f3f1ea',
+      faint: '#b4b1a8',
+      line: '#eceae3',
+      muted: '#8c897f',
+      panel: '#fbfbfa',
+      panelTint: '#f6f4ee',
+      text: '#1d1c1a',
+    };
 
   useEffect(() => {
     if (!active) return;
@@ -137,7 +411,7 @@ export default function RiverReader({
     setLoading(true);
     setError(null);
     void Promise.all([
-      window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: selectedSourceIds, limit: 50 }) ?? Promise.resolve([]),
+      window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: timelineSourceIds, limit: 50 }) ?? Promise.resolve([]),
       window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
     ])
       .then(([nextItems, nextTargets]) => {
@@ -158,13 +432,26 @@ export default function RiverReader({
     return () => {
       cancelled = true;
     };
-  }, [active, scope, selectedSourceIds]);
+  }, [active, scope, timelineSourceIds]);
 
   const toggleSource = (targetId: string) => {
-    setSelectedSourceIds((current) => (
-      current.includes(targetId)
-        ? current.filter((id) => id !== targetId)
-        : [...current, targetId]
+    const allSourceIds = sourceTargets.map((target) => target.id);
+    setSelectedSourceIds((current) => {
+      const next = (current.length === 0
+        ? allSourceIds.filter((id) => id !== targetId)
+        : current.includes(targetId)
+          ? current.filter((id) => id !== targetId)
+          : [...current, targetId]
+      ).filter((id, index, ids) => ids.indexOf(id) === index);
+      return next.length === 0 || next.length === allSourceIds.length ? [] : next;
+    });
+  };
+
+  const toggleExpanded = (documentId: string) => {
+    setExpandedItemIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
     ));
   };
 
@@ -207,8 +494,8 @@ export default function RiverReader({
         minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: theme.bg,
-        color: theme.text,
+        backgroundColor: riverColors.bg,
+        color: riverColors.text,
       }}
     >
       <div
@@ -218,7 +505,8 @@ export default function RiverReader({
           alignItems: 'center',
           gap: '10px',
           padding: '10px 30px 10px 44px',
-          borderBottom: `1px solid ${theme.border}`,
+          backgroundColor: riverColors.chrome,
+          borderBottom: `1px solid ${riverColors.line}`,
           flexShrink: 0,
         }}
       >
@@ -255,11 +543,11 @@ export default function RiverReader({
               gap: '6px',
               minWidth: 0,
               fontSize: '11px',
-              color: theme.textSecondary,
+              color: riverColors.muted,
               whiteSpace: 'nowrap',
             }}
           >
-            <span style={{ color: theme.text, fontWeight: 600 }}>River</span>
+            <span style={{ color: riverColors.text, fontWeight: 600 }}>River</span>
           </div>
         </div>
       </div>
@@ -268,23 +556,34 @@ export default function RiverReader({
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          padding: '24px 24px 36px',
+          padding: '40px 24px 52px',
         }}
       >
-        <div style={{ width: 'min(100%, 620px)', margin: '0 auto', position: 'relative' }}>
+        <div
+          style={{
+            width: 'min(100%, 880px)',
+            margin: '0 auto',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '30px',
+            justifyContent: 'center',
+            alignItems: 'start',
+          }}
+        >
+          <section style={{ width: 'min(100%, 560px)', minWidth: 0, position: 'relative' }}>
           <button
             type="button"
             aria-label="Edit River sources"
             onClick={() => setFiltersOpen((current) => !current)}
             style={{
               position: 'absolute',
-              top: '2px',
+              top: '8px',
               right: 0,
-              width: '30px',
-              height: '30px',
-              borderRadius: '8px',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: theme.surface1 ?? theme.bg,
+              width: '34px',
+              height: '34px',
+              borderRadius: '10px',
+              border: `1px solid ${riverColors.line}`,
+              backgroundColor: riverColors.panel,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -293,22 +592,19 @@ export default function RiverReader({
             }}
           >
             <span style={{ display: 'flex', alignItems: 'center' }}>
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#cdbce0', border: `1.5px solid ${theme.surface1 ?? theme.bg}` }} />
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#bcd0d8', border: `1.5px solid ${theme.surface1 ?? theme.bg}`, marginLeft: '-5px' }} />
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#c9d6c4', border: `1.5px solid ${theme.surface1 ?? theme.bg}`, marginLeft: '-5px' }} />
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#cdbce0', border: `1.5px solid ${riverColors.panel}` }} />
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#bcd0d8', border: `1.5px solid ${riverColors.panel}`, marginLeft: '-5px' }} />
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#c9d6c4', border: `1.5px solid ${riverColors.panel}`, marginLeft: '-5px' }} />
             </span>
           </button>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: theme.accent, marginBottom: '6px' }}>
-            <SidebarRiverIcon color={theme.accent} />
-          </div>
           <h1
             style={{
               margin: 0,
               textAlign: 'center',
               fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
-              fontSize: '29px',
-              lineHeight: 1.12,
+              fontSize: '46px',
+              lineHeight: 1.04,
               fontWeight: 500,
             }}
           >
@@ -321,9 +617,9 @@ export default function RiverReader({
             style={{
               display: 'flex',
               justifyContent: 'center',
-              gap: '24px',
-              marginTop: '14px',
-              borderBottom: `1px solid ${theme.border}`,
+              gap: '26px',
+              marginTop: '22px',
+              borderBottom: `1px solid ${riverColors.line}`,
             }}
           >
             {([
@@ -342,7 +638,7 @@ export default function RiverReader({
                     border: 'none',
                     borderBottom: `2px solid ${selected ? theme.accent : 'transparent'}`,
                     backgroundColor: 'transparent',
-                    color: selected ? theme.text : theme.textSecondary,
+                    color: selected ? riverColors.text : riverColors.muted,
                     cursor: 'pointer',
                     fontSize: '13.5px',
                     fontWeight: 650,
@@ -354,93 +650,19 @@ export default function RiverReader({
                 </button>
               );
             })}
-            <button
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-disabled="true"
-              disabled
-              style={{
-                border: 'none',
-                borderBottom: '2px solid transparent',
-                backgroundColor: 'transparent',
-                color: theme.textSecondary,
-                opacity: 0.42,
-                cursor: 'not-allowed',
-                fontSize: '13.5px',
-                fontWeight: 650,
-                padding: '0 0 10px',
-              }}
-            >
-              For You
-            </button>
           </div>
 
-          {scope === 'private' && sourceTargets.length > 0 && filtersOpen && (
-            <div
-              aria-label="River source filters"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '7px',
-                padding: '14px 0 0',
-                overflowX: 'auto',
-              }}
-            >
-              <button
-                type="button"
-                aria-pressed={selectedSourceIds.length === 0}
-                onClick={() => setSelectedSourceIds([])}
-                style={{
-                  height: '29px',
-                  padding: '0 11px',
-                  borderRadius: '999px',
-                  border: `1px solid ${selectedSourceIds.length === 0 ? theme.accent : theme.border}`,
-                  backgroundColor: selectedSourceIds.length === 0 ? (theme.surface1 ?? theme.bg) : 'transparent',
-                  color: selectedSourceIds.length === 0 ? theme.text : theme.textSecondary,
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: 650,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                All private
-              </button>
-              {sourceTargets.map((target) => {
-                const selected = selectedSourceSet.has(target.id);
-                return (
-                  <button
-                    key={target.id}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => toggleSource(target.id)}
-                    style={{
-                      height: '29px',
-                      padding: '0 11px',
-                      borderRadius: '999px',
-                      border: `1px solid ${selected ? theme.accent : theme.border}`,
-                      backgroundColor: selected ? (theme.surface1 ?? theme.bg) : 'transparent',
-                      color: selected ? theme.text : theme.textSecondary,
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      fontWeight: 650,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {targetFilterLabel(target)}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div style={{ textAlign: 'center', color: riverColors.muted, fontSize: '12.5px', marginTop: '14px' }}>
+            {privateSourceSummary}
+          </div>
 
-          <div style={{ marginTop: '15px' }}>
+          <div style={{ marginTop: '18px' }}>
             {loading ? (
-              <div style={{ color: theme.textSecondary, fontSize: '13px', padding: '18px 0' }}>Loading River...</div>
+              <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>Loading River...</div>
             ) : error ? (
-              <div role="alert" style={{ color: theme.textSecondary, fontSize: '13px', padding: '18px 0' }}>{error}</div>
+              <div role="alert" style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>{error}</div>
             ) : items.length === 0 ? (
-              <div style={{ color: theme.textSecondary, fontSize: '13px', padding: '18px 0' }}>
+              <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
                 {scope === 'public' ? 'No public River items yet.' : 'No private River items yet.'}
               </div>
             ) : (
@@ -450,23 +672,23 @@ export default function RiverReader({
                     key={item.documentId}
                     style={{
                       display: 'flex',
-                      gap: '11px',
-                      padding: '18px 0',
-                      borderBottom: `1px solid ${theme.border}`,
+                      gap: '13px',
+                      padding: '28px 0',
+                      borderBottom: `1px solid ${riverColors.line}`,
                     }}
                   >
                     <div
                       aria-hidden="true"
                       style={{
-                        width: '32px',
-                        height: '32px',
+                        width: '34px',
+                        height: '34px',
                         borderRadius: '50%',
-                        backgroundColor: theme.surface2 ?? theme.bg,
-                        color: theme.textSecondary,
+                        backgroundColor: theme.isDark ? (theme.surface2 ?? theme.bg) : '#e9e5f2',
+                        color: theme.isDark ? theme.textSecondary : '#5a4b86',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '10px',
+                        fontSize: '10.5px',
                         fontWeight: 700,
                         flex: '0 0 auto',
                       }}
@@ -477,7 +699,7 @@ export default function RiverReader({
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
-                            <span style={{ fontSize: '13px', fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{authorLabel(item)}</span>
+                            <span style={{ fontSize: '14px', fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{authorLabel(item)}</span>
                             {item.authorCallsign && (
                               <span
                                 style={{
@@ -494,17 +716,18 @@ export default function RiverReader({
                               </span>
                             )}
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: theme.textSecondary, fontSize: '12px', marginTop: '3px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: riverColors.muted, fontSize: '12.5px', marginTop: '4px' }}>
                             <span aria-hidden="true" style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: sourceDotColor(item, theme.accent), flex: '0 0 auto' }} />
                             <span>{sourceLabel(item)} · {formatRiverTime(item.sharedAt)}</span>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: theme.textSecondary, fontSize: '12px', flex: '0 0 auto' }}>
-                          <button type="button" aria-label={`Copy ${item.title}`} onClick={() => void copyItem(item)} style={{ border: 'none', background: 'transparent', color: theme.textSecondary, cursor: 'pointer', fontSize: '12px', padding: 0 }}>Copy</button>
-                          <button type="button" aria-label={`Open ${item.title}`} disabled={!item.cachePath} onClick={() => onOpenItem?.(item)} style={{ border: 'none', background: 'transparent', color: theme.textSecondary, cursor: item.cachePath ? 'pointer' : 'not-allowed', fontSize: '12px', padding: 0 }}>Open</button>
-                          <button type="button" aria-label={`${item.pinned ? 'Remove bookmark for' : 'Bookmark'} ${item.title}`} disabled={!item.cachePath} onClick={() => void pinItem(item)} style={{ border: 'none', background: 'transparent', color: item.pinned ? theme.accent : theme.textSecondary, cursor: item.cachePath ? 'pointer' : 'not-allowed', fontSize: '12px', padding: 0 }}>
-                            {item.pinned ? 'Bookmarked' : 'Bookmark'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: riverColors.muted, fontSize: '12px', flex: '0 0 auto' }}>
+                          <button type="button" title="Copy" aria-label={`Copy ${item.title}`} onClick={() => void copyItem(item)} style={riverActionStyle(riverColors.muted)}>⧉</button>
+                          <button type="button" title="Open" aria-label={`Open ${item.title}`} disabled={!item.cachePath} onClick={() => onOpenItem?.(item)} style={{ ...riverActionStyle(riverColors.muted), cursor: item.cachePath ? 'pointer' : 'not-allowed', opacity: item.cachePath ? 1 : 0.42 }}>↗</button>
+                          <button type="button" aria-label={`${item.pinned ? 'Remove bookmark for' : 'Bookmark'} ${item.title}`} disabled={!item.cachePath} onClick={() => void pinItem(item)} style={{ border: 'none', background: 'transparent', color: item.pinned ? theme.accent : riverColors.muted, cursor: item.cachePath ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                            <BookmarkActionIcon filled={Boolean(item.pinned)} />
                           </button>
+                          <span aria-hidden="true" style={{ color: theme.accent, display: 'inline-flex' }}><SidebarRiverIcon color={theme.accent} style={{ opacity: 0.7 }} /></span>
                         </div>
                       </div>
                       <button
@@ -513,11 +736,11 @@ export default function RiverReader({
                         style={{
                           display: 'block',
                           width: '100%',
-                          marginTop: '10px',
+                          marginTop: '12px',
                           padding: 0,
                           border: 'none',
                           background: 'transparent',
-                          color: theme.text,
+                          color: riverColors.text,
                           textAlign: 'left',
                           cursor: item.cachePath ? 'pointer' : 'default',
                         }}
@@ -525,23 +748,64 @@ export default function RiverReader({
                         <div
                           style={{
                             fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
-                            fontSize: '21px',
-                            lineHeight: 1.25,
+                            fontSize: '27px',
+                            lineHeight: 1.2,
                             fontWeight: 500,
                           }}
                         >
                           {item.title}
                         </div>
-                        <div style={{ marginTop: '6px', color: theme.textSecondary, fontSize: '13.5px', lineHeight: 1.62 }}>
+                        <div
+                          style={{
+                            marginTop: '8px',
+                            color: riverColors.body,
+                            fontSize: '15px',
+                            lineHeight: 1.65,
+                            display: expandedItemIds.includes(item.documentId) ? 'block' : '-webkit-box',
+                            WebkitLineClamp: expandedItemIds.includes(item.documentId) ? undefined : 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
                           {item.excerpt || 'No preview available.'}
                         </div>
                       </button>
+                      {shouldClampExcerpt(item.excerpt ?? '') && (
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(item.documentId)}
+                          style={{
+                            marginTop: '9px',
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.accent,
+                            cursor: 'pointer',
+                            fontSize: '12.5px',
+                            padding: 0,
+                          }}
+                        >
+                          {expandedItemIds.includes(item.documentId) ? 'Collapse ▴' : 'Show more ▾'}
+                        </button>
+                      )}
                     </div>
                   </article>
                 ))}
               </div>
             )}
           </div>
+          </section>
+          {filtersOpen && scope === 'private' && sourceTargets.length > 0 && (
+            <RiverSourceRail
+              accent={theme.accent}
+              activeSourceSet={activeSourceSet}
+              colors={riverColors}
+              groups={groupedSourceTargets.groups}
+              isDark={theme.isDark}
+              people={groupedSourceTargets.people}
+              onClose={() => setFiltersOpen(false)}
+              onToggleSource={toggleSource}
+            />
+          )}
         </div>
       </main>
     </div>
