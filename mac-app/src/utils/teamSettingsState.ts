@@ -103,7 +103,7 @@ export function buildTeamSettingsState(input: {
   return {
     loading,
     error: error ?? (teamState?.reason === 'ambiguous_team_scope'
-      ? 'Multiple teams are connected. River supports one team for v1.'
+      ? 'Multiple River contacts are connected. Use the River picker to choose who receives each file.'
       : null),
     currentUserRole: teamState?.available ? (teamState.isOwner ? 'owner' : 'member') : null,
     members: buildMembers(teamState, currentUser),

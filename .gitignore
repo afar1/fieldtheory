@@ -56,6 +56,8 @@ logs/
 tmp/
 temp/
 *.tmp
+supabase/.temp/
+supabase/supabase/
 
 # Signing and generated app assets
 *.jks

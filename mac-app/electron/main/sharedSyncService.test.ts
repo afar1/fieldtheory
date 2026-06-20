@@ -7,6 +7,63 @@ import { sharedFilesRoot } from './sharedFiles';
 import { SharedSyncService } from './sharedSyncService';
 import type { SharedTeamService } from './sharedTeamService';
 
+function makeTimelineRow(id: string, createdBy = 'user-1') {
+  return {
+    id,
+    title: `Title ${id}`,
+    shared_name: null,
+    content: `# Title ${id}\n\nBody`,
+    created_by: createdBy,
+    updated_at: '2026-01-02T00:00:00.000Z',
+    created_at: '2026-01-01T00:00:00.000Z',
+    author_initials: 'AF',
+    author_callsign: 'afar',
+  };
+}
+
+function makeTimelineSupabase(dataByTable: Record<string, unknown[]>) {
+  const operations: Array<{ table: string; op: string; args: unknown[] }> = [];
+  const supabase = {
+    from(table: string) {
+      const builder = {
+        select(...args: unknown[]) {
+          operations.push({ table, op: 'select', args });
+          return this;
+        },
+        eq(...args: unknown[]) {
+          operations.push({ table, op: 'eq', args });
+          return this;
+        },
+        is(...args: unknown[]) {
+          operations.push({ table, op: 'is', args });
+          return this;
+        },
+        order(...args: unknown[]) {
+          operations.push({ table, op: 'order', args });
+          return this;
+        },
+        in(...args: unknown[]) {
+          operations.push({ table, op: 'in', args });
+          return this;
+        },
+        or(...args: unknown[]) {
+          operations.push({ table, op: 'or', args });
+          return this;
+        },
+        limit(...args: unknown[]) {
+          operations.push({ table, op: 'limit', args });
+          return this;
+        },
+        then(resolve: (value: { data: unknown[]; error: null }) => void, reject?: (reason: unknown) => void) {
+          return Promise.resolve({ data: dataByTable[table] ?? [], error: null }).then(resolve, reject);
+        },
+      };
+      return builder;
+    },
+  };
+  return { supabase, operations };
+}
+
 describe('SharedSyncService cache behavior', () => {
   let tempRoot: string;
   let originalLibraryDir: string | undefined;
@@ -396,7 +453,9 @@ describe('SharedSyncService cache behavior', () => {
       content: 'Body\n',
       type: 'document',
     })).resolves.toEqual({ shared: false, error: 'Add an approved contact before sharing to River' });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('pulls River grant rows without requiring cached team scope when team lookup fails', async () => {
@@ -531,6 +590,10 @@ describe('SharedSyncService cache behavior', () => {
     await service.startRemoteChangeSync();
     expect(realtimeHandlers.river_documents).toEqual(expect.any(Function));
     expect(realtimeHandlers.river_document_audience).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_document_targets).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_share_group_members).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_default_destinations).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_source_preferences).toEqual(expect.any(Function));
     expect(realtimeHandlers.river_document_pins).toEqual(expect.any(Function));
     const handler = realtimeHandlers.river_documents as () => void;
     handler();
@@ -555,6 +618,44 @@ describe('SharedSyncService cache behavior', () => {
         schema: 'public',
         table: 'river_document_audience',
         filter: 'recipient_user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_document_targets',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_share_group_members',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_default_destinations',
+        filter: 'user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_source_preferences',
+        filter: 'user_id=eq.user-1',
       },
       expect.any(Function),
     );
@@ -1131,7 +1232,9 @@ describe('SharedSyncService cache behavior', () => {
       content: 'Body\n',
       type: 'document',
     })).resolves.toEqual({ shared: false, error: 'Add an approved contact before sharing to River' });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('creates River document rows and audience grants for resolved recipients', async () => {
@@ -1206,6 +1309,471 @@ describe('SharedSyncService cache behavior', () => {
     }]);
   });
 
+  it('creates River target rows and target-backed grants for Picker targets', async () => {
+    let documentRow: Record<string, unknown> | null = null;
+    let targetRows: Array<Record<string, unknown>> = [];
+    let audienceRows: Array<Record<string, unknown>> = [];
+    const supabase = {
+      from(table: string) {
+        if (table === 'river_document_targets') {
+          return {
+            upsert(rows: Array<Record<string, unknown>>) {
+              targetRows = rows;
+              return {
+                select: async () => ({
+                  data: rows.map((row, index) => ({
+                    id: `target-${index + 1}`,
+                    target_kind: row.target_kind,
+                    target_id: row.target_id,
+                  })),
+                  error: null,
+                }),
+              };
+            },
+          };
+        }
+        if (table === 'river_document_audience') {
+          return {
+            upsert(rows: Array<Record<string, unknown>>) {
+              audienceRows = rows;
+              return { error: null };
+            },
+          };
+        }
+        return {
+          upsert(row: Record<string, unknown>) {
+            documentRow = row;
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: {
+                        id: 'shared-1',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        ...row,
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const riverTargetService = {
+      resolveShareTargets: async () => ({
+        targets: [{
+          id: 'group:group-1',
+          kind: 'group',
+          targetId: 'group-1',
+          label: 'Design',
+          status: 'accepted',
+          committable: true,
+          recipientUserIds: ['user-2', 'user-3'],
+        }],
+        recipients: ['user-2', 'user-3'],
+      }),
+      listTargets: async () => [],
+    };
+
+    await expect(new SharedSyncService(
+      authManager,
+      {} as SharedTeamService,
+      riverTargetService as never,
+    ).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+      targets: [{ id: 'group:group-1', kind: 'group' }],
+    })).resolves.toMatchObject({ shared: true, sharedId: 'shared-1' });
+
+    expect(documentRow).toMatchObject({ created_by: 'user-1' });
+    expect(targetRows).toEqual([{
+      document_id: 'shared-1',
+      target_kind: 'group',
+      target_id: 'group-1',
+      created_by: 'user-1',
+      revoked_at: null,
+    }]);
+    expect(audienceRows).toEqual([
+      {
+        document_id: 'shared-1',
+        recipient_user_id: 'user-2',
+        granted_by_user_id: 'user-1',
+        source_type: 'group',
+        source_id: 'target-1',
+        revoked_at: null,
+      },
+      {
+        document_id: 'shared-1',
+        recipient_user_id: 'user-3',
+        granted_by_user_id: 'user-1',
+        source_type: 'group',
+        source_id: 'target-1',
+        revoked_at: null,
+      },
+    ]);
+  });
+
+  it('shares public River targets without fake recipient grants', async () => {
+    let targetRows: Array<Record<string, unknown>> = [];
+    let audienceWriteCount = 0;
+    const supabase = {
+      from(table: string) {
+        if (table === 'river_document_targets') {
+          return {
+            upsert(rows: Array<Record<string, unknown>>) {
+              targetRows = rows;
+              return {
+                select: async () => ({
+                  data: [{ id: 'target-public', target_kind: 'public', target_id: 'public' }],
+                  error: null,
+                }),
+              };
+            },
+          };
+        }
+        if (table === 'river_document_audience') {
+          return {
+            upsert() {
+              audienceWriteCount++;
+              return { error: null };
+            },
+          };
+        }
+        return {
+          upsert(row: Record<string, unknown>) {
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: {
+                        id: 'shared-1',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        ...row,
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const riverTargetService = {
+      resolveShareTargets: async () => ({
+        targets: [{
+          id: 'public:public',
+          kind: 'public',
+          targetId: 'public',
+          label: 'Public River',
+          status: 'accepted',
+          committable: true,
+          recipientUserIds: [],
+        }],
+        recipients: [],
+      }),
+      listTargets: async () => [],
+    };
+
+    await expect(new SharedSyncService(
+      authManager,
+      {} as SharedTeamService,
+      riverTargetService as never,
+    ).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+      targets: [{ id: 'public:public', kind: 'public' }],
+    })).resolves.toMatchObject({ shared: true, sharedId: 'shared-1' });
+
+    expect(targetRows).toEqual([{
+      document_id: 'shared-1',
+      target_kind: 'public',
+      target_id: 'public',
+      created_by: 'user-1',
+      revoked_at: null,
+    }]);
+    expect(audienceWriteCount).toBe(0);
+  });
+
+  it('returns current target audience for a shared cache file', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Plan AF.md');
+    fs.writeFileSync(cachePath, '---\nshared: true\nshared_id: "shared-1"\nshared_type: "document"\n---\n\nBody\n');
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        eq() { return this; },
+        async is() {
+          return {
+            data: [{ target_kind: 'group', target_id: 'group-1' }],
+            error: null,
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const riverTargetService = {
+      listTargets: async () => [{
+        id: 'group:group-1',
+        kind: 'group',
+        targetId: 'group-1',
+        label: 'Design',
+        status: 'accepted',
+        committable: true,
+        recipientUserIds: ['user-2'],
+      }],
+    };
+
+    await expect(new SharedSyncService(
+      authManager,
+      {} as SharedTeamService,
+      riverTargetService as never,
+    ).getAudienceStatus(cachePath)).resolves.toMatchObject({
+      shared: true,
+      sharedId: 'shared-1',
+      targets: [{ id: 'group:group-1', label: 'Design' }],
+    });
+  });
+
+  it('clears target audience without falling back to default destinations', async () => {
+    const updates: Array<{ table: string; field: string; value: unknown }> = [];
+    const supabase = {
+      from(table: string) {
+        if (table === 'river_document_targets') {
+          return {
+            select() {
+              return {
+                async eq(field: string, value: unknown) {
+                  expect(field).toBe('document_id');
+                  expect(value).toBe('shared-1');
+                  return {
+                    data: [{ id: 'target-1', target_kind: 'group', target_id: 'group-1' }],
+                    error: null,
+                  };
+                },
+              };
+            },
+            update() {
+              return {
+                async eq(field: string, value: unknown) {
+                  updates.push({ table, field, value });
+                  return { error: null };
+                },
+              };
+            },
+          };
+        }
+        if (table === 'river_document_audience') {
+          return {
+            update() {
+              return {
+                eq(field: string, value: unknown) {
+                  updates.push({ table, field, value });
+                  return this;
+                },
+              };
+            },
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const riverTargetService = {
+      resolveShareTargets: vi.fn(),
+      listTargets: async () => [],
+    };
+
+    await expect(new SharedSyncService(
+      authManager,
+      {} as SharedTeamService,
+      riverTargetService as never,
+    ).updateAudience({ sharedId: 'shared-1', targets: [] })).resolves.toMatchObject({
+      shared: true,
+      sharedId: 'shared-1',
+      targets: [],
+    });
+
+    expect(riverTargetService.resolveShareTargets).not.toHaveBeenCalled();
+    expect(updates).toEqual([
+      { table: 'river_document_targets', field: 'id', value: 'target-1' },
+      { table: 'river_document_audience', field: 'document_id', value: 'shared-1' },
+      { table: 'river_document_audience', field: 'source_id', value: 'target-1' },
+    ]);
+  });
+
+  it('builds timeline items from the local River cache when remote reads are unavailable', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Plan AF.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "document"',
+      'title: "Plan"',
+      'shared_author_initials: "AF"',
+      'shared_author_callsign: "afar"',
+      'shared_updated_at: "2026-01-02T00:00:00.000Z"',
+      '---',
+      '',
+      '# Plan',
+      '',
+      'Useful context for the team.',
+    ].join('\n'));
+    const authManager = {
+      getSupabaseClient: () => ({
+        from: () => {
+          throw new Error('offline');
+        },
+      }),
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toEqual([{
+      documentId: 'shared-1',
+      cachePath,
+      title: 'Plan',
+      excerpt: 'Plan Useful context for the team.',
+      content: '# Plan\n\nUseful context for the team.',
+      authorUserId: null,
+      authorCallsign: 'afar',
+      authorInitials: 'AF',
+      sourceLabel: null,
+      sourceKind: 'all',
+      sharedAt: '2026-01-02T00:00:00.000Z',
+      pinned: false,
+      public: false,
+    }]);
+  });
+
+  it('keeps private timeline reads scoped to owned and granted River documents', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_audience: [{ document_id: 'shared-granted' }],
+      river_documents: [
+        makeTimelineRow('shared-owned', 'user-1'),
+        makeTimelineRow('shared-granted', 'user-2'),
+      ],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toHaveLength(2);
+
+    expect(operations).toContainEqual({
+      table: 'river_document_audience',
+      op: 'eq',
+      args: ['recipient_user_id', 'user-1'],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'or',
+      args: ['created_by.eq.user-1,id.in.(shared-granted)'],
+    });
+    expect(operations.some((operation) => operation.table === 'river_document_targets')).toBe(false);
+  });
+
+  it('loads the public timeline only through active public River targets', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_targets: [
+        { document_id: 'public-doc', target_kind: 'public', target_id: 'public' },
+        { document_id: 'group-doc', target_kind: 'group', target_id: 'design' },
+      ],
+      river_documents: [makeTimelineRow('public-doc', 'user-2')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'public',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toMatchObject([{ documentId: 'public-doc', public: true }]);
+
+    expect(operations).toContainEqual({
+      table: 'river_document_targets',
+      op: 'is',
+      args: ['revoked_at', null],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'in',
+      args: ['id', ['public-doc']],
+    });
+    expect(operations.some((operation) => operation.table === 'river_document_audience')).toBe(false);
+  });
+
+  it('applies selected River source filters before reading private timeline documents', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_targets: [
+        { document_id: 'design-doc', target_kind: 'group', target_id: 'design' },
+        { document_id: 'other-doc', target_kind: 'group', target_id: 'ops' },
+      ],
+      river_document_audience: [{ document_id: 'design-doc' }],
+      river_documents: [makeTimelineRow('design-doc', 'user-2')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: ['group:design'],
+      limit: 10,
+    })).resolves.toMatchObject([{ documentId: 'design-doc', public: false }]);
+
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'in',
+      args: ['id', ['design-doc']],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'or',
+      args: ['created_by.eq.user-1,id.in.(design-doc)'],
+    });
+  });
+
   it('blocks pending invitees from sharing before hitting River RLS', async () => {
     const fromCalls: string[] = [];
     const supabase = {
@@ -1238,7 +1806,9 @@ describe('SharedSyncService cache behavior', () => {
       shared: false,
       error: 'Accept the team invite before sharing to River',
     });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('uploads only image assets referenced by the shared file content', async () => {
