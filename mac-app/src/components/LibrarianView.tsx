@@ -19,6 +19,7 @@ import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   EMBER_ITEM_ID,
+  RIVER_ITEM_ID,
   LOCAL_WIKI_ADDED_EVENT,
   LOCAL_WIKI_DELETED_EVENT,
   LOCAL_WIKI_RENAMED_EVENT,
@@ -32,6 +33,7 @@ import WikiSidebar, {
 } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
 import EmberPane from './EmberPane';
+import RiverReader from './RiverReader';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
 import {
@@ -225,7 +227,7 @@ type InlineDrawInsertion = {
   } | null;
 };
 
-export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external' | null;
 type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
 type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
 type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
@@ -3261,7 +3263,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ||
     selectedItemType === 'artifact' ||
     selectedItemType === 'external' ||
-    selectedItemType === 'bookmarks';
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'river';
   const selectedItemUsesLegacyImmersive = selectedItemType === null;
   const [isFullScreen, setIsFullScreen] = useState(() => (
     initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
@@ -4076,6 +4079,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => initialSelection?.type === 'bookmarks');
+  const [riverEverShown, setRiverEverShown] = useState<boolean>(false);
   const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
@@ -4529,10 +4533,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
       setBookmarksEverShown(true);
     }
+    if (selectedItemType === 'river' && !riverEverShown) {
+      setRiverEverShown(true);
+    }
     if (selectedItemType === 'ember' && !emberEverShown) {
       setEmberEverShown(true);
     }
-  }, [selectedItemType, bookmarksEverShown, emberEverShown]);
+  }, [selectedItemType, bookmarksEverShown, riverEverShown, emberEverShown]);
 
   useEffect(() => {
     onSelectedItemTypeChange?.(active ? selectedItemType : null);
@@ -9241,6 +9248,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
       setContentMode('rendered');
+    } else if (item.type === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (item.type === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -11423,6 +11437,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
+        {riverEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'river' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <RiverReader
+              active={active && selectedItemType === 'river'}
+              onOpenItem={(item) => {
+                if (!item.cachePath) {
+                  flashCopyFeedback('River item is not cached yet');
+                  return;
+                }
+                void selectExternalFile(item.cachePath);
+              }}
+              onActionFeedback={flashCopyFeedback}
+            />
+          </div>
+        )}
         {emberEverShown && (
           <div
             style={{
@@ -11440,7 +11477,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'river' && selectedItemType !== 'ember' && (
         <div
           data-ft-reader-editor-pane="true"
           style={{
