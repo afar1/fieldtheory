@@ -145,6 +145,30 @@ export interface SharedFileAudienceUpdateInput {
   targets: RiverShareTarget[];
 }
 
+export type RiverTimelineScope = 'private' | 'public';
+export type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
+
+export interface RiverTimelineQuery {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+}
+
+export interface RiverTimelineItem {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+}
+
 export interface SharedFileUpdateResult {
   ok: boolean;
   revision?: number;
@@ -387,6 +411,54 @@ export class SharedSyncService extends EventEmitter {
         },
         () => {
           void this.syncFromRemoteChange();
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_document_targets',
+        },
+        () => {
+          void this.syncFromRemoteChange();
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_share_group_members',
+        },
+        () => {
+          void this.syncFromRemoteChange();
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_default_destinations',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        () => {
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_source_preferences',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        () => {
+          this.emit('targetsChanged');
         },
       )
       .on(
@@ -934,6 +1006,31 @@ export class SharedSyncService extends EventEmitter {
     return { shared: true, sharedId, targets: resolved.targets };
   }
 
+  async getTimeline(query: RiverTimelineQuery): Promise<RiverTimelineItem[]> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!session?.user?.id) return [];
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 50)));
+
+    if (supabase) {
+      try {
+        const response = await supabase
+          .from('river_documents')
+          .select('id, title, shared_name, content, created_by, updated_at, created_at, author_initials, author_callsign')
+          .is('deleted_at', null)
+          .order('updated_at', { ascending: false })
+          .limit(limit);
+        if (!response.error && response.data) {
+          return ((response.data ?? []) as RiverDocumentRow[]).map((row) => this.timelineItemFromRow(row, query.scope));
+        }
+      } catch {
+        // Fall through to local cache while offline or while the remote schema is unavailable.
+      }
+    }
+
+    return this.timelineItemsFromCache(limit, query.scope);
+  }
+
   async unshareFile(filePath: string): Promise<boolean> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
@@ -1113,6 +1210,64 @@ export class SharedSyncService extends EventEmitter {
       existingFileNames: existingForOtherRows,
     });
     return path.join(root, fileName);
+  }
+
+  private timelineItemFromRow(row: RiverDocumentRow, scope: RiverTimelineScope): RiverTimelineItem {
+    return {
+      documentId: row.id,
+      cachePath: this.existingCachePathForRow(row.id) ?? undefined,
+      title: sharedRowTitle(row),
+      excerpt: this.excerptForContent(row.content),
+      authorCallsign: row.author_callsign ?? null,
+      authorInitials: row.author_initials ?? null,
+      sourceLabel: scope === 'public' ? 'Public River' : null,
+      sourceKind: scope === 'public' ? 'public' : row.created_by === this.authManager.getSession()?.user?.id ? 'mine' : 'all',
+      sharedAt: row.updated_at ?? row.created_at,
+      pinned: false,
+      public: scope === 'public',
+    };
+  }
+
+  private timelineItemsFromCache(limit: number, scope: RiverTimelineScope): RiverTimelineItem[] {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return [];
+    const items: RiverTimelineItem[] = [];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = parseSharedFileFrontmatter(content);
+        if (!parsed?.sharedId) continue;
+        items.push({
+          documentId: parsed.sharedId,
+          cachePath: filePath,
+          title: parsed.title?.trim() || path.basename(filePath, path.extname(filePath)),
+          excerpt: this.excerptForContent(content),
+          authorCallsign: parsed.authorCallsign ?? null,
+          authorInitials: parsed.authorInitials ?? null,
+          sourceLabel: parsed.teamName ?? null,
+          sourceKind: scope === 'public' ? 'public' : 'all',
+          sharedAt: parsed.updatedAt ?? new Date(fs.statSync(filePath).mtimeMs).toISOString(),
+          pinned: false,
+          public: scope === 'public',
+        });
+      } catch {
+        // Ignore unreadable cache files while building the timeline.
+      }
+    }
+    return items
+      .sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))
+      .slice(0, limit);
+  }
+
+  private excerptForContent(content: string): string {
+    return stripSharedFileFrontmatter(content)
+      .replace(/^---[\s\S]*?---\s*/, '')
+      .replace(/[#>*_`[\]()-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
   }
 
   private sharedIdForCacheFile(filePath: string): string | null {

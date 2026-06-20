@@ -533,6 +533,10 @@ describe('SharedSyncService cache behavior', () => {
     await service.startRemoteChangeSync();
     expect(realtimeHandlers.river_documents).toEqual(expect.any(Function));
     expect(realtimeHandlers.river_document_audience).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_document_targets).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_share_group_members).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_default_destinations).toEqual(expect.any(Function));
+    expect(realtimeHandlers.river_source_preferences).toEqual(expect.any(Function));
     expect(realtimeHandlers.river_document_pins).toEqual(expect.any(Function));
     const handler = realtimeHandlers.river_documents as () => void;
     handler();
@@ -557,6 +561,44 @@ describe('SharedSyncService cache behavior', () => {
         schema: 'public',
         table: 'river_document_audience',
         filter: 'recipient_user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_document_targets',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_share_group_members',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_default_destinations',
+        filter: 'user_id=eq.user-1',
+      },
+      expect.any(Function),
+    );
+    expect(channel.on).toHaveBeenCalledWith(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'river_source_preferences',
+        filter: 'user_id=eq.user-1',
       },
       expect.any(Function),
     );
@@ -1458,6 +1500,53 @@ describe('SharedSyncService cache behavior', () => {
       sharedId: 'shared-1',
       targets: [{ id: 'group:group-1', label: 'Design' }],
     });
+  });
+
+  it('builds timeline items from the local River cache when remote reads are unavailable', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = path.join(root, 'Plan AF.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "document"',
+      'title: "Plan"',
+      'shared_author_initials: "AF"',
+      'shared_author_callsign: "afar"',
+      'shared_updated_at: "2026-01-02T00:00:00.000Z"',
+      '---',
+      '',
+      '# Plan',
+      '',
+      'Useful context for the team.',
+    ].join('\n'));
+    const authManager = {
+      getSupabaseClient: () => ({
+        from: () => {
+          throw new Error('offline');
+        },
+      }),
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toEqual([{
+      documentId: 'shared-1',
+      cachePath,
+      title: 'Plan',
+      excerpt: 'Plan Useful context for the team.',
+      authorCallsign: 'afar',
+      authorInitials: 'AF',
+      sourceLabel: null,
+      sourceKind: 'all',
+      sharedAt: '2026-01-02T00:00:00.000Z',
+      pinned: false,
+      public: false,
+    }]);
   });
 
   it('blocks pending invitees from sharing before hitting River RLS', async () => {

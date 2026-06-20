@@ -1946,6 +1946,8 @@ type SharedFileDestinationKind = 'contact' | 'team';
 type RiverTargetKind = 'person' | 'group' | 'public';
 type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
 type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
 
 interface SharedFileShareTarget {
   id: string;
@@ -1992,6 +1994,27 @@ interface RiverSourcePreference {
 interface RiverMutationResult {
   ok: boolean;
   error?: string;
+}
+
+interface RiverTimelineQuery {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+}
+
+interface RiverTimelineItem {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
 }
 
 interface SharedFileDestination {
@@ -2055,6 +2078,7 @@ interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
   getAudience: (filePath: string) => Promise<SharedFileAudienceStatus>;
+  getTimeline: (query: RiverTimelineQuery) => Promise<RiverTimelineItem[]>;
   getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
   getTargets: (query?: string) => Promise<RiverTarget[]>;
   setDefaultDestinations: (destinations: RiverDefaultDestination[]) => Promise<RiverMutationResult>;

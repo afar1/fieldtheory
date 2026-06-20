@@ -189,6 +189,7 @@ export type BrowserHelperNativeBridge = {
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
   getSharedFileAudience?: (filePath: string) => unknown | Promise<unknown>;
+  getRiverTimeline?: (query: unknown) => unknown[] | Promise<unknown[]>;
   getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
   getRiverTargets?: (query?: string) => unknown[] | Promise<unknown[]>;
   setRiverDefaultDestinations?: (destinations: unknown[]) => unknown | Promise<unknown>;
@@ -1287,6 +1288,13 @@ export class BrowserHelperServer {
         const filePath = String(parsed.searchParams.get('path') ?? '');
         const audience = filePath ? await this.nativeBridge.getSharedFileAudience?.(filePath) ?? { shared: false, targets: [] } : { shared: false, targets: [] };
         writeJson(res, 200, { ok: true, audience }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/timeline') {
+        const query = await readJsonBody(req);
+        const items = await this.nativeBridge.getRiverTimeline?.(query) ?? [];
+        writeJson(res, 200, { ok: true, items }, req.headers.origin);
         return;
       }
 

@@ -4160,6 +4160,8 @@ type SharedFileDestinationKind = 'contact' | 'team';
 type RiverTargetKind = 'person' | 'group' | 'public';
 type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
 type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
 
 type SharedFileShareTarget = {
   id: string;
@@ -4206,6 +4208,27 @@ type RiverSourcePreference = {
 type RiverMutationResult = {
   ok: boolean;
   error?: string;
+};
+
+type RiverTimelineQuery = {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+};
+
+type RiverTimelineItem = {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
 };
 
 type SharedFileDestination = {
@@ -4272,6 +4295,8 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
   getAudience: (filePath: string): Promise<SharedFileAudienceStatus> =>
     ipcRenderer.invoke('sharedFiles:getAudience', filePath),
+  getTimeline: (query: RiverTimelineQuery): Promise<RiverTimelineItem[]> =>
+    ipcRenderer.invoke('sharedFiles:getTimeline', query),
   getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
     ipcRenderer.invoke('sharedFiles:getDestinations', query),
   getTargets: (query?: string): Promise<RiverTarget[]> =>

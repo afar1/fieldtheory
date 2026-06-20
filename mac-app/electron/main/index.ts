@@ -121,7 +121,7 @@ import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
-import { SharedSyncService, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
@@ -3399,6 +3399,12 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         refreshFieldTheorySyncServices();
         if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
         return sharedSyncService.getAudienceStatus(filePath);
+      },
+      getRiverTimeline: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getTimeline(query as RiverTimelineQuery);
       },
       getSharedFileDestinations: async (query) => {
         const entitlement = await getSharedFeatureEntitlement();
@@ -8945,6 +8951,13 @@ function setupLibrarianIPCHandlers(): void {
     refreshFieldTheorySyncServices();
     if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
     return sharedSyncService.getAudienceStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getTimeline', async (_event, query: RiverTimelineQuery) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getTimeline(query);
   });
 
   ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
