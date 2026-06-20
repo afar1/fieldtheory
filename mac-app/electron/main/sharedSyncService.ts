@@ -976,11 +976,15 @@ export class SharedSyncService extends EventEmitter {
       ?? (input.filePath ? (await this.getShareStatus(input.filePath)).sharedId : null);
     if (!sharedId) return { shared: false, targets: [], error: 'Shared file not found' };
 
-    const resolved = await this.riverTargetService.resolveShareTargets(input.targets);
+    const resolved = input.targets.length === 0
+      ? { targets: [], recipients: [] }
+      : await this.riverTargetService.resolveShareTargets(input.targets);
     if (resolved.error) return { shared: true, sharedId, targets: [], error: resolved.error };
 
-    const targetResult = await this.writeTargetAudience(sharedId, resolved);
-    if (!targetResult.ok) return { shared: true, sharedId, targets: [], error: targetResult.error };
+    if (resolved.targets.length > 0) {
+      const targetResult = await this.writeTargetAudience(sharedId, resolved);
+      if (!targetResult.ok) return { shared: true, sharedId, targets: [], error: targetResult.error };
+    }
 
     const selectedTargetIds = new Set(resolved.targets.map((target) => `${target.kind}:${target.targetId}`));
     const allRows = await supabase

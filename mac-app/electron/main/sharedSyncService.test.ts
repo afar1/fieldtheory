@@ -1502,6 +1502,76 @@ describe('SharedSyncService cache behavior', () => {
     });
   });
 
+  it('clears target audience without falling back to default destinations', async () => {
+    const updates: Array<{ table: string; field: string; value: unknown }> = [];
+    const supabase = {
+      from(table: string) {
+        if (table === 'river_document_targets') {
+          return {
+            select() {
+              return {
+                async eq(field: string, value: unknown) {
+                  expect(field).toBe('document_id');
+                  expect(value).toBe('shared-1');
+                  return {
+                    data: [{ id: 'target-1', target_kind: 'group', target_id: 'group-1' }],
+                    error: null,
+                  };
+                },
+              };
+            },
+            update() {
+              return {
+                async eq(field: string, value: unknown) {
+                  updates.push({ table, field, value });
+                  return { error: null };
+                },
+              };
+            },
+          };
+        }
+        if (table === 'river_document_audience') {
+          return {
+            update() {
+              return {
+                eq(field: string, value: unknown) {
+                  updates.push({ table, field, value });
+                  return this;
+                },
+              };
+            },
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const riverTargetService = {
+      resolveShareTargets: vi.fn(),
+      listTargets: async () => [],
+    };
+
+    await expect(new SharedSyncService(
+      authManager,
+      {} as SharedTeamService,
+      riverTargetService as never,
+    ).updateAudience({ sharedId: 'shared-1', targets: [] })).resolves.toMatchObject({
+      shared: true,
+      sharedId: 'shared-1',
+      targets: [],
+    });
+
+    expect(riverTargetService.resolveShareTargets).not.toHaveBeenCalled();
+    expect(updates).toEqual([
+      { table: 'river_document_targets', field: 'id', value: 'target-1' },
+      { table: 'river_document_audience', field: 'document_id', value: 'shared-1' },
+      { table: 'river_document_audience', field: 'source_id', value: 'target-1' },
+    ]);
+  });
+
   it('builds timeline items from the local River cache when remote reads are unavailable', async () => {
     const root = sharedFilesRoot();
     fs.mkdirSync(root, { recursive: true });
