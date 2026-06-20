@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.19': [
+    'River now has a polished full-page reader with an editorial timeline layout',
+    'River sources can be edited from the reader with quick group and contact filters',
+    'The River sidebar button now opens the reader with the updated reader-style icon',
+    'Fixed quitting Field Theory so Command-Q exits cleanly on the first attempt',
+  ],
   '0.3.18': [
     'River sharing now opens with the polished destination picker design',
     'The picker keeps your default River selected so Enter can share immediately',
@@ -450,6 +456,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.19': 'Jun 20 2026',
   '0.3.18': 'Jun 20 2026',
   '0.3.17': 'Jun 20 2026',
   '0.3.16': 'Jun 18 2026',
