@@ -396,7 +396,9 @@ describe('SharedSyncService cache behavior', () => {
       content: 'Body\n',
       type: 'document',
     })).resolves.toEqual({ shared: false, error: 'Add an approved contact before sharing to River' });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('pulls River grant rows without requiring cached team scope when team lookup fails', async () => {
@@ -1131,7 +1133,9 @@ describe('SharedSyncService cache behavior', () => {
       content: 'Body\n',
       type: 'document',
     })).resolves.toEqual({ shared: false, error: 'Add an approved contact before sharing to River' });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('creates River document rows and audience grants for resolved recipients', async () => {
@@ -1238,7 +1242,9 @@ describe('SharedSyncService cache behavior', () => {
       shared: false,
       error: 'Accept the team invite before sharing to River',
     });
-    expect(fromCalls).toEqual(['contacts']);
+    expect(fromCalls).toContain('contacts');
+    expect(fromCalls).not.toContain('river_documents');
+    expect(fromCalls).not.toContain('river_document_audience');
   });
 
   it('uploads only image assets referenced by the shared file content', async () => {

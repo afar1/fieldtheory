@@ -4150,10 +4150,55 @@ type SharedFileStatus = {
 };
 
 type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
 
 type SharedFileShareTarget = {
   id: string;
   kind: SharedFileDestinationKind;
+};
+
+type RiverShareTarget = {
+  id: string;
+  kind: RiverTargetKind;
+};
+
+type RiverTarget = {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+};
+
+type RiverDefaultDestination = {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+};
+
+type RiverSourcePreference = {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+};
+
+type RiverMutationResult = {
+  ok: boolean;
+  error?: string;
 };
 
 type SharedFileDestination = {
@@ -4173,6 +4218,7 @@ type SharedFileShareInput = {
   content: string;
   type?: SharedFileType;
   destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
 };
 
 type SharedFileUpdateResult = {
@@ -4213,6 +4259,14 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
   getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
     ipcRenderer.invoke('sharedFiles:getDestinations', query),
+  getTargets: (query?: string): Promise<RiverTarget[]> =>
+    ipcRenderer.invoke('sharedFiles:getTargets', query),
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:setDefaultDestinations', destinations),
+  getSourcePreferences: (): Promise<RiverSourcePreference[]> =>
+    ipcRenderer.invoke('sharedFiles:getSourcePreferences'),
+  updateSourcePreferences: (preferences: RiverSourcePreference[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:updateSourcePreferences', preferences),
   share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:share', input),
   unshare: (filePath: string): Promise<boolean> =>

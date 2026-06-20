@@ -1936,10 +1936,55 @@ interface SharedFileStatus {
 }
 
 type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
 
 interface SharedFileShareTarget {
   id: string;
   kind: SharedFileDestinationKind;
+}
+
+interface RiverShareTarget {
+  id: string;
+  kind: RiverTargetKind;
+}
+
+interface RiverTarget {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+}
+
+interface RiverDefaultDestination {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+}
+
+interface RiverSourcePreference {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+}
+
+interface RiverMutationResult {
+  ok: boolean;
+  error?: string;
 }
 
 interface SharedFileDestination {
@@ -1959,6 +2004,7 @@ interface SharedFileShareInput {
   content: string;
   type?: SharedFileType;
   destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
 }
 
 interface SharedFileUpdateResult {
@@ -1996,6 +2042,10 @@ interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
   getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
+  getTargets: (query?: string) => Promise<RiverTarget[]>;
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]) => Promise<RiverMutationResult>;
+  getSourcePreferences: () => Promise<RiverSourcePreference[]>;
+  updateSourcePreferences: (preferences: RiverSourcePreference[]) => Promise<RiverMutationResult>;
   share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
   unshare: (filePath: string) => Promise<boolean>;
   sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;

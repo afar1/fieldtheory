@@ -3400,6 +3400,32 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (!entitlement.allowed || !sharedSyncService) return [];
         return sharedSyncService.getDestinations(query);
       },
+      getRiverTargets: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverTargets(query);
+      },
+      setRiverDefaultDestinations: async (destinations) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+      },
+      getRiverSourcePreferences: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverSourcePreferences();
+      },
+      updateRiverSourcePreferences: async (preferences) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.updateRiverSourcePreferences(preferences as any);
+      },
       shareSharedFile: async (input) => {
         if (!canWriteFieldTheoryContent()) return { shared: false };
         const entitlement = await getSharedFeatureEntitlement();
@@ -8904,6 +8930,36 @@ function setupLibrarianIPCHandlers(): void {
     refreshFieldTheorySyncServices();
     if (!entitlement.allowed || !sharedSyncService) return [];
     return sharedSyncService.getDestinations(query);
+  });
+
+  ipcMain.handle('sharedFiles:getTargets', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverTargets(query);
+  });
+
+  ipcMain.handle('sharedFiles:setDefaultDestinations', async (_event, destinations: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+  });
+
+  ipcMain.handle('sharedFiles:getSourcePreferences', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverSourcePreferences();
+  });
+
+  ipcMain.handle('sharedFiles:updateSourcePreferences', async (_event, preferences: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.updateRiverSourcePreferences(preferences as any);
   });
 
   ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {

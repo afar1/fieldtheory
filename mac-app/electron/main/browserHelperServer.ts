@@ -189,6 +189,10 @@ export type BrowserHelperNativeBridge = {
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
   getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
+  getRiverTargets?: (query?: string) => unknown[] | Promise<unknown[]>;
+  setRiverDefaultDestinations?: (destinations: unknown[]) => unknown | Promise<unknown>;
+  getRiverSourcePreferences?: () => unknown[] | Promise<unknown[]>;
+  updateRiverSourcePreferences?: (preferences: unknown[]) => unknown | Promise<unknown>;
   shareSharedFile?: (input: unknown) => unknown | Promise<unknown>;
   unshareSharedFile?: (filePath: string) => boolean | Promise<boolean>;
   syncSharedFiles?: () => unknown | Promise<unknown>;
@@ -1281,6 +1285,33 @@ export class BrowserHelperServer {
         const query = String(parsed.searchParams.get('q') ?? '');
         const destinations = await this.nativeBridge.getSharedFileDestinations?.(query) ?? [];
         writeJson(res, 200, { ok: true, destinations }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/targets') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const targets = await this.nativeBridge.getRiverTargets?.(query) ?? [];
+        writeJson(res, 200, { ok: true, targets }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/default-destinations') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.setRiverDefaultDestinations?.(Array.isArray(body.destinations) ? body.destinations : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/source-preferences') {
+        const preferences = await this.nativeBridge.getRiverSourcePreferences?.() ?? [];
+        writeJson(res, 200, { ok: true, preferences }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/source-preferences') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.updateRiverSourcePreferences?.(Array.isArray(body.preferences) ? body.preferences : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 

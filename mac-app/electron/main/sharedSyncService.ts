@@ -7,6 +7,14 @@ import { libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
 import { SharedTeamService, type SharedTeamState } from './sharedTeamService';
 import {
+  RiverTargetService,
+  type RiverDefaultDestination,
+  type RiverMutationResult,
+  type RiverSourcePreference,
+  type RiverShareTarget,
+  type RiverTarget,
+} from './riverTargetService';
+import {
   applySharedFileFrontmatter,
   buildSharedCacheFileName,
   buildSharedConflictFileName,
@@ -54,10 +62,6 @@ function contentForSharedTransport(filePath: string, content: string): string {
 
 function safeTitleFromPath(filePath: string): string {
   return path.basename(filePath, path.extname(filePath)) || 'Untitled';
-}
-
-function normalizeEmail(email: string | null | undefined): string {
-  return (email ?? '').trim().toLowerCase();
 }
 
 function sharedRowTitle(row: Pick<RiverDocumentLike, 'shared_name' | 'title'>): string {
@@ -124,6 +128,7 @@ export interface SharedFileShareInput {
   content: string;
   type?: SharedFileType;
   destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
 }
 
 export interface SharedFileUpdateResult {
@@ -174,16 +179,6 @@ export interface SharedFileDestination {
   recipientUserIds: string[];
   memberCount?: number;
   isDefault?: boolean;
-}
-
-interface ContactRow {
-  id: string;
-  owner_user_id: string;
-  contact_email: string | null;
-  contact_user_id?: string | null;
-  relationship_type: string | null;
-  status: string | null;
-  created_at?: string | null;
 }
 
 interface TeamDocumentRow {
@@ -250,6 +245,7 @@ function canWriteTeamDocuments(teamState: SharedTeamState): boolean {
 export class SharedSyncService extends EventEmitter {
   private authManager: AuthManager;
   private sharedTeamService: SharedTeamService;
+  private riverTargetService: RiverTargetService;
   private presenceChannel: any | null = null;
   private activePresenceSharedId: string | null = null;
   private riverDocumentsChannel: any | null = null;
@@ -258,10 +254,15 @@ export class SharedSyncService extends EventEmitter {
   private remoteSyncQueued = false;
   private disposed = false;
 
-  constructor(authManager: AuthManager, sharedTeamService = new SharedTeamService(authManager)) {
+  constructor(
+    authManager: AuthManager,
+    sharedTeamService = new SharedTeamService(authManager),
+    riverTargetService = new RiverTargetService(authManager),
+  ) {
     super();
     this.authManager = authManager;
     this.sharedTeamService = sharedTeamService;
+    this.riverTargetService = riverTargetService;
   }
 
   async setActivePresence(sharedId: string | null): Promise<SharedFilePresenceUser[]> {
@@ -507,111 +508,40 @@ export class SharedSyncService extends EventEmitter {
   }
 
   async getDestinations(query = ''): Promise<SharedFileDestination[]> {
-    const supabase = this.authManager.getSupabaseClient();
-    const session = this.authManager.getSession();
-    const userId = session?.user?.id;
-    const userEmail = normalizeEmail(session?.user?.email);
-    if (!supabase || !userId) return [];
-
-    let rows: ContactRow[] = [];
-    try {
-      let { data, error } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('relationship_type', 'team')
-        .or(this.contactLookupFilter(userId, userEmail, true))
-        .order('created_at', { ascending: false });
-
-      if (error && this.isMissingContactUserIdError(error)) {
-        const fallback = await supabase
-          .from('contacts')
-          .select('*')
-          .eq('relationship_type', 'team')
-          .or(this.contactLookupFilter(userId, userEmail, false))
-          .order('created_at', { ascending: false });
-        data = fallback.data;
-        error = fallback.error;
-      }
-
-      if (error) {
-        log.warn('River destination lookup failed:', error);
-        return [];
-      }
-      rows = (data ?? []) as ContactRow[];
-    } catch (err) {
-      log.warn('River destination lookup failed:', err);
-      return [];
+    const targets = await this.riverTargetService.listTargets(query);
+    const destinations = targets
+      .filter((target) => target.kind !== 'public')
+      .map((target): SharedFileDestination => ({
+        id: target.kind === 'person' ? `contact:${target.targetId}` : `team:${target.targetId}`,
+        kind: target.kind === 'person' ? 'contact' : 'team',
+        label: target.label,
+        detail: target.detail,
+        status: target.status === 'accepted' ? 'accepted' : 'pending',
+        recipientUserIds: target.committable ? target.recipientUserIds : [],
+        memberCount: target.memberCount,
+        isDefault: target.isDefault,
+      }));
+    if (!destinations.some((destination) => destination.isDefault)) {
+      const firstAccepted = destinations.find((destination) => destination.status === 'accepted');
+      if (firstAccepted) firstAccepted.isDefault = true;
     }
-
-    const acceptedContacts = new Map<string, SharedFileDestination>();
-    const pendingContacts = new Map<string, SharedFileDestination>();
-    const ownedTeamRecipients = new Map<string, string>();
-
-    for (const row of rows) {
-      const isOwner: boolean = row.owner_user_id === userId;
-      const isContact: boolean = row.contact_user_id === userId || normalizeEmail(row.contact_email) === userEmail;
-      const accepted = row.status === 'accepted';
-      const pending = row.status === 'pending';
-      const recipientUserId: string | null = isOwner ? row.contact_user_id ?? null : isContact ? row.owner_user_id : null;
-      const email = normalizeEmail(row.contact_email);
-      if (!recipientUserId || recipientUserId === userId) continue;
-
-      const label = email || (isOwner ? 'Team contact' : 'Team owner');
-      const destination: SharedFileDestination = {
-        id: `contact:${recipientUserId}`,
-        kind: 'contact',
-        label,
-        detail: email || undefined,
-        status: accepted ? 'accepted' : 'pending',
-        recipientUserIds: accepted ? [recipientUserId] : [],
-      };
-      if (accepted) {
-        acceptedContacts.set(recipientUserId, destination);
-        if (isOwner) ownedTeamRecipients.set(recipientUserId, email);
-      } else if (pending && !acceptedContacts.has(recipientUserId)) {
-        pendingContacts.set(recipientUserId, destination);
-      }
-    }
-
-    const destinations = [...acceptedContacts.values()];
-    if (ownedTeamRecipients.size > 0) {
-      destinations.unshift({
-        id: `team:${userId}`,
-        kind: 'team',
-        label: 'My Team',
-        detail: `${ownedTeamRecipients.size} ${ownedTeamRecipients.size === 1 ? 'contact' : 'contacts'}`,
-        status: 'accepted',
-        recipientUserIds: [...ownedTeamRecipients.keys()],
-        memberCount: ownedTeamRecipients.size,
-        isDefault: true,
-      });
-    } else if (destinations[0]) {
-      destinations[0] = { ...destinations[0], isDefault: true };
-    }
-
-    for (const pending of pendingContacts.values()) destinations.push(pending);
-
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return destinations;
-    return destinations.filter((destination) => (
-      destination.label.toLowerCase().includes(normalizedQuery)
-      || destination.detail?.toLowerCase().includes(normalizedQuery)
-    ));
+    return destinations;
   }
 
-  private contactLookupFilter(userId: string, userEmail: string, includeContactUserId: boolean): string {
-    const filters = [`owner_user_id.eq.${userId}`];
-    if (includeContactUserId) filters.push(`contact_user_id.eq.${userId}`);
-    if (userEmail) filters.push(`contact_email.ilike.${userEmail}`);
-    return filters.join(',');
+  async getRiverTargets(query = ''): Promise<RiverTarget[]> {
+    return this.riverTargetService.listTargets(query);
   }
 
-  private isMissingContactUserIdError(error: unknown): boolean {
-    const message = (typeof error === 'object' && error && 'message' in error
-      ? String((error as { message?: unknown }).message ?? '')
-      : String(error ?? '')).toLowerCase();
-    return message.includes('contact_user_id')
-      && (message.includes('does not exist') || message.includes('schema cache'));
+  async setRiverDefaultDestinations(destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> {
+    return this.riverTargetService.setDefaultDestinations(destinations);
+  }
+
+  async getRiverSourcePreferences(): Promise<RiverSourcePreference[]> {
+    return this.riverTargetService.getSourcePreferences();
+  }
+
+  async updateRiverSourcePreferences(preferences: RiverSourcePreference[]): Promise<RiverMutationResult> {
+    return this.riverTargetService.updateSourcePreferences(preferences);
   }
 
   private async resolveShareRecipients(targets: SharedFileShareTarget[] | undefined): Promise<{ recipients: string[]; error?: string }> {
