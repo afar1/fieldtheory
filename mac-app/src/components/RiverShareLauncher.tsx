@@ -49,7 +49,8 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
   const [defaultTargetIds, setDefaultTargetIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [sharing, setSharing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [commitError, setCommitError] = useState<string | null>(null);
 
   const pickerTargets = useMemo(() => targets.map(toPickerTarget), [targets]);
   const targetById = useMemo(() => new Map(targets.map((target) => [target.id, target])), [targets]);
@@ -57,7 +58,8 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
+    setLoadError(null);
+    setCommitError(null);
     void (window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]))
       .then((nextTargets) => {
         if (cancelled) return;
@@ -69,7 +71,7 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
         setSelectedTargetIds(initialIds);
       })
       .catch(() => {
-        if (!cancelled) setError('River targets could not load.');
+        if (!cancelled) setLoadError('River targets could not load.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -87,7 +89,7 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
       return [{ kind: target.kind, targetId: target.targetId, position: index }];
     });
     void window.sharedFilesAPI?.setDefaultDestinations?.(destinations).catch(() => {
-      setError('River defaults could not be saved.');
+      setCommitError('River defaults could not be saved.');
     });
   }, [targetById]);
 
@@ -95,15 +97,15 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
     if (sharing) return;
     const selectedTargets = targetsForIds(targets, ids);
     if (selectedTargets.length === 0) {
-      setError('Choose an approved River destination.');
+      setCommitError('Choose an approved River destination.');
       return;
     }
     setSharing(true);
-    setError(null);
+    setCommitError(null);
     try {
       const preview = await loadContent(file.filePath);
       if (!preview?.content) {
-        setError('This file could not be read for sharing.');
+        setCommitError('This file could not be read for sharing.');
         return;
       }
       const result = await window.sharedFilesAPI?.share?.({
@@ -114,12 +116,12 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
         targets: selectedTargets,
       });
       if (!result?.shared) {
-        setError(result?.error ?? 'River share failed.');
+        setCommitError(result?.error ?? 'River share failed.');
         return;
       }
       onShared(`Shared ${file.title} to River`);
     } catch {
-      setError('River share failed.');
+      setCommitError('River share failed.');
     } finally {
       setSharing(false);
     }
@@ -180,9 +182,10 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
         defaultIds={defaultTargetIds}
         surface="palette"
         intent="share"
-        status={loading ? 'loading' : error ? 'error' : 'ready'}
+        status={loading ? 'loading' : loadError ? 'error' : 'ready'}
         disabled={sharing}
-        commitError={error}
+        commitError={commitError}
+        errorMessage={loadError}
         emptyLabel="No River contacts or groups yet."
         commitLabel={sharing ? 'Sharing...' : 'Share to River'}
         onToggleTarget={(targetId) => {
