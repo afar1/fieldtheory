@@ -372,31 +372,10 @@ export class SharedTeamService {
       }
     }
 
-    if (teamScopeUserIds.size > 1) {
-      return {
-        available: false,
-        currentTeamScopeUserId: null,
-        reason: 'ambiguous_team_scope',
-        isOwner: false,
-        members,
-        pendingIncoming,
-        pendingOutgoing,
-      };
-    }
-
-    const [currentTeamScopeUserId] = Array.from(teamScopeUserIds);
+    const currentTeamScopeUserId = teamScopeUserIds.has(userId)
+      ? userId
+      : Array.from(teamScopeUserIds)[0];
     if (!currentTeamScopeUserId) {
-      if (pendingIncomingTeamScopeUserIds.size > 1) {
-        return {
-          available: false,
-          currentTeamScopeUserId: null,
-          reason: 'ambiguous_team_scope',
-          isOwner: false,
-          members,
-          pendingIncoming,
-          pendingOutgoing,
-        };
-      }
       const [pendingIncomingTeamScopeUserId] = Array.from(pendingIncomingTeamScopeUserIds);
       if (pendingIncomingTeamScopeUserId) {
         return {
