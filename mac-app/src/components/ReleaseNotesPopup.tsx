@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.18': [
+    'River sharing now opens with the polished destination picker design',
+    'The picker keeps your default River selected so Enter can share immediately',
+  ],
   '0.3.17': [
     'River now has a full timeline view while keeping individual River files navigable in the sidebar',
     'Sharing to River now uses a destination picker for defaults, contacts, teams, groups, and Public River',
@@ -446,6 +450,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.18': 'Jun 20 2026',
   '0.3.17': 'Jun 20 2026',
   '0.3.16': 'Jun 18 2026',
   '0.3.15': 'Jun 18 2026',

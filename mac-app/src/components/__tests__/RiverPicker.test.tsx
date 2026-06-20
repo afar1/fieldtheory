@@ -106,16 +106,16 @@ describe('RiverPicker', () => {
     renderPicker();
 
     const input = screen.getByRole('searchbox', { name: 'Search River targets' });
-    expect(input.getAttribute('aria-activedescendant')).toContain('public');
-
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(input.getAttribute('aria-activedescendant')).toContain('design');
 
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(input.getAttribute('aria-activedescendant')).toContain('mira');
 
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input.getAttribute('aria-activedescendant')).toContain('pending-lee');
+
     fireEvent.keyDown(input, { key: 'ArrowUp' });
-    expect(input.getAttribute('aria-activedescendant')).toContain('design');
+    expect(input.getAttribute('aria-activedescendant')).toContain('mira');
   });
 
   it('does not toggle disabled pending rows', () => {
@@ -139,7 +139,7 @@ describe('RiverPicker', () => {
       defaultIds: ['design'],
     });
 
-    expect(screen.getByLabelText('River defaults').textContent).toContain('Design Circle');
+    expect(screen.getByRole('button', { name: 'Remove Design Circle default' }).textContent).toBe('default');
     expect(screen.getByRole('option', { name: /Design Circle/ }).getAttribute('aria-selected')).toBe('false');
     expect(screen.getByRole('option', { name: /Mira Chen/ }).getAttribute('aria-selected')).toBe('true');
   });

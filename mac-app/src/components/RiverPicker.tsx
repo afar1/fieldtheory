@@ -39,6 +39,7 @@ export interface RiverPickerProps {
   pendingOnlyLabel?: string;
   placeholder?: string;
   commitLabel?: string;
+  showSelectAll?: boolean;
   onToggleTarget: (targetId: string, target: RiverPickerTarget) => void;
   onCommit?: (targetIds: string[]) => void;
   onDefaultChange?: (targetIds: string[]) => void;
@@ -68,6 +69,12 @@ function optionId(baseId: string, targetId: string): string {
   return `${baseId}-${targetId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
+function targetKindPriority(kind: RiverPickerTargetKind): number {
+  if (kind === 'group') return 0;
+  if (kind === 'person') return 1;
+  return 2;
+}
+
 function defaultLabelForIntent(intent: RiverPickerIntent): string {
   if (intent === 'source') return 'Save sources';
   if (intent === 'defaults') return 'Save defaults';
@@ -78,9 +85,8 @@ function statusLabelForTarget(target: RiverPickerTarget): string {
   const status = target.status ?? 'accepted';
   if (status === 'pending') return 'Pending';
   if (status === 'unavailable') return 'Unavailable';
-  if (target.kind === 'group') return 'Group';
-  if (target.kind === 'public') return 'Public';
-  return 'Person';
+  if (target.kind === 'public') return target.detail ?? 'Visible to entitled users';
+  return target.detail ?? '';
 }
 
 function getInitials(target: RiverPickerTarget): string {
@@ -102,30 +108,55 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
       width: '100%',
       display: 'flex',
       flexDirection: 'column' as const,
-      gap: compact ? '8px' : '10px',
-      padding: surface === 'palette' ? '12px' : surface === 'popover' ? '10px' : '0',
-      borderRadius: surface === 'inline' ? '0' : '8px',
+      padding: surface === 'palette' ? '0' : surface === 'popover' ? '0' : '0',
+      borderRadius: surface === 'inline' ? '0' : surface === 'palette' ? '14px' : '12px',
       border: surface === 'inline' ? 'none' : `1px solid ${tokens.border}`,
       backgroundColor: surface === 'inline' ? 'transparent' : tokens.surface,
+      boxShadow: surface === 'palette' ? tokens.shadow : 'none',
+      overflow: surface === 'inline' ? 'visible' : 'hidden',
       boxSizing: 'border-box' as const,
     },
+    searchHeader: {
+      minHeight: compact ? '44px' : '52px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: compact ? '8px' : '10px',
+      padding: surface === 'popover' ? '12px 14px' : compact ? '8px 0' : '15px 16px',
+      borderBottom: surface === 'inline' ? 'none' : `1px solid ${tokens.subtleBorder}`,
+      boxSizing: 'border-box' as const,
+    },
+    glyph: {
+      color: tokens.accent,
+      fontSize: compact ? '14px' : '15px',
+      lineHeight: 1,
+      flex: '0 0 auto',
+    },
     input: {
-      height: '34px',
+      height: '24px',
       width: '100%',
-      borderRadius: '6px',
-      border: `1px solid ${tokens.border}`,
-      backgroundColor: tokens.inputBackground,
+      border: 'none',
+      backgroundColor: 'transparent',
       color: tokens.text,
-      padding: '0 10px',
-      fontSize: '13px',
+      padding: 0,
+      fontSize: surface === 'popover' ? '13.5px' : '15px',
       outline: 'none',
       boxSizing: 'border-box' as const,
     },
+    selectAllButton: {
+      border: 'none',
+      background: 'transparent',
+      color: tokens.accent,
+      cursor: 'pointer',
+      fontSize: '11.5px',
+      padding: 0,
+      whiteSpace: 'nowrap' as const,
+    },
     banner: {
-      borderRadius: '6px',
+      margin: surface === 'inline' ? '0 0 8px' : '8px 12px 0',
+      borderRadius: '8px',
       padding: '8px 10px',
-      border: `1px solid ${tokens.chipBorder}`,
-      backgroundColor: tokens.chipBackground,
+      border: `1px solid ${tokens.subtleBorder}`,
+      backgroundColor: tokens.softBackground,
       color: tokens.mutedText,
       fontSize: '12px',
       lineHeight: 1.4,
@@ -137,12 +168,10 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
     },
     list: {
       minHeight: compact ? '48px' : '96px',
-      maxHeight: surface === 'palette' ? '320px' : '280px',
+      maxHeight: surface === 'palette' ? '292px' : '280px',
       overflowY: 'auto' as const,
-      borderRadius: '6px',
-      border: `1px solid ${tokens.border}`,
-      backgroundColor: tokens.background,
-      padding: '4px',
+      backgroundColor: tokens.surface,
+      padding: surface === 'inline' ? '0' : surface === 'popover' ? '6px 10px' : '8px',
     },
     empty: {
       padding: '14px',
@@ -152,14 +181,14 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
     },
     row: {
       width: '100%',
-      minHeight: '46px',
+      minHeight: compact ? '38px' : '42px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: '10px',
-      padding: '7px 8px',
+      gap: compact ? '8px' : '11px',
+      padding: compact ? '6px 7px' : '8px 9px',
       border: 'none',
-      borderRadius: '5px',
+      borderRadius: '9px',
       textAlign: 'left' as const,
       color: tokens.text,
       backgroundColor: 'transparent',
@@ -170,19 +199,19 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
       minWidth: 0,
       display: 'flex',
       alignItems: 'center',
-      gap: '9px',
+      gap: compact ? '8px' : '11px',
     },
     avatar: {
-      width: '28px',
-      height: '28px',
-      flex: '0 0 28px',
+      width: compact ? '23px' : '24px',
+      height: compact ? '23px' : '24px',
+      flex: compact ? '0 0 23px' : '0 0 24px',
       borderRadius: '999px',
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
       color: tokens.accent,
       backgroundColor: tokens.groupBackground,
-      fontSize: '10px',
+      fontSize: '9px',
       fontWeight: 700,
       fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
       overflow: 'hidden',
@@ -200,8 +229,8 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
       minWidth: 0,
     },
     label: {
-      fontSize: '13px',
-      fontWeight: 650,
+      fontSize: compact ? '13px' : '14px',
+      fontWeight: 500,
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap' as const,
@@ -215,13 +244,14 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
     },
     badge: {
       flexShrink: 0,
-      borderRadius: '999px',
-      border: `1px solid ${tokens.chipBorder}`,
-      backgroundColor: tokens.chipBackground,
+      borderRadius: '4px',
+      border: 'none',
+      backgroundColor: tokens.badgeBackground,
       color: tokens.mutedText,
-      fontSize: '10px',
-      fontWeight: 650,
-      padding: '1px 5px',
+      fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+      fontSize: '9.5px',
+      fontWeight: 500,
+      padding: '1px 6px',
       lineHeight: 1.4,
     },
     actions: {
@@ -231,10 +261,10 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
       gap: '6px',
     },
     checkbox: {
-      width: '16px',
-      height: '16px',
-      borderRadius: '4px',
-      border: `1px solid ${tokens.border}`,
+      width: surface === 'popover' ? '18px' : '19px',
+      height: surface === 'popover' ? '18px' : '19px',
+      borderRadius: '6px',
+      border: `1.5px solid ${tokens.checkboxBorder}`,
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -243,46 +273,53 @@ function getStyles(tokens: RiverPickerTokens, surface: RiverPickerSurface) {
       boxSizing: 'border-box' as const,
     },
     defaultButton: {
-      borderRadius: '999px',
-      border: `1px solid ${tokens.chipBorder}`,
-      backgroundColor: tokens.chipBackground,
-      color: tokens.mutedText,
+      borderRadius: '5px',
+      border: 'none',
+      backgroundColor: tokens.accentSoft,
+      color: tokens.accent,
       fontSize: '10px',
-      fontWeight: 650,
-      padding: '2px 6px',
+      fontWeight: 500,
+      padding: '1px 7px',
       cursor: 'pointer',
-    },
-    defaultStrip: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      flexWrap: 'wrap' as const,
-    },
-    defaultPill: {
-      borderRadius: '999px',
-      border: `1px solid ${tokens.chipBorder}`,
-      backgroundColor: tokens.chipBackground,
-      color: tokens.text,
-      fontSize: '11px',
-      fontWeight: 600,
-      padding: '3px 7px',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '5px',
     },
     footer: {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: '10px',
+      gap: '14px',
+      minHeight: compact ? '34px' : '42px',
+      padding: surface === 'inline' ? '8px 0 0' : surface === 'popover' ? '9px 14px 10px' : '9px 16px',
+      borderTop: surface === 'inline' ? 'none' : `1px solid ${tokens.subtleBorder}`,
+      boxSizing: 'border-box' as const,
     },
     footerHint: {
       color: tokens.mutedText,
+      fontSize: '11.5px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      flexWrap: 'wrap' as const,
+    },
+    kbd: {
+      borderRadius: '4px',
+      border: `1px solid ${tokens.subtleBorder}`,
+      color: tokens.keyText,
+      fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
       fontSize: '11px',
+      padding: '1px 5px',
+      lineHeight: 1.35,
+    },
+    commitHint: {
+      marginLeft: 'auto',
+      color: tokens.accent,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '5px',
+      whiteSpace: 'nowrap' as const,
     },
     commitButton: {
       height: '32px',
-      borderRadius: '6px',
+      borderRadius: '9px',
       border: `1px solid ${tokens.accent}`,
       backgroundColor: tokens.accent,
       color: tokens.accentText,
@@ -312,6 +349,7 @@ export default function RiverPicker({
   pendingOnlyLabel = 'No accepted River targets are available yet.',
   placeholder = 'Search River targets',
   commitLabel,
+  showSelectAll = false,
   onToggleTarget,
   onCommit,
   onDefaultChange,
@@ -328,7 +366,14 @@ export default function RiverPicker({
   const [activeId, setActiveId] = useState<string | null>(null);
   const normalizedQuery = normalize(query);
   const visibleTargets = useMemo(
-    () => targets.filter((target) => targetMatches(target, normalizedQuery)),
+    () => targets
+      .filter((target) => targetMatches(target, normalizedQuery))
+      .slice()
+      .sort((a, b) => (
+        targetKindPriority(a.kind) - targetKindPriority(b.kind)
+        || Number(!targetIsAccepted(a)) - Number(!targetIsAccepted(b))
+        || a.label.localeCompare(b.label)
+      )),
     [targets, normalizedQuery],
   );
   const acceptedSelectedIds = selectedIds.filter((id) => {
@@ -336,13 +381,11 @@ export default function RiverPicker({
     return target ? targetIsAccepted(target) : false;
   });
   const acceptedTargets = targets.filter(targetIsAccepted);
+  const acceptedVisibleTargets = visibleTargets.filter(targetIsAccepted);
   const staleIds = useMemo(() => {
     const ids = [...staleDefaultIds, ...defaultIds.filter((id) => !targetById.has(id))];
     return Array.from(new Set(ids));
   }, [defaultIds, staleDefaultIds, targetById]);
-  const defaultTargets = defaultIds
-    .map((id) => targetById.get(id))
-    .filter((target): target is RiverPickerTarget => !!target);
   const activeTarget = visibleTargets.find((target) => target.id === activeId) ?? null;
   const commitDisabled = disabled || status !== 'ready' || acceptedSelectedIds.length === 0 || !onCommit;
 
@@ -401,11 +444,22 @@ export default function RiverPicker({
     onDefaultChange(nextIds);
   };
 
+  const selectAllVisible = () => {
+    if (disabled || acceptedVisibleTargets.length === 0) return;
+    for (const target of acceptedVisibleTargets) {
+      if (!selectedSet.has(target.id)) onToggleTarget(target.id, target);
+    }
+  };
+
+  const sectionLabelForTarget = (target: RiverPickerTarget): string => (
+    target.kind === 'group' ? 'GROUPS' : 'PEOPLE / PUBLIC'
+  );
+
   const renderIdentity = (target: RiverPickerTarget) => {
     const avatarStyle: CSSProperties = {
       ...styles.avatar,
-      color: target.kind === 'group' ? (target.tint ?? tokens.accent) : tokens.accent,
-      backgroundColor: target.kind === 'person' ? tokens.successBackground : tokens.groupBackground,
+      color: target.kind === 'public' ? '#3a6b65' : target.kind === 'group' ? (target.tint ?? tokens.accent) : tokens.accent,
+      backgroundColor: target.kind === 'public' ? '#dff0ee' : target.kind === 'person' ? tokens.successBackground : tokens.groupBackground,
     };
 
     if (target.avatarUrl) {
@@ -416,7 +470,7 @@ export default function RiverPicker({
       );
     }
 
-    return <span style={avatarStyle}>{getInitials(target)}</span>;
+    return <span style={avatarStyle}>{target.kind === 'public' ? '🌐' : getInitials(target)}</span>;
   };
 
   const renderRow = (target: RiverPickerTarget) => {
@@ -426,7 +480,7 @@ export default function RiverPicker({
     const active = target.id === activeId;
     const rowStyle: CSSProperties = {
       ...styles.row,
-      backgroundColor: selected ? tokens.selectedBackground : active ? tokens.focusBackground : 'transparent',
+      backgroundColor: active ? tokens.accentSoft : selected ? tokens.softBackground : 'transparent',
       color: accepted ? tokens.text : tokens.mutedText,
       cursor: accepted && !disabled ? 'pointer' : 'not-allowed',
       opacity: accepted ? 1 : 0.68,
@@ -456,11 +510,10 @@ export default function RiverPicker({
               <span style={styles.label}>{target.label}</span>
               {target.callSign && <span style={styles.badge}>{target.callSign}</span>}
             </span>
-            <span style={styles.detail}>{target.detail ?? statusLabelForTarget(target)}</span>
+            {statusLabelForTarget(target) && <span style={styles.detail}>{statusLabelForTarget(target)}</span>}
           </span>
         </span>
         <span style={styles.actions}>
-          {isDefault && <span style={{ ...styles.badge, color: tokens.accent }}>Default</span>}
           <button
             type="button"
             aria-label={isDefault ? `Remove ${target.label} default` : `Make ${target.label} default`}
@@ -473,13 +526,41 @@ export default function RiverPicker({
               opacity: accepted && onDefaultChange ? 1 : 0.5,
             }}
           >
-            {isDefault ? 'Default' : 'Set default'}
+            {isDefault ? 'default' : 'set default'}
           </button>
-          <span aria-hidden="true" style={checkboxStyle}>{selected ? 'x' : ''}</span>
-          <span style={styles.badge}>{statusLabelForTarget(target)}</span>
+          <span aria-hidden="true" style={checkboxStyle}>{selected ? '✓' : ''}</span>
+          {!accepted && <span style={styles.badge}>{target.status === 'pending' ? 'pending' : 'unavailable'}</span>}
         </span>
       </div>
     );
+  };
+
+  const renderRows = () => {
+    let previousSection: string | null = null;
+    return visibleTargets.flatMap((target) => {
+      const section = sectionLabelForTarget(target);
+      const nodes = [];
+      if (section !== previousSection) {
+        previousSection = section;
+        nodes.push(
+          <div
+            key={`section-${section}-${target.id}`}
+            aria-hidden="true"
+            style={{
+              fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+              fontSize: '9.5px',
+              letterSpacing: '0.13em',
+              color: tokens.mutedText,
+              padding: '8px 9px 4px',
+            }}
+          >
+            {section}
+          </div>
+        );
+      }
+      nodes.push(renderRow(target));
+      return nodes;
+    });
   };
 
   const renderBody = () => {
@@ -487,34 +568,41 @@ export default function RiverPicker({
     if (visibleTargets.length === 0) {
       return <div style={styles.empty}>{normalizedQuery ? 'No River targets match.' : emptyLabel}</div>;
     }
-    return visibleTargets.map(renderRow);
+    return renderRows();
   };
 
   return (
     <div style={styles.shell} data-river-picker-surface={surface} data-river-picker-intent={intent}>
-      <input
-        type="search"
-        role="searchbox"
-        aria-label="Search River targets"
-        aria-controls={`${baseId}-listbox`}
-        aria-activedescendant={activeId ? optionId(baseId, activeId) : undefined}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        disabled={disabled || status === 'loading'}
-        style={styles.input}
-      />
-
-      {defaultTargets.length > 0 && (
-        <div aria-label="River defaults" style={styles.defaultStrip}>
-          {defaultTargets.map((target) => (
-            <span key={target.id} style={styles.defaultPill}>
-              {target.label}
-            </span>
-          ))}
-        </div>
-      )}
+      <div style={styles.searchHeader}>
+        <span aria-hidden="true" style={styles.glyph}>≈</span>
+        <input
+          type="search"
+          role="searchbox"
+          aria-label="Search River targets"
+          aria-controls={`${baseId}-listbox`}
+          aria-activedescendant={activeId ? optionId(baseId, activeId) : undefined}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled || status === 'loading'}
+          style={styles.input}
+        />
+        {showSelectAll && (
+          <button
+            type="button"
+            onClick={selectAllVisible}
+            disabled={disabled || acceptedVisibleTargets.length === 0}
+            style={{
+              ...styles.selectAllButton,
+              opacity: disabled || acceptedVisibleTargets.length === 0 ? 0.45 : 1,
+              cursor: disabled || acceptedVisibleTargets.length === 0 ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Select all
+          </button>
+        )}
+      </div>
 
       {staleIds.length > 0 && (
         <div role="status" style={styles.banner}>
@@ -548,7 +636,11 @@ export default function RiverPicker({
 
       {footerMode === 'commit' && (
         <div style={styles.footer}>
-          <span style={styles.footerHint}>Enter commits defaults. Search then Enter toggles.</span>
+          <span style={styles.footerHint}>
+            <span><span style={styles.kbd}>↵</span> {normalizedQuery ? 'select' : 'share default'}</span>
+            <span><span style={styles.kbd}>↑↓</span> navigate</span>
+            <span style={styles.commitHint}><span style={{ ...styles.kbd, color: tokens.accent, borderColor: tokens.accent }}>⌘↵</span> {acceptedSelectedIds.length > 1 ? 'Add to Rivers' : 'Add to River'}</span>
+          </span>
           <button
             type="button"
             disabled={commitDisabled}

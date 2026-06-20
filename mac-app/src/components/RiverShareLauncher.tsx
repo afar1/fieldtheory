@@ -134,70 +134,94 @@ export default function RiverShareLauncher({ file, loadContent, onCancel, onShar
         width: '100vw',
         minHeight: '100vh',
         boxSizing: 'border-box',
-        padding: '10px',
-        backgroundColor: theme.bg,
+        padding: '14px',
+        backgroundColor: theme.isDark ? theme.bg : '#e7e5df',
         color: theme.text,
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+      <div
+        style={{
+          width: '418px',
+          maxWidth: 'calc(100vw - 28px)',
+          borderRadius: '15px',
+          overflow: 'hidden',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 18px 50px rgba(0,0,0,0.32)' : '0 18px 50px rgba(40,36,28,0.20)',
+          backgroundColor: theme.surface1,
+        }}
+      >
+        <div style={{ padding: '14px 16px 10px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
           <SidebarRiverIcon color={theme.accent} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '13px', fontWeight: 700 }}>Share to River</div>
-            <div
-              title={file.filePath}
-              style={{
-                color: theme.textSecondary,
-                fontSize: '11px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: '430px',
-              }}
-            >
-              {file.title}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: '15px', fontWeight: 650 }}>Share to River</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0, marginTop: '7px' }}>
+              <span
+                title={file.filePath}
+                style={{
+                  maxWidth: '300px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  borderRadius: '7px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : '#faf9f6',
+                  color: theme.text,
+                  fontSize: '12px',
+                  padding: '4px 8px',
+                }}
+              >
+                {file.title}
+              </span>
+              <span style={{ color: theme.textSecondary, fontSize: '11px' }}>to River</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Cancel River share"
+            style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '8px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.bg,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+              fontSize: '16px',
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onCancel}
-          style={{
-            height: '28px',
-            padding: '0 10px',
-            borderRadius: '6px',
-            border: `1px solid ${theme.border}`,
-            backgroundColor: theme.bg,
-            color: theme.textSecondary,
-            cursor: 'pointer',
-            fontSize: '12px',
+        <RiverPicker
+          targets={pickerTargets}
+          selectedIds={selectedTargetIds}
+          defaultIds={defaultTargetIds}
+          surface="inline"
+          intent="share"
+          status={loading ? 'loading' : loadError ? 'error' : 'ready'}
+          disabled={sharing}
+          commitError={commitError}
+          errorMessage={loadError}
+          emptyLabel="No River contacts or groups yet."
+          placeholder="Search people, groups, or make public..."
+          commitLabel={sharing ? 'Sharing...' : selectedTargetIds.length > 1 ? 'Share to Rivers' : 'Share'}
+          showSelectAll
+          onToggleTarget={(targetId) => {
+            setSelectedTargetIds((current) => (
+              current.includes(targetId)
+                ? current.filter((id) => id !== targetId)
+                : [...current, targetId]
+            ));
           }}
-        >
-          Cancel
-        </button>
+          onDefaultChange={updateDefaults}
+          onCommit={commit}
+        />
       </div>
-      <RiverPicker
-        targets={pickerTargets}
-        selectedIds={selectedTargetIds}
-        defaultIds={defaultTargetIds}
-        surface="palette"
-        intent="share"
-        status={loading ? 'loading' : loadError ? 'error' : 'ready'}
-        disabled={sharing}
-        commitError={commitError}
-        errorMessage={loadError}
-        emptyLabel="No River contacts or groups yet."
-        commitLabel={sharing ? 'Sharing...' : 'Share to River'}
-        onToggleTarget={(targetId) => {
-          setSelectedTargetIds((current) => (
-            current.includes(targetId)
-              ? current.filter((id) => id !== targetId)
-              : [...current, targetId]
-          ));
-        }}
-        onDefaultChange={updateDefaults}
-        onCommit={commit}
-      />
     </div>
   );
 }
