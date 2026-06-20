@@ -69,6 +69,28 @@ describe('RiverReader', () => {
     expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'doc-1' }));
   });
 
+  it('renders page navigation controls for the River page', () => {
+    const onNavigateBack = vi.fn();
+    const onNavigateForward = vi.fn();
+
+    render(
+      <RiverReader
+        active={false}
+        canNavigateBack
+        canNavigateForward
+        onNavigateBack={onNavigateBack}
+        onNavigateForward={onNavigateForward}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Back'));
+    fireEvent.click(screen.getByLabelText('Forward'));
+
+    expect(onNavigateBack).toHaveBeenCalledTimes(1);
+    expect(onNavigateForward).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('River location').textContent).toContain('River');
+  });
+
   it('switches public tab and sends selected source filters', async () => {
     const getTimeline = vi.fn(async () => timelineItems);
     Object.defineProperty(window, 'sharedFilesAPI', {

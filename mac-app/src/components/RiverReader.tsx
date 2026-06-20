@@ -9,7 +9,11 @@ type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
 
 interface RiverReaderProps {
   active?: boolean;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
   onOpenItem?: (item: RiverTimelineItem) => void;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
   onActionFeedback?: (message: string) => void;
 }
 
@@ -58,7 +62,61 @@ function authorLabel(item: RiverTimelineItem): string {
   return 'River';
 }
 
-export default function RiverReader({ active = true, onOpenItem, onActionFeedback }: RiverReaderProps) {
+function RiverNavigationButton({
+  label,
+  disabled,
+  onClick,
+  direction,
+  textSecondary,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick?: () => void;
+  direction: 'back' | 'forward';
+  textSecondary: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      style={{
+        width: '22px',
+        height: '24px',
+        padding: 0,
+        color: textSecondary,
+        backgroundColor: 'transparent',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.32 : 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+        {direction === 'back' ? (
+          <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+        ) : (
+          <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+export default function RiverReader({
+  active = true,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onOpenItem,
+  onNavigateBack,
+  onNavigateForward,
+  onActionFeedback,
+}: RiverReaderProps) {
   const { theme } = useTheme();
   const [scope, setScope] = useState<RiverTimelineScope>('private');
   const [items, setItems] = useState<RiverTimelineItem[]>([]);
@@ -153,6 +211,58 @@ export default function RiverReader({ active = true, onOpenItem, onActionFeedbac
         color: theme.text,
       }}
     >
+      <div
+        data-fieldtheory-river-toolbar="true"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '10px 30px 10px 44px',
+          borderBottom: `1px solid ${theme.border}`,
+          flexShrink: 0,
+        }}
+      >
+        <div
+          aria-label="River location"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            minWidth: 0,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0 }}>
+            <RiverNavigationButton
+              label="Back"
+              disabled={!canNavigateBack}
+              onClick={onNavigateBack}
+              direction="back"
+              textSecondary={theme.textSecondary}
+            />
+            <RiverNavigationButton
+              label="Forward"
+              disabled={!canNavigateForward}
+              onClick={onNavigateForward}
+              direction="forward"
+              textSecondary={theme.textSecondary}
+            />
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              minWidth: 0,
+              fontSize: '11px',
+              color: theme.textSecondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span style={{ color: theme.text, fontWeight: 600 }}>River</span>
+          </div>
+        </div>
+      </div>
       <main
         style={{
           flex: 1,

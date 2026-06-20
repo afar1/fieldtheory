@@ -2642,7 +2642,7 @@ export type LibrarianEditorSession = {
 };
 
 export type LibrarianNavigationEntry = {
-  itemType: 'wiki' | 'artifact' | 'external' | 'ember';
+  itemType: 'wiki' | 'artifact' | 'external' | 'river' | 'ember';
   itemPath: string;
 };
 
@@ -4316,6 +4316,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'external' && externalOpenFile?.path) {
       return { itemType: 'external', itemPath: externalOpenFile.path };
     }
+    if (selectedItemType === 'river') {
+      return { itemType: 'river', itemPath: RIVER_ITEM_ID };
+    }
     if (selectedItemType === 'ember') {
       return { itemType: 'ember', itemPath: EMBER_ITEM_ID };
     }
@@ -4332,6 +4335,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(entry.itemPath);
     } else if (entry.itemType === 'artifact') {
       selectArtifactPath(entry.itemPath);
+    } else if (entry.itemType === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (entry.itemType === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -11449,6 +11459,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           >
             <RiverReader
               active={active && selectedItemType === 'river'}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
               onOpenItem={(item) => {
                 if (!item.cachePath) {
                   flashCopyFeedback('River item is not cached yet');

@@ -4195,6 +4195,7 @@ let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
 let appQuitConfirmedWithLocalWork = false;
 let appQuitConfirmationOpen = false;
+let appQuitInProgress = false;
 let appQuitWatcherCleanupComplete = false;
 let appQuitWatcherCleanupInFlight: Promise<void> | null = null;
 let appMetadataIPCHandlersInstalled = false;
@@ -7396,6 +7397,7 @@ function showClipboardHistoryOnActivate(): void {
     commandLauncherExternalInvocationSuppressed,
   });
   const preflightSkipReason = getClipboardHistoryActivationPreflightSkipReason({
+    appQuitInProgress,
     onboardingComplete: prefs?.onboardingComplete === true,
     commandLauncherExternalInvocationSuppressed,
     commandLauncherShowingOrVisible,
@@ -16538,6 +16540,7 @@ if (!gotTheLock) {
   });
 
   app.on('before-quit', (event) => {
+    appQuitInProgress = true;
     const blockingActivities = getQuitBlockingActivities();
     if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
       event.preventDefault();
@@ -16565,9 +16568,12 @@ if (!gotTheLock) {
         if (response === 0) {
           appQuitConfirmedWithLocalWork = true;
           app.quit();
+        } else {
+          appQuitInProgress = false;
         }
       }).catch((error) => {
         appQuitConfirmationOpen = false;
+        appQuitInProgress = false;
         log.warn('Quit confirmation failed: %s', error instanceof Error ? error.message : String(error));
       });
       return;

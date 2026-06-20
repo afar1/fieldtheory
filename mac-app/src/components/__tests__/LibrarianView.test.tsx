@@ -28,6 +28,8 @@ import LibrarianView, {
   restoreLibrarianTextSize,
   shouldReportActiveLibraryFileContextForSelection,
   shouldPreserveEditorSelectionPastePopover,
+  moveLibrarianNavigationHistory,
+  pushLibrarianNavigationEntry,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -82,6 +84,21 @@ describe('LibrarianView render', () => {
     `${testLibraryRootPath}::scratchpad`,
   ]);
   let toggleLineNumbersFromLauncher: (() => void) | null = null;
+
+  it('keeps River entries in librarian navigation history', () => {
+    const wikiEntry = { itemType: 'wiki' as const, itemPath: 'scratchpad/start' };
+    const riverEntry = { itemType: 'river' as const, itemPath: 'river' };
+    const history = pushLibrarianNavigationEntry(
+      pushLibrarianNavigationEntry({ entries: [], index: -1 }, wikiEntry),
+      riverEntry
+    );
+
+    const previous = moveLibrarianNavigationHistory(history, -1);
+    const next = previous ? moveLibrarianNavigationHistory(previous.history, 1) : null;
+
+    expect(previous?.entry).toEqual(wikiEntry);
+    expect(next?.entry).toEqual(riverEntry);
+  });
 
   it('keeps the selection paste popover alive for CodeMirror editor selections', () => {
     const editor = document.createElement('div');
