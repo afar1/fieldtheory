@@ -1821,6 +1821,14 @@ export function buildBuiltInLauncherActions(
       actionId: 'save-current-website',
     },
     {
+      id: 'action-share-current-file-river',
+      type: 'action',
+      name: 'share river',
+      displayName: 'Share Current File to River',
+      keywords: ['river', 'share', 'share river', 'share current file', 'share to river', 'team', 'contact'],
+      actionId: 'share-current-file-river',
+    },
+    {
       id: 'action-move-current-library-file',
       type: 'action',
       name: 'move file',

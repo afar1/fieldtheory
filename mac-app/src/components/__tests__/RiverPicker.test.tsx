@@ -144,7 +144,7 @@ describe('RiverPicker', () => {
     expect(screen.getByRole('option', { name: /Mira Chen/ }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('toggles with Enter and commits accepted checked rows with Meta or Ctrl Enter', () => {
+  it('commits selected defaults with Enter and toggles searched rows with Enter', () => {
     const onToggleTarget = vi.fn();
     const onCommit = vi.fn();
     renderPicker({
@@ -154,12 +154,15 @@ describe('RiverPicker', () => {
     });
 
     const input = screen.getByRole('searchbox', { name: 'Search River targets' });
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onToggleTarget).toHaveBeenCalledWith('design', expect.objectContaining({ label: 'Design Circle' }));
+    expect(onCommit).toHaveBeenCalledWith(['design']);
+
+    fireEvent.change(input, { target: { value: 'mira' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onToggleTarget).toHaveBeenCalledWith('mira', expect.objectContaining({ label: 'Mira Chen' }));
 
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
-    expect(onCommit).toHaveBeenCalledWith(['design']);
+    expect(onCommit).toHaveBeenLastCalledWith(['design']);
 
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(onCommit).toHaveBeenLastCalledWith(['design']);

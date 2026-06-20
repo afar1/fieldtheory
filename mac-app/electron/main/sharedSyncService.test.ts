@@ -7,6 +7,63 @@ import { sharedFilesRoot } from './sharedFiles';
 import { SharedSyncService } from './sharedSyncService';
 import type { SharedTeamService } from './sharedTeamService';
 
+function makeTimelineRow(id: string, createdBy = 'user-1') {
+  return {
+    id,
+    title: `Title ${id}`,
+    shared_name: null,
+    content: `# Title ${id}\n\nBody`,
+    created_by: createdBy,
+    updated_at: '2026-01-02T00:00:00.000Z',
+    created_at: '2026-01-01T00:00:00.000Z',
+    author_initials: 'AF',
+    author_callsign: 'afar',
+  };
+}
+
+function makeTimelineSupabase(dataByTable: Record<string, unknown[]>) {
+  const operations: Array<{ table: string; op: string; args: unknown[] }> = [];
+  const supabase = {
+    from(table: string) {
+      const builder = {
+        select(...args: unknown[]) {
+          operations.push({ table, op: 'select', args });
+          return this;
+        },
+        eq(...args: unknown[]) {
+          operations.push({ table, op: 'eq', args });
+          return this;
+        },
+        is(...args: unknown[]) {
+          operations.push({ table, op: 'is', args });
+          return this;
+        },
+        order(...args: unknown[]) {
+          operations.push({ table, op: 'order', args });
+          return this;
+        },
+        in(...args: unknown[]) {
+          operations.push({ table, op: 'in', args });
+          return this;
+        },
+        or(...args: unknown[]) {
+          operations.push({ table, op: 'or', args });
+          return this;
+        },
+        limit(...args: unknown[]) {
+          operations.push({ table, op: 'limit', args });
+          return this;
+        },
+        then(resolve: (value: { data: unknown[]; error: null }) => void, reject?: (reason: unknown) => void) {
+          return Promise.resolve({ data: dataByTable[table] ?? [], error: null }).then(resolve, reject);
+        },
+      };
+      return builder;
+    },
+  };
+  return { supabase, operations };
+}
+
 describe('SharedSyncService cache behavior', () => {
   let tempRoot: string;
   let originalLibraryDir: string | undefined;
@@ -1617,6 +1674,102 @@ describe('SharedSyncService cache behavior', () => {
       pinned: false,
       public: false,
     }]);
+  });
+
+  it('keeps private timeline reads scoped to owned and granted River documents', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_audience: [{ document_id: 'shared-granted' }],
+      river_documents: [
+        makeTimelineRow('shared-owned', 'user-1'),
+        makeTimelineRow('shared-granted', 'user-2'),
+      ],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toHaveLength(2);
+
+    expect(operations).toContainEqual({
+      table: 'river_document_audience',
+      op: 'eq',
+      args: ['recipient_user_id', 'user-1'],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'or',
+      args: ['created_by.eq.user-1,id.in.(shared-granted)'],
+    });
+    expect(operations.some((operation) => operation.table === 'river_document_targets')).toBe(false);
+  });
+
+  it('loads the public timeline only through active public River targets', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_targets: [
+        { document_id: 'public-doc', target_kind: 'public', target_id: 'public' },
+        { document_id: 'group-doc', target_kind: 'group', target_id: 'design' },
+      ],
+      river_documents: [makeTimelineRow('public-doc', 'user-2')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'public',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toMatchObject([{ documentId: 'public-doc', public: true }]);
+
+    expect(operations).toContainEqual({
+      table: 'river_document_targets',
+      op: 'is',
+      args: ['revoked_at', null],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'in',
+      args: ['id', ['public-doc']],
+    });
+    expect(operations.some((operation) => operation.table === 'river_document_audience')).toBe(false);
+  });
+
+  it('applies selected River source filters before reading private timeline documents', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_targets: [
+        { document_id: 'design-doc', target_kind: 'group', target_id: 'design' },
+        { document_id: 'other-doc', target_kind: 'group', target_id: 'ops' },
+      ],
+      river_document_audience: [{ document_id: 'design-doc' }],
+      river_documents: [makeTimelineRow('design-doc', 'user-2')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: ['group:design'],
+      limit: 10,
+    })).resolves.toMatchObject([{ documentId: 'design-doc', public: false }]);
+
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'in',
+      args: ['id', ['design-doc']],
+    });
+    expect(operations).toContainEqual({
+      table: 'river_documents',
+      op: 'or',
+      args: ['created_by.eq.user-1,id.in.(design-doc)'],
+    });
   });
 
   it('blocks pending invitees from sharing before hitting River RLS', async () => {

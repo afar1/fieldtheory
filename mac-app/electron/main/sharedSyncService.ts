@@ -169,6 +169,18 @@ export interface RiverTimelineItem {
   public: boolean;
 }
 
+interface RiverDocumentTargetRow {
+  document_id: string;
+  target_kind: 'person' | 'group' | 'public';
+  target_id: string;
+}
+
+interface RiverDocumentAudienceRow {
+  document_id: string;
+}
+
+type SupabaseClient = NonNullable<ReturnType<AuthManager['getSupabaseClient']>>;
+
 export interface SharedFileUpdateResult {
   ok: boolean;
   revision?: number;
@@ -1018,12 +1030,30 @@ export class SharedSyncService extends EventEmitter {
 
     if (supabase) {
       try {
-        const response = await supabase
+        const requestedTargets = query.scope === 'public'
+          ? [{ kind: 'public' as const, targetId: 'public' }]
+          : this.timelineTargetKeys(query.sourceIds);
+        const targetDocumentIds = requestedTargets.length > 0
+          ? await this.documentIdsForTargetRows(supabase, requestedTargets)
+          : null;
+        if (targetDocumentIds && targetDocumentIds.size === 0) return [];
+
+        let documentQuery = supabase
           .from('river_documents')
           .select('id, title, shared_name, content, created_by, updated_at, created_at, author_initials, author_callsign')
           .is('deleted_at', null)
-          .order('updated_at', { ascending: false })
-          .limit(limit);
+          .order('updated_at', { ascending: false });
+
+        if (targetDocumentIds) {
+          documentQuery = documentQuery.in('id', [...targetDocumentIds]);
+        }
+
+        if (query.scope === 'private') {
+          const audienceDocumentIds = await this.documentIdsForRecipient(supabase, session.user.id);
+          documentQuery = documentQuery.or(this.privateTimelineVisibilityFilter(session.user.id, audienceDocumentIds));
+        }
+
+        const response = await documentQuery.limit(limit);
         if (!response.error && response.data) {
           return ((response.data ?? []) as RiverDocumentRow[]).map((row) => this.timelineItemFromRow(row, query.scope));
         }
@@ -1232,9 +1262,61 @@ export class SharedSyncService extends EventEmitter {
     };
   }
 
+  private timelineTargetKeys(sourceIds: string[]): Array<{ kind: 'person' | 'group' | 'public'; targetId: string }> {
+    const keys: Array<{ kind: 'person' | 'group' | 'public'; targetId: string }> = [];
+    for (const sourceId of sourceIds) {
+      const separatorIndex = sourceId.indexOf(':');
+      if (separatorIndex <= 0) continue;
+      const kind = sourceId.slice(0, separatorIndex);
+      const targetId = sourceId.slice(separatorIndex + 1);
+      if (!targetId) continue;
+      if (kind === 'person' || kind === 'group' || kind === 'public') keys.push({ kind, targetId });
+    }
+    return keys;
+  }
+
+  private privateTimelineVisibilityFilter(userId: string, audienceDocumentIds: Set<string>): string {
+    if (audienceDocumentIds.size === 0) return `created_by.eq.${userId}`;
+    return `created_by.eq.${userId},id.in.(${[...audienceDocumentIds].join(',')})`;
+  }
+
+  private async documentIdsForRecipient(
+    supabase: SupabaseClient,
+    userId: string,
+  ): Promise<Set<string>> {
+    const { data, error } = await supabase
+      .from('river_document_audience')
+      .select('document_id')
+      .eq('recipient_user_id', userId)
+      .is('revoked_at', null);
+    if (error) throw error;
+    return new Set(((data ?? []) as RiverDocumentAudienceRow[])
+      .map((row) => row.document_id)
+      .filter(Boolean));
+  }
+
+  private async documentIdsForTargetRows(
+    supabase: SupabaseClient,
+    targets: Array<{ kind: 'person' | 'group' | 'public'; targetId: string }>,
+  ): Promise<Set<string>> {
+    if (targets.length === 0) return new Set();
+    const { data, error } = await supabase
+      .from('river_document_targets')
+      .select('document_id, target_kind, target_id')
+      .is('revoked_at', null);
+    if (error) throw error;
+
+    const targetKeys = new Set(targets.map((target) => `${target.kind}:${target.targetId}`));
+    return new Set(((data ?? []) as RiverDocumentTargetRow[])
+      .filter((row) => targetKeys.has(`${row.target_kind}:${row.target_id}`))
+      .map((row) => row.document_id)
+      .filter(Boolean));
+  }
+
   private timelineItemsFromCache(limit: number, scope: RiverTimelineScope): RiverTimelineItem[] {
     const root = sharedFilesRoot();
     if (!fs.existsSync(root)) return [];
+    if (scope === 'public') return [];
     const items: RiverTimelineItem[] = [];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
@@ -1251,10 +1333,10 @@ export class SharedSyncService extends EventEmitter {
           authorCallsign: parsed.authorCallsign ?? null,
           authorInitials: parsed.authorInitials ?? null,
           sourceLabel: parsed.teamName ?? null,
-          sourceKind: scope === 'public' ? 'public' : 'all',
+          sourceKind: 'all',
           sharedAt: parsed.updatedAt ?? new Date(fs.statSync(filePath).mtimeMs).toISOString(),
           pinned: false,
-          public: scope === 'public',
+          public: false,
         });
       } catch {
         // Ignore unreadable cache files while building the timeline.

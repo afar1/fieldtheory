@@ -384,7 +384,7 @@ export default function RiverPicker({
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (event.metaKey || event.ctrlKey) {
+      if (event.metaKey || event.ctrlKey || (!normalizedQuery && acceptedSelectedIds.length > 0)) {
         commit();
         return;
       }
@@ -548,7 +548,7 @@ export default function RiverPicker({
 
       {footerMode === 'commit' && (
         <div style={styles.footer}>
-          <span style={styles.footerHint}>Enter toggles. Cmd/Ctrl Enter commits.</span>
+          <span style={styles.footerHint}>Enter commits defaults. Search then Enter toggles.</span>
           <button
             type="button"
             disabled={commitDisabled}
