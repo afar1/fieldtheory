@@ -16,7 +16,7 @@ create table if not exists public.river_document_targets (
 
 create unique index if not exists river_document_targets_active_unique
   on public.river_document_targets (document_id, target_kind, target_id)
-  where revoked_at is null;
+;
 
 create index if not exists river_document_targets_document_idx
   on public.river_document_targets (document_id)

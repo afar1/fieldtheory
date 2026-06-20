@@ -1935,6 +1935,13 @@ interface SharedFileStatus {
   error?: string;
 }
 
+interface SharedFileAudienceStatus {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+}
+
 type SharedFileDestinationKind = 'contact' | 'team';
 type RiverTargetKind = 'person' | 'group' | 'public';
 type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
@@ -2007,6 +2014,12 @@ interface SharedFileShareInput {
   targets?: RiverShareTarget[];
 }
 
+interface SharedFileAudienceUpdateInput {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
+}
+
 interface SharedFileUpdateResult {
   ok: boolean;
   revision?: number;
@@ -2041,12 +2054,14 @@ interface SharedFilePinResult {
 interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
+  getAudience: (filePath: string) => Promise<SharedFileAudienceStatus>;
   getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
   getTargets: (query?: string) => Promise<RiverTarget[]>;
   setDefaultDestinations: (destinations: RiverDefaultDestination[]) => Promise<RiverMutationResult>;
   getSourcePreferences: () => Promise<RiverSourcePreference[]>;
   updateSourcePreferences: (preferences: RiverSourcePreference[]) => Promise<RiverMutationResult>;
   share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
+  updateAudience: (input: SharedFileAudienceUpdateInput) => Promise<SharedFileAudienceStatus>;
   unshare: (filePath: string) => Promise<boolean>;
   sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;
   updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => Promise<SharedFileUpdateResult>;

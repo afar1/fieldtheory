@@ -188,12 +188,14 @@ export type BrowserHelperNativeBridge = {
   rescanTaggedDocs?: () => unknown[] | Promise<unknown[]>;
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
+  getSharedFileAudience?: (filePath: string) => unknown | Promise<unknown>;
   getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
   getRiverTargets?: (query?: string) => unknown[] | Promise<unknown[]>;
   setRiverDefaultDestinations?: (destinations: unknown[]) => unknown | Promise<unknown>;
   getRiverSourcePreferences?: () => unknown[] | Promise<unknown[]>;
   updateRiverSourcePreferences?: (preferences: unknown[]) => unknown | Promise<unknown>;
   shareSharedFile?: (input: unknown) => unknown | Promise<unknown>;
+  updateSharedFileAudience?: (input: unknown) => unknown | Promise<unknown>;
   unshareSharedFile?: (filePath: string) => boolean | Promise<boolean>;
   syncSharedFiles?: () => unknown | Promise<unknown>;
   updateSharedFileContent?: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => unknown | Promise<unknown>;
@@ -1281,6 +1283,13 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/audience') {
+        const filePath = String(parsed.searchParams.get('path') ?? '');
+        const audience = filePath ? await this.nativeBridge.getSharedFileAudience?.(filePath) ?? { shared: false, targets: [] } : { shared: false, targets: [] };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'GET' && parsed.pathname === '/native/shared-files/destinations') {
         const query = String(parsed.searchParams.get('q') ?? '');
         const destinations = await this.nativeBridge.getSharedFileDestinations?.(query) ?? [];
@@ -1319,6 +1328,13 @@ export class BrowserHelperServer {
         const input = await readJsonBody(req);
         const status = await this.nativeBridge.shareSharedFile?.(input) ?? { shared: false };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/shared-files/audience') {
+        const input = await readJsonBody(req);
+        const audience = await this.nativeBridge.updateSharedFileAudience?.(input) ?? { shared: false, targets: [], error: 'Field Theory shared sync is not ready' };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
         return;
       }
 

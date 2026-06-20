@@ -10,6 +10,7 @@ import {
   RiverTargetService,
   type RiverDefaultDestination,
   type RiverMutationResult,
+  type RiverResolvedAudience,
   type RiverSourcePreference,
   type RiverShareTarget,
   type RiverTarget,
@@ -129,6 +130,19 @@ export interface SharedFileShareInput {
   type?: SharedFileType;
   destinations?: SharedFileShareTarget[];
   targets?: RiverShareTarget[];
+}
+
+export interface SharedFileAudienceStatus {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+}
+
+export interface SharedFileAudienceUpdateInput {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
 }
 
 export interface SharedFileUpdateResult {
@@ -735,8 +749,16 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { shared: false };
-    const resolved = await this.resolveShareRecipients(input.destinations);
-    if (resolved.error || resolved.recipients.length === 0) {
+    const resolvedTargets = input.targets?.length
+      ? await this.riverTargetService.resolveShareTargets(input.targets)
+      : null;
+    if (resolvedTargets?.error) {
+      return { shared: false, error: resolvedTargets.error };
+    }
+    const resolved = resolvedTargets
+      ? { recipients: resolvedTargets.recipients, error: resolvedTargets.error }
+      : await this.resolveShareRecipients(input.destinations);
+    if (resolved.error || (resolvedTargets ? resolvedTargets.targets.length === 0 : resolved.recipients.length === 0)) {
       return { shared: false, error: resolved.error ?? 'Choose an approved River destination' };
     }
 
@@ -778,23 +800,138 @@ export class SharedSyncService extends EventEmitter {
     }
 
     const savedRow = { ...row, ...(data as Omit<RiverDocumentRow, 'content'>), content } as RiverDocumentRow;
-    const audienceRows = resolved.recipients.map((recipientUserId) => ({
-      document_id: savedRow.id,
-      recipient_user_id: recipientUserId,
-      granted_by_user_id: session.user.id,
-      source_type: 'direct',
-      source_id: 'direct',
+    if (resolvedTargets) {
+      const targetResult = await this.writeTargetAudience(savedRow.id, resolvedTargets);
+      if (!targetResult.ok) return { shared: false, error: targetResult.error };
+    } else {
+      const audienceRows = resolved.recipients.map((recipientUserId) => ({
+        document_id: savedRow.id,
+        recipient_user_id: recipientUserId,
+        granted_by_user_id: session.user.id,
+        source_type: 'direct',
+        source_id: 'direct',
+        revoked_at: null,
+      }));
+      const { error: audienceError } = await supabase
+        .from('river_document_audience')
+        .upsert(audienceRows, { onConflict: 'document_id,recipient_user_id,source_type,source_id' });
+      if (audienceError) {
+        log.error('River audience grant failed:', audienceError);
+        return { shared: false, error: audienceError.message ?? 'River audience grant failed' };
+      }
+    }
+    const cachePath = this.writeRowToCache(savedRow);
+    return { shared: true, sharedId: savedRow.id, revision: savedRow.revision ?? 1, cachePath };
+  }
+
+  private async writeTargetAudience(documentId: string, resolved: RiverResolvedAudience): Promise<RiverMutationResult> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { ok: false, error: 'Not authenticated' };
+
+    const targetRows = resolved.targets.map((target) => ({
+      document_id: documentId,
+      target_kind: target.kind,
+      target_id: target.targetId,
+      created_by: session.user.id,
       revoked_at: null,
     }));
+    const { data: savedTargets, error: targetError } = await supabase
+      .from('river_document_targets')
+      .upsert(targetRows, { onConflict: 'document_id,target_kind,target_id' })
+      .select('id, target_kind, target_id');
+    if (targetError) {
+      log.error('River target write failed:', targetError);
+      return { ok: false, error: targetError.message ?? 'River target write failed' };
+    }
+
+    const savedTargetIds = new Map(
+      ((savedTargets ?? []) as Array<{ id: string; target_kind: string; target_id: string }>)
+        .map((row) => [`${row.target_kind}:${row.target_id}`, row.id]),
+    );
+    const audienceRows = resolved.targets.flatMap((target) => {
+      if (target.kind === 'public') return [];
+      const savedTargetId = savedTargetIds.get(`${target.kind}:${target.targetId}`);
+      if (!savedTargetId) return [];
+      return target.recipientUserIds.map((recipientUserId) => ({
+        document_id: documentId,
+        recipient_user_id: recipientUserId,
+        granted_by_user_id: session.user.id,
+        source_type: target.kind,
+        source_id: savedTargetId,
+        revoked_at: null,
+      }));
+    });
+    if (!audienceRows.length) return { ok: true };
+
     const { error: audienceError } = await supabase
       .from('river_document_audience')
       .upsert(audienceRows, { onConflict: 'document_id,recipient_user_id,source_type,source_id' });
     if (audienceError) {
       log.error('River audience grant failed:', audienceError);
-      return { shared: false, error: audienceError.message ?? 'River audience grant failed' };
+      return { ok: false, error: audienceError.message ?? 'River audience grant failed' };
     }
-    const cachePath = this.writeRowToCache(savedRow);
-    return { shared: true, sharedId: savedRow.id, revision: savedRow.revision ?? 1, cachePath };
+    return { ok: true };
+  }
+
+  async getAudienceStatus(filePath: string): Promise<SharedFileAudienceStatus> {
+    const status = await this.getShareStatus(filePath);
+    if (!status.shared || !status.sharedId) return { shared: false, targets: [] };
+
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase) return { shared: true, sharedId: status.sharedId, targets: [] };
+
+    const { data, error } = await supabase
+      .from('river_document_targets')
+      .select('target_kind, target_id')
+      .eq('document_id', status.sharedId)
+      .is('revoked_at', null);
+    if (error) return { shared: true, sharedId: status.sharedId, targets: [], error: error.message };
+
+    const selectedKeys = new Set(((data ?? []) as Array<{ target_kind?: unknown; target_id?: unknown }>)
+      .map((row) => `${String(row.target_kind)}:${String(row.target_id)}`));
+    const targets = (await this.riverTargetService.listTargets())
+      .filter((target) => selectedKeys.has(`${target.kind}:${target.targetId}`));
+    return { shared: true, sharedId: status.sharedId, targets };
+  }
+
+  async updateAudience(input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { shared: false, targets: [], error: 'Not authenticated' };
+
+    const sharedId = input.sharedId
+      ?? (input.filePath ? (await this.getShareStatus(input.filePath)).sharedId : null);
+    if (!sharedId) return { shared: false, targets: [], error: 'Shared file not found' };
+
+    const resolved = await this.riverTargetService.resolveShareTargets(input.targets);
+    if (resolved.error) return { shared: true, sharedId, targets: [], error: resolved.error };
+
+    const targetResult = await this.writeTargetAudience(sharedId, resolved);
+    if (!targetResult.ok) return { shared: true, sharedId, targets: [], error: targetResult.error };
+
+    const selectedTargetIds = new Set(resolved.targets.map((target) => `${target.kind}:${target.targetId}`));
+    const allRows = await supabase
+      .from('river_document_targets')
+      .select('id, target_kind, target_id')
+      .eq('document_id', sharedId);
+    if (!allRows.error) {
+      for (const row of (allRows.data ?? []) as Array<{ id: string; target_kind: string; target_id: string }>) {
+        if (selectedTargetIds.has(`${row.target_kind}:${row.target_id}`)) continue;
+        await supabase
+          .from('river_document_targets')
+          .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+        await supabase
+          .from('river_document_audience')
+          .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('document_id', sharedId)
+          .eq('source_id', row.id);
+      }
+    }
+
+    if (input.filePath) return this.getAudienceStatus(input.filePath);
+    return { shared: true, sharedId, targets: resolved.targets };
   }
 
   async unshareFile(filePath: string): Promise<boolean> {

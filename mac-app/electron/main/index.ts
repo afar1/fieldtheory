@@ -121,7 +121,7 @@ import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
-import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { SharedSyncService, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
@@ -3394,6 +3394,12 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         return sharedSyncService.getShareStatus(filePath);
       },
+      getSharedFileAudience: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+        return sharedSyncService.getAudienceStatus(filePath);
+      },
       getSharedFileDestinations: async (query) => {
         const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
@@ -3433,6 +3439,15 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         const result = await sharedSyncService.shareFile(input as SharedFileShareInput);
         if (result.shared) librarianManager?.emit('library:changed');
+        return result;
+      },
+      updateSharedFileAudience: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateAudience(input as SharedFileAudienceUpdateInput);
+        if (!result.error) librarianManager?.emit('library:changed');
         return result;
       },
       unshareSharedFile: async (filePath) => {
@@ -8925,6 +8940,13 @@ function setupLibrarianIPCHandlers(): void {
     return sharedSyncService.getShareStatus(filePath);
   });
 
+  ipcMain.handle('sharedFiles:getAudience', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+    return sharedSyncService.getAudienceStatus(filePath);
+  });
+
   ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
     const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
@@ -8969,6 +8991,16 @@ function setupLibrarianIPCHandlers(): void {
     if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     const result = await sharedSyncService.shareFile(input);
     if (result.shared) librarianManager?.emit('library:changed');
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:updateAudience', async (_event, input: SharedFileAudienceUpdateInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+    const result = await sharedSyncService.updateAudience(input);
+    if (!result.error) librarianManager?.emit('library:changed');
     return result;
   });
 

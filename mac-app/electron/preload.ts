@@ -4149,6 +4149,13 @@ type SharedFileStatus = {
   error?: string;
 };
 
+type SharedFileAudienceStatus = {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+};
+
 type SharedFileDestinationKind = 'contact' | 'team';
 type RiverTargetKind = 'person' | 'group' | 'public';
 type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
@@ -4221,6 +4228,12 @@ type SharedFileShareInput = {
   targets?: RiverShareTarget[];
 };
 
+type SharedFileAudienceUpdateInput = {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
+};
+
 type SharedFileUpdateResult = {
   ok: boolean;
   revision?: number;
@@ -4257,6 +4270,8 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getAvailability'),
   getStatus: (filePath: string): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  getAudience: (filePath: string): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:getAudience', filePath),
   getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
     ipcRenderer.invoke('sharedFiles:getDestinations', query),
   getTargets: (query?: string): Promise<RiverTarget[]> =>
@@ -4269,6 +4284,8 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:updateSourcePreferences', preferences),
   share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:share', input),
+  updateAudience: (input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:updateAudience', input),
   unshare: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('sharedFiles:unshare', filePath),
   sync: (): Promise<{ written: number; removed: number; created: number; errors: string[] }> =>
