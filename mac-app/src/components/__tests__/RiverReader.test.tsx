@@ -23,6 +23,15 @@ const timelineItems = [{
   cachePath: '/Users/afar/.fieldtheory/library/River (shared)/Brief AF.md',
   title: 'Launch Brief',
   excerpt: 'Useful context for the launch.',
+  content: [
+    'Useful context for the launch.',
+    '',
+    'The complete launch plan lives here.',
+    '',
+    'This longer body makes sure River expands beyond the compact preview and renders the full document text instead of another short excerpt.',
+    'It also keeps the test close to the product behavior, where shared briefs are usually long enough to need expansion.',
+  ].join('\n'),
+  authorUserId: 'user-2',
   authorCallsign: 'AF',
   authorInitials: 'AF',
   sourceLabel: 'Design',
@@ -102,6 +111,22 @@ describe('RiverReader', () => {
     expect(screen.getByLabelText('River location').textContent).toContain('River');
   });
 
+  it('expands River cards to the full document body', async () => {
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getTimeline: vi.fn(async () => timelineItems),
+        getTargets: vi.fn(async () => targets),
+      },
+    });
+
+    render(<RiverReader />);
+
+    fireEvent.click(await screen.findByText('Show more ▾'));
+
+    expect(screen.getByText(/The complete launch plan lives here/)).toBeTruthy();
+  });
+
   it('switches public tab and sends private source filters', async () => {
     const getTimeline = vi.fn(async () => timelineItems);
     Object.defineProperty(window, 'sharedFilesAPI', {
@@ -119,6 +144,7 @@ describe('RiverReader', () => {
     await waitFor(() => {
       expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['person:andrew'], limit: 50 });
     });
+    expect(screen.queryByText('Launch Brief')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Public' }));
     await waitFor(() => {

@@ -1666,6 +1666,8 @@ describe('SharedSyncService cache behavior', () => {
       cachePath,
       title: 'Plan',
       excerpt: 'Plan Useful context for the team.',
+      content: '# Plan\n\nUseful context for the team.',
+      authorUserId: null,
       authorCallsign: 'afar',
       authorInitials: 'AF',
       sourceLabel: null,

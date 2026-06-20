@@ -2008,6 +2008,8 @@ interface RiverTimelineItem {
   cachePath?: string;
   title: string;
   excerpt: string;
+  content?: string;
+  authorUserId?: string | null;
   authorCallsign?: string | null;
   authorInitials?: string | null;
   sourceLabel?: string | null;

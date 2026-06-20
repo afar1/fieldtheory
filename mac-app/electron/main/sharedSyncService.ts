@@ -160,6 +160,8 @@ export interface RiverTimelineItem {
   cachePath?: string;
   title: string;
   excerpt: string;
+  content?: string;
+  authorUserId?: string | null;
   authorCallsign?: string | null;
   authorInitials?: string | null;
   sourceLabel?: string | null;
@@ -1252,6 +1254,8 @@ export class SharedSyncService extends EventEmitter {
       cachePath: this.existingCachePathForRow(row.id) ?? undefined,
       title: sharedRowTitle(row),
       excerpt: this.excerptForContent(row.content),
+      content: this.timelineContentForDisplay(row.content),
+      authorUserId: row.created_by ?? null,
       authorCallsign: row.author_callsign ?? null,
       authorInitials: row.author_initials ?? null,
       sourceLabel: scope === 'public' ? 'Public River' : null,
@@ -1330,6 +1334,8 @@ export class SharedSyncService extends EventEmitter {
           cachePath: filePath,
           title: parsed.title?.trim() || path.basename(filePath, path.extname(filePath)),
           excerpt: this.excerptForContent(content),
+          content: this.timelineContentForDisplay(content),
+          authorUserId: null,
           authorCallsign: parsed.authorCallsign ?? null,
           authorInitials: parsed.authorInitials ?? null,
           sourceLabel: parsed.teamName ?? null,
@@ -1354,6 +1360,12 @@ export class SharedSyncService extends EventEmitter {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 240);
+  }
+
+  private timelineContentForDisplay(content: string): string {
+    return stripSharedFileFrontmatter(content)
+      .replace(/^---[\s\S]*?---\s*/, '')
+      .trim();
   }
 
   private sharedIdForCacheFile(filePath: string): string | null {

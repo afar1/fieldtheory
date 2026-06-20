@@ -158,6 +158,7 @@ interface ContentToolbarProps {
   // View state
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  forceVisibleActions?: ToolbarActionId[];
   dragSpacer?: boolean;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
@@ -593,6 +594,7 @@ export default function ContentToolbar({
   filePath,
   isFullScreen = false,
   onToggleFullScreen,
+  forceVisibleActions = [],
   dragSpacer = true,
   canNavigateBack = false,
   canNavigateForward = false,
@@ -833,7 +835,8 @@ export default function ContentToolbar({
   };
 
   const availableToolbarActions = PINNED_TOOLBAR_ACTION_ORDER.filter(canUseToolbarAction);
-  const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id));
+  const forcedVisibleActionSet = new Set(forceVisibleActions);
+  const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id) || forcedVisibleActionSet.has(id));
   const hasCustomizeMenuActions = availableToolbarActions.length > 0 || Boolean(showDelete && onDelete);
   const pillBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
   const menuBackground = theme.isDark ? '#1f1f23' : '#f8f7f4';

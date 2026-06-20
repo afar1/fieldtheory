@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.20': [
+    'River reader layout now uses more of the page with roomier source filters',
+    'River source toggles now hide matching people and groups from the visible timeline',
+    'Show more now expands to the full shared document body',
+    'River now exposes immersive view from the standard reader toolbar',
+  ],
   '0.3.19': [
     'River now has a polished full-page reader with an editorial timeline layout',
     'River sources can be edited from the reader with quick group and contact filters',
@@ -456,6 +462,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.20': 'Jun 20 2026',
   '0.3.19': 'Jun 20 2026',
   '0.3.18': 'Jun 20 2026',
   '0.3.17': 'Jun 20 2026',

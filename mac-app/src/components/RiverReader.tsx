@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { SidebarRiverIcon } from './SidebarIcons';
+import ContentToolbar from './ContentToolbar';
 
 type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
 type RiverTimelineItem = Awaited<ReturnType<SharedFilesClient['getTimeline']>>[number];
@@ -22,9 +22,11 @@ interface RiverReaderProps {
   active?: boolean;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
+  isFullScreen?: boolean;
   onOpenItem?: (item: RiverTimelineItem) => void;
   onNavigateBack?: () => void;
   onNavigateForward?: () => void;
+  onToggleFullScreen?: () => void;
   onActionFeedback?: (message: string) => void;
 }
 
@@ -79,8 +81,39 @@ function authorLabel(item: RiverTimelineItem): string {
   return 'River';
 }
 
-function shouldClampExcerpt(excerpt: string): boolean {
-  return excerpt.length > 190;
+function itemBodyText(item: RiverTimelineItem): string {
+  const content = item.content?.trim();
+  if (content) return content;
+  return item.excerpt?.trim() || 'No preview available.';
+}
+
+function shouldClampBody(item: RiverTimelineItem): boolean {
+  const body = itemBodyText(item);
+  return body.length > 260 || body.split(/\n/).length > 4;
+}
+
+function normalizeRiverToken(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function targetMatchesTimelineItem(target: RiverTarget, item: RiverTimelineItem): boolean {
+  if (target.kind === 'public') return item.public;
+  if (target.kind === 'person') {
+    if (item.authorUserId && (item.authorUserId === target.targetId || target.recipientUserIds.includes(item.authorUserId))) {
+      return true;
+    }
+    const targetCallsign = normalizeRiverToken(target.callsign);
+    const itemCallsign = normalizeRiverToken(item.authorCallsign);
+    if (targetCallsign && itemCallsign && targetCallsign === itemCallsign) return true;
+    const targetInitials = normalizeRiverToken(target.initials);
+    const itemInitials = normalizeRiverToken(item.authorInitials);
+    if (targetInitials && itemInitials && targetInitials === itemInitials) return true;
+    const targetText = normalizeRiverToken(`${target.label} ${target.detail ?? ''}`);
+    return Boolean(itemCallsign.length >= 3 && targetText.includes(itemCallsign));
+  }
+  const targetLabel = normalizeRiverToken(target.label);
+  const source = normalizeRiverToken(item.sourceLabel);
+  return Boolean(targetLabel && source && (targetLabel === source || targetLabel.includes(source) || source.includes(targetLabel)));
 }
 
 function riverActionStyle(color: string): CSSProperties {
@@ -234,7 +267,7 @@ function RiverSourceRow({
           }}
         />
       )}
-      <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13.5px' }}>
+      <span style={{ minWidth: 0, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13.5px' }}>
         {isPerson ? (target.label || target.callsign || 'River contact') : targetFilterLabel(target)}
       </span>
       {isPerson && target.callsign ? (
@@ -245,12 +278,15 @@ function RiverSourceRow({
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
           fontSize: '9.5px',
           padding: '1px 6px',
-          flex: '0 0 auto',
+          flex: '0 1 auto',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
         }}>
           {target.callsign}
         </span>
       ) : targetFilterDetail(target) ? (
-        <span style={{ color: included ? colors.muted : colors.faint, fontSize: '11px', flex: '0 0 auto' }}>
+        <span style={{ color: included ? colors.muted : colors.faint, fontSize: '11px', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {targetFilterDetail(target)}
         </span>
       ) : null}
@@ -290,9 +326,9 @@ function RiverSourceRail({
         top: '8px',
         borderLeft: `1px solid ${colors.line}`,
         backgroundColor: colors.panelTint,
-        padding: '28px 0 28px 18px',
+        padding: '28px 0 28px 20px',
         minHeight: '420px',
-        width: 'min(100%, 260px)',
+        width: 'min(100%, 340px)',
         boxSizing: 'border-box',
       }}
     >
@@ -346,9 +382,11 @@ export default function RiverReader({
   active = true,
   canNavigateBack = false,
   canNavigateForward = false,
+  isFullScreen = false,
   onOpenItem,
   onNavigateBack,
   onNavigateForward,
+  onToggleFullScreen,
   onActionFeedback,
 }: RiverReaderProps) {
   const { theme } = useTheme();
@@ -360,6 +398,7 @@ export default function RiverReader({
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const sourceTargets = useMemo(() => (
     targets.filter((target) => target.status === 'accepted' && target.kind !== 'public')
@@ -372,12 +411,18 @@ export default function RiverReader({
     groups: sourceTargets.filter((target) => target.kind === 'group'),
     people: sourceTargets.filter((target) => target.kind === 'person'),
   }), [sourceTargets]);
+  const visibleItems = useMemo(() => {
+    if (scope !== 'private' || selectedSourceIds.length === 0) return items;
+    const hiddenTargets = sourceTargets.filter((target) => !activeSourceSet.has(target.id));
+    if (hiddenTargets.length === 0) return items;
+    return items.filter((item) => hiddenTargets.every((target) => !targetMatchesTimelineItem(target, item)));
+  }, [activeSourceSet, items, scope, selectedSourceIds.length, sourceTargets]);
   const privateSourceSummary = useMemo(() => {
     if (scope === 'public') return 'Public timeline';
     if (sourceTargets.length === 0) return 'All private';
-    if (selectedSourceIds.length === 0) return `${items.length} documents · all private sources`;
-    return `${items.length} documents · ${selectedSourceIds.length} of ${sourceTargets.length} sources`;
-  }, [items.length, scope, selectedSourceIds.length, sourceTargets.length]);
+    if (selectedSourceIds.length === 0) return `${visibleItems.length} documents · all private sources`;
+    return `${visibleItems.length} documents · ${selectedSourceIds.length} of ${sourceTargets.length} sources`;
+  }, [scope, selectedSourceIds.length, sourceTargets.length, visibleItems.length]);
   const timelineSourceIds = useMemo(() => (
     scope === 'private' ? selectedSourceIds : []
   ), [scope, selectedSourceIds]);
@@ -408,7 +453,7 @@ export default function RiverReader({
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    setLoading(true);
+    setLoading(!hasLoadedRef.current);
     setError(null);
     void Promise.all([
       window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: timelineSourceIds, limit: 50 }) ?? Promise.resolve([]),
@@ -418,11 +463,12 @@ export default function RiverReader({
         if (cancelled) return;
         setItems(nextItems ?? []);
         setTargets(nextTargets ?? []);
+        hasLoadedRef.current = true;
       })
       .catch((err) => {
         console.warn('[RiverReader] timeline load failed:', err);
         if (!cancelled) {
-          setItems([]);
+          if (!hasLoadedRef.current) setItems([]);
           setError('River timeline could not load. Cached River files remain available in the sidebar.');
         }
       })
@@ -456,7 +502,7 @@ export default function RiverReader({
   };
 
   const copyItem = async (item: RiverTimelineItem) => {
-    const text = [item.title, item.excerpt].filter(Boolean).join('\n\n');
+    const text = [item.title, itemBodyText(item)].filter(Boolean).join('\n\n');
     try {
       const nativeResult = await window.clipboardAPI?.writeText?.(text);
       if (nativeResult && nativeResult.success === false) throw new Error(nativeResult.error ?? 'Copy failed');
@@ -508,6 +554,7 @@ export default function RiverReader({
           backgroundColor: riverColors.chrome,
           borderBottom: `1px solid ${riverColors.line}`,
           flexShrink: 0,
+          minHeight: '46px',
         }}
       >
         <div
@@ -550,27 +597,41 @@ export default function RiverReader({
             <span style={{ color: riverColors.text, fontWeight: 600 }}>River</span>
           </div>
         </div>
+        {onToggleFullScreen && (
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+          <ContentToolbar
+            isFullScreen={isFullScreen}
+            onToggleFullScreen={onToggleFullScreen}
+            forceVisibleActions={['immersive']}
+            dragSpacer={false}
+            showCopy={false}
+            showFolder={false}
+            showDelete={false}
+          />
+        </div>
+        )}
       </div>
       <main
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          padding: '40px 24px 52px',
+          padding: '40px clamp(28px, 6vw, 76px) 52px',
         }}
       >
         <div
           style={{
-            width: 'min(100%, 880px)',
+            width: '100%',
+            maxWidth: '1180px',
             margin: '0 auto',
             display: 'flex',
             flexWrap: 'wrap',
-            gap: '30px',
+            gap: '34px',
             justifyContent: 'center',
             alignItems: 'start',
           }}
         >
-          <section style={{ width: 'min(100%, 560px)', minWidth: 0, position: 'relative' }}>
+          <section style={{ flex: '1 1 680px', maxWidth: '780px', minWidth: 0, position: 'relative' }}>
           <button
             type="button"
             aria-label="Edit River sources"
@@ -579,8 +640,8 @@ export default function RiverReader({
               position: 'absolute',
               top: '8px',
               right: 0,
-              width: '34px',
-              height: '34px',
+              height: '32px',
+              padding: '0 12px',
               borderRadius: '10px',
               border: `1px solid ${riverColors.line}`,
               backgroundColor: riverColors.panel,
@@ -588,14 +649,12 @@ export default function RiverReader({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: 0,
+              color: riverColors.body,
+              fontSize: '12.5px',
+              fontWeight: 650,
             }}
           >
-            <span style={{ display: 'flex', alignItems: 'center' }}>
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#cdbce0', border: `1.5px solid ${riverColors.panel}` }} />
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#bcd0d8', border: `1.5px solid ${riverColors.panel}`, marginLeft: '-5px' }} />
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#c9d6c4', border: `1.5px solid ${riverColors.panel}`, marginLeft: '-5px' }} />
-            </span>
+            Sources
           </button>
 
           <h1
@@ -661,13 +720,13 @@ export default function RiverReader({
               <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>Loading River...</div>
             ) : error ? (
               <div role="alert" style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>{error}</div>
-            ) : items.length === 0 ? (
+            ) : visibleItems.length === 0 ? (
               <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
                 {scope === 'public' ? 'No public River items yet.' : 'No private River items yet.'}
               </div>
             ) : (
               <div>
-                {items.map((item) => (
+                {visibleItems.map((item) => (
                   <article
                     key={item.documentId}
                     style={{
@@ -727,7 +786,6 @@ export default function RiverReader({
                           <button type="button" aria-label={`${item.pinned ? 'Remove bookmark for' : 'Bookmark'} ${item.title}`} disabled={!item.cachePath} onClick={() => void pinItem(item)} style={{ border: 'none', background: 'transparent', color: item.pinned ? theme.accent : riverColors.muted, cursor: item.cachePath ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
                             <BookmarkActionIcon filled={Boolean(item.pinned)} />
                           </button>
-                          <span aria-hidden="true" style={{ color: theme.accent, display: 'inline-flex' }}><SidebarRiverIcon color={theme.accent} style={{ opacity: 0.7 }} /></span>
                         </div>
                       </div>
                       <button
@@ -765,12 +823,13 @@ export default function RiverReader({
                             WebkitLineClamp: expandedItemIds.includes(item.documentId) ? undefined : 2,
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
+                            whiteSpace: expandedItemIds.includes(item.documentId) ? 'pre-wrap' : 'normal',
                           }}
                         >
-                          {item.excerpt || 'No preview available.'}
+                          {expandedItemIds.includes(item.documentId) ? itemBodyText(item) : (item.excerpt || itemBodyText(item))}
                         </div>
                       </button>
-                      {shouldClampExcerpt(item.excerpt ?? '') && (
+                      {shouldClampBody(item) && (
                         <button
                           type="button"
                           onClick={() => toggleExpanded(item.documentId)}

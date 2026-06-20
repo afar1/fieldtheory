@@ -11461,8 +11461,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               active={active && selectedItemType === 'river'}
               canNavigateBack={canNavigateBack}
               canNavigateForward={canNavigateForward}
+              isFullScreen={effectiveFullScreen}
               onNavigateBack={() => navigateHistory(-1)}
               onNavigateForward={() => navigateHistory(1)}
+              onToggleFullScreen={toggleImmersive}
               onOpenItem={(item) => {
                 if (!item.cachePath) {
                   flashCopyFeedback('River item is not cached yet');
