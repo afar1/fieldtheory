@@ -81,6 +81,7 @@ describe('RiverReader', () => {
 
     render(<RiverReader />);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit River sources' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Design' }));
     await waitFor(() => {
       expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['group:design'], limit: 50 });
