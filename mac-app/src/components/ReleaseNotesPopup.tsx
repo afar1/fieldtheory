@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.17': [
+    'River now has a full timeline view while keeping individual River files navigable in the sidebar',
+    'Sharing to River now uses a destination picker for defaults, contacts, teams, groups, and Public River',
+    'River timeline filters and sharing now support multiple contacts without the old one-team limitation',
+  ],
   '0.3.16': [
     'Fixed the River toolbar button showing for entitled markdown documents before a destination is selected',
   ],
@@ -441,6 +446,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.17': 'Jun 20 2026',
   '0.3.16': 'Jun 18 2026',
   '0.3.15': 'Jun 18 2026',
   '0.3.14': 'Jun 17 2026',
