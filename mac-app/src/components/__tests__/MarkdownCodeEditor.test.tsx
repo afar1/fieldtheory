@@ -110,7 +110,7 @@ import {
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
   getRenderedMarkdownSelectedTaskDeleteEdit,
-  getRenderedMarkdownTaskMarkerDeleteBackwardEdit,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListBodyStartForLine,
@@ -1047,6 +1047,28 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       insertAt: 0,
       selection: 0,
     });
+  });
+
+  it('inserts Enter at the top of a rendered plain document as a leading blank line', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'Plain text',
+        selection: EditorSelection.cursor(0),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('\nPlain text');
+    expect(view.state.selection.main.from).toBe(0);
+
+    view.destroy();
+    parent.remove();
   });
 
   it('inserts Enter around a first rendered image without splitting its markdown', () => {
@@ -2340,17 +2362,17 @@ describe('MarkdownCodeEditor rendered presentation', () => {
   });
 
   it('removes only the rendered task marker on Backspace at task text start', () => {
-    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('- [ ] keep this text', '- [ ] '.length)).toEqual({
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('- [ ] keep this text', '- [ ] '.length)).toEqual({
       from: 0,
       to: '- [ ] '.length,
       insert: '',
       selection: 0,
     });
-    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('before\n  - [x] keep this text', 'before\n  - [x] '.length)).toEqual({
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('before\n  - [x] keep this text', 'before\n  - [x] '.length)).toEqual({
       from: 'before\n'.length,
       to: 'before\n  - [x] '.length,
-      insert: '  ',
-      selection: 'before\n  '.length,
+      insert: '',
+      selection: 'before\n'.length,
     });
 
     const parent = document.createElement('div');
@@ -2359,6 +2381,41 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       state: EditorState.create({
         doc: '- [ ] keep this text',
         selection: EditorSelection.cursor('- [ ] '.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('keep this text');
+    expect(view.state.selection.main.from).toBe(0);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes only rendered list markers on Backspace at text start', () => {
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('- keep this text', '- '.length)).toEqual({
+      from: 0,
+      to: '- '.length,
+      insert: '',
+      selection: 0,
+    });
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('1. keep this text', '1. '.length)).toEqual({
+      from: 0,
+      to: '1. '.length,
+      insert: '',
+      selection: 0,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- keep this text',
+        selection: EditorSelection.cursor('- '.length),
         extensions: [renderedMarkdownEditorPresentationExtension],
       }),
       parent,

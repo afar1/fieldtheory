@@ -1799,7 +1799,6 @@ export function getRenderedMarkdownShortcutEdit(input: {
 }): MarkdownTextEdit | null {
   const formattingKind = getMarkdownFormattingShortcut(input.event);
   if (formattingKind) {
-    if (input.selectionStart === input.selectionEnd) return null;
     return getMarkdownFormattingEdit(
       input.value,
       input.selectionStart,
