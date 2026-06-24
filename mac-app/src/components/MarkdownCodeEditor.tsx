@@ -3857,6 +3857,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         doc: value,
         extensions: [
           historyCompartment.of(history()),
+          Prec.highest(EditorView.domEventHandlers({
+            keydown: (event) => handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current),
+          })),
           keymap.of([
             {
               key: 'ArrowRight',
@@ -4099,13 +4102,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       viewRef.current = view;
       view.scrollDOM.setAttribute('data-ft-quality-scroll', presentation === 'rendered' ? 'rendered-editor' : 'markdown');
       scrollFpsSamplerRef(view.scrollDOM);
-      const handleKeyDownCapture = (event: KeyboardEvent) => {
-        handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
-      };
-      view.contentDOM.addEventListener('keydown', handleKeyDownCapture, true);
 
       return () => {
-        view.contentDOM.removeEventListener('keydown', handleKeyDownCapture, true);
         scrollFpsSamplerRef(null);
         view.destroy();
         viewRef.current = null;
