@@ -1452,11 +1452,7 @@ describe('rendered markdown edit helpers', () => {
   });
 
   it('does not skip visible literal punctuation when inserting rendered Enter', () => {
-    expect(getRenderedMarkdownEnterEdit('Use * literally', 4, 4)).toEqual({
-      nextValue: 'Use \n* literally',
-      selectionStart: 5,
-      selectionEnd: 5,
-    });
+    expect(getRenderedMarkdownEnterEdit('Use * literally', 4, 4)).toBeNull();
   });
 
   it('inserts rendered Enter before hidden block markdown at the visible line start', () => {
@@ -1472,25 +1468,15 @@ describe('rendered markdown edit helpers', () => {
       selectionEnd: 0,
     });
 
-    expect(getRenderedMarkdownEnterEdit('Resolved', 0, 0)).toEqual({
-      nextValue: '\nResolved',
-      selectionStart: 0,
-      selectionEnd: 0,
-    });
+    expect(getRenderedMarkdownEnterEdit('Resolved', 0, 0)).toBeNull();
   });
 
-  it('moves the rendered caret forward when Enter creates another blank line', () => {
-    expect(getRenderedMarkdownEnterEdit('hello\n', 6, 6)).toEqual({
-      nextValue: 'hello\n\n',
-      selectionStart: 7,
-      selectionEnd: 7,
-    });
+  it('lets CodeMirror handle ordinary plain-text rendered Enter', () => {
+    expect(getRenderedMarkdownEnterEdit('hello', 5, 5)).toBeNull();
+    expect(getRenderedMarkdownEnterEdit('hello\n', 6, 6)).toBeNull();
+    expect(getRenderedMarkdownEnterEdit('hello\nworld', 6, 6)).toBeNull();
 
-    expect(getRenderedMarkdownEnterEdit('', 0, 0)).toEqual({
-      nextValue: '\n',
-      selectionStart: 1,
-      selectionEnd: 1,
-    });
+    expect(getRenderedMarkdownEnterEdit('', 0, 0)).toBeNull();
   });
 
   it('continues markdown list structures from rendered Enter', () => {

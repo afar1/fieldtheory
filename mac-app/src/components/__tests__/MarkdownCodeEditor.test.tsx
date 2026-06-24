@@ -1049,7 +1049,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
   });
 
-  it('inserts Enter at the top of a rendered plain document as a leading blank line', () => {
+  it('lets CodeMirror handle Enter at the top of a rendered plain document', () => {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
@@ -1063,8 +1063,8 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
       inputType: 'insertParagraph',
-    }))).toBe(true);
-    expect(view.state.doc.toString()).toBe('\nPlain text');
+    }))).toBe(false);
+    expect(view.state.doc.toString()).toBe('Plain text');
     expect(view.state.selection.main.from).toBe(0);
 
     view.destroy();
