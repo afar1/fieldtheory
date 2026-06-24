@@ -1786,25 +1786,70 @@ describe('rendered markdown edit helpers', () => {
 	    });
 	  });
 
-	  it('ignores empty inline formatting shortcuts in rendered mode', () => {
+	  it('creates inline formatting placeholders for empty rendered shortcuts', () => {
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'b', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello ****',
+	      selectionStart: 8,
+	      selectionEnd: 8,
+	    });
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'i', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello **',
+	      selectionStart: 7,
+	      selectionEnd: 7,
+	    });
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'u', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello <u></u>',
+	      selectionStart: 9,
+	      selectionEnd: 9,
+	    });
+	  });
+
+	  it('toggles empty rendered inline formatting placeholders off', () => {
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'b', metaKey: true }),
+	      value: 'hello ****',
+	      selectionStart: 8,
+	      selectionEnd: 8,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'i', metaKey: true }),
+	      value: 'hello **',
+	      selectionStart: 7,
+	      selectionEnd: 7,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'u', metaKey: true }),
+	      value: 'hello <u></u>',
+	      selectionStart: 9,
+	      selectionEnd: 9,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
 	  });
 
   it('recognizes the paste selection to terminal hotkey', () => {

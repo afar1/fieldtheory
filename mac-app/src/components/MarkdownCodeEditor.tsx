@@ -1702,26 +1702,24 @@ export function getRenderedMarkdownSelectedTaskDeleteEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
-export function getRenderedMarkdownTaskMarkerDeleteBackwardEdit(
+export function getRenderedMarkdownListMarkerDeleteBackwardEdit(
   value: string,
   offset: number,
 ): { from: number; to: number; insert: string; selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
   const lineText = value.slice(lineStart, lineEnd);
-  const taskMatch = /^(\s*)(?:[-*+]\s*)?\[[ xX]?\](\s+)(.+)$/.exec(lineText);
-  if (!taskMatch) return null;
-  const markerPrefixLength = taskMatch[0].length - taskMatch[3].length;
+  const markerMatch = /^(\s*)((?:(?:[-*+]\s+)?\[[ xX]?\]\s+)|(?:[-*+]\s+)|(?:\d+[.)]\s+))(.+)$/.exec(lineText);
+  if (!markerMatch) return null;
+  const markerPrefixLength = markerMatch[0].length - markerMatch[3].length;
   const bodyStart = lineStart + markerPrefixLength;
   if (caret !== bodyStart) return null;
 
-  const indentation = taskMatch[1];
-  const selection = lineStart + indentation.length;
   return {
     from: lineStart,
     to: bodyStart,
-    insert: indentation,
-    selection,
+    insert: '',
+    selection: lineStart,
   };
 }
 
@@ -1784,11 +1782,11 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
       }
       return false;
     }
-    const taskMarkerEdit = getRenderedMarkdownTaskMarkerDeleteBackwardEdit(value, selection.from);
-    if (taskMarkerEdit) {
+    const listMarkerEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(value, selection.from);
+    if (listMarkerEdit) {
       view.dispatch({
-        changes: { from: taskMarkerEdit.from, to: taskMarkerEdit.to, insert: taskMarkerEdit.insert },
-        selection: { anchor: taskMarkerEdit.selection, head: taskMarkerEdit.selection },
+        changes: { from: listMarkerEdit.from, to: listMarkerEdit.to, insert: listMarkerEdit.insert },
+        selection: { anchor: listMarkerEdit.selection, head: listMarkerEdit.selection },
       });
       return true;
     }
@@ -1811,6 +1809,13 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
     const value = view.state.doc.toString();
+    if (selection.empty && selection.from === 0) {
+      view.dispatch({
+        changes: { from: 0, insert: '\n' },
+        selection: { anchor: 0 },
+      });
+      return true;
+    }
     const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
       ?? getRenderedMarkdownAtomicBoundaryLineBreakEdit(value, selection.from);
     if (!edit) return false;

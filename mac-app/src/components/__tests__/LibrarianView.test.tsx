@@ -4589,6 +4589,125 @@ describe('LibrarianView render', () => {
     expect(getClipboardImagePath).not.toHaveBeenCalled();
   });
 
+  it('does not make unchanged source-mode image references portable while autosaving prose edits', async () => {
+    const relPath = 'scratchpad/source-prose-autosave-image-skip-test';
+    const content = '![Image](./existing.png)\nhello source image';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'source-prose-autosave-image-skip-test',
+      title: 'source-prose-autosave-image-skip-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'source-prose-image-skip-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: 0,
+          selectionEnd: 0,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 7, sha256: 'source-prose-image-skip-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const sourceInput = await waitFor(() => {
+      const input = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello source image');
+      return input;
+    });
+    if (!sourceInput) throw new Error('Markdown source input missing');
+
+    pasteText(sourceInput, 'draft: ');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'draft: ![Image](./existing.png)\nhello source image',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+    expect(window.markdownImagesAPI!.makeImagesPortable).not.toHaveBeenCalled();
+  });
+
+  it('makes added source-mode image references portable before autosaving', async () => {
+    const relPath = 'scratchpad/source-image-autosave-portable-test';
+    const content = 'hello source image';
+    const pastedImage = '![Image](<file:///Users/afar/Pictures/Source%20Photo.png>)';
+    const portableContent = '![Image](./.assets/Source%20Photo.png)\nhello source image';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'source-image-autosave-portable-test',
+      title: 'source-image-autosave-portable-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'source-image-portable-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: 0,
+          selectionEnd: 0,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.markdownImagesAPI!.makeImagesPortable).mockResolvedValue({
+      content: portableContent,
+      copied: 1,
+      rewritten: 1,
+      missing: 0,
+    });
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: portableContent.length, sha256: 'source-image-portable-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const sourceInput = await waitFor(() => {
+      const input = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello source image');
+      return input;
+    });
+    if (!sourceInput) throw new Error('Markdown source input missing');
+
+    pasteText(sourceInput, `${pastedImage}\n`);
+
+    await waitFor(() => {
+      expect(window.markdownImagesAPI!.makeImagesPortable).toHaveBeenCalledWith(
+        page.absPath,
+        `${pastedImage}\nhello source image`,
+      );
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        portableContent,
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
   it('opens a Quick Look style preview when a rendered editor image is clicked', async () => {
     const relPath = 'scratchpad/rendered-image-preview-test';
     const content = '![Diagram](<file:///tmp/Figure%201.png>)';
