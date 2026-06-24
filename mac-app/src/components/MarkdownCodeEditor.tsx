@@ -1809,13 +1809,6 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
     const value = view.state.doc.toString();
-    if (selection.empty && selection.from === 0) {
-      view.dispatch({
-        changes: { from: 0, insert: '\n' },
-        selection: { anchor: 0 },
-      });
-      return true;
-    }
     const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
       ?? getRenderedMarkdownAtomicBoundaryLineBreakEdit(value, selection.from);
     if (!edit) return false;

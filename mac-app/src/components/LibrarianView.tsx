@@ -1870,7 +1870,6 @@ function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: numbe
 function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): number | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
-  if (caret === lineStart) return lineStart;
   const lineEndIndex = value.indexOf('\n', caret);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
   const visibleStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
@@ -1905,6 +1904,7 @@ export function getRenderedMarkdownEnterEdit(
     ? null
     : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
       ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset));
+  if (!listEnterEdit && lineStartOffset === null && insertionOffset === selectionStart) return null;
   return listEnterEdit
     ?? {
       nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
