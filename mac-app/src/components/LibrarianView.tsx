@@ -1892,6 +1892,11 @@ export function getRenderedMarkdownEnterEdit(
 ): MarkdownTextEdit | null {
   if (selectionStart !== selectionEnd) return null;
   const lineStartOffset = getRenderedMarkdownLineStartEditOffset(value, selectionStart);
+  const directListEnterEdit = lineStartOffset === null
+    ? (getCarrotListEnterEdit(value, selectionStart, selectionEnd)
+      ?? getMarkdownListEnterEdit(value, selectionStart, selectionEnd))
+    : null;
+  if (directListEnterEdit) return directListEnterEdit;
   const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, lineStartOffset ?? selectionStart);
   const insertionOffset = openingOffset === selectionStart
     ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
