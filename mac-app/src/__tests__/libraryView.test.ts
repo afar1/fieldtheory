@@ -1497,6 +1497,15 @@ describe('rendered markdown edit helpers', () => {
       selectionStart: 18,
       selectionEnd: 18,
     });
+
+    const mixedTaskList = '- hello\n- [ ] bye';
+    const continuedTaskMarker = '\n- [ ] ';
+    const mixedTaskSelection = mixedTaskList.length + continuedTaskMarker.length;
+    expect(getRenderedMarkdownEnterEdit(mixedTaskList, mixedTaskList.length, mixedTaskList.length)).toEqual({
+      nextValue: `${mixedTaskList}${continuedTaskMarker}`,
+      selectionStart: mixedTaskSelection,
+      selectionEnd: mixedTaskSelection,
+    });
   });
 
   it('exits empty markdown list structures from rendered Enter', () => {
