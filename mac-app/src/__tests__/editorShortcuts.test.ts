@@ -206,6 +206,9 @@ describe('getMarkdownListShortcutKind', () => {
   it('maps Shift+Cmd+7 and Shift+Cmd+8 to ordered and unordered list actions', () => {
     expect(getMarkdownListShortcutKind(mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }))).toBe('ordered');
     expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }))).toBe('unordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '7', code: '', metaKey: true, shiftKey: true }))).toBe('ordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '8', code: '', metaKey: true, shiftKey: true }))).toBe('unordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '•', code: '', metaKey: true, shiftKey: true }))).toBe('unordered');
   });
 
   it('rejects unshifted or unrelated modified list chords', () => {

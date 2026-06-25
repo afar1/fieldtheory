@@ -55,8 +55,8 @@ export function isMarkdownTaskToggleShortcut(e: KeyboardEvent | React.KeyboardEv
 
 export function getMarkdownListShortcutKind(e: KeyboardEvent | React.KeyboardEvent): 'ordered' | 'unordered' | null {
   if (!e.metaKey || !e.shiftKey || e.ctrlKey || e.altKey) return null;
-  if (e.code === 'Digit7') return 'ordered';
-  if (e.code === 'Digit8') return 'unordered';
+  if (e.code === 'Digit7' || e.key === '7' || e.key === '&') return 'ordered';
+  if (e.code === 'Digit8' || e.key === '8' || e.key === '*' || e.key === '•') return 'unordered';
   return null;
 }
 
