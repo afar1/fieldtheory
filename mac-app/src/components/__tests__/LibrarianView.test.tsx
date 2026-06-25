@@ -28,6 +28,8 @@ import LibrarianView, {
   restoreLibrarianTextSize,
   shouldReportActiveLibraryFileContextForSelection,
   shouldPreserveEditorSelectionPastePopover,
+  moveLibrarianNavigationHistory,
+  pushLibrarianNavigationEntry,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -82,6 +84,21 @@ describe('LibrarianView render', () => {
     `${testLibraryRootPath}::scratchpad`,
   ]);
   let toggleLineNumbersFromLauncher: (() => void) | null = null;
+
+  it('keeps River entries in librarian navigation history', () => {
+    const wikiEntry = { itemType: 'wiki' as const, itemPath: 'scratchpad/start' };
+    const riverEntry = { itemType: 'river' as const, itemPath: 'river' };
+    const history = pushLibrarianNavigationEntry(
+      pushLibrarianNavigationEntry({ entries: [], index: -1 }, wikiEntry),
+      riverEntry
+    );
+
+    const previous = moveLibrarianNavigationHistory(history, -1);
+    const next = previous ? moveLibrarianNavigationHistory(previous.history, 1) : null;
+
+    expect(previous?.entry).toEqual(wikiEntry);
+    expect(next?.entry).toEqual(riverEntry);
+  });
 
   it('keeps the selection paste popover alive for CodeMirror editor selections', () => {
     const editor = document.createElement('div');
@@ -2650,6 +2667,107 @@ describe('LibrarianView render', () => {
     expect(terminalButton.style.height).toBe(focusButton.style.width);
     expect(focusButton.style.height).toBe(focusButton.style.width);
     expect(riverButton.style.borderStyle).toBe('none');
+  });
+
+  it('shows the River button for entitled markdown documents before a writable destination exists', async () => {
+    const relPath = 'scratchpad/river-no-destination-toolbar-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'river-no-destination-toolbar-test',
+      title: 'river-no-destination-toolbar-test',
+      lastUpdated: 1,
+      content: 'River button body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'river-no-destination' },
+    };
+    const getTargets = vi.fn(async () => []);
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: false, hasTeamMembers: false })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getTargets,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('River button body');
+    const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
+
+    fireEvent.click(riverButton);
+
+    expect(await screen.findByRole('dialog', { name: 'Share to River' })).toBeTruthy();
+    expect(await screen.findByText('No River contacts or groups yet.')).toBeTruthy();
+    expect(getTargets).toHaveBeenCalledWith('');
+  });
+
+  it('shares to the selected default River target from the toolbar picker', async () => {
+    const relPath = 'scratchpad/river-default-target-toolbar-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'river-default-target-toolbar-test',
+      title: 'river-default-target-toolbar-test',
+      lastUpdated: 1,
+      content: 'River default target body',
+      documentVersion: { mtimeMs: 1, size: 26, sha256: 'river-default-target' },
+    };
+    const share = vi.fn(async () => ({ shared: true, sharedId: 'shared-1', revision: 1 }));
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getTargets: vi.fn(async () => [{
+          id: 'person:user-2',
+          kind: 'person',
+          targetId: 'user-2',
+          label: 'Jane Beta',
+          detail: 'jneb802@gmail.com',
+          status: 'accepted',
+          committable: true,
+          isDefault: true,
+          recipientUserIds: ['user-2'],
+        }]),
+        share,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('River default target body');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to River (shared)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Share to Jane Beta' }));
+
+    await waitFor(() => {
+      expect(share).toHaveBeenCalledWith(expect.objectContaining({
+        filePath: page.absPath,
+        title: page.title,
+        content: page.content,
+        targets: [{ id: 'person:user-2', kind: 'person' }],
+      }));
+    });
   });
 
   it('keeps the Library document toolbar in Browser mode while excluding terminal controls', async () => {

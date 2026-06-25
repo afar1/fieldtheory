@@ -70,6 +70,8 @@ Supabase-backed features include auth, profile/session state, feedback, account 
 
 The Supabase publishable key is public client configuration. It is not a service-role secret. Access control belongs in auth, row-level security, Edge Functions, and server-side checks.
 
+Teams and River are account-backed and entitlement-gated. Production database policy and RLS own the eligibility decision for each signed-in account; the Mac app only reads the current account's allowed/not-allowed result. If the entitlement cannot be read, the app fails closed and hides Teams/River controls, except that a same-user last-known allowed result may keep the UI visible during offline or network loss until the app can read the online result again. A successful online revocation wins over any local last-known state.
+
 ## Internal, Disabled, and Experimental Surfaces
 
 These surfaces exist in code but should not be treated as default public contributor features:

@@ -77,7 +77,7 @@ export function SidebarRiverIcon({ color, style }: { color: string; style?: CSSP
       style={iconStyle(color, style)}
     >
       <path
-        d="M2.5 5.25c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0M2.5 8c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0M2.5 10.75c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0"
+        d="M4.25 3.25h7.5M4.25 6h7.5M4.25 8.75h7.5M4.25 11.5h5.25M2.5 3.4v8.2"
         stroke="currentColor"
         strokeWidth="1.25"
         strokeLinecap="round"

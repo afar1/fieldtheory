@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 
 describe('getClipboardHistoryActivationPreflightSkipReason', () => {
+  it('skips app activation while quit cleanup is in progress', () => {
+    expect(getClipboardHistoryActivationPreflightSkipReason({
+      appQuitInProgress: true,
+      onboardingComplete: true,
+      commandLauncherExternalInvocationSuppressed: false,
+      commandLauncherShowingOrVisible: false,
+    })).toBe('app-quitting');
+  });
+
   it('skips app activation while a command launcher invocation is in flight even after the launcher hides', () => {
     expect(getClipboardHistoryActivationPreflightSkipReason({
       onboardingComplete: true,

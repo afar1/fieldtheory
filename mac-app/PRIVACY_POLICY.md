@@ -67,6 +67,8 @@ Current Mac code can use Supabase for:
 
 The Supabase URL and publishable key are public client configuration. They are not service-role secrets. Access control must come from authentication, row-level security, Edge Functions, and server-side checks.
 
+Teams and River use an account entitlement in addition to the existing auth and team/River state. The production database and RLS policies own that eligibility result; the app treats missing, denied, or unreadable entitlement as not allowed. During offline or network loss, the app may keep Teams/River UI visible for the same signed-in user when it has a last-known allowed result, but the next successful online read can revoke that local allowance.
+
 ## River Shared Documents
 
 River is the account-backed shared markdown feature.

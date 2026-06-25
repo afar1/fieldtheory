@@ -121,10 +121,11 @@ import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
-import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
+import { SharedTeamEntitlementService, type SharedTeamEntitlementState } from './sharedTeamEntitlementService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
@@ -3382,34 +3383,92 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       markAllTaggedDocsRead: () => taggedDocsManager?.markAllRead() ?? [],
       rescanTaggedDocs: () => taggedDocsManager?.rescan() ?? [],
       getSharedFilesAvailability: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
-        return sharedSyncService.getAvailability();
+        if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+        return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
       },
       getSharedFileStatus: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         return sharedSyncService.getShareStatus(filePath);
+      },
+      getSharedFileAudience: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+        return sharedSyncService.getAudienceStatus(filePath);
+      },
+      getRiverTimeline: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getTimeline(query as RiverTimelineQuery);
+      },
+      getSharedFileDestinations: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getDestinations(query);
+      },
+      getRiverTargets: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverTargets(query);
+      },
+      setRiverDefaultDestinations: async (destinations) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+      },
+      getRiverSourcePreferences: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverSourcePreferences();
+      },
+      updateRiverSourcePreferences: async (preferences) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.updateRiverSourcePreferences(preferences as any);
       },
       shareSharedFile: async (input) => {
         if (!canWriteFieldTheoryContent()) return { shared: false };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         const result = await sharedSyncService.shareFile(input as SharedFileShareInput);
         if (result.shared) librarianManager?.emit('library:changed');
         return result;
       },
+      updateSharedFileAudience: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateAudience(input as SharedFileAudienceUpdateInput);
+        if (!result.error) librarianManager?.emit('library:changed');
+        return result;
+      },
       unshareSharedFile: async (filePath) => {
         if (!canWriteFieldTheoryContent()) return false;
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return false;
+        if (!entitlement.allowed || !sharedSyncService) return false;
         const result = await sharedSyncService.unshareFile(filePath);
         if (result) librarianManager?.emit('library:changed');
         return result;
       },
       syncSharedFiles: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+        if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
         const result = await sharedSyncService.syncOnce();
         if (result.written > 0 || result.removed > 0 || result.created > 0) {
           librarianManager?.emit('library:changed');
@@ -3419,28 +3478,33 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       },
       updateSharedFileContent: async (sharedId, content, expectedRevision, documentPath) => {
         if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
         const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
         if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
         return result;
       },
       setActivePresence: async (sharedId) => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        if (!entitlement.allowed || !sharedSyncService) return [];
         return sharedSyncService.setActivePresence(sharedId);
       },
       getPinnedItemIds: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        if (!entitlement.allowed || !sharedSyncService) return [];
         return sharedSyncService.getPinnedSidebarItemIds();
       },
       setPinned: async (filePath, pinned) => {
         if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
         return sharedSyncService.setPinned(filePath, pinned);
       },
+      getTeamEntitlement: async () => getSharedFeatureEntitlement(),
       initializeCommands: async () => {
         await commandsManager?.initialize();
       },
@@ -3914,6 +3978,7 @@ let librarySyncService: LibrarySyncService | null = null;
 let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let sharedSyncService: SharedSyncService | null = null;
+let sharedTeamEntitlementService: SharedTeamEntitlementService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let lastExternalCommandTargetApp: CommandLauncherTargetApp | null = null;
 type ActiveLibraryFileContext = {
@@ -4130,6 +4195,7 @@ let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
 let appQuitConfirmedWithLocalWork = false;
 let appQuitConfirmationOpen = false;
+let appQuitInProgress = false;
 let appQuitWatcherCleanupComplete = false;
 let appQuitWatcherCleanupInFlight: Promise<void> | null = null;
 let appMetadataIPCHandlersInstalled = false;
@@ -4670,8 +4736,38 @@ function canUseFieldTheorySync(): boolean {
   return getFieldTheorySyncStatus().enabled;
 }
 
+function getSharedTeamEntitlementService(): SharedTeamEntitlementService | null {
+  if (!authManager) return null;
+  if (!sharedTeamEntitlementService) {
+    sharedTeamEntitlementService = new SharedTeamEntitlementService(authManager);
+  }
+  return sharedTeamEntitlementService;
+}
+
+function getSharedFeatureEntitlementSnapshot(): SharedTeamEntitlementState {
+  const service = getSharedTeamEntitlementService();
+  return service?.getCachedState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
+async function getSharedFeatureEntitlement(): Promise<SharedTeamEntitlementState> {
+  const service = getSharedTeamEntitlementService();
+  return service?.getState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
 function canUseSharedFeatures(): boolean {
-  return authManager?.isAuthenticated() ?? false;
+  return getSharedFeatureEntitlementSnapshot().allowed;
 }
 
 function fieldTheorySyncDisabledError(): string {
@@ -4681,7 +4777,29 @@ function fieldTheorySyncDisabledError(): string {
 }
 
 function sharedFeaturesDisabledError(): string {
-  return canUseSharedFeatures() ? 'River is not available' : 'Not authenticated';
+  const entitlement = getSharedFeatureEntitlementSnapshot();
+  if (entitlement.reason === 'not_authenticated') return 'Not authenticated';
+  if (entitlement.reason === 'not_entitled') return 'River is not enabled for this account';
+  return 'River is not available';
+}
+
+function sharedUnavailableAvailability(entitlement: SharedTeamEntitlementState) {
+  const availability = {
+    available: false,
+    canWrite: false,
+    hasTeamMembers: false,
+    reason: entitlement.reason ?? 'lookup_failed',
+  };
+  return entitlement.stale ? { ...availability, stale: true } : availability;
+}
+
+function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
+  availability: T,
+  entitlement: SharedTeamEntitlementState,
+): T {
+  return entitlement.stale && availability.stale !== true
+    ? { ...availability, stale: true }
+    : availability;
 }
 
 function refreshFieldTheorySyncServices(): void {
@@ -4754,7 +4872,9 @@ function scheduleSharedFilesSyncAndBroadcastChanges(): void {
 }
 
 async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
-  if (!sharedSyncService) return;
+  const entitlement = await getSharedFeatureEntitlement();
+  refreshFieldTheorySyncServices();
+  if (!entitlement.allowed || !sharedSyncService) return;
   try {
     const result = await sharedSyncService.syncOnce();
     if (result.written > 0 || result.removed > 0 || result.created > 0) {
@@ -7277,6 +7397,7 @@ function showClipboardHistoryOnActivate(): void {
     commandLauncherExternalInvocationSuppressed,
   });
   const preflightSkipReason = getClipboardHistoryActivationPreflightSkipReason({
+    appQuitInProgress,
     onboardingComplete: prefs?.onboardingComplete === true,
     commandLauncherExternalInvocationSuppressed,
     commandLauncherShowingOrVisible,
@@ -7644,8 +7765,9 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     if (isMoveIntoRiver(kind, sourceRelPath, targetDirRelPath)) {
+      const entitlement = await getSharedFeatureEntitlement();
       refreshFieldTheorySyncServices();
-      if (!sharedSyncService || !canUseSharedFeatures()) return null;
+      if (!entitlement.allowed || !sharedSyncService) return null;
       return moveLibraryFileIntoRiver({
         librarianManager,
         sharedSyncService,
@@ -7699,8 +7821,9 @@ function setupLibrarianIPCHandlers(): void {
     const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
     if (localConflict) return localConflict;
 
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'error' };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: 'error' };
 
     const result = await sharedSyncService.updateSharedContent(
       sharedMeta.sharedId,
@@ -8812,38 +8935,104 @@ function setupLibrarianIPCHandlers(): void {
   // ===========================================================================
 
   ipcMain.handle('sharedFiles:getAvailability', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
-    return sharedSyncService.getAvailability();
+    if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+    return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
   });
 
   ipcMain.handle('sharedFiles:getStatus', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     return sharedSyncService.getShareStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getAudience', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+    return sharedSyncService.getAudienceStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getTimeline', async (_event, query: RiverTimelineQuery) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getTimeline(query);
+  });
+
+  ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getDestinations(query);
+  });
+
+  ipcMain.handle('sharedFiles:getTargets', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverTargets(query);
+  });
+
+  ipcMain.handle('sharedFiles:setDefaultDestinations', async (_event, destinations: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+  });
+
+  ipcMain.handle('sharedFiles:getSourcePreferences', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverSourcePreferences();
+  });
+
+  ipcMain.handle('sharedFiles:updateSourcePreferences', async (_event, preferences: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.updateRiverSourcePreferences(preferences as any);
   });
 
   ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {
     if (!canWriteFieldTheoryContent()) return { shared: false };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     const result = await sharedSyncService.shareFile(input);
     if (result.shared) librarianManager?.emit('library:changed');
     return result;
   });
 
+  ipcMain.handle('sharedFiles:updateAudience', async (_event, input: SharedFileAudienceUpdateInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+    const result = await sharedSyncService.updateAudience(input);
+    if (!result.error) librarianManager?.emit('library:changed');
+    return result;
+  });
+
   ipcMain.handle('sharedFiles:unshare', async (_event, filePath: string): Promise<boolean> => {
     if (!canWriteFieldTheoryContent()) return false;
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return false;
+    if (!entitlement.allowed || !sharedSyncService) return false;
     const result = await sharedSyncService.unshareFile(filePath);
     if (result) librarianManager?.emit('library:changed');
     return result;
   });
 
   ipcMain.handle('sharedFiles:sync', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+    if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
     const result = await sharedSyncService.syncOnce();
     if (result.written > 0 || result.removed > 0 || result.created > 0) {
       librarianManager?.emit('library:changed');
@@ -8854,29 +9043,33 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
     const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
     if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
     return result;
   });
 
   ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return [];
+    if (!entitlement.allowed || !sharedSyncService) return [];
     return sharedSyncService.setActivePresence(sharedId);
   });
 
   ipcMain.handle('sharedFiles:getPinnedItemIds', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return [];
+    if (!entitlement.allowed || !sharedSyncService) return [];
     return sharedSyncService.getPinnedSidebarItemIds();
   });
 
   ipcMain.handle('sharedFiles:setPinned', async (_event, filePath: string, pinned: boolean) => {
     if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
     return sharedSyncService.setPinned(filePath, pinned);
   });
 
@@ -8884,13 +9077,16 @@ function setupLibrarianIPCHandlers(): void {
   // Team Membership
   // ===========================================================================
 
+  ipcMain.handle('team:getEntitlement', async () => getSharedFeatureEntitlement());
+
   ipcMain.handle('team:getState', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) {
+    if (!entitlement.allowed || !sharedTeamService) {
       return {
         available: false,
         currentTeamScopeUserId: null,
-        reason: 'not_authenticated',
+        reason: entitlement.reason ?? 'lookup_failed',
         isOwner: false,
         members: [],
         pendingIncoming: [],
@@ -8902,29 +9098,33 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('team:inviteMember', async (_event, email: string): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.inviteMember(email));
   });
 
   ipcMain.handle('team:respondToInvite', async (_event, contactId: string, accept: boolean): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.respondToInvite(contactId, accept));
   });
 
   ipcMain.handle('team:removeMember', async (_event, contactId: string): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.removeMember(contactId));
   });
 
   ipcMain.handle('team:leaveTeam', async (): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.leaveTeam());
   });
 
@@ -16340,6 +16540,7 @@ if (!gotTheLock) {
   });
 
   app.on('before-quit', (event) => {
+    appQuitInProgress = true;
     const blockingActivities = getQuitBlockingActivities();
     if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
       event.preventDefault();
@@ -16367,9 +16568,12 @@ if (!gotTheLock) {
         if (response === 0) {
           appQuitConfirmedWithLocalWork = true;
           app.quit();
+        } else {
+          appQuitInProgress = false;
         }
       }).catch((error) => {
         appQuitConfirmationOpen = false;
+        appQuitInProgress = false;
         log.warn('Quit confirmation failed: %s', error instanceof Error ? error.message : String(error));
       });
       return;

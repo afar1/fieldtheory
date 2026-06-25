@@ -60,6 +60,36 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.20': [
+    'River reader layout now uses more of the page with roomier source filters',
+    'River source toggles now hide matching people and groups from the visible timeline',
+    'Show more now expands to the full shared document body',
+    'River now exposes immersive view from the standard reader toolbar',
+  ],
+  '0.3.19': [
+    'River now has a polished full-page reader with an editorial timeline layout',
+    'River sources can be edited from the reader with quick group and contact filters',
+    'The River sidebar button now opens the reader with the updated reader-style icon',
+    'Fixed quitting Field Theory so Command-Q exits cleanly on the first attempt',
+  ],
+  '0.3.18': [
+    'River sharing now opens with the polished destination picker design',
+    'The picker keeps your default River selected so Enter can share immediately',
+  ],
+  '0.3.17': [
+    'River now has a full timeline view while keeping individual River files navigable in the sidebar',
+    'Sharing to River now uses a destination picker for defaults, contacts, teams, groups, and Public River',
+    'River timeline filters and sharing now support multiple contacts without the old one-team limitation',
+  ],
+  '0.3.16': [
+    'Fixed the River toolbar button showing for entitled markdown documents before a destination is selected',
+  ],
+  '0.3.15': [
+    'River sharing now supports explicit destinations for contacts and teams',
+    'Team and River access can be rolled out to entitled users without exposing it to everyone',
+    'River stays available from the local session when the network is unavailable',
+    'Shared River documents now use explicit recipient grants for tighter access control',
+  ],
   '0.3.14': [
     'Fixed a first-open focus race that could hide the Library window immediately after launch',
     'Startup Library now waits briefly before allowing click-away blur dismissal',
@@ -432,6 +462,12 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.20': 'Jun 20 2026',
+  '0.3.19': 'Jun 20 2026',
+  '0.3.18': 'Jun 20 2026',
+  '0.3.17': 'Jun 20 2026',
+  '0.3.16': 'Jun 18 2026',
+  '0.3.15': 'Jun 18 2026',
   '0.3.14': 'Jun 17 2026',
   '0.3.13': 'Jun 17 2026',
   '0.3.12': 'Jun 17 2026',

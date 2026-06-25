@@ -5,6 +5,7 @@ import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   BOOKMARKS_SHORTCUT_FOLDER_ID,
+  RIVER_ITEM_ID,
   addDirToLibraryRoot,
   canDropLibraryItem,
   collectSidebarIconTargetIds,
@@ -1473,6 +1474,48 @@ describe('WikiSidebar River root helpers', () => {
 
     expect(riverShortcutNode).toBe(river);
     expect(visibleRoots).toEqual([scratchpad]);
+  });
+
+  it('opens the River timeline from the shortcut button while keeping files navigable', async () => {
+    const onSelectItem = vi.fn();
+    renderSidebarForTest({
+      onSelectItem,
+      roots: [{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: [{
+          kind: 'dir',
+          name: 'River (shared)',
+          relPath: 'River (shared)',
+          children: [{
+            kind: 'file',
+            relPath: 'River (shared)/brief',
+            absPath: `${libraryRootPath}/River (shared)/brief.md`,
+            name: 'brief',
+            title: 'brief',
+            lastUpdated: 1,
+          }],
+        }],
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open River timeline' }));
+
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: RIVER_ITEM_ID,
+      type: 'river',
+      title: 'River',
+    }));
+
+    fireEvent.click(screen.getByTitle('River (shared)'));
+    fireEvent.click(await screen.findByText('brief'));
+
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'wiki:River (shared)/brief',
+      type: 'wiki',
+      relPath: 'River (shared)/brief',
+    }));
   });
 
   it('includes the promoted River shortcut when applying sidebar icon colors to all', () => {

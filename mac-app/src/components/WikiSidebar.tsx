@@ -24,7 +24,7 @@ type SidebarTodoStateOverride = SidebarTodoState | null;
 interface UnifiedItem {
   id: string;
   title: string;
-  type: 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external';
+  type: 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external';
   absPath: string;
   relPath?: string;
   rootPath?: string;
@@ -40,6 +40,7 @@ interface UnifiedItem {
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 export const BOOKMARKS_SHORTCUT_FOLDER_ID = 'bookmarks-shortcut';
+export const RIVER_ITEM_ID = 'river:root';
 const RIVER_SHARED_FOLDER_NAME = 'River (shared)';
 const RIVER_SHORTCUT_LABEL = 'River';
 export const EMBER_ITEM_ID = 'ember:root';
@@ -1045,6 +1046,16 @@ function makeBookmarksItem(): UnifiedItem {
     id: BOOKMARKS_ITEM_ID,
     title: 'Bookmarks',
     type: 'bookmarks',
+    absPath: '',
+    timestamp: 0,
+  };
+}
+
+function makeRiverItem(): UnifiedItem {
+  return {
+    id: RIVER_ITEM_ID,
+    title: 'River',
+    type: 'river',
     absPath: '',
     timestamp: 0,
   };
@@ -3687,12 +3698,39 @@ function WikiSidebar({
             title={RIVER_SHORTCUT_LABEL}
             titleAttr={riverShortcutNode.label}
             count={countSidebarItems(riverShortcutNode.children)}
-            isSelected={selectedId === riverShortcutNode.id}
+            isSelected={selectedId === RIVER_ITEM_ID}
             theme={theme}
             indent={LIBRARY_SIDEBAR_EDGE_PADDING}
             fontWeight={500}
             rowId={riverShortcutNode.id}
-            trailing={<SidebarPeopleChipIcon color={theme.textSecondary} />}
+            trailing={(
+              <button
+                type="button"
+                aria-label="Open River timeline"
+                title="Open River timeline"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectItem(makeRiverItem());
+                }}
+                style={{
+                  width: '22px',
+                  height: '22px',
+                  marginLeft: 'auto',
+                  flexShrink: 0,
+                  border: `1px solid ${selectedId === RIVER_ITEM_ID ? theme.accent : theme.border}`,
+                  borderRadius: '6px',
+                  backgroundColor: selectedId === RIVER_ITEM_ID ? (theme.surface2 ?? theme.bg) : 'transparent',
+                  color: selectedId === RIVER_ITEM_ID ? theme.accent : theme.textSecondary,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                <SidebarRiverIcon color="currentColor" style={{ opacity: 0.72 }} />
+              </button>
+            )}
             onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
             onOpen={() => toggleFolder(riverShortcutNode.id)}
             onContextMenu={(event) => openContextMenu(event, riverShortcutNode)}
@@ -5345,31 +5383,6 @@ function SidebarRiverShareIndicator({
       }}
     >
       <SidebarRiverIcon color="currentColor" style={{ opacity: 0.58 }} />
-    </span>
-  );
-}
-
-function SidebarPeopleChipIcon({ color }: { color: string }) {
-  return (
-    <span
-      title="Shared River"
-      aria-label="Shared River"
-      style={{ color, opacity: 0.62, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-    >
-      <svg width="16" height="14" viewBox="0 0 18 16" fill="none" aria-hidden="true">
-        <path
-          d="M6.75 7.25a2.45 2.45 0 1 0 0-4.9 2.45 2.45 0 0 0 0 4.9zM2.55 13.15c.55-2.45 2.05-3.7 4.2-3.7s3.65 1.25 4.2 3.7"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-        <path
-          d="M11.6 7.05a2.05 2.05 0 1 0 0-4.1M12.85 9.55c1.35.35 2.25 1.45 2.6 3.25"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-      </svg>
     </span>
   );
 }

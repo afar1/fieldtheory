@@ -188,13 +188,22 @@ export type BrowserHelperNativeBridge = {
   rescanTaggedDocs?: () => unknown[] | Promise<unknown[]>;
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
+  getSharedFileAudience?: (filePath: string) => unknown | Promise<unknown>;
+  getRiverTimeline?: (query: unknown) => unknown[] | Promise<unknown[]>;
+  getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
+  getRiverTargets?: (query?: string) => unknown[] | Promise<unknown[]>;
+  setRiverDefaultDestinations?: (destinations: unknown[]) => unknown | Promise<unknown>;
+  getRiverSourcePreferences?: () => unknown[] | Promise<unknown[]>;
+  updateRiverSourcePreferences?: (preferences: unknown[]) => unknown | Promise<unknown>;
   shareSharedFile?: (input: unknown) => unknown | Promise<unknown>;
+  updateSharedFileAudience?: (input: unknown) => unknown | Promise<unknown>;
   unshareSharedFile?: (filePath: string) => boolean | Promise<boolean>;
   syncSharedFiles?: () => unknown | Promise<unknown>;
   updateSharedFileContent?: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => unknown | Promise<unknown>;
   setActivePresence?: (sharedId: string | null) => unknown[] | Promise<unknown[]>;
   getPinnedItemIds?: () => string[] | Promise<string[]>;
   setPinned?: (filePath: string, pinned: boolean) => unknown | Promise<unknown>;
+  getTeamEntitlement?: () => unknown | Promise<unknown>;
   initializeCommands?: () => void | Promise<void>;
   getWatchedCommandDirs?: () => unknown[] | Promise<unknown[]>;
   addWatchedCommandDir?: (dirPath: string) => unknown | Promise<unknown>;
@@ -1275,10 +1284,65 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/audience') {
+        const filePath = String(parsed.searchParams.get('path') ?? '');
+        const audience = filePath ? await this.nativeBridge.getSharedFileAudience?.(filePath) ?? { shared: false, targets: [] } : { shared: false, targets: [] };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/timeline') {
+        const query = await readJsonBody(req);
+        const items = await this.nativeBridge.getRiverTimeline?.(query) ?? [];
+        writeJson(res, 200, { ok: true, items }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/destinations') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const destinations = await this.nativeBridge.getSharedFileDestinations?.(query) ?? [];
+        writeJson(res, 200, { ok: true, destinations }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/targets') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const targets = await this.nativeBridge.getRiverTargets?.(query) ?? [];
+        writeJson(res, 200, { ok: true, targets }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/default-destinations') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.setRiverDefaultDestinations?.(Array.isArray(body.destinations) ? body.destinations : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/source-preferences') {
+        const preferences = await this.nativeBridge.getRiverSourcePreferences?.() ?? [];
+        writeJson(res, 200, { ok: true, preferences }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/source-preferences') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.updateRiverSourcePreferences?.(Array.isArray(body.preferences) ? body.preferences : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/shared-files/share') {
         const input = await readJsonBody(req);
         const status = await this.nativeBridge.shareSharedFile?.(input) ?? { shared: false };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/shared-files/audience') {
+        const input = await readJsonBody(req);
+        const audience = await this.nativeBridge.updateSharedFileAudience?.(input) ?? { shared: false, targets: [], error: 'Field Theory shared sync is not ready' };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
         return;
       }
 
@@ -1330,6 +1394,11 @@ export class BrowserHelperServer {
         const pinned = body.pinned === true;
         const result = filePath ? await this.nativeBridge.setPinned?.(filePath, pinned) : { ok: false, reason: 'missing_path' };
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/team/entitlement') {
+        writeJson(res, 200, { ok: true, entitlement: await this.nativeBridge.getTeamEntitlement?.() ?? { allowed: false, reason: 'not_authenticated', stale: false, userId: null, checkedAt: null } }, req.headers.origin);
         return;
       }
 

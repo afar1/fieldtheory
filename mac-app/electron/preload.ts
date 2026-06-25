@@ -4146,6 +4146,100 @@ type SharedFileStatus = {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
+};
+
+type SharedFileAudienceStatus = {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+};
+
+type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
+
+type SharedFileShareTarget = {
+  id: string;
+  kind: SharedFileDestinationKind;
+};
+
+type RiverShareTarget = {
+  id: string;
+  kind: RiverTargetKind;
+};
+
+type RiverTarget = {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+};
+
+type RiverDefaultDestination = {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+};
+
+type RiverSourcePreference = {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+};
+
+type RiverMutationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+type RiverTimelineQuery = {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+};
+
+type RiverTimelineItem = {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+};
+
+type SharedFileDestination = {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
 };
 
 type SharedFileShareInput = {
@@ -4153,6 +4247,14 @@ type SharedFileShareInput = {
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
+};
+
+type SharedFileAudienceUpdateInput = {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
 };
 
 type SharedFileUpdateResult = {
@@ -4174,14 +4276,15 @@ type SharedFilesAvailability = {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
+  stale?: boolean;
 };
 
 type SharedFilePinResult = {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 };
 
@@ -4190,8 +4293,24 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getAvailability'),
   getStatus: (filePath: string): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  getAudience: (filePath: string): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:getAudience', filePath),
+  getTimeline: (query: RiverTimelineQuery): Promise<RiverTimelineItem[]> =>
+    ipcRenderer.invoke('sharedFiles:getTimeline', query),
+  getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
+    ipcRenderer.invoke('sharedFiles:getDestinations', query),
+  getTargets: (query?: string): Promise<RiverTarget[]> =>
+    ipcRenderer.invoke('sharedFiles:getTargets', query),
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:setDefaultDestinations', destinations),
+  getSourcePreferences: (): Promise<RiverSourcePreference[]> =>
+    ipcRenderer.invoke('sharedFiles:getSourcePreferences'),
+  updateSourcePreferences: (preferences: RiverSourcePreference[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:updateSourcePreferences', preferences),
   share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:share', input),
+  updateAudience: (input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:updateAudience', input),
   unshare: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('sharedFiles:unshare', filePath),
   sync: (): Promise<{ written: number; removed: number; created: number; errors: string[] }> =>
@@ -4220,10 +4339,19 @@ type SharedFilesAPI = typeof sharedFilesAPI;
 
 type SharedTeamUnavailableReason =
   | 'not_authenticated'
+  | 'not_entitled'
   | 'no_team_members'
   | 'pending_only'
   | 'ambiguous_team_scope'
   | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
 
 interface SharedTeamMember {
   contactId: string;
@@ -4258,6 +4386,8 @@ interface SharedTeamMutationResult {
 }
 
 const teamAPI = {
+  getEntitlement: (): Promise<SharedTeamEntitlementState> =>
+    ipcRenderer.invoke('team:getEntitlement'),
   getState: (): Promise<SharedTeamState> =>
     ipcRenderer.invoke('team:getState'),
   inviteMember: (email: string): Promise<SharedTeamMutationResult> =>
