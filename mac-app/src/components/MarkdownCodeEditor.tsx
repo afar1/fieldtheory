@@ -2254,6 +2254,54 @@ export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): bool
   return true;
 }
 
+export function getRenderedMarkdownTaskEnterEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): { from: number; to: number; insert: string; nextValue: string; selectionStart: number; selectionEnd: number } | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const task = line.match(/^(\s*)[-*+]\s+\[(?: |x|X)\]\s*(.*)$/);
+  if (!task) return null;
+
+  if (task[2].trim().length === 0) {
+    return {
+      from: lineStart,
+      to: lineEnd,
+      insert: '',
+      nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+      selectionStart: lineStart,
+      selectionEnd: lineStart,
+    };
+  }
+
+  const insertion = `\n${task[1]}- [ ] `;
+  const offset = Math.max(selectionStart, lineStart + line.length - task[2].length);
+  const nextSelection = offset + insertion.length;
+  return {
+    from: offset,
+    to: selectionEnd,
+    insert: insertion,
+    nextValue: `${value.slice(0, offset)}${insertion}${value.slice(selectionEnd)}`,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
+}
+
+export function handleRenderedMarkdownTaskEnter(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  const edit = getRenderedMarkdownTaskEnterEdit(view.state.doc.toString(), selection.from, selection.to);
+  if (!edit) return false;
+  view.dispatch({
+    changes: { from: edit.from, to: edit.to, insert: edit.insert },
+    selection: { anchor: edit.selectionStart, head: edit.selectionEnd },
+  });
+  return true;
+}
+
 export function handleRenderedMarkdownEditorKeyDown(view: EditorView, event: KeyboardEvent): boolean {
   if (event.metaKey || event.altKey || event.ctrlKey || event.shiftKey || event.isComposing) {
     return false;
@@ -3888,6 +3936,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             {
               mac: 'Mod-Backspace',
               run: handleMarkdownCodeEditorCommandBackspace,
+            },
+            {
+              key: 'Enter',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownTaskEnter(view) : false),
             },
             {
               key: 'Alt-ArrowRight',
