@@ -39,29 +39,29 @@ describe('getMarkdownTaskShortcutEdit', () => {
     });
   });
 
-  it('cycles unchecked tasks to checked tasks', () => {
-    expect(getMarkdownTaskShortcutEdit('- [ ] alpha', 0, 0)?.nextValue).toBe('- [x] alpha');
+  it('removes unchecked task state instead of checking the box', () => {
+    expect(getMarkdownTaskShortcutEdit('- [ ] alpha', 0, 0)?.nextValue).toBe('alpha');
   });
 
-  it('cycles bare unchecked tasks without adding a bullet marker', () => {
-    expect(getMarkdownTaskShortcutEdit('[] alpha', 0, 0)?.nextValue).toBe('[x] alpha');
-    expect(getMarkdownTaskShortcutEdit('[ ] alpha', 0, 0)?.nextValue).toBe('[x] alpha');
+  it('removes bare task state instead of checking the box', () => {
+    expect(getMarkdownTaskShortcutEdit('[] alpha', 0, 0)?.nextValue).toBe('alpha');
+    expect(getMarkdownTaskShortcutEdit('[ ] alpha', 0, 0)?.nextValue).toBe('alpha');
   });
 
-  it('cycles checked tasks back to plain text', () => {
+  it('removes checked task state', () => {
     expect(getMarkdownTaskShortcutEdit('- [x] alpha', 0, 0)?.nextValue).toBe('alpha');
     expect(getMarkdownTaskShortcutEdit('[x] alpha', 0, 0)?.nextValue).toBe('alpha');
   });
 
-  it('advances each selected line one step', () => {
+  it('toggles selected lines between plain and task lines', () => {
     expect(getMarkdownTaskShortcutEdit('alpha\n- [ ] beta\n- [x] gamma', 0, 28)?.nextValue).toBe(
-      '- [ ] alpha\n- [x] beta\ngamma',
+      '- [ ] alpha\nbeta\ngamma',
     );
   });
 
-  it('cycles selected lines backward one step', () => {
+  it('can create checked tasks when cycling selected lines backward', () => {
     expect(getMarkdownTaskShortcutEdit('alpha\n- [ ] beta\n- [x] gamma', 0, 28, 'backward')?.nextValue).toBe(
-      '- [x] alpha\nbeta\n- [ ] gamma',
+      '- [x] alpha\nbeta\ngamma',
     );
   });
 

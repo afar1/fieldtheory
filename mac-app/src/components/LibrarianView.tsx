@@ -1824,6 +1824,10 @@ export function getRenderedMarkdownShortcutEdit(input: {
     );
   }
 
+  if (isMarkdownTaskToggleShortcut(input.event)) {
+    return getMarkdownTaskToggleEdit(input.value, input.selectionStart, input.selectionEnd);
+  }
+
   if (!input.event.metaKey || !input.event.shiftKey || input.event.altKey || input.event.ctrlKey) return null;
   if (isMarkdownTaskShortcut(input.event)) {
     return getMarkdownTaskShortcutEdit(input.value, input.selectionStart, input.selectionEnd);

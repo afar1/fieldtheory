@@ -1801,6 +1801,17 @@ describe('rendered markdown edit helpers', () => {
       selectionStart: '- [ ] kk'.length,
       selectionEnd: '- [ ] kk'.length,
     })).toEqual({
+      nextValue: 'kk',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: 'Enter', code: 'Enter', metaKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
       nextValue: '- [x] kk',
       selectionStart: 8,
       selectionEnd: 8,
