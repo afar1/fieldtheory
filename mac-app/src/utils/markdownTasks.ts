@@ -55,7 +55,7 @@ function cycleTaskLine(line: string, direction: MarkdownTaskCycleDirection): str
     return task.bullet ? `${task.indentation}${task.bullet} [x] ${task.text}` : `${task.indentation}[x] ${task.text}`;
   }
 
-  const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s+(.+)$/);
+  const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s*(.*)$/);
   if (list) return `${list[1]}- [${direction === 'backward' ? 'x' : ' '}] ${list[2]}`;
 
   const plain = line.match(/^(\s*)(.*)$/);
