@@ -1809,6 +1809,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
     const value = view.state.doc.toString();
+    const taskEnterEdit = getRenderedMarkdownTaskEnterEdit(value, selection.from, selection.to);
+    if (taskEnterEdit) {
+      view.dispatch({
+        changes: { from: taskEnterEdit.from, to: taskEnterEdit.to, insert: taskEnterEdit.insert },
+        selection: { anchor: taskEnterEdit.selectionStart, head: taskEnterEdit.selectionEnd },
+      });
+      return true;
+    }
     const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
       ?? getRenderedMarkdownAtomicBoundaryLineBreakEdit(value, selection.from);
     if (!edit) return false;

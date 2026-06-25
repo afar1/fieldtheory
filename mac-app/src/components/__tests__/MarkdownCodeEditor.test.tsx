@@ -1793,6 +1793,28 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('continues rendered task lines from beforeinput insertParagraph too', () => {
+    const doc = '- hello\n- [ ] yo';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- hello\n- [ ] yo\n- [ ] ');
+    expect(view.state.selection.main.from).toBe(23);
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('applies list body navigation in source mode too', () => {
     const doc = '- first\n- second';
     expect(getMarkdownListArrowRightBoundaryEdit(doc, '- first'.length)).toEqual({
