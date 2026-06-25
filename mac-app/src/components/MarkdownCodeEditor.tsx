@@ -1673,6 +1673,27 @@ export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
+export function getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)(.*)$/.exec(lineText);
+  if (!taskMatch) return null;
+  const bodyStart = lineEnd - taskMatch[5].length;
+  if (lineEnd - bodyStart !== 1 || caret !== lineEnd) return null;
+
+  if (lineStart === 0 && lineEnd === value.length) {
+    return { from: 0, to: value.length, selection: 0 };
+  }
+  if (lineEnd < value.length) {
+    return { from: lineStart, to: lineEnd + 1, selection: lineStart };
+  }
+  return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
+}
+
 export function getRenderedMarkdownSelectedTaskDeleteEdit(
   value: string,
   from: number,
@@ -1702,26 +1723,24 @@ export function getRenderedMarkdownSelectedTaskDeleteEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
-export function getRenderedMarkdownTaskMarkerDeleteBackwardEdit(
+export function getRenderedMarkdownListMarkerDeleteBackwardEdit(
   value: string,
   offset: number,
 ): { from: number; to: number; insert: string; selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
   const lineText = value.slice(lineStart, lineEnd);
-  const taskMatch = /^(\s*)(?:[-*+]\s*)?\[[ xX]?\](\s+)(.+)$/.exec(lineText);
-  if (!taskMatch) return null;
-  const markerPrefixLength = taskMatch[0].length - taskMatch[3].length;
+  const markerMatch = /^(\s*)((?:(?:[-*+]\s+)?\[[ xX]?\]\s+)|(?:[-*+]\s+)|(?:\d+[.)]\s+))(.+)$/.exec(lineText);
+  if (!markerMatch) return null;
+  const markerPrefixLength = markerMatch[0].length - markerMatch[3].length;
   const bodyStart = lineStart + markerPrefixLength;
   if (caret !== bodyStart) return null;
 
-  const indentation = taskMatch[1];
-  const selection = lineStart + indentation.length;
   return {
     from: lineStart,
     to: bodyStart,
-    insert: indentation,
-    selection,
+    insert: '',
+    selection: lineStart,
   };
 }
 
@@ -1784,11 +1803,19 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
       }
       return false;
     }
-    const taskMarkerEdit = getRenderedMarkdownTaskMarkerDeleteBackwardEdit(value, selection.from);
-    if (taskMarkerEdit) {
+    const listMarkerEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(value, selection.from);
+    if (listMarkerEdit) {
       view.dispatch({
-        changes: { from: taskMarkerEdit.from, to: taskMarkerEdit.to, insert: taskMarkerEdit.insert },
-        selection: { anchor: taskMarkerEdit.selection, head: taskMarkerEdit.selection },
+        changes: { from: listMarkerEdit.from, to: listMarkerEdit.to, insert: listMarkerEdit.insert },
+        selection: { anchor: listMarkerEdit.selection, head: listMarkerEdit.selection },
+      });
+      return true;
+    }
+    const singleCharacterTaskEdit = getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit(value, selection.from);
+    if (singleCharacterTaskEdit) {
+      view.dispatch({
+        changes: { from: singleCharacterTaskEdit.from, to: singleCharacterTaskEdit.to },
+        selection: { anchor: singleCharacterTaskEdit.selection, head: singleCharacterTaskEdit.selection },
       });
       return true;
     }
@@ -1811,6 +1838,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
 
   if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
     const value = view.state.doc.toString();
+    const taskEnterEdit = getRenderedMarkdownTaskEnterEdit(value, selection.from, selection.to);
+    if (taskEnterEdit) {
+      view.dispatch({
+        changes: { from: taskEnterEdit.from, to: taskEnterEdit.to, insert: taskEnterEdit.insert },
+        selection: { anchor: taskEnterEdit.selectionStart, head: taskEnterEdit.selectionEnd },
+      });
+      return true;
+    }
     const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(value, selection.from)
       ?? getRenderedMarkdownAtomicBoundaryLineBreakEdit(value, selection.from);
     if (!edit) return false;
@@ -2252,6 +2287,54 @@ export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): bool
   view.dispatch({
     changes: from === edit.to ? undefined : { from, to: edit.to },
     selection: { anchor: from, head: from },
+  });
+  return true;
+}
+
+export function getRenderedMarkdownTaskEnterEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): { from: number; to: number; insert: string; nextValue: string; selectionStart: number; selectionEnd: number } | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const task = line.match(/^(\s*)[-*+]\s+\[(?: |x|X)\]\s*(.*)$/);
+  if (!task) return null;
+
+  if (task[2].trim().length === 0) {
+    return {
+      from: lineStart,
+      to: lineEnd,
+      insert: '',
+      nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+      selectionStart: lineStart,
+      selectionEnd: lineStart,
+    };
+  }
+
+  const insertion = `\n${task[1]}- [ ] `;
+  const offset = Math.max(selectionStart, lineStart + line.length - task[2].length);
+  const nextSelection = offset + insertion.length;
+  return {
+    from: offset,
+    to: selectionEnd,
+    insert: insertion,
+    nextValue: `${value.slice(0, offset)}${insertion}${value.slice(selectionEnd)}`,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
+}
+
+export function handleRenderedMarkdownTaskEnter(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  const edit = getRenderedMarkdownTaskEnterEdit(view.state.doc.toString(), selection.from, selection.to);
+  if (!edit) return false;
+  view.dispatch({
+    changes: { from: edit.from, to: edit.to, insert: edit.insert },
+    selection: { anchor: edit.selectionStart, head: edit.selectionEnd },
   });
   return true;
 }
@@ -3859,6 +3942,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         doc: value,
         extensions: [
           historyCompartment.of(history()),
+          Prec.highest(EditorView.domEventHandlers({
+            keydown: (event) => handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current),
+          })),
           keymap.of([
             {
               key: 'ArrowRight',
@@ -3887,6 +3973,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             {
               mac: 'Mod-Backspace',
               run: handleMarkdownCodeEditorCommandBackspace,
+            },
+            {
+              key: 'Enter',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownTaskEnter(view) : false),
             },
             {
               key: 'Alt-ArrowRight',
@@ -4101,13 +4191,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       viewRef.current = view;
       view.scrollDOM.setAttribute('data-ft-quality-scroll', presentation === 'rendered' ? 'rendered-editor' : 'markdown');
       scrollFpsSamplerRef(view.scrollDOM);
-      const handleKeyDownCapture = (event: KeyboardEvent) => {
-        handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
-      };
-      view.contentDOM.addEventListener('keydown', handleKeyDownCapture, true);
 
       return () => {
-        view.contentDOM.removeEventListener('keydown', handleKeyDownCapture, true);
         scrollFpsSamplerRef(null);
         view.destroy();
         viewRef.current = null;

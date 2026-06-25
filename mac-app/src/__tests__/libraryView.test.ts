@@ -748,6 +748,34 @@ describe('markdown list editor helpers', () => {
     });
   });
 
+  it('converts task markers to the requested list marker instead of exposing checkbox syntax', () => {
+    expect(getMarkdownListToggleEdit('- [ ] task', 0, '- [ ] task'.length, 'unordered')).toEqual({
+      nextValue: '- task',
+      selectionStart: 0,
+      selectionEnd: 6,
+    });
+
+    expect(getMarkdownListToggleEdit('- [ ] task', 0, '- [ ] task'.length, 'ordered')).toEqual({
+      nextValue: '1. task',
+      selectionStart: 0,
+      selectionEnd: 7,
+    });
+  });
+
+  it('converts the current task line without selecting the whole row', () => {
+    expect(getMarkdownListToggleEdit('- [ ] kk', '- [ ] kk'.length, '- [ ] kk'.length, 'unordered')).toEqual({
+      nextValue: '- kk',
+      selectionStart: 4,
+      selectionEnd: 4,
+    });
+
+    expect(getMarkdownListToggleEdit('- [ ] kk', '- [ ] kk'.length, '- [ ] kk'.length, 'ordered')).toEqual({
+      nextValue: '1. kk',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
+  });
+
   it('starts a list on an empty line and leaves the caret ready for typing', () => {
     expect(getMarkdownListToggleEdit('', 0, 0, 'ordered')).toEqual({
       nextValue: '1. ',
@@ -1452,11 +1480,7 @@ describe('rendered markdown edit helpers', () => {
   });
 
   it('does not skip visible literal punctuation when inserting rendered Enter', () => {
-    expect(getRenderedMarkdownEnterEdit('Use * literally', 4, 4)).toEqual({
-      nextValue: 'Use \n* literally',
-      selectionStart: 5,
-      selectionEnd: 5,
-    });
+    expect(getRenderedMarkdownEnterEdit('Use * literally', 4, 4)).toBeNull();
   });
 
   it('inserts rendered Enter before hidden block markdown at the visible line start', () => {
@@ -1472,25 +1496,15 @@ describe('rendered markdown edit helpers', () => {
       selectionEnd: 0,
     });
 
-    expect(getRenderedMarkdownEnterEdit('Resolved', 0, 0)).toEqual({
-      nextValue: '\nResolved',
-      selectionStart: 0,
-      selectionEnd: 0,
-    });
+    expect(getRenderedMarkdownEnterEdit('Resolved', 0, 0)).toBeNull();
   });
 
-  it('moves the rendered caret forward when Enter creates another blank line', () => {
-    expect(getRenderedMarkdownEnterEdit('hello\n', 6, 6)).toEqual({
-      nextValue: 'hello\n\n',
-      selectionStart: 7,
-      selectionEnd: 7,
-    });
+  it('lets CodeMirror handle ordinary plain-text rendered Enter', () => {
+    expect(getRenderedMarkdownEnterEdit('hello', 5, 5)).toBeNull();
+    expect(getRenderedMarkdownEnterEdit('hello\n', 6, 6)).toBeNull();
+    expect(getRenderedMarkdownEnterEdit('hello\nworld', 6, 6)).toBeNull();
 
-    expect(getRenderedMarkdownEnterEdit('', 0, 0)).toEqual({
-      nextValue: '\n',
-      selectionStart: 1,
-      selectionEnd: 1,
-    });
+    expect(getRenderedMarkdownEnterEdit('', 0, 0)).toBeNull();
   });
 
   it('continues markdown list structures from rendered Enter', () => {
@@ -1510,6 +1524,15 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '- [x] first\n- [ ] ',
       selectionStart: 18,
       selectionEnd: 18,
+    });
+
+    const mixedTaskList = '- hello\n- [ ] bye';
+    const continuedTaskMarker = '\n- [ ] ';
+    const mixedTaskSelection = mixedTaskList.length + continuedTaskMarker.length;
+    expect(getRenderedMarkdownEnterEdit(mixedTaskList, mixedTaskList.length, mixedTaskList.length)).toEqual({
+      nextValue: `${mixedTaskList}${continuedTaskMarker}`,
+      selectionStart: mixedTaskSelection,
+      selectionEnd: mixedTaskSelection,
     });
   });
 
@@ -1619,6 +1642,30 @@ describe('rendered markdown edit helpers', () => {
       selectionEnd: 3,
     })).toEqual({
       nextValue: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+  });
+
+  it('removes rendered list markers at the text start without deleting the text', () => {
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- keep this text',
+      selectionStart: '- '.length,
+      selectionEnd: '- '.length,
+    })).toEqual({
+      nextValue: 'keep this text',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- [ ] keep this text',
+      selectionStart: '- [ ] '.length,
+      selectionEnd: '- [ ] '.length,
+    })).toEqual({
+      nextValue: 'keep this text',
       selectionStart: 0,
       selectionEnd: 0,
     });
@@ -1738,6 +1785,39 @@ describe('rendered markdown edit helpers', () => {
     });
 
     expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }),
+      value: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
+    })).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '0', code: '', metaKey: true, shiftKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
+      nextValue: 'kk',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: 'Enter', code: 'Enter', metaKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
+      nextValue: '- [x] kk',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
       event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
       value: 'first\nsecond',
       selectionStart: 0,
@@ -1758,6 +1838,39 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '› first\n› second',
       selectionStart: 0,
       selectionEnd: 16,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }),
+      value: '- [ ] task',
+      selectionStart: 0,
+      selectionEnd: '- [ ] task'.length,
+    })).toEqual({
+      nextValue: '- task',
+      selectionStart: 0,
+      selectionEnd: 6,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
+      value: '- [ ] task',
+      selectionStart: 0,
+      selectionEnd: '- [ ] task'.length,
+    })).toEqual({
+      nextValue: '1. task',
+      selectionStart: 0,
+      selectionEnd: 7,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '8', code: '', metaKey: true, shiftKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
+      nextValue: '- kk',
+      selectionStart: 4,
+      selectionEnd: 4,
     });
   });
 
@@ -1782,29 +1895,85 @@ describe('rendered markdown edit helpers', () => {
     })).toEqual({
       nextValue: '› ',
       selectionStart: 2,
-	      selectionEnd: 2,
-	    });
-	  });
+      selectionEnd: 2,
+    });
 
-	  it('ignores empty inline formatting shortcuts in rendered mode', () => {
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }),
+      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    })).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
+
+	  it('creates inline formatting placeholders for empty rendered shortcuts', () => {
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'b', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello ****',
+	      selectionStart: 8,
+	      selectionEnd: 8,
+	    });
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'i', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello **',
+	      selectionStart: 7,
+	      selectionEnd: 7,
+	    });
 	    expect(getRenderedMarkdownShortcutEdit({
 	      event: mkKey({ key: 'u', metaKey: true }),
 	      value: 'hello ',
 	      selectionStart: 6,
 	      selectionEnd: 6,
-	    })).toBeNull();
+	    })).toEqual({
+	      nextValue: 'hello <u></u>',
+	      selectionStart: 9,
+	      selectionEnd: 9,
+	    });
+	  });
+
+	  it('toggles empty rendered inline formatting placeholders off', () => {
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'b', metaKey: true }),
+	      value: 'hello ****',
+	      selectionStart: 8,
+	      selectionEnd: 8,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'i', metaKey: true }),
+	      value: 'hello **',
+	      selectionStart: 7,
+	      selectionEnd: 7,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'u', metaKey: true }),
+	      value: 'hello <u></u>',
+	      selectionStart: 9,
+	      selectionEnd: 9,
+	    })).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
 	  });
 
   it('recognizes the paste selection to terminal hotkey', () => {

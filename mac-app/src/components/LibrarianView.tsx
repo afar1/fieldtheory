@@ -140,6 +140,7 @@ import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownInlineHtmlBlockRanges,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
   isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
@@ -1663,10 +1664,27 @@ export function getMarkdownListToggleEdit(
   const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(lineStart, lineEnd);
   const lines = block.split('\n');
-
-  const orderedRe = /^(\s*)(\d+)\.\s/;
-  const unorderedRe = /^(\s*)[-*+]\s/;
-  const carrotRe = /^(\s*)›+\s/;
+  type ToggleLine = {
+    indent: string;
+    marker: 'ordered' | 'unordered' | 'carrot' | 'task' | 'none';
+    markerLength: number;
+    text: string;
+  };
+  const parseToggleLine = (line: string): ToggleLine => {
+    const task = line.match(/^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.*)$/);
+    if (task) return { indent: task[1], marker: 'task', markerLength: line.length - task[2].length, text: task[2] };
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
+    if (ordered) return { indent: ordered[1], marker: 'ordered', markerLength: line.length - ordered[2].length, text: ordered[2] };
+    const unordered = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (unordered) return { indent: unordered[1], marker: 'unordered', markerLength: line.length - unordered[2].length, text: unordered[2] };
+    const carrot = line.match(/^(\s*)›+\s+(.*)$/);
+    if (carrot) return { indent: carrot[1], marker: 'carrot', markerLength: line.length - carrot[2].length, text: carrot[2] };
+    const plain = line.match(/^(\s*)(.*)$/);
+    return { indent: plain?.[1] ?? '', marker: 'none', markerLength: plain?.[1].length ?? 0, text: plain?.[2] ?? line };
+  };
+  const markerText = kind === 'ordered'
+    ? (counter: number) => `${counter}. `
+    : () => (unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ');
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
   if (nonBlank.length === 0 && selectionStart === selectionEnd) {
@@ -1685,29 +1703,49 @@ export function getMarkdownListToggleEdit(
   }
 
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
-    kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
+    kind === 'ordered'
+      ? parseToggleLine(line).marker === 'ordered'
+      : ['unordered', 'carrot'].includes(parseToggleLine(line).marker)
   ));
 
   let counter = 1;
-  const transformed = lines.map((line) => {
+  let collapsedSelection: number | null = null;
+  let blockOffset = 0;
+  const selectionIsCollapsed = selectionStart === selectionEnd;
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
     if (line.trim().length === 0) return line;
-    const orderedMatch = line.match(orderedRe);
-    const unorderedMatch = line.match(unorderedRe);
-    const carrotMatch = line.match(carrotRe);
-    const stripped = orderedMatch
-      ? line.slice(orderedMatch[0].length)
-      : unorderedMatch
-      ? line.slice(unorderedMatch[0].length)
-      : carrotMatch
-      ? line.slice(carrotMatch[0].length)
-      : line;
-    if (allMarked) return stripped;
-    if (kind === 'ordered') return `${counter++}. ${stripped}`;
-    return unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
+    const parsed = parseToggleLine(line);
+    const nextLine = allMarked
+      ? `${parsed.indent}${parsed.text}`
+      : `${parsed.indent}${markerText(counter++)}${parsed.text}`;
+    if (
+      selectionIsCollapsed
+      && collapsedSelection === null
+      && selectionStart >= lineStart + lineOffset
+      && selectionStart <= lineStart + lineOffset + line.length
+    ) {
+      const nextMarkerLength = nextLine.length - parsed.text.length;
+      const relativeSelection = selectionStart - lineStart - lineOffset;
+      const delta = relativeSelection >= parsed.markerLength
+        ? nextMarkerLength - parsed.markerLength
+        : 0;
+      collapsedSelection = lineStart + lineOffset + Math.max(0, relativeSelection + delta);
+    }
+    return nextLine;
   });
 
   const nextBlock = transformed.join('\n');
   if (nextBlock === block) return null;
+  if (selectionIsCollapsed) {
+    const nextSelection = Math.max(lineStart, Math.min(lineStart + nextBlock.length, collapsedSelection ?? selectionStart));
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
   return {
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,
@@ -1778,13 +1816,16 @@ export function getRenderedMarkdownShortcutEdit(input: {
 }): MarkdownTextEdit | null {
   const formattingKind = getMarkdownFormattingShortcut(input.event);
   if (formattingKind) {
-    if (input.selectionStart === input.selectionEnd) return null;
     return getMarkdownFormattingEdit(
       input.value,
       input.selectionStart,
       input.selectionEnd,
       formattingKind,
     );
+  }
+
+  if (isMarkdownTaskToggleShortcut(input.event)) {
+    return getMarkdownTaskToggleEdit(input.value, input.selectionStart, input.selectionEnd);
   }
 
   if (!input.event.metaKey || !input.event.shiftKey || input.event.altKey || input.event.ctrlKey) return null;
@@ -1871,7 +1912,6 @@ function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: numbe
 function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): number | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
-  if (caret === lineStart) return lineStart;
   const lineEndIndex = value.indexOf('\n', caret);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
   const visibleStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
@@ -1894,6 +1934,11 @@ export function getRenderedMarkdownEnterEdit(
 ): MarkdownTextEdit | null {
   if (selectionStart !== selectionEnd) return null;
   const lineStartOffset = getRenderedMarkdownLineStartEditOffset(value, selectionStart);
+  const directListEnterEdit = lineStartOffset === null
+    ? (getCarrotListEnterEdit(value, selectionStart, selectionEnd)
+      ?? getMarkdownListEnterEdit(value, selectionStart, selectionEnd))
+    : null;
+  if (directListEnterEdit) return directListEnterEdit;
   const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, lineStartOffset ?? selectionStart);
   const insertionOffset = openingOffset === selectionStart
     ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
@@ -1906,6 +1951,7 @@ export function getRenderedMarkdownEnterEdit(
     ? null
     : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
       ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset));
+  if (!listEnterEdit && lineStartOffset === null && insertionOffset === selectionStart) return null;
   return listEnterEdit
     ?? {
       nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
@@ -2109,6 +2155,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
   if (emptyMarkerEdit) return emptyMarkerEdit;
+
+  const markerDeleteEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(input.value, selectionStart);
+  if (markerDeleteEdit) {
+    return {
+      nextValue: `${input.value.slice(0, markerDeleteEdit.from)}${markerDeleteEdit.insert}${input.value.slice(markerDeleteEdit.to)}`,
+      selectionStart: markerDeleteEdit.selection,
+      selectionEnd: markerDeleteEdit.selection,
+    };
+  }
 
   const listBodyDeleteEdit = getSingleCharacterRenderedListBodyDeleteEdit(
     input.value,
@@ -8907,6 +8962,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetTitle = activeReading.title;
     const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = removeEmptyMarkdownCommentPlaceholders(editContent);
+    const previousSavedContent = lastSavedContentRef.current;
     const targetSharedFileStatus = sharedFileStatus;
     let done = false;
     const doSave = async () => {
@@ -8914,7 +8970,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       done = true;
       setSaveStatus('saving');
       try {
-        const portableContent = targetReadingPath
+        const portableContent = targetReadingPath && markdownPortableImagesChanged(previousSavedContent, targetContent)
           ? (await window.markdownImagesAPI?.makeImagesPortable(targetReadingPath, targetContent))?.content ?? targetContent
           : targetContent;
         let result: DocumentSaveResult | null | undefined;
