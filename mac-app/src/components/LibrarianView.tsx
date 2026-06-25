@@ -1664,11 +1664,27 @@ export function getMarkdownListToggleEdit(
   const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(lineStart, lineEnd);
   const lines = block.split('\n');
-
-  const orderedRe = /^(\s*)(\d+)\.\s/;
-  const unorderedRe = /^(\s*)[-*+]\s/;
-  const carrotRe = /^(\s*)›+\s/;
-  const taskRe = /^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s+/;
+  type ToggleLine = {
+    indent: string;
+    marker: 'ordered' | 'unordered' | 'carrot' | 'task' | 'none';
+    markerLength: number;
+    text: string;
+  };
+  const parseToggleLine = (line: string): ToggleLine => {
+    const task = line.match(/^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.*)$/);
+    if (task) return { indent: task[1], marker: 'task', markerLength: line.length - task[2].length, text: task[2] };
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
+    if (ordered) return { indent: ordered[1], marker: 'ordered', markerLength: line.length - ordered[2].length, text: ordered[2] };
+    const unordered = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (unordered) return { indent: unordered[1], marker: 'unordered', markerLength: line.length - unordered[2].length, text: unordered[2] };
+    const carrot = line.match(/^(\s*)›+\s+(.*)$/);
+    if (carrot) return { indent: carrot[1], marker: 'carrot', markerLength: line.length - carrot[2].length, text: carrot[2] };
+    const plain = line.match(/^(\s*)(.*)$/);
+    return { indent: plain?.[1] ?? '', marker: 'none', markerLength: plain?.[1].length ?? 0, text: plain?.[2] ?? line };
+  };
+  const markerText = kind === 'ordered'
+    ? (counter: number) => `${counter}. `
+    : () => (unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ');
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
   if (nonBlank.length === 0 && selectionStart === selectionEnd) {
@@ -1688,33 +1704,48 @@ export function getMarkdownListToggleEdit(
 
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
     kind === 'ordered'
-      ? orderedRe.test(line)
-      : !taskRe.test(line) && (unorderedRe.test(line) || carrotRe.test(line))
+      ? parseToggleLine(line).marker === 'ordered'
+      : ['unordered', 'carrot'].includes(parseToggleLine(line).marker)
   ));
 
   let counter = 1;
-  const transformed = lines.map((line) => {
+  let collapsedSelection: number | null = null;
+  let blockOffset = 0;
+  const selectionIsCollapsed = selectionStart === selectionEnd;
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
     if (line.trim().length === 0) return line;
-    const taskMatch = line.match(taskRe);
-    const orderedMatch = line.match(orderedRe);
-    const unorderedMatch = line.match(unorderedRe);
-    const carrotMatch = line.match(carrotRe);
-    const stripped = taskMatch
-      ? `${taskMatch[1]}${line.slice(taskMatch[0].length)}`
-      : orderedMatch
-      ? line.slice(orderedMatch[0].length)
-      : unorderedMatch
-      ? line.slice(unorderedMatch[0].length)
-      : carrotMatch
-      ? line.slice(carrotMatch[0].length)
-      : line;
-    if (allMarked) return stripped;
-    if (kind === 'ordered') return `${counter++}. ${stripped}`;
-    return unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
+    const parsed = parseToggleLine(line);
+    const nextLine = allMarked
+      ? `${parsed.indent}${parsed.text}`
+      : `${parsed.indent}${markerText(counter++)}${parsed.text}`;
+    if (
+      selectionIsCollapsed
+      && collapsedSelection === null
+      && selectionStart >= lineStart + lineOffset
+      && selectionStart <= lineStart + lineOffset + line.length
+    ) {
+      const nextMarkerLength = nextLine.length - parsed.text.length;
+      const relativeSelection = selectionStart - lineStart - lineOffset;
+      const delta = relativeSelection >= parsed.markerLength
+        ? nextMarkerLength - parsed.markerLength
+        : 0;
+      collapsedSelection = lineStart + lineOffset + Math.max(0, relativeSelection + delta);
+    }
+    return nextLine;
   });
 
   const nextBlock = transformed.join('\n');
   if (nextBlock === block) return null;
+  if (selectionIsCollapsed) {
+    const nextSelection = Math.max(lineStart, Math.min(lineStart + nextBlock.length, collapsedSelection ?? selectionStart));
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
   return {
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,

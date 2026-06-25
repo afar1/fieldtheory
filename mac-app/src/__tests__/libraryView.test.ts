@@ -762,6 +762,20 @@ describe('markdown list editor helpers', () => {
     });
   });
 
+  it('converts the current task line without selecting the whole row', () => {
+    expect(getMarkdownListToggleEdit('- [ ] kk', '- [ ] kk'.length, '- [ ] kk'.length, 'unordered')).toEqual({
+      nextValue: '- kk',
+      selectionStart: 4,
+      selectionEnd: 4,
+    });
+
+    expect(getMarkdownListToggleEdit('- [ ] kk', '- [ ] kk'.length, '- [ ] kk'.length, 'ordered')).toEqual({
+      nextValue: '1. kk',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
+  });
+
   it('starts a list on an empty line and leaves the caret ready for typing', () => {
     expect(getMarkdownListToggleEdit('', 0, 0, 'ordered')).toEqual({
       nextValue: '1. ',
@@ -1782,6 +1796,17 @@ describe('rendered markdown edit helpers', () => {
     });
 
     expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '0', code: '', metaKey: true, shiftKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
+      nextValue: '- [x] kk',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
       event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
       value: 'first\nsecond',
       selectionStart: 0,
@@ -1824,6 +1849,17 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '1. task',
       selectionStart: 0,
       selectionEnd: 7,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '8', code: '', metaKey: true, shiftKey: true }),
+      value: '- [ ] kk',
+      selectionStart: '- [ ] kk'.length,
+      selectionEnd: '- [ ] kk'.length,
+    })).toEqual({
+      nextValue: '- kk',
+      selectionStart: 4,
+      selectionEnd: 4,
     });
   });
 
