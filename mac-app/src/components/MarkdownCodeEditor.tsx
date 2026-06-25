@@ -1673,6 +1673,27 @@ export function getRenderedMarkdownEmptyTaskDeleteBackwardEdit(
   return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
 }
 
+export function getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, caret);
+  const lineText = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)(.*)$/.exec(lineText);
+  if (!taskMatch) return null;
+  const bodyStart = lineEnd - taskMatch[5].length;
+  if (lineEnd - bodyStart !== 1 || caret !== lineEnd) return null;
+
+  if (lineStart === 0 && lineEnd === value.length) {
+    return { from: 0, to: value.length, selection: 0 };
+  }
+  if (lineEnd < value.length) {
+    return { from: lineStart, to: lineEnd + 1, selection: lineStart };
+  }
+  return { from: lineStart - 1, to: lineEnd, selection: lineStart - 1 };
+}
+
 export function getRenderedMarkdownSelectedTaskDeleteEdit(
   value: string,
   from: number,
@@ -1787,6 +1808,14 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
       view.dispatch({
         changes: { from: listMarkerEdit.from, to: listMarkerEdit.to, insert: listMarkerEdit.insert },
         selection: { anchor: listMarkerEdit.selection, head: listMarkerEdit.selection },
+      });
+      return true;
+    }
+    const singleCharacterTaskEdit = getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit(value, selection.from);
+    if (singleCharacterTaskEdit) {
+      view.dispatch({
+        changes: { from: singleCharacterTaskEdit.from, to: singleCharacterTaskEdit.to },
+        selection: { anchor: singleCharacterTaskEdit.selection, head: singleCharacterTaskEdit.selection },
       });
       return true;
     }

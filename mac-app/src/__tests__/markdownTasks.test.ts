@@ -23,6 +23,14 @@ describe('parseMarkdownTaskLine', () => {
 });
 
 describe('getMarkdownTaskShortcutEdit', () => {
+  it('creates an unchecked task on an empty current line', () => {
+    expect(getMarkdownTaskShortcutEdit('', 0, 0)).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
+
   it('turns the current plain line into an unchecked task', () => {
     expect(getMarkdownTaskShortcutEdit('before\nwrite tests\nafter', 12, 12)).toEqual({
       nextValue: 'before\n- [ ] write tests\nafter',

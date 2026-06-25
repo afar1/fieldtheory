@@ -1895,9 +1895,20 @@ describe('rendered markdown edit helpers', () => {
     })).toEqual({
       nextValue: '› ',
       selectionStart: 2,
-	      selectionEnd: 2,
-	    });
-	  });
+      selectionEnd: 2,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }),
+      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    })).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
 
 	  it('creates inline formatting placeholders for empty rendered shortcuts', () => {
 	    expect(getRenderedMarkdownShortcutEdit({

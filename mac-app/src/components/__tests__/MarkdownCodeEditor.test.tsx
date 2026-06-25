@@ -109,6 +109,7 @@ import {
   getRenderedMarkdownBlockBodyStart,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
+  getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit,
   getRenderedMarkdownSelectedTaskDeleteEdit,
   getRenderedMarkdownListMarkerDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
@@ -1810,6 +1811,34 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     }))).toBe(true);
     expect(view.state.doc.toString()).toBe('- hello\n- [ ] yo\n- [ ] ');
     expect(view.state.selection.main.from).toBe(23);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes a rendered task line when Backspace deletes its only body character', () => {
+    expect(getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit('- [ ] a', 7)).toEqual({
+      from: 0,
+      to: 7,
+      selection: 0,
+    });
+
+    const doc = 'before\n- [ ] a\nafter';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('before\n- [ ] a'.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('before\nafter');
+    expect(view.state.selection.main.from).toBe('before\n'.length);
 
     view.destroy();
     parent.remove();

@@ -104,7 +104,14 @@ export function getMarkdownTaskShortcutEdit(
 ): MarkdownTaskShortcutEdit | null {
   const { start, end } = selectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(start, end);
-  if (!block.trim()) return null;
+  if (!block.trim()) {
+    if (selectionStart !== selectionEnd) return null;
+    const indentation = block.match(/^\s*/)?.[0] ?? '';
+    const nextBlock = `${indentation}- [ ] `;
+    const nextValue = `${value.slice(0, start)}${nextBlock}${value.slice(end)}`;
+    const nextSelection = start + nextBlock.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
 
   const nextBlock = block.split('\n').map((line) => cycleTaskLine(line, direction)).join('\n');
   if (nextBlock === block) return null;
