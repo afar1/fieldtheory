@@ -140,6 +140,7 @@ import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownInlineHtmlBlockRanges,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
   isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
@@ -1667,6 +1668,7 @@ export function getMarkdownListToggleEdit(
   const orderedRe = /^(\s*)(\d+)\.\s/;
   const unorderedRe = /^(\s*)[-*+]\s/;
   const carrotRe = /^(\s*)›+\s/;
+  const taskRe = /^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s+/;
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
   if (nonBlank.length === 0 && selectionStart === selectionEnd) {
@@ -1685,16 +1687,21 @@ export function getMarkdownListToggleEdit(
   }
 
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
-    kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
+    kind === 'ordered'
+      ? orderedRe.test(line)
+      : !taskRe.test(line) && (unorderedRe.test(line) || carrotRe.test(line))
   ));
 
   let counter = 1;
   const transformed = lines.map((line) => {
     if (line.trim().length === 0) return line;
+    const taskMatch = line.match(taskRe);
     const orderedMatch = line.match(orderedRe);
     const unorderedMatch = line.match(unorderedRe);
     const carrotMatch = line.match(carrotRe);
-    const stripped = orderedMatch
+    const stripped = taskMatch
+      ? `${taskMatch[1]}${line.slice(taskMatch[0].length)}`
+      : orderedMatch
       ? line.slice(orderedMatch[0].length)
       : unorderedMatch
       ? line.slice(unorderedMatch[0].length)
@@ -2113,6 +2120,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
   if (emptyMarkerEdit) return emptyMarkerEdit;
+
+  const markerDeleteEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(input.value, selectionStart);
+  if (markerDeleteEdit) {
+    return {
+      nextValue: `${input.value.slice(0, markerDeleteEdit.from)}${markerDeleteEdit.insert}${input.value.slice(markerDeleteEdit.to)}`,
+      selectionStart: markerDeleteEdit.selection,
+      selectionEnd: markerDeleteEdit.selection,
+    };
+  }
 
   const listBodyDeleteEdit = getSingleCharacterRenderedListBodyDeleteEdit(
     input.value,
