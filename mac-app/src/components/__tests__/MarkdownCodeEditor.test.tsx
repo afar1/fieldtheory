@@ -119,12 +119,14 @@ import {
   getRenderedMarkdownListMarkerLayoutStyle,
   getRenderedMarkdownTaskMarkerLayoutStyle,
   getRenderedMarkdownCommandArrowSelection,
+  getRenderedMarkdownTaskEnterEdit,
   getRenderedMarkdownVerticalNavigationEdit,
   handleRenderedMarkdownEditorBeforeInput,
   handleRenderedMarkdownEditorArrowLeft,
   handleMarkdownCodeEditorListArrowRight,
   handleMarkdownCodeEditorListCommandArrowLeft,
   handleMarkdownCodeEditorCommandBackspace,
+  handleRenderedMarkdownTaskEnter,
   handleRenderedMarkdownEditorCommandArrow,
   handleRenderedMarkdownEditorKeyDown,
   handleMarkdownCodeEditorCapturedKeyDown,
@@ -1757,6 +1759,35 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(handleMarkdownCodeEditorCommandBackspace(view)).toBe(true);
     expect(view.state.doc.toString()).toBe('- first item here');
     expect(view.state.selection.main.from).toBe('- first item'.length);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('continues rendered task lines before the markdown keymap can turn them into bullets', () => {
+    const doc = '- hello\n- [ ] yo';
+    expect(getRenderedMarkdownTaskEnterEdit(doc, doc.length, doc.length)).toEqual({
+      from: doc.length,
+      to: doc.length,
+      insert: '\n- [ ] ',
+      nextValue: '- hello\n- [ ] yo\n- [ ] ',
+      selectionStart: 23,
+      selectionEnd: 23,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownTaskEnter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe('- hello\n- [ ] yo\n- [ ] ');
+    expect(view.state.selection.main.from).toBe(23);
 
     view.destroy();
     parent.remove();
