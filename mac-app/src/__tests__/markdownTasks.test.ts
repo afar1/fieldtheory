@@ -76,6 +76,16 @@ describe('getMarkdownTaskShortcutEdit', () => {
   it('preserves indentation and strips ordinary list markers when creating tasks', () => {
     expect(getMarkdownTaskShortcutEdit('  - nested', 4, 4)?.nextValue).toBe('  - [ ] nested');
   });
+
+  it('turns empty list markers into empty tasks without keeping the marker as text', () => {
+    expect(getMarkdownTaskShortcutEdit('- ', 2, 2)).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+
+    expect(getMarkdownTaskShortcutEdit('1. ', 3, 3)?.nextValue).toBe('- [ ] ');
+  });
 });
 
 describe('getMarkdownTaskToggleEdit', () => {

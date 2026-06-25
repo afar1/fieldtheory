@@ -1771,6 +1771,17 @@ describe('rendered markdown edit helpers', () => {
     });
 
     expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }),
+      value: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
+    })).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
       event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
       value: 'first\nsecond',
       selectionStart: 0,
