@@ -748,6 +748,20 @@ describe('markdown list editor helpers', () => {
     });
   });
 
+  it('converts task markers to the requested list marker instead of exposing checkbox syntax', () => {
+    expect(getMarkdownListToggleEdit('- [ ] task', 0, '- [ ] task'.length, 'unordered')).toEqual({
+      nextValue: '- task',
+      selectionStart: 0,
+      selectionEnd: 6,
+    });
+
+    expect(getMarkdownListToggleEdit('- [ ] task', 0, '- [ ] task'.length, 'ordered')).toEqual({
+      nextValue: '1. task',
+      selectionStart: 0,
+      selectionEnd: 7,
+    });
+  });
+
   it('starts a list on an empty line and leaves the caret ready for typing', () => {
     expect(getMarkdownListToggleEdit('', 0, 0, 'ordered')).toEqual({
       nextValue: '1. ',
@@ -1619,6 +1633,30 @@ describe('rendered markdown edit helpers', () => {
     });
   });
 
+  it('removes rendered list markers at the text start without deleting the text', () => {
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- keep this text',
+      selectionStart: '- '.length,
+      selectionEnd: '- '.length,
+    })).toEqual({
+      nextValue: 'keep this text',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- [ ] keep this text',
+      selectionStart: '- [ ] '.length,
+      selectionEnd: '- [ ] '.length,
+    })).toEqual({
+      nextValue: 'keep this text',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+  });
+
   it('returns rendered list items to a clean empty body after deleting their only character', () => {
     expect(getSingleCharacterRenderedListBodyDeleteEdit('- a', 3, 3, 'Backspace')).toEqual({
       nextValue: '- ',
@@ -1753,6 +1791,28 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '› first\n› second',
       selectionStart: 0,
       selectionEnd: 16,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }),
+      value: '- [ ] task',
+      selectionStart: 0,
+      selectionEnd: '- [ ] task'.length,
+    })).toEqual({
+      nextValue: '- task',
+      selectionStart: 0,
+      selectionEnd: 6,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
+      value: '- [ ] task',
+      selectionStart: 0,
+      selectionEnd: '- [ ] task'.length,
+    })).toEqual({
+      nextValue: '1. task',
+      selectionStart: 0,
+      selectionEnd: 7,
     });
   });
 
