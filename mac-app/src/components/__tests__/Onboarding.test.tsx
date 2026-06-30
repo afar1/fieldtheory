@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Onboarding from '../Onboarding';
 
@@ -140,5 +140,56 @@ describe('Onboarding local setup', () => {
       expect(window.onboardingAPI?.completeLocalSetup).toHaveBeenCalled();
     });
     expect(window.authAPI?.requestOtp).not.toHaveBeenCalled();
+  });
+
+  it('does not ask returning users to re-enter a session display name', async () => {
+    const maybeSingle = vi.fn(async () => ({
+      data: { callsign: 'AF', full_name: null },
+    }));
+    const eq = vi.fn(() => ({ maybeSingle }));
+    const select = vi.fn(() => ({ eq }));
+    supabaseMock.from.mockReturnValue({ select });
+
+    (window as any).authAPI = {
+      ...window.authAPI,
+      prepareForNewLogin: vi.fn(async () => undefined),
+      verifyOtp: vi.fn(async () => ({
+        error: null,
+        session: {
+          authenticated: true,
+          expires_at: null,
+          expiresAt: null,
+          tier: 'pro',
+          callsign: 'AF',
+          displayName: 'Andrew Farah',
+          user: {
+            id: 'user-1',
+            email: 'andrew@example.com',
+            user_metadata: { full_name: 'Andrew Farah' },
+          },
+        },
+      })),
+      updateFullName: vi.fn(async () => ({ error: null })),
+    };
+
+    render(<Onboarding />);
+
+    const emailInput = await screen.findByPlaceholderText('Enter your email');
+    fireEvent.change(emailInput, { target: { value: 'andrew@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }));
+
+    const codeInput = await screen.findByPlaceholderText('Enter code');
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+
+    expect(await screen.findByText('Welcome Back')).toBeTruthy();
+    expect(screen.queryByText('Add your name below, or skip to continue.')).toBeNull();
+    expect(window.authAPI?.updateFullName).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => {
+      expect(window.onboardingAPI?.complete).toHaveBeenCalled();
+    });
   });
 });

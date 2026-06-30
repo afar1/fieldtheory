@@ -35,6 +35,24 @@ type PermissionStatus = {
   screenRecording: boolean;
 };
 
+type OnboardingAuthSession = {
+  displayName?: string;
+  user?: {
+    user_metadata?: Record<string, unknown> | null;
+  } | null;
+} | null;
+
+function getSessionDisplayName(session: OnboardingAuthSession): string | null {
+  const metadata = session?.user?.user_metadata;
+  const displayName =
+    session?.displayName ??
+    metadata?.full_name ??
+    metadata?.display_name ??
+    metadata?.name;
+
+  return typeof displayName === 'string' && displayName.trim() ? displayName.trim() : null;
+}
+
 // Phase to step number mapping for persistence.
 const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
   permissions: 0,
@@ -733,8 +751,9 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
         setIsVerifyingOtp(false);
         setIsSettingUpSession(true);
 
-        // Fetch profile to check if returning user (has name) or new user
-        let hasExistingProfile = false;
+        // Fetch profile to check if returning user (has name) or new user.
+        // The session display name is the canonical local source; profiles can lag it.
+        let hasExistingProfile = Boolean(getSessionDisplayName(result.session));
         if (supabase && result.session.user?.id) {
           try {
             const { data } = await supabase
@@ -745,7 +764,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
             if (data?.callsign) {
               setCallsign(data.callsign);
             }
-            hasExistingProfile = !!data?.full_name;
+            hasExistingProfile = hasExistingProfile || !!data?.full_name;
           } catch (err) {
             console.warn('[Onboarding] Failed to fetch profile:', err);
           }

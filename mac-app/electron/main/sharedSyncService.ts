@@ -146,7 +146,9 @@ export interface SharedFileAudienceUpdateInput {
 }
 
 export type RiverTimelineScope = 'private' | 'public';
-export type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
+export type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
+
+const OLD_RIVER_SOURCE_ID = 'legacy:old-river';
 
 export interface RiverTimelineQuery {
   scope: RiverTimelineScope;
@@ -1032,33 +1034,17 @@ export class SharedSyncService extends EventEmitter {
 
     if (supabase) {
       try {
+        const includeLegacy = query.scope === 'private'
+          && (query.sourceIds.length === 0 || query.sourceIds.includes(OLD_RIVER_SOURCE_ID));
         const requestedTargets = query.scope === 'public'
           ? [{ kind: 'public' as const, targetId: 'public' }]
           : this.timelineTargetKeys(query.sourceIds);
-        const targetDocumentIds = requestedTargets.length > 0
-          ? await this.documentIdsForTargetRows(supabase, requestedTargets)
-          : null;
-        if (targetDocumentIds && targetDocumentIds.size === 0) return [];
-
-        let documentQuery = supabase
-          .from('river_documents')
-          .select('id, title, shared_name, content, created_by, updated_at, created_at, author_initials, author_callsign')
-          .is('deleted_at', null)
-          .order('updated_at', { ascending: false });
-
-        if (targetDocumentIds) {
-          documentQuery = documentQuery.in('id', [...targetDocumentIds]);
-        }
-
-        if (query.scope === 'private') {
-          const audienceDocumentIds = await this.documentIdsForRecipient(supabase, session.user.id);
-          documentQuery = documentQuery.or(this.privateTimelineVisibilityFilter(session.user.id, audienceDocumentIds));
-        }
-
-        const response = await documentQuery.limit(limit);
-        if (!response.error && response.data) {
-          return ((response.data ?? []) as RiverDocumentRow[]).map((row) => this.timelineItemFromRow(row, query.scope));
-        }
+        const includeCanonical = query.scope === 'public' || query.sourceIds.length === 0 || requestedTargets.length > 0;
+        const canonicalItems = includeCanonical
+          ? await this.canonicalTimelineItems(supabase, session.user.id, query.scope, requestedTargets, limit)
+          : [];
+        const legacyItems = includeLegacy ? await this.legacyTimelineItems(limit) : [];
+        return this.mergeTimelineItems(canonicalItems, legacyItems, limit);
       } catch {
         // Fall through to local cache while offline or while the remote schema is unavailable.
       }
@@ -1135,6 +1121,8 @@ export class SharedSyncService extends EventEmitter {
         result.errors.push(err instanceof Error ? err.message : String(err));
       }
     }
+
+    await this.syncLegacyRows(result, activeIds);
     result.removed = this.removeStaleCacheFiles(activeIds);
     return result;
   }
@@ -1192,12 +1180,15 @@ export class SharedSyncService extends EventEmitter {
     return { ok: true, revision: nextRevision, cachePath };
   }
 
-  private async syncLegacyOnce(result: { written: number; removed: number; created: number; errors: string[] }): Promise<{ written: number; removed: number; created: number; errors: string[] }> {
+  private async syncLegacyRows(
+    result: { written: number; removed: number; created: number; errors: string[] },
+    activeIds: Set<string>,
+  ): Promise<void> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
-    if (!supabase || !session?.user?.id) return result;
+    if (!supabase || !session?.user?.id) return;
     const teamScopeUserId = await this.getReadableTeamScopeUserId();
-    if (!teamScopeUserId) return result;
+    if (!teamScopeUserId) return;
 
     const { data, error } = await supabase
       .from('team_documents')
@@ -1207,12 +1198,12 @@ export class SharedSyncService extends EventEmitter {
 
     if (error) {
       result.errors.push(error.message);
-      return result;
+      return;
     }
 
-    const activeIds = new Set<string>();
     for (const row of (data ?? []) as TeamDocumentRow[]) {
       try {
+        if (activeIds.has(row.id)) continue;
         this.writeRowToCache(row);
         activeIds.add(row.id);
         result.written++;
@@ -1220,6 +1211,11 @@ export class SharedSyncService extends EventEmitter {
         result.errors.push(err instanceof Error ? err.message : String(err));
       }
     }
+  }
+
+  private async syncLegacyOnce(result: { written: number; removed: number; created: number; errors: string[] }): Promise<{ written: number; removed: number; created: number; errors: string[] }> {
+    const activeIds = new Set<string>();
+    await this.syncLegacyRows(result, activeIds);
     result.removed = this.removeStaleCacheFiles(activeIds);
     return result;
   }
@@ -1264,6 +1260,93 @@ export class SharedSyncService extends EventEmitter {
       pinned: false,
       public: scope === 'public',
     };
+  }
+
+  private timelineItemFromLegacyRow(row: TeamDocumentRow): RiverTimelineItem {
+    return {
+      documentId: row.id,
+      cachePath: this.existingCachePathForRow(row.id) ?? undefined,
+      title: sharedRowTitle(row),
+      excerpt: this.excerptForContent(row.content),
+      content: this.timelineContentForDisplay(row.content),
+      authorUserId: row.created_by ?? null,
+      authorCallsign: row.author_callsign ?? null,
+      authorInitials: row.author_initials ?? null,
+      sourceLabel: 'Old River',
+      sourceKind: 'legacy',
+      sharedAt: row.updated_at ?? row.created_at,
+      pinned: false,
+      public: false,
+    };
+  }
+
+  private async canonicalTimelineItems(
+    supabase: SupabaseClient,
+    userId: string,
+    scope: RiverTimelineScope,
+    requestedTargets: Array<{ kind: 'person' | 'group' | 'public'; targetId: string }>,
+    limit: number,
+  ): Promise<RiverTimelineItem[]> {
+    const targetDocumentIds = requestedTargets.length > 0
+      ? await this.documentIdsForTargetRows(supabase, requestedTargets)
+      : null;
+    if (targetDocumentIds && targetDocumentIds.size === 0) return [];
+
+    let documentQuery = supabase
+      .from('river_documents')
+      .select('id, title, shared_name, content, created_by, updated_at, created_at, author_initials, author_callsign')
+      .is('deleted_at', null)
+      .order('updated_at', { ascending: false });
+
+    if (targetDocumentIds) {
+      documentQuery = documentQuery.in('id', [...targetDocumentIds]);
+    }
+
+    if (scope === 'private') {
+      const audienceDocumentIds = await this.documentIdsForRecipient(supabase, userId);
+      documentQuery = documentQuery.or(this.privateTimelineVisibilityFilter(userId, audienceDocumentIds));
+    }
+
+    const response = await documentQuery.limit(limit);
+    if (response.error || !response.data) throw response.error;
+    return ((response.data ?? []) as RiverDocumentRow[]).map((row) => this.timelineItemFromRow(row, scope));
+  }
+
+  private async legacyTimelineItems(limit: number): Promise<RiverTimelineItem[]> {
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase) return [];
+    let teamScopeUserId: string | null = null;
+    try {
+      teamScopeUserId = await this.getReadableTeamScopeUserId();
+    } catch {
+      return [];
+    }
+    if (!teamScopeUserId) return [];
+
+    const { data, error } = await supabase
+      .from('team_documents')
+      .select('*')
+      .eq('team_scope_user_id', teamScopeUserId)
+      .is('deleted_at', null)
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (error || !data) return [];
+    return ((data ?? []) as TeamDocumentRow[]).map((row) => this.timelineItemFromLegacyRow(row));
+  }
+
+  private mergeTimelineItems(
+    canonicalItems: RiverTimelineItem[],
+    legacyItems: RiverTimelineItem[],
+    limit: number,
+  ): RiverTimelineItem[] {
+    const byId = new Map<string, RiverTimelineItem>();
+    for (const item of canonicalItems) byId.set(item.documentId, item);
+    for (const item of legacyItems) {
+      if (!byId.has(item.documentId)) byId.set(item.documentId, item);
+    }
+    return [...byId.values()]
+      .sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))
+      .slice(0, limit);
   }
 
   private timelineTargetKeys(sourceIds: string[]): Array<{ kind: 'person' | 'group' | 'public'; targetId: string }> {

@@ -1947,7 +1947,7 @@ type RiverTargetKind = 'person' | 'group' | 'public';
 type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
 type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
 type RiverTimelineScope = 'private' | 'public';
-type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
 
 interface SharedFileShareTarget {
   id: string;
