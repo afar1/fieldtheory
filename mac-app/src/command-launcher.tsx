@@ -440,6 +440,7 @@ interface LauncherCommandsAPI {
     selection?: { start?: number; end?: number; text?: string } | null;
     useMemory?: boolean;
   }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
+  runGlobalImproveSelection?: () => Promise<{ success: boolean; error?: string }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
@@ -482,6 +483,8 @@ interface LauncherClipboardAPI {
 interface LauncherTranscribeAPI {
   getHotkey: () => Promise<string>;
   toggleRecording: () => Promise<void>;
+  getAutoImprove?: () => Promise<boolean>;
+  setAutoImprove?: (enabled: boolean) => Promise<void>;
 }
 
 interface LauncherThemeAPI {
@@ -3902,6 +3905,24 @@ function CommandLauncher() {
         case 'start-recording':
           transcribeAPI.toggleRecording?.();
           break;
+        case 'improve-selected-text': {
+          const result = await commandsAPI.runGlobalImproveSelection?.();
+          if (!result?.success) {
+            showLauncherMessage(result?.error ?? 'Improve selected text is unavailable');
+            return;
+          }
+          break;
+        }
+        case 'toggle-auto-improve': {
+          if (!transcribeAPI.getAutoImprove || !transcribeAPI.setAutoImprove) {
+            showLauncherMessage('Auto-improve settings are unavailable');
+            return;
+          }
+          const next = !(await transcribeAPI.getAutoImprove());
+          await transcribeAPI.setAutoImprove(next);
+          showLauncherMessage(next ? 'Auto-improve enabled' : 'Auto-improve disabled');
+          return;
+        }
         case 'toggle-theme':
           // Toggle dark/light mode
           (async () => {

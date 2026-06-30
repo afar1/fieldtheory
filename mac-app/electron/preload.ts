@@ -187,6 +187,16 @@ const TranscribeIPCChannels = {
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_PROVIDER: 'transcribe:getAutoImproveProvider',
+  SET_AUTO_IMPROVE_PROVIDER: 'transcribe:setAutoImproveProvider',
+  GET_AUTO_IMPROVE_PROVIDER_STATUS: 'transcribe:getAutoImproveProviderStatus',
+  GET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:getAutoImproveModelOptions',
+  SET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:setAutoImproveModelOptions',
+  GET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:getAutoImproveWritingPreferences',
+  SET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:setAutoImproveWritingPreferences',
+  GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
+  SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
+  CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -507,6 +517,25 @@ type AutoImproveStats = {
   apiCalls: number;
   inputTokens: number;
   outputTokens: number;
+};
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+type AutoImproveModelOptions = {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+};
+type AutoImproveContextFile = {
+  path: string;
+  enabled: boolean;
+};
+type AutoImproveProviderStatus = {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
 };
 
 // Sound configuration for recording actions.
@@ -904,6 +933,16 @@ export interface TranscribeAPI {
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences: () => Promise<string>;
+  setAutoImproveWritingPreferences: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
@@ -1411,6 +1450,46 @@ const transcribeAPI: TranscribeAPI = {
 
   setAutoImprove: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
+  },
+
+  getAutoImproveProvider: async (): Promise<AutoImproveProvider> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER);
+  },
+
+  setAutoImproveProvider: async (provider: AutoImproveProvider): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, provider);
+  },
+
+  getAutoImproveProviderStatus: async (provider: AutoImproveProvider): Promise<AutoImproveProviderStatus> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, provider);
+  },
+
+  getAutoImproveModelOptions: async (): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS);
+  },
+
+  setAutoImproveModelOptions: async (options: Partial<AutoImproveModelOptions>): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, options);
+  },
+
+  getAutoImproveWritingPreferences: async (): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES);
+  },
+
+  setAutoImproveWritingPreferences: async (preferences: string): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, preferences);
+  },
+
+  getAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  setAutoImproveContextFiles: async (files: AutoImproveContextFile[]): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, files);
+  },
+
+  chooseAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES);
   },
 
   getAutoImproveMinWords: async (): Promise<number> => {
@@ -3137,6 +3216,7 @@ const CommandsIPCChannels = {
   GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
   SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  RUN_GLOBAL_IMPROVE_SELECTION: 'commands:runGlobalImproveSelection',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
   GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
   SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
@@ -3561,6 +3641,10 @@ const commandsAPI = {
 
   runLocalCommand: async (request: string | LocalCommandRunRequest): Promise<LocalCommandRunResult> => {
     return ipcRenderer.invoke(CommandsIPCChannels.RUN_LOCAL_COMMAND, request);
+  },
+
+  runGlobalImproveSelection: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION);
   },
 
   listMaxwellRuns: async (limit?: number): Promise<MaxwellRunSummary[]> => {

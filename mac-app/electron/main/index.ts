@@ -70,6 +70,9 @@ import {
 import {
   isParakeetEngine,
   TranscribeIPCChannels,
+  type AutoImproveContextFile,
+  type AutoImproveModelOptions,
+  type AutoImproveProvider,
   type TranscriptionEngine,
 } from './types/transcribe';
 import {
@@ -117,6 +120,14 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
+import {
+  getTextImproveProviderStatus,
+  improveText,
+  normalizeAutoImproveContextFiles,
+  normalizeAutoImproveModelOptions,
+  sanitizeAutoImproveWritingPreferences,
+  type TextImproveMode,
+} from './textImproveService';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
@@ -4580,6 +4591,76 @@ async function ensureLocalImproveCommand(): Promise<PortableCommand | null> {
   return created ? commandsManager.getCommand(created.name) : commandsManager.getCommand('improve');
 }
 
+function getAutoImproveModelOptions(): AutoImproveModelOptions {
+  return normalizeAutoImproveModelOptions({
+    codexModel: preferencesManager?.getPreference('autoImproveCodexModel'),
+    codexEffort: preferencesManager?.getPreference('autoImproveCodexEffort'),
+    claudeModel: preferencesManager?.getPreference('autoImproveClaudeModel'),
+    claudeEffort: preferencesManager?.getPreference('autoImproveClaudeEffort'),
+  });
+}
+
+function getAutoImproveContextFiles(): AutoImproveContextFile[] {
+  return normalizeAutoImproveContextFiles(
+    preferencesManager?.getPreference('autoImproveContextFiles')
+  );
+}
+
+function getAutoImproveWritingPreferences(): string {
+  return sanitizeAutoImproveWritingPreferences(
+    preferencesManager?.getPreference('autoImproveWritingPreferences')
+  );
+}
+
+async function runLocalImproveCommand(input: {
+  text: string;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+  privateGuidance?: string;
+}): Promise<string | null> {
+  const command = await ensureLocalImproveCommand();
+  if (!command || !commandsManager) return null;
+  const loaded = await commandsManager.loadCommandContent(command);
+  if (!loaded) return null;
+
+  const localManager = getLocalLlmManager();
+  return localManager.runSelectionCommand({
+    commandName: loaded.name,
+    commandContent: `${loaded.content}${input.privateGuidance ?? ''}`,
+    targetTitle: input.title ?? (input.mode === 'transcript' ? 'Transcript' : 'Selected text'),
+    targetPath: input.targetPath ?? (input.mode === 'transcript' ? 'fieldtheory://transcript/auto-improve' : 'global-selection'),
+    targetContent: input.text,
+    selectedText: input.text,
+    memorySnapshot: input.memorySnapshot ?? null,
+  });
+}
+
+async function improveWithPreferredProvider(input: {
+  text: string;
+  provider: AutoImproveProvider;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+}): Promise<string | null> {
+  return improveText({
+    text: input.text,
+    provider: input.provider,
+    mode: input.mode,
+    title: input.title,
+    targetPath: input.targetPath,
+    writingPreferences: getAutoImproveWritingPreferences(),
+    contextFiles: getAutoImproveContextFiles(),
+    modelOptions: getAutoImproveModelOptions(),
+    runLocal: (localInput) => runLocalImproveCommand({
+      ...localInput,
+      memorySnapshot: input.memorySnapshot ?? null,
+    }),
+  });
+}
+
 async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targetApp: { bundleId: string; name: string } | null }> {
   const target = nativeHelper?.getFrontmostApp() ?? null;
   const targetApp = target?.bundleId
@@ -4609,57 +4690,42 @@ async function runGlobalImproveSelection(): Promise<void> {
   if (globalImproveInFlight) return;
   globalImproveInFlight = true;
   try {
-    if (!commandsManager) {
-      cursorStatusManager?.showNoTargetError('Maxwell is not ready');
-      return;
-    }
     const { text, targetApp } = await copySelectedTextFromFrontmostApp();
     if (!text) {
       cursorStatusManager?.showNoTargetError('Select text to improve');
       return;
     }
 
-    const command = await ensureLocalImproveCommand();
-    if (!command) {
-      cursorStatusManager?.showNoTargetError('Improve command not found');
-      return;
-    }
-    const loaded = await commandsManager.loadCommandContent(command);
-    if (!loaded) {
-      cursorStatusManager?.showNoTargetError('Improve command could not be loaded');
-      return;
-    }
+    const provider = transcriberManager?.getAutoImproveProvider() ?? 'local';
+    const providerLabel = provider === 'local' ? 'locally' : `with ${provider === 'codex' ? 'Codex' : 'Claude'}`;
 
     emitLocalCommandStatus({
       status: 'running',
-      message: 'Improving selected text locally...',
-      commandName: loaded.name,
+      message: `Improving selected text ${providerLabel}...`,
+      commandName: 'improve',
       mode: 'selection',
       phase: 'generating',
     });
 
-    const localManager = getLocalLlmManager();
-    const replacement = await localManager.runSelectionCommand({
-      commandName: loaded.name,
-      commandContent: loaded.content,
-      targetTitle: targetApp?.name ?? 'Selected text',
+    const replacement = await improveWithPreferredProvider({
+      provider,
+      mode: 'selection',
+      text,
+      title: targetApp?.name ?? 'Selected text',
       targetPath: targetApp?.bundleId ?? 'global-selection',
-      targetContent: text,
-      selectedText: text,
       memorySnapshot: readMaxwellMemorySnapshot(true),
-    }, {
-      onProgress: (event) => {
-        emitLocalCommandStatus({
-          status: 'running',
-          message: event.message,
-          detail: compactLocalCommandDetail(event.detail),
-          eventKind: event.kind,
-          commandName: loaded.name,
-          mode: 'selection',
-          phase: event.phase ?? 'generating',
-        });
-      },
     });
+    if (!replacement) {
+      cursorStatusManager?.showNoTargetError('Improve did not return replacement text');
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Improve did not return replacement text',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'No replacement text',
+      });
+      return;
+    }
 
     const targetIsFieldTheory = isFieldTheoryBundleId(targetApp?.bundleId);
     const pasted = targetIsFieldTheory
@@ -4677,7 +4743,7 @@ async function runGlobalImproveSelection(): Promise<void> {
       emitLocalCommandStatus({
         status: 'error',
         message: 'Improved text copied; paste failed',
-        commandName: loaded.name,
+        commandName: 'improve',
         mode: 'selection',
         error: 'Paste failed',
       });
@@ -4692,7 +4758,7 @@ async function runGlobalImproveSelection(): Promise<void> {
       message: 'Improved selected text',
       detail: changeSummary.detail,
       eventKind: 'file_change',
-      commandName: loaded.name,
+      commandName: 'improve',
       mode: 'selection',
       phase: 'done',
       changedLines: changeSummary.changedLines,
@@ -9753,20 +9819,88 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
-    return false;
+    return transcriberManager?.getAutoImprove() ?? false;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async () => {
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
     if (!transcriberManager) return;
-    await transcriberManager.setAutoImprove(false);
+    await transcriberManager.setAutoImprove(enabled);
+    trayManager?.refreshMenu();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER, () => {
+    return transcriberManager?.getAutoImproveProvider() ?? 'local';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, async (_event, provider: AutoImproveProvider) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveProvider(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, async (_event, provider: AutoImproveProvider) => {
+    return getTextImproveProviderStatus(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS, () => {
+    return getAutoImproveModelOptions();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, async (_event, options: Partial<AutoImproveModelOptions>) => {
+    const normalized = normalizeAutoImproveModelOptions({
+      ...getAutoImproveModelOptions(),
+      ...(options ?? {}),
+    });
+    await preferencesManager?.save({
+      autoImproveCodexModel: normalized.codexModel,
+      autoImproveCodexEffort: normalized.codexEffort,
+      autoImproveClaudeModel: normalized.claudeModel,
+      autoImproveClaudeEffort: normalized.claudeEffort,
+    });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES, () => {
+    return getAutoImproveWritingPreferences();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, async (_event, writingPreferences: string) => {
+    const sanitized = sanitizeAutoImproveWritingPreferences(writingPreferences);
+    await preferencesManager?.save({ autoImproveWritingPreferences: sanitized });
+    return sanitized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES, () => {
+    return getAutoImproveContextFiles();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, async (_event, files: AutoImproveContextFile[]) => {
+    const normalized = normalizeAutoImproveContextFiles(files);
+    await preferencesManager?.save({ autoImproveContextFiles: normalized });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose Auto-Improve Context Files',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return getAutoImproveContextFiles();
+    const next = normalizeAutoImproveContextFiles([
+      ...getAutoImproveContextFiles(),
+      ...result.filePaths.map((filePath) => ({ path: filePath, enabled: true })),
+    ]);
+    await preferencesManager?.save({ autoImproveContextFiles: next });
+    return next;
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
-    return 0;
+    return transcriberManager?.getAutoImproveMinWords() ?? 70;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async () => {
-    return;
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async (_event, minWords: number) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveMinWords(minWords);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS, () => {
@@ -12614,6 +12748,16 @@ function setupClipboardIPCHandlers(): void {
     return runNativeLocalCommand(rawRequest);
   });
 
+  ipcMain.handle(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION, async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await runGlobalImproveSelection();
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Improve selected text failed';
+      return { success: false, error: message };
+    }
+  });
+
   ipcMain.handle(CommandsIPCChannels.LIST_MAXWELL_RUNS, (_event, rawLimit?: unknown): MaxwellRunSummary[] => {
     return listNativeMaxwellRuns(rawLimit);
   });
@@ -13659,10 +13803,14 @@ function broadcastTranscribeEvents(): void {
     });
     // Send final transcript to the dynamic island for display.
     dynamicIslandManager?.sendTranscript(text, true);
+  });
 
-    // Record transcription metrics
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-    metricsManager?.recordTranscription(wordCount);
+  transcriberManager.on('transcriptRecorded', (data: { wordCount: number }) => {
+    metricsManager?.recordTranscription(data.wordCount);
+  });
+
+  transcriberManager.on('transcriptImproved', (data: { wordCount: number }) => {
+    metricsManager?.recordWordsImproved(data.wordCount);
   });
 
   transcriberManager.on('verbalCommand', () => {
@@ -14456,6 +14604,20 @@ async function initTranscriberSystem(): Promise<void> {
   log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   const { TranscriberManager } = require('./transcriberManager') as typeof import('./transcriberManager');
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
+  transcriberManager.setTranscriptImproveRunner(({ text, provider }) => improveWithPreferredProvider({
+    text,
+    provider,
+    mode: 'transcript',
+    title: 'Transcript',
+    targetPath: 'fieldtheory://transcript/auto-improve',
+  }));
+  trayManager?.setAutoImproveCallbacks({
+    get: () => transcriberManager?.getAutoImprove() ?? false,
+    set: async (enabled: boolean) => {
+      await transcriberManager?.setAutoImprove(enabled);
+      trayManager?.refreshMenu();
+    },
+  });
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
