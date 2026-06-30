@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import type { ChangeEvent } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 import type { ParakeetSetupError, ParakeetSetupProgress, ParakeetStatus } from '../types/window';
@@ -20,6 +21,38 @@ import {
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+type AutoImproveModelOptions = {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+};
+type AutoImproveContextFile = {
+  path: string;
+  enabled: boolean;
+};
+type AutoImproveProviderStatus = {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+};
+const AUTO_IMPROVE_PROVIDER_OPTIONS: Array<{
+  id: AutoImproveProvider;
+  label: string;
+}> = [
+  { id: 'local', label: 'Local' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'claude', label: 'Claude' },
+];
+const AUTO_IMPROVE_EFFORT_OPTIONS: Array<{ id: AutoImproveEffort; label: string }> = [
+  { id: 'fast', label: 'Fast' },
+  { id: 'balanced', label: 'Balanced' },
+  { id: 'deep', label: 'Deep' },
+];
 
 function getParakeetVerifiedBadge(isSelected: boolean): {
   label: 'Selected' | 'Installed';
@@ -62,6 +95,30 @@ export default function TranscriptionSettings() {
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
+  const [autoImprove, setAutoImprove] = useState(false);
+  const [autoImproveProvider, setAutoImproveProvider] = useState<AutoImproveProvider>('local');
+  const [autoImproveProviderStatus, setAutoImproveProviderStatus] = useState<Record<AutoImproveProvider, AutoImproveProviderStatus | null>>({
+    local: {
+      provider: 'local',
+      installed: true,
+      authenticated: true,
+      available: true,
+      message: 'Local provider is available.',
+    },
+    codex: null,
+    claude: null,
+  });
+  const [checkingAutoImproveProvider, setCheckingAutoImproveProvider] = useState<AutoImproveProvider | null>(null);
+  const [autoImproveMinWords, setAutoImproveMinWords] = useState(70);
+  const [autoImproveModelOptions, setAutoImproveModelOptions] = useState<AutoImproveModelOptions>({
+    codexModel: '',
+    codexEffort: 'balanced',
+    claudeModel: '',
+    claudeEffort: 'balanced',
+  });
+  const [autoImproveWritingPreferences, setAutoImproveWritingPreferences] = useState('');
+  const [autoImproveContextFiles, setAutoImproveContextFiles] = useState<AutoImproveContextFile[]>([]);
+  const [autoImproveContextPathInput, setAutoImproveContextPathInput] = useState('');
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -92,6 +149,12 @@ export default function TranscriptionSettings() {
           currentSelectedModel,
           currentRecordingSource,
           currentAbandonHotkey,
+          currentAutoImprove,
+          currentAutoImproveProvider,
+          currentAutoImproveMinWords,
+          currentAutoImproveModelOptions,
+          currentAutoImproveWritingPreferences,
+          currentAutoImproveContextFiles,
           currentHotMicHotkey,
         ] = await Promise.all([
           window.transcribeAPI!.getStatus(),
@@ -100,6 +163,17 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getSelectedModel(),
           window.transcribeAPI!.getRecordingSource?.() ?? 'microphone',
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
+          window.transcribeAPI!.getAutoImprove?.() ?? false,
+          window.transcribeAPI!.getAutoImproveProvider?.() ?? 'local',
+          window.transcribeAPI!.getAutoImproveMinWords?.() ?? 70,
+          window.transcribeAPI!.getAutoImproveModelOptions?.() ?? {
+            codexModel: '',
+            codexEffort: 'balanced',
+            claudeModel: '',
+            claudeEffort: 'balanced',
+          },
+          window.transcribeAPI!.getAutoImproveWritingPreferences?.() ?? '',
+          window.transcribeAPI!.getAutoImproveContextFiles?.() ?? [],
           window.hotMicAPI?.getHotkey?.() ?? null,
         ]);
         setStatus(currentStatus);
@@ -108,6 +182,12 @@ export default function TranscriptionSettings() {
         setSelectedModel(currentSelectedModel);
         setRecordingSource(currentRecordingSource as 'microphone' | 'system-audio');
         setAbandonHotkey(currentAbandonHotkey);
+        setAutoImprove(currentAutoImprove);
+        setAutoImproveProvider(currentAutoImproveProvider as AutoImproveProvider);
+        setAutoImproveMinWords(currentAutoImproveMinWords);
+        setAutoImproveModelOptions(currentAutoImproveModelOptions as AutoImproveModelOptions);
+        setAutoImproveWritingPreferences(currentAutoImproveWritingPreferences);
+        setAutoImproveContextFiles(currentAutoImproveContextFiles as AutoImproveContextFile[]);
         setHotMicHotkey(currentHotMicHotkey);
 
         // Fetch current engine selection. Only Parakeet variants are user-facing.
@@ -178,6 +258,114 @@ export default function TranscriptionSettings() {
       console.error('Failed to set recording source:', err);
     }
   }, []);
+
+  const handleAutoImproveChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setAutoImprove) return;
+    setAutoImprove(enabled);
+    try {
+      await window.transcribeAPI.setAutoImprove(enabled);
+    } catch (err) {
+      setAutoImprove(!enabled);
+      console.error('Failed to set auto-improve:', err);
+    }
+  }, []);
+
+  const checkAutoImproveProvider = useCallback(async (provider: AutoImproveProvider) => {
+    if (provider === 'local') return autoImproveProviderStatus.local;
+    if (!window.transcribeAPI?.getAutoImproveProviderStatus) return null;
+    setCheckingAutoImproveProvider(provider);
+    try {
+      const status = await window.transcribeAPI.getAutoImproveProviderStatus(provider);
+      setAutoImproveProviderStatus((current) => ({ ...current, [provider]: status }));
+      return status;
+    } catch (err) {
+      const status: AutoImproveProviderStatus = {
+        provider,
+        installed: false,
+        authenticated: false,
+        available: false,
+        message: err instanceof Error ? err.message : 'Could not check provider access.',
+      };
+      setAutoImproveProviderStatus((current) => ({ ...current, [provider]: status }));
+      return status;
+    } finally {
+      setCheckingAutoImproveProvider(null);
+    }
+  }, [autoImproveProviderStatus.local]);
+
+  const handleAutoImproveProviderChange = useCallback(async (provider: AutoImproveProvider) => {
+    if (!window.transcribeAPI?.setAutoImproveProvider) return;
+    const status = autoImproveProviderStatus[provider] ?? await checkAutoImproveProvider(provider);
+    if (!status?.available) return;
+    const previousProvider = autoImproveProvider;
+    setAutoImproveProvider(provider);
+    try {
+      await window.transcribeAPI.setAutoImproveProvider(provider);
+    } catch (err) {
+      setAutoImproveProvider(previousProvider);
+      console.error('Failed to set auto-improve provider:', err);
+    }
+  }, [autoImproveProvider, autoImproveProviderStatus, checkAutoImproveProvider]);
+
+  const handleAutoImproveMinWordsChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const value = Math.max(30, Math.min(500, Number.parseInt(event.currentTarget.value, 10) || 70));
+    setAutoImproveMinWords(value);
+    try {
+      await window.transcribeAPI?.setAutoImproveMinWords?.(value);
+    } catch (err) {
+      console.error('Failed to set auto-improve minimum words:', err);
+    }
+  }, []);
+
+  const saveAutoImproveModelOptions = useCallback(async (patch: Partial<AutoImproveModelOptions>) => {
+    const next = { ...autoImproveModelOptions, ...patch };
+    setAutoImproveModelOptions(next);
+    try {
+      const saved = await window.transcribeAPI?.setAutoImproveModelOptions?.(next);
+      if (saved) setAutoImproveModelOptions(saved);
+    } catch (err) {
+      console.error('Failed to save auto-improve model options:', err);
+    }
+  }, [autoImproveModelOptions]);
+
+  const saveAutoImproveWritingPreferences = useCallback(async (value: string) => {
+    setAutoImproveWritingPreferences(value);
+    try {
+      const saved = await window.transcribeAPI?.setAutoImproveWritingPreferences?.(value);
+      if (typeof saved === 'string') setAutoImproveWritingPreferences(saved);
+    } catch (err) {
+      console.error('Failed to save auto-improve writing preferences:', err);
+    }
+  }, []);
+
+  const saveAutoImproveContextFiles = useCallback(async (files: AutoImproveContextFile[]) => {
+    setAutoImproveContextFiles(files);
+    try {
+      const saved = await window.transcribeAPI?.setAutoImproveContextFiles?.(files);
+      if (saved) setAutoImproveContextFiles(saved);
+    } catch (err) {
+      console.error('Failed to save auto-improve context files:', err);
+    }
+  }, []);
+
+  const handleChooseAutoImproveContextFiles = useCallback(async () => {
+    try {
+      const files = await window.transcribeAPI?.chooseAutoImproveContextFiles?.();
+      if (files) setAutoImproveContextFiles(files);
+    } catch (err) {
+      console.error('Failed to choose auto-improve context files:', err);
+    }
+  }, []);
+
+  const handleAddAutoImproveContextPath = useCallback(async () => {
+    const filePath = autoImproveContextPathInput.trim();
+    if (!filePath) return;
+    setAutoImproveContextPathInput('');
+    await saveAutoImproveContextFiles([
+      ...autoImproveContextFiles,
+      { path: filePath, enabled: true },
+    ]);
+  }, [autoImproveContextFiles, autoImproveContextPathInput, saveAutoImproveContextFiles]);
 
   const handleSetupParakeet = useCallback(async (engine: VisibleParakeetEngine) => {
     if (!window.transcribeAPI || settingUpParakeet) return;
@@ -648,6 +836,227 @@ export default function TranscriptionSettings() {
 
       <section style={styles.card}>
         <header style={styles.cardHeader}>
+          <div style={styles.cardTitle}>Auto-improve</div>
+          <div style={styles.cardSub}>
+            Clean transcripts before paste.
+          </div>
+        </header>
+
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Enable auto-improve</span>
+            <span style={styles.modelHint}>Keeps the raw transcript and pastes the improved version when available.</span>
+          </div>
+          <button
+            onClick={() => void handleAutoImproveChange(!autoImprove)}
+            style={{
+              ...styles.toggle,
+              backgroundColor: autoImprove ? theme.info : (theme.isDark ? '#404040' : '#d1d5db'),
+            }}
+            title={autoImprove ? 'Auto-improve enabled' : 'Auto-improve disabled'}
+          >
+            <span
+              style={{
+                ...styles.toggleKnob,
+                transform: autoImprove ? 'translateX(22px)' : 'translateX(2px)',
+              }}
+            />
+          </button>
+        </div>
+
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Provider</span>
+            <span style={styles.modelHint}>Use a local model, or confirm access to a logged-in Codex or Claude CLI.</span>
+          </div>
+          <div style={{ ...styles.rowControls, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {AUTO_IMPROVE_PROVIDER_OPTIONS.map((provider) => {
+              const selected = autoImproveProvider === provider.id;
+              const status = autoImproveProviderStatus[provider.id];
+              const checking = checkingAutoImproveProvider === provider.id;
+              const available = status?.available === true;
+              const canSelect = provider.id === 'local' || available;
+              return (
+                <div key={provider.id} style={styles.providerControl}>
+                  <button
+                    onClick={() => void handleAutoImproveProviderChange(provider.id)}
+                    disabled={!canSelect || checking}
+                    style={{
+                      ...(selected ? styles.btn : styles.btnGhost),
+                      opacity: canSelect ? 1 : 0.55,
+                      cursor: canSelect && !checking ? 'pointer' : 'not-allowed',
+                    }}
+                    title={status?.message}
+                  >
+                    {provider.label}
+                  </button>
+                  {provider.id !== 'local' && (
+                    <button
+                      onClick={() => void checkAutoImproveProvider(provider.id)}
+                      disabled={checking}
+                      style={styles.btnGhost}
+                    >
+                      {checking ? 'Checking...' : status?.available ? 'Ready' : 'Check'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {AUTO_IMPROVE_PROVIDER_OPTIONS
+          .filter((provider) => provider.id !== 'local' && autoImproveProviderStatus[provider.id]?.message)
+          .map((provider) => (
+            <div key={provider.id} style={styles.providerStatus}>
+              {provider.label}: {autoImproveProviderStatus[provider.id]?.message}
+            </div>
+          ))}
+        {autoImproveProvider === 'local' && autoImproveProviderStatus.local?.message && (
+          <div style={styles.providerStatus}>
+            Local: {autoImproveProviderStatus.local.message}
+          </div>
+        )}
+
+        {autoImproveProvider !== 'local' && (
+          <div style={styles.fieldBlock}>
+            <div style={styles.fieldGrid}>
+              <label style={styles.fieldLabel}>
+                <span style={styles.rowLabel}>{autoImproveProvider === 'codex' ? 'Codex model' : 'Claude model'}</span>
+                <input
+                  value={autoImproveProvider === 'codex' ? autoImproveModelOptions.codexModel : autoImproveModelOptions.claudeModel}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setAutoImproveModelOptions((current) => (
+                      autoImproveProvider === 'codex'
+                        ? { ...current, codexModel: value }
+                        : { ...current, claudeModel: value }
+                    ));
+                  }}
+                  onBlur={() => {
+                    void saveAutoImproveModelOptions(
+                      autoImproveProvider === 'codex'
+                        ? { codexModel: autoImproveModelOptions.codexModel }
+                        : { claudeModel: autoImproveModelOptions.claudeModel }
+                    );
+                  }}
+                  placeholder="Default"
+                  style={styles.textInput}
+                />
+              </label>
+              <label style={styles.fieldLabel}>
+                <span style={styles.rowLabel}>Effort</span>
+                <select
+                  value={autoImproveProvider === 'codex' ? autoImproveModelOptions.codexEffort : autoImproveModelOptions.claudeEffort}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value as AutoImproveEffort;
+                    void saveAutoImproveModelOptions(
+                      autoImproveProvider === 'codex'
+                        ? { codexEffort: value }
+                        : { claudeEffort: value }
+                    );
+                  }}
+                  style={styles.select}
+                >
+                  {AUTO_IMPROVE_EFFORT_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div style={styles.providerStatus}>
+              Leave model blank to use the logged-in CLI default.
+            </div>
+          </div>
+        )}
+
+        <div style={styles.fieldBlock}>
+          <label style={styles.fieldLabel}>
+            <span style={styles.rowLabel}>Writing preferences</span>
+            <textarea
+              value={autoImproveWritingPreferences}
+              onChange={(event) => setAutoImproveWritingPreferences(event.currentTarget.value)}
+              onBlur={() => void saveAutoImproveWritingPreferences(autoImproveWritingPreferences)}
+              placeholder="Examples: keep my voice direct, avoid corporate polish, preserve uncertainty, do not add claims I did not say."
+              style={styles.textArea}
+            />
+          </label>
+        </div>
+
+        <div style={styles.fieldBlock}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Style/context files</span>
+            <span style={styles.modelHint}>Markdown files included as private guidance. Cloud providers receive enabled files.</span>
+          </div>
+          <div style={styles.contextPathRow}>
+            <input
+              value={autoImproveContextPathInput}
+              onChange={(event) => setAutoImproveContextPathInput(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void handleAddAutoImproveContextPath();
+                }
+              }}
+              placeholder="/path/to/style.md"
+              style={styles.textInput}
+            />
+            <button onClick={() => void handleAddAutoImproveContextPath()} style={styles.btnGhost}>
+              Add
+            </button>
+            <button onClick={() => void handleChooseAutoImproveContextFiles()} style={styles.btn}>
+              Choose
+            </button>
+          </div>
+          {autoImproveContextFiles.length > 0 && (
+            <div style={styles.contextFileList}>
+              {autoImproveContextFiles.map((file, index) => (
+                <div key={`${file.path}-${index}`} style={styles.contextFileRow}>
+                  <label style={styles.contextFileLabel}>
+                    <input
+                      type="checkbox"
+                      checked={file.enabled}
+                      onChange={(event) => {
+                        const next = autoImproveContextFiles.map((item, itemIndex) => (
+                          itemIndex === index ? { ...item, enabled: event.currentTarget.checked } : item
+                        ));
+                        void saveAutoImproveContextFiles(next);
+                      }}
+                    />
+                    <span title={file.path} style={styles.contextFilePath}>{file.path}</span>
+                  </label>
+                  <button
+                    onClick={() => {
+                      void saveAutoImproveContextFiles(autoImproveContextFiles.filter((_, itemIndex) => itemIndex !== index));
+                    }}
+                    style={styles.btnGhost}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ ...styles.row, borderBottom: 0 }}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Minimum words</span>
+            <span style={styles.modelHint}>Shorter transcripts paste as recorded.</span>
+          </div>
+          <input
+            type="number"
+            min={30}
+            max={500}
+            step={10}
+            value={autoImproveMinWords}
+            onChange={handleAutoImproveMinWordsChange}
+            style={styles.numberInput}
+          />
+        </div>
+      </section>
+
+      <section style={styles.card}>
+        <header style={styles.cardHeader}>
           <div style={styles.cardTitle}>Transcription</div>
           <div style={styles.cardSub}>
             Local engines and model downloads used to turn captured audio into text.
@@ -847,6 +1256,91 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gap: '8px',
     flexShrink: 0,
   },
+  providerControl: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  providerStatus: {
+    fontSize: '11px',
+    color: theme.textSecondary,
+    lineHeight: 1.45,
+    marginTop: '4px',
+  },
+  fieldBlock: {
+    padding: '10px 0',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
+  },
+  fieldGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(160px, 1fr) minmax(120px, 180px)',
+    gap: '10px',
+    alignItems: 'end',
+  },
+  fieldLabel: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '6px',
+    minWidth: 0,
+  },
+  textInput: {
+    width: '100%',
+    boxSizing: 'border-box' as const,
+    padding: '6px 10px',
+    fontSize: '12px',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+  },
+  textArea: {
+    width: '100%',
+    minHeight: '78px',
+    boxSizing: 'border-box' as const,
+    resize: 'vertical' as const,
+    padding: '8px 10px',
+    fontSize: '12px',
+    lineHeight: 1.45,
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+  },
+  contextPathRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+    gap: '8px',
+    alignItems: 'center',
+    marginTop: '8px',
+  },
+  contextFileList: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '4px',
+    marginTop: '8px',
+  },
+  contextFileRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    minWidth: 0,
+  },
+  contextFileLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    minWidth: 0,
+    flex: 1,
+  },
+  contextFilePath: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    fontSize: '11px',
+    color: theme.textSecondary,
+  },
 
   // Status dot indicator.
   statusDot: {
@@ -921,6 +1415,15 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '160px',
+  },
+  numberInput: {
+    width: '84px',
+    padding: '6px 10px',
+    fontSize: '12px',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
   },
 
   // Error text.

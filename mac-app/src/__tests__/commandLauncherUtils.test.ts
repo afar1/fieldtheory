@@ -2198,7 +2198,7 @@ describe('SQUARES_ACTION_DEFS', () => {
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'archive-current-library-file', 'undo-library-move', 'toggle-theme',
-      'toggle-line-numbers'];
+      'toggle-line-numbers', 'improve-selected-text', 'toggle-auto-improve'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -2257,6 +2257,21 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'Save Website',
     }));
     expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
+  });
+
+  it('includes auto-improve and selected-text improve actions', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'improve-selected-text')).toEqual(expect.objectContaining({
+      name: 'improve selected text',
+      displayName: 'Improve Selected Text',
+      keywords: expect.arrayContaining(['improve', 'selected text', 'auto improve']),
+    }));
+    expect(actions.find((action) => action.actionId === 'toggle-auto-improve')).toEqual(expect.objectContaining({
+      name: 'auto improve',
+      displayName: 'Toggle Auto-Improve',
+      keywords: expect.arrayContaining(['auto improve', 'transcription cleanup']),
+    }));
   });
 
   it('includes a bookmarks canvas action searchable by bookmarks', () => {

@@ -199,6 +199,25 @@ interface GazeAPI {
  * Transcription status.
  */
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+interface AutoImproveModelOptions {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+}
+interface AutoImproveContextFile {
+  path: string;
+  enabled: boolean;
+}
+interface AutoImproveProviderStatus {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+}
 
 /**
  * Model download status.
@@ -308,6 +327,16 @@ interface TranscribeAPI {
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
   getAutoImprove?: () => Promise<boolean>;
   setAutoImprove?: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider?: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider?: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus?: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions?: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions?: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences?: () => Promise<string>;
+  setAutoImproveWritingPreferences?: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles?: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
@@ -1559,6 +1588,7 @@ interface CommandsAPI {
   getLauncherSettings?: () => Promise<LauncherSettings>;
   setLauncherSettings?: (settings: LauncherSettings) => Promise<LauncherSettings>;
   runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
+  runGlobalImproveSelection?: () => Promise<{ success: boolean; error?: string }>;
   listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
   getMaxwellMemory?: () => Promise<MaxwellMemoryState>;
   saveMaxwellMemory?: (request: MaxwellMemorySaveRequest) => Promise<MaxwellMemorySaveResult>;

@@ -27,6 +27,7 @@ export const CommandsIPCChannels = {
   GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
   SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  RUN_GLOBAL_IMPROVE_SELECTION: 'commands:runGlobalImproveSelection',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
   GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
   SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
