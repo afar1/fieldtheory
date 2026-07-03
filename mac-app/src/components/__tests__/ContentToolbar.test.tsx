@@ -255,6 +255,11 @@ describe('ContentToolbar', () => {
     );
 
     expect(container.querySelectorAll('[data-content-toolbar-divider]')).toHaveLength(3);
+    const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
+    const newWindowButton = screen.getByRole('button', { name: 'Open in New Window' });
+    const nextDivider = newWindowButton.nextElementSibling;
+    expect(fieldTheoryButton.compareDocumentPosition(newWindowButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(nextDivider?.hasAttribute('data-content-toolbar-divider')).toBe(true);
 
     rerender(
       <ContentToolbar

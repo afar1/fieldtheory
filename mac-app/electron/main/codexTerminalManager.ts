@@ -739,11 +739,11 @@ export class CodexTerminalManager {
     const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
-      'Read current document command: ft current --json',
-      'Edit current document command: ft current update --stdin --expected-sha256 <version.sha256>',
-      'Line-number questions: inspect ft current --json lineNumbers. If activeLineKind is renderedVisual, answer from visibleLine because rendered rows may not match Markdown source newlines.',
-      'After each successful edit, use the newly printed sha256 for the next edit to the same document.',
-      'If an edit reports that the file changed on disk, run ft current --json again, merge the requested change into the returned content, and retry once with the new version.sha256.',
+      'Read current document command: ft current --json (v1 envelope; use data.content, data.version.sha256, and data.lineNumbers).',
+      'Edit current document command: ft current update --stdin --expected-sha256 <data.version.sha256>',
+      'Line-number questions: inspect ft current --json data.lineNumbers. If data.lineNumbers.activeLineKind is renderedVisual, answer from visibleLine because rendered rows may not match Markdown source newlines.',
+      'After each successful JSON edit, use the newly printed data.version.sha256 for the next edit to the same document.',
+      'If an edit reports that the file changed on disk, run ft current --json again, merge the requested change into data.content, and retry once with the new data.version.sha256.',
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
       'For user-requested edits to the current Field Theory document, use only the current-document commands above. Pipe multiline Markdown on stdin; do not pass Markdown as command arguments. Do not use sed, awk, cat against the source path, apply_patch, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',

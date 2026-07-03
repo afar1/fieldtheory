@@ -1,0 +1,82 @@
+name: Mac App CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-app-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-release:
+    name: Verify CI-safe release gates
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac-app
+    env:
+      FIELD_THEORY_RELEASE_BRANCH_OVERRIDE: "true"
+      PYTHON: python3.11
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mac-app/package-lock.json
+
+      - name: Use Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure named branch for release gate
+        env:
+          CI_BRANCH_NAME: ${{ github.head_ref || github.ref_name || 'ci' }}
+        run: |
+          current_branch="$(git rev-parse --abbrev-ref HEAD)"
+          if [ "$current_branch" = "HEAD" ]; then
+            git switch -C "$CI_BRANCH_NAME"
+          fi
+        working-directory: .
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Check release channel
+        run: npm run guard:release-channel
+
+      - name: Check tracked sources
+        run: npm run guard:tracked-sources
+
+      - name: Check package safety
+        run: npm run guard:package-safety
+
+      - name: Build
+        env:
+          FIELD_THEORY_BUILD_CHANNEL: production
+          VITE_FIELD_THEORY_BUILD_CHANNEL: production
+        run: npm run build
+
+      - name: Check Electron dist requires
+        run: npm run guard:electron-dist-requires

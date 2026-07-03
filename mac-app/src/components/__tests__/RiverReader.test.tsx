@@ -89,6 +89,31 @@ describe('RiverReader', () => {
     expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'doc-1' }));
   });
 
+  it('shows a sign-in prompt when private River sync is not authenticated', async () => {
+    const onNavigateToSignIn = vi.fn();
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getTimeline: vi.fn(async () => []),
+        getTargets: vi.fn(async () => []),
+        getAvailability: vi.fn(async () => ({
+          available: false,
+          canWrite: false,
+          hasTeamMembers: false,
+          reason: 'not_authenticated',
+        })),
+      },
+    });
+
+    render(<RiverReader onNavigateToSignIn={onNavigateToSignIn} />);
+
+    expect(await screen.findByText('Sign in to sync River')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(onNavigateToSignIn).toHaveBeenCalledTimes(1);
+  });
+
   it('renders page navigation controls for the River page', () => {
     const onNavigateBack = vi.fn();
     const onNavigateForward = vi.fn();

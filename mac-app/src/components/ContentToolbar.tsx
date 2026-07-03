@@ -34,8 +34,8 @@ const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: Toolbar
 ];
 const VISIBLE_TOOLBAR_ACTION_GROUPS: Array<{ id: string; actions: ToolbarActionId[] }> = [
   { id: 'document', actions: ['textstyle', 'copypath'] },
-  { id: 'field', actions: ['fieldtheory', 'agent', 'share'] },
-  { id: 'view', actions: ['newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive'] },
+  { id: 'field', actions: ['fieldtheory', 'agent', 'share', 'newwindow'] },
+  { id: 'view', actions: ['contentmode', 'htmllayout', 'terminal', 'immersive'] },
   { id: 'file', actions: ['copy', 'folder', 'rename', 'edit'] },
 ];
 const KNOWN_TOOLBAR_ACTIONS = new Set(TOOLBAR_ACTION_GROUPS.flatMap((group) => group.actions));

@@ -6,6 +6,7 @@ type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
 type RiverTimelineItem = Awaited<ReturnType<SharedFilesClient['getTimeline']>>[number];
 type RiverTimelineScope = Parameters<SharedFilesClient['getTimeline']>[0]['scope'];
 type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+type SharedFilesAvailability = Awaited<ReturnType<SharedFilesClient['getAvailability']>>;
 const OLD_RIVER_SOURCE_ID = 'legacy:old-river';
 const OLD_RIVER_TARGET: RiverTarget = {
   id: OLD_RIVER_SOURCE_ID,
@@ -41,6 +42,7 @@ interface RiverReaderProps {
   onNavigateForward?: () => void;
   onToggleFullScreen?: () => void;
   onActionFeedback?: (message: string) => void;
+  onNavigateToSignIn?: () => void;
 }
 
 function formatRiverTime(value: string): string {
@@ -413,6 +415,7 @@ export default function RiverReader({
   onNavigateForward,
   onToggleFullScreen,
   onActionFeedback,
+  onNavigateToSignIn,
 }: RiverReaderProps) {
   const { theme } = useTheme();
   const [scope, setScope] = useState<RiverTimelineScope>('private');
@@ -423,6 +426,7 @@ export default function RiverReader({
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [availability, setAvailability] = useState<SharedFilesAvailability | null>(null);
   const hasLoadedRef = useRef(false);
 
   const sourceTargets = useMemo(() => (
@@ -486,11 +490,13 @@ export default function RiverReader({
     void Promise.all([
       window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: timelineSourceIds, limit: 50 }) ?? Promise.resolve([]),
       window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
+      window.sharedFilesAPI?.getAvailability?.() ?? Promise.resolve(null),
     ])
-      .then(([nextItems, nextTargets]) => {
+      .then(([nextItems, nextTargets, nextAvailability]) => {
         if (cancelled) return;
         setItems(nextItems ?? []);
         setTargets(nextTargets ?? []);
+        setAvailability(nextAvailability);
         hasLoadedRef.current = true;
       })
       .catch((err) => {
@@ -558,6 +564,11 @@ export default function RiverReader({
       onActionFeedback?.(result?.error ?? 'River bookmark failed');
     }
   };
+
+  const shouldShowSignInPrompt = scope === 'private'
+    && visibleItems.length === 0
+    && availability?.available === false
+    && availability.reason === 'not_authenticated';
 
   return (
     <div
@@ -748,6 +759,39 @@ export default function RiverReader({
               <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>Loading River...</div>
             ) : error ? (
               <div role="alert" style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>{error}</div>
+            ) : shouldShowSignInPrompt ? (
+              <div
+                style={{
+                  color: riverColors.muted,
+                  fontSize: '13px',
+                  padding: '30px 0',
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ color: riverColors.text, fontSize: '15px', fontWeight: 650, marginBottom: '8px' }}>
+                  Sign in to sync River
+                </div>
+                <div style={{ maxWidth: '360px', margin: '0 auto 16px', lineHeight: 1.5 }}>
+                  Cached River files remain available in the sidebar. Sign in to load your private River timeline and sources.
+                </div>
+                <button
+                  type="button"
+                  onClick={onNavigateToSignIn}
+                  style={{
+                    height: '34px',
+                    padding: '0 14px',
+                    borderRadius: '8px',
+                    border: `1px solid ${theme.accent}`,
+                    backgroundColor: theme.accent,
+                    color: '#fff',
+                    cursor: 'pointer',
+                    fontSize: '12.5px',
+                    fontWeight: 650,
+                  }}
+                >
+                  Sign in
+                </button>
+              </div>
             ) : visibleItems.length === 0 ? (
               <div style={{ color: riverColors.muted, fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
                 {scope === 'public' ? 'No public River items yet.' : 'No private River items yet.'}

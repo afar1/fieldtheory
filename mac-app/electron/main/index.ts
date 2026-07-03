@@ -112,6 +112,7 @@ import {
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
+import { resolveFieldTheorySelectionText, shouldRejectFieldTheoryPathFallback } from './globalImproveSelection';
 import type { QuotaManager } from './quotaManager';
 import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
@@ -417,7 +418,7 @@ function fieldTheoryCliEnv(): NodeJS.ProcessEnv {
 
 async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResult> {
   if (!bookmarksManager) return { status: 'unavailable' };
-  if (bookmarkBackgroundSyncInFlight) return { status: 'already-running' };
+  if (bookmarkBackgroundSyncInFlight) return bookmarkBackgroundSyncInFlight;
 
   const now = Date.now();
   if (bookmarkBackgroundSyncLastAttemptAt > 0 && now - bookmarkBackgroundSyncLastAttemptAt < BOOKMARK_BACKGROUND_SYNC_STALE_MS) {
@@ -427,10 +428,10 @@ async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResu
   const cli = findFieldTheoryCli();
   if (!cli) return { status: 'missing-cli' };
 
-  bookmarkBackgroundSyncLastAttemptAt = now;
   bookmarkBackgroundSyncInFlight = (async () => {
     try {
       await execFileAsync(cli, ['sync', '--yes'], { env: fieldTheoryCliEnv(), maxBuffer: 10 * 1024 * 1024 });
+      bookmarkBackgroundSyncLastAttemptAt = Date.now();
       bookmarksManager?.reloadAndEmitChanged();
       return { status: 'synced' as const };
     } catch (error) {
@@ -4666,6 +4667,16 @@ async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targe
   const targetApp = target?.bundleId
     ? { bundleId: target.bundleId, name: target.name ?? target.bundleId }
     : null;
+  const activeContext = getActiveBrowserLibraryPanelContext() ?? activeLibraryFileContext;
+  const fieldTheorySelectionText = resolveFieldTheorySelectionText({
+    targetApp,
+    activeContext,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  });
+  if (fieldTheorySelectionText !== null) {
+    return { text: fieldTheorySelectionText, targetApp };
+  }
+  const previousClipboardText = clipboard.readText();
 
   try {
     await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "c" using command down'], { timeout: 3000 });
@@ -4674,7 +4685,18 @@ async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targe
     return { text: '', targetApp };
   }
   await new Promise(resolve => setTimeout(resolve, 80));
-  return { text: clipboard.readText().trim(), targetApp };
+  const copiedText = clipboard.readText().trim();
+  if (shouldRejectFieldTheoryPathFallback({
+    copiedText,
+    targetApp,
+    activeFilePath: activeContext?.filePath,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  })) {
+    clipboard.writeText(previousClipboardText);
+    clipboardManager?.syncClipboardHash();
+    return { text: '', targetApp };
+  }
+  return { text: copiedText, targetApp };
 }
 
 async function pasteTextToGlobalImproveTarget(text: string, targetApp: { bundleId: string; name: string } | null): Promise<boolean> {
