@@ -140,9 +140,10 @@ describe('RiverReader', () => {
     render(<RiverReader />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit River sources' }));
+    expect(screen.getByRole('button', { name: /Old River/ })).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: /Design/ }));
     await waitFor(() => {
-      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['person:andrew'], limit: 50 });
+      expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: ['person:andrew', 'legacy:old-river'], limit: 50 });
     });
     expect(screen.queryByText('Launch Brief')).toBeNull();
 

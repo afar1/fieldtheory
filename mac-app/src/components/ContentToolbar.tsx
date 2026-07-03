@@ -841,6 +841,7 @@ export default function ContentToolbar({
   const pillBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
   const menuBackground = theme.isDark ? '#1f1f23' : '#f8f7f4';
   const pillBorder = theme.border;
+  const toolbarDivider = theme.isDark ? 'rgba(255,255,255,0.22)' : '#d6d1c8';
   const toolbarIconMuted = theme.textSecondary;
   const toolbarIconPrimary = theme.textSecondary;
   const toolbarIconStrong = theme.text;
@@ -856,7 +857,7 @@ export default function ContentToolbar({
   );
 
   const renderToolbarDivider = (key?: string) => (
-    <span key={key} data-content-toolbar-divider aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: pillBorder, flexShrink: 0 }} />
+    <span key={key} data-content-toolbar-divider aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: toolbarDivider, flexShrink: 0 }} />
   );
 
   const typographyMenuRowStyle: CSSProperties = {

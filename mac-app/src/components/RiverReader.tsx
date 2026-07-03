@@ -6,6 +6,19 @@ type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
 type RiverTimelineItem = Awaited<ReturnType<SharedFilesClient['getTimeline']>>[number];
 type RiverTimelineScope = Parameters<SharedFilesClient['getTimeline']>[0]['scope'];
 type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+const OLD_RIVER_SOURCE_ID = 'legacy:old-river';
+const OLD_RIVER_TARGET: RiverTarget = {
+  id: OLD_RIVER_SOURCE_ID,
+  kind: 'group',
+  targetId: 'old-river',
+  label: 'Old River',
+  detail: 'Legacy team docs',
+  status: 'accepted',
+  committable: false,
+  recipientUserIds: [],
+  tint: '#9b7a4f',
+};
+
 type RiverReaderColors = {
   bg: string;
   body: string;
@@ -42,6 +55,7 @@ function formatRiverTime(value: string): string {
 
 function sourceLabel(item: RiverTimelineItem): string {
   if (item.sourceLabel) return item.sourceLabel;
+  if (item.sourceKind === 'legacy') return 'Old River';
   if (item.sourceKind === 'public') return 'Public';
   if (item.sourceKind === 'mine') return 'Mine';
   if (item.sourceKind === 'group') return 'Group';
@@ -50,6 +64,7 @@ function sourceLabel(item: RiverTimelineItem): string {
 }
 
 function sourceDotColor(item: RiverTimelineItem, accent: string): string {
+  if (item.sourceKind === 'legacy') return '#9b7a4f';
   if (item.sourceKind === 'public') return '#6fa6a0';
   if (item.sourceKind === 'group') return '#79a585';
   if (item.sourceKind === 'person') return '#6f8fb0';
@@ -97,6 +112,7 @@ function normalizeRiverToken(value: string | null | undefined): string {
 }
 
 function targetMatchesTimelineItem(target: RiverTarget, item: RiverTimelineItem): boolean {
+  if (target.id === OLD_RIVER_SOURCE_ID) return item.sourceKind === 'legacy';
   if (target.kind === 'public') return item.public;
   if (target.kind === 'person') {
     if (item.authorUserId && (item.authorUserId === target.targetId || target.recipientUserIds.includes(item.authorUserId))) {
@@ -356,6 +372,15 @@ function RiverSourceRail({
         Click a source to include or hide it from your private River.
       </div>
 
+      <RiverSourceRow
+        accent={accent}
+        colors={colors}
+        included={activeSourceSet.has(OLD_RIVER_SOURCE_ID)}
+        isDark={isDark}
+        target={OLD_RIVER_TARGET}
+        onToggle={onToggleSource}
+      />
+
       {sections.map(([label, sectionTargets]) => sectionTargets.length > 0 && (
         <div key={label} style={{ marginTop: label === 'PEOPLE' ? '15px' : 0 }}>
           <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '10px', letterSpacing: '0.12em', color: colors.muted, padding: '0 0 7px' }}>
@@ -403,9 +428,12 @@ export default function RiverReader({
   const sourceTargets = useMemo(() => (
     targets.filter((target) => target.status === 'accepted' && target.kind !== 'public')
   ), [targets]);
+  const filterTargets = useMemo(() => (
+    [...sourceTargets, OLD_RIVER_TARGET]
+  ), [sourceTargets]);
   const activeSourceIds = useMemo(() => (
-    selectedSourceIds.length === 0 ? sourceTargets.map((target) => target.id) : selectedSourceIds
-  ), [selectedSourceIds, sourceTargets]);
+    selectedSourceIds.length === 0 ? filterTargets.map((target) => target.id) : selectedSourceIds
+  ), [filterTargets, selectedSourceIds]);
   const activeSourceSet = useMemo(() => new Set(activeSourceIds), [activeSourceIds]);
   const groupedSourceTargets = useMemo(() => ({
     groups: sourceTargets.filter((target) => target.kind === 'group'),
@@ -413,16 +441,16 @@ export default function RiverReader({
   }), [sourceTargets]);
   const visibleItems = useMemo(() => {
     if (scope !== 'private' || selectedSourceIds.length === 0) return items;
-    const hiddenTargets = sourceTargets.filter((target) => !activeSourceSet.has(target.id));
+    const hiddenTargets = filterTargets.filter((target) => !activeSourceSet.has(target.id));
     if (hiddenTargets.length === 0) return items;
     return items.filter((item) => hiddenTargets.every((target) => !targetMatchesTimelineItem(target, item)));
-  }, [activeSourceSet, items, scope, selectedSourceIds.length, sourceTargets]);
+  }, [activeSourceSet, filterTargets, items, scope, selectedSourceIds.length]);
   const privateSourceSummary = useMemo(() => {
     if (scope === 'public') return 'Public timeline';
-    if (sourceTargets.length === 0) return 'All private';
+    if (filterTargets.length === 0) return 'All private';
     if (selectedSourceIds.length === 0) return `${visibleItems.length} documents · all private sources`;
-    return `${visibleItems.length} documents · ${selectedSourceIds.length} of ${sourceTargets.length} sources`;
-  }, [scope, selectedSourceIds.length, sourceTargets.length, visibleItems.length]);
+    return `${visibleItems.length} documents · ${selectedSourceIds.length} of ${filterTargets.length} sources`;
+  }, [filterTargets.length, scope, selectedSourceIds.length, visibleItems.length]);
   const timelineSourceIds = useMemo(() => (
     scope === 'private' ? selectedSourceIds : []
   ), [scope, selectedSourceIds]);
@@ -481,7 +509,7 @@ export default function RiverReader({
   }, [active, scope, timelineSourceIds]);
 
   const toggleSource = (targetId: string) => {
-    const allSourceIds = sourceTargets.map((target) => target.id);
+    const allSourceIds = filterTargets.map((target) => target.id);
     setSelectedSourceIds((current) => {
       const next = (current.length === 0
         ? allSourceIds.filter((id) => id !== targetId)

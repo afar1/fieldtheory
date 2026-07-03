@@ -21,6 +21,30 @@ function makeTimelineRow(id: string, createdBy = 'user-1') {
   };
 }
 
+function makeLegacyTimelineRow(id: string) {
+  return {
+    id,
+    team_scope_user_id: 'owner-1',
+    kind: 'document',
+    path: 'Docs/Legacy.md',
+    title: 'Legacy',
+    content: '# Legacy\n\nOld River body',
+    content_hash: null,
+    client_id: 'legacy-client',
+    client_created_at_ms: 1,
+    created_by: 'user-2',
+    updated_by: 'user-2',
+    deleted_at: null,
+    created_at: '2026-01-03T00:00:00.000Z',
+    updated_at: '2026-01-04T00:00:00.000Z',
+    original_source_path: 'scratchpad/Legacy.md',
+    shared_name: 'Legacy',
+    author_initials: 'SS',
+    author_callsign: 'mav-rik',
+    revision: 1,
+  };
+}
+
 function makeTimelineSupabase(dataByTable: Record<string, unknown[]>) {
   const operations: Array<{ table: string; op: string; args: unknown[] }> = [];
   const supabase = {
@@ -528,8 +552,96 @@ describe('SharedSyncService cache behavior', () => {
       created: 0,
       errors: [],
     });
-    expect(eqCalls).toEqual([]);
+    expect(eqCalls).toEqual([{ field: 'team_scope_user_id', value: 'owner-1' }]);
     expect(fs.readFileSync(path.join(root, 'Plan AF.md'), 'utf-8')).toContain('Fresh body');
+  });
+
+  it('keeps legacy team River rows when canonical River sync succeeds', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const queries: Array<{ table: string; eq?: [string, unknown] }> = [];
+    const rowsByTable: Record<string, unknown[]> = {
+      river_documents: [{
+        id: 'canonical-1',
+        kind: 'document',
+        path: 'Docs/Canonical.md',
+        title: 'Canonical',
+        content: 'Canonical body\n',
+        content_hash: null,
+        client_id: 'canonical-client',
+        client_created_at_ms: 1,
+        created_by: 'user-1',
+        updated_by: 'user-1',
+        deleted_at: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-02T00:00:00Z',
+        original_source_path: 'scratchpad/Canonical.md',
+        shared_name: 'Canonical',
+        author_initials: 'AF',
+        author_callsign: 'afar',
+        revision: 1,
+      }],
+      team_documents: [{
+        id: 'legacy-1',
+        team_scope_user_id: 'owner-1',
+        kind: 'document',
+        path: 'Docs/Legacy.md',
+        title: 'Legacy',
+        content: 'Legacy body\n',
+        content_hash: null,
+        client_id: 'legacy-client',
+        client_created_at_ms: 1,
+        created_by: 'user-2',
+        updated_by: 'user-2',
+        deleted_at: null,
+        created_at: '2026-01-03T00:00:00Z',
+        updated_at: '2026-01-04T00:00:00Z',
+        original_source_path: 'scratchpad/Legacy.md',
+        shared_name: 'Legacy',
+        author_initials: 'SS',
+        author_callsign: 'mav-rik',
+        revision: 1,
+      }],
+    };
+    const supabase = {
+      from(table: string) {
+        return {
+          select() { return this; },
+          eq(field: string, value: unknown) {
+            queries.push({ table, eq: [field, value] });
+            return this;
+          },
+          async is() {
+            return { data: rowsByTable[table] ?? [], error: null };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 2,
+      removed: 0,
+      created: 0,
+      errors: [],
+    });
+
+    expect(queries).toContainEqual({ table: 'team_documents', eq: ['team_scope_user_id', 'owner-1'] });
+    expect(fs.readFileSync(path.join(root, 'Canonical AF.md'), 'utf-8')).toContain('Canonical body');
+    expect(fs.readFileSync(path.join(root, 'Legacy SS.md'), 'utf-8')).toContain('Legacy body');
   });
 
   it('removes stale River cache files after a team document realtime change', async () => {
@@ -925,10 +1037,11 @@ describe('SharedSyncService cache behavior', () => {
     const supabase = {
       channel: vi.fn(() => channel),
       removeChannel: vi.fn(async () => undefined),
-      from: () => ({
+      from: (table: string) => ({
         select() { return this; },
         eq() { return this; },
         async is() {
+          if (table === 'team_documents') return { data: [], error: null };
           queryCount++;
           const contentAtQueryStart = serverContent;
           await new Promise<void>((resolve) => {
@@ -1708,6 +1821,75 @@ describe('SharedSyncService cache behavior', () => {
       args: ['created_by.eq.user-1,id.in.(shared-granted)'],
     });
     expect(operations.some((operation) => operation.table === 'river_document_targets')).toBe(false);
+  });
+
+  it('includes Old River documents in the default private timeline', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_audience: [],
+      river_documents: [makeTimelineRow('canonical-doc', 'user-1')],
+      team_documents: [makeLegacyTimelineRow('legacy-doc')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: [],
+      limit: 10,
+    })).resolves.toMatchObject([
+      { documentId: 'legacy-doc', sourceKind: 'legacy', sourceLabel: 'Old River' },
+      { documentId: 'canonical-doc', sourceKind: 'mine' },
+    ]);
+
+    expect(operations).toContainEqual({
+      table: 'team_documents',
+      op: 'eq',
+      args: ['team_scope_user_id', 'owner-1'],
+    });
+  });
+
+  it('can show only Old River when the legacy source is selected alone', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_document_audience: [],
+      river_documents: [makeTimelineRow('canonical-doc', 'user-1')],
+      team_documents: [makeLegacyTimelineRow('legacy-doc')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getTimeline({
+      scope: 'private',
+      sourceIds: ['legacy:old-river'],
+      limit: 10,
+    })).resolves.toMatchObject([
+      { documentId: 'legacy-doc', sourceKind: 'legacy', sourceLabel: 'Old River' },
+    ]);
+
+    expect(operations.some((operation) => operation.table === 'river_documents')).toBe(false);
   });
 
   it('loads the public timeline only through active public River targets', async () => {
