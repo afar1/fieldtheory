@@ -67,6 +67,10 @@ function makeTranscribeApi(overrides: Partial<Window['transcribeAPI']> = {}) {
     getDownloadingModels: vi.fn(async () => []),
     downloadModel: vi.fn(async () => undefined),
     getAbandonHotkey: vi.fn(async () => 'Escape'),
+    getRecordingSource: vi.fn(async () => 'microphone'),
+    setRecordingSource: vi.fn(async () => undefined),
+    getLiveTyping: vi.fn(async () => false),
+    setLiveTyping: vi.fn(async () => undefined),
     getTranscriptionEngine: vi.fn(async () => 'parakeet'),
     getParakeetStatus: vi.fn(async () => makeParakeetStatus()),
     setupParakeet: vi.fn(async () => ({ success: true })),
@@ -201,6 +205,24 @@ describe('TranscriptionSettings Parakeet labels', () => {
       expect(screen.getByText('Selected')).toBeTruthy();
       expect(screen.getByText('Installed')).toBeTruthy();
     });
+  });
+
+  it('loads and saves the live typing toggle', async () => {
+    const setLiveTyping = vi.fn(async () => undefined);
+    (window as any).transcribeAPI = makeTranscribeApi({ setLiveTyping });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings />);
+
+    const liveTypingSwitch = await screen.findByRole('switch', { name: 'Live typing' });
+    expect(liveTypingSwitch.getAttribute('aria-checked')).toBe('false');
+
+    await act(async () => {
+      liveTypingSwitch.click();
+    });
+
+    expect(setLiveTyping).toHaveBeenCalledWith(true);
+    expect(liveTypingSwitch.getAttribute('aria-checked')).toBe('true');
   });
 
   it('shows retry guidance for timeout failures instead of a reinstall-only message', async () => {

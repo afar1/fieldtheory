@@ -337,6 +337,8 @@ interface TranscribeAPI {
   getAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
   setAutoImproveContextFiles?: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
   chooseAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping?: () => Promise<boolean>;
+  setLiveTyping?: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;

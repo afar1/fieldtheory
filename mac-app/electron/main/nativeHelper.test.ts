@@ -242,4 +242,55 @@ describe('NativeHelper recording command sequencing', () => {
 
     await expect(typePromise).resolves.toMatchObject({ success: true });
   });
+
+  it('passes live typing segments to the native helper and returns insert diagnostics', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const insertPromise = helper.insertTextSegment('com.apple.TextEdit', 'hello');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'insertTextSegment',
+      bundleId: 'com.apple.TextEdit',
+      text: 'hello',
+    }]);
+
+    helper.handleMessage({
+      type: 'insertTextSegmentResult',
+      success: false,
+      reason: 'not-frontmost',
+      accessibilityTrusted: true,
+    });
+
+    await expect(insertPromise).resolves.toEqual({
+      success: false,
+      reason: 'not-frontmost',
+      accessibilityTrusted: true,
+    });
+  });
+
+  it('passes live typing submit commands to the native helper', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const submitPromise = helper.submitTextTarget('com.mitchellh.ghostty', 'command-enter');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'submitTextTarget',
+      bundleId: 'com.mitchellh.ghostty',
+      submitMode: 'command-enter',
+    }]);
+
+    helper.handleMessage({
+      type: 'submitTextTargetResult',
+      success: true,
+      accessibilityTrusted: true,
+    });
+
+    await expect(submitPromise).resolves.toEqual({
+      success: true,
+      reason: undefined,
+      accessibilityTrusted: true,
+    });
+  });
 });

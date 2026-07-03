@@ -1075,7 +1075,9 @@ describe('TranscriberManager standard real-time chunking', () => {
       transcribeWithEngineFallback: vi.fn(() => transcribePromise),
       getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
       insertFigureReferences: vi.fn((text: string) => text),
-      preferences: { getPreference: vi.fn(() => 'parakeet') },
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -2039,6 +2041,322 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.standardLiveTranscript).toBe('hello again');
     expect(manager.emit).toHaveBeenCalledWith('standardLiveTranscript', 'hello');
     expect(manager.emit).toHaveBeenCalledWith('standardLiveTranscript', 'hello again');
+  });
+
+  it('allows live typing to target Field Theory when a Field Theory document is frontmost', async () => {
+    const insertTextSegment = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      preferences: { getPreference: vi.fn((key: string) => key === 'liveTypingEnabled') },
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app' })),
+        insertTextSegment,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.startLiveTypingSessionIfEligible('microphone');
+    manager.liveTypingCoordinator.enqueueSegment('hello field theory');
+    await manager.liveTypingCoordinator.finish();
+
+    expect(manager.liveTypingTargetBundleId).toBe('com.fieldtheory.app');
+    expect(insertTextSegment).toHaveBeenCalledWith('com.fieldtheory.app', 'hello field theory ');
+  });
+
+  it('enqueues finalized chunks for live typing and skips Squares tail parsing', async () => {
+    const enqueueSegment = vi.fn();
+    const parseVoiceCommandFromTail = vi.fn(() => ({ action: 'grid', remainingText: 'draft' }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft tile'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: { parseVoiceCommandFromTail },
+      liveTypingCoordinator: { enqueueSegment },
+      nativeHelper: { setHarvestMode: vi.fn() },
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledWith('draft tile');
+    expect(parseVoiceCommandFromTail).not.toHaveBeenCalled();
+    expect(manager.pendingImmediateSquaresAction).toBeNull();
+  });
+
+  it('submits the live typing target when a Hot Mic submit phrase is spoken', async () => {
+    const enqueueSegment = vi.fn();
+    const drain = vi.fn(async () => ({ typedSegmentCount: 1, bufferedSegmentCount: 0 }));
+    const submitTextTarget = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingTargetBundleId: 'com.mitchellh.ghostty',
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft the response go ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      liveTypingCoordinator: { enqueueSegment, drain },
+      nativeHelper: { setHarvestMode: vi.fn(), submitTextTarget },
+      emit: vi.fn(),
+      clipboardManager: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledWith('draft the response');
+    expect(drain).toHaveBeenCalled();
+    expect(submitTextTarget).toHaveBeenCalledWith('com.mitchellh.ghostty', 'enter');
+    expect(manager.liveTypingOutputSegments).toEqual(['draft the response']);
+  });
+
+  it('does not run Hot Mic submit phrases during non-live standard transcription', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft the response go ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      nativeHelper: { setHarvestMode: vi.fn(), typeIntoApp },
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.standardLiveTranscript).toBe('draft the response go ahead');
+  });
+
+  it('holds a possible live submit prefix until the next chunk completes it', async () => {
+    const enqueueSegment = vi.fn();
+    const drain = vi.fn(async () => ({ typedSegmentCount: 1, bufferedSegmentCount: 0 }));
+    const submitTextTarget = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingTargetBundleId: 'com.mitchellh.ghostty',
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi
+        .fn()
+        .mockResolvedValueOnce('draft go')
+        .mockResolvedValueOnce('ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      liveTypingCoordinator: { enqueueSegment, drain },
+      nativeHelper: { setHarvestMode: vi.fn(), submitTextTarget },
+      emit: vi.fn(),
+      clipboardManager: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/chunk-1.wav');
+    await manager.onStandardChunkReady('/tmp/chunk-2.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledTimes(1);
+    expect(enqueueSegment).toHaveBeenCalledWith('draft');
+    expect(manager.liveTypingPendingCommandText).toBe('');
+    expect(submitTextTarget).toHaveBeenCalledWith('com.mitchellh.ghostty', 'enter');
+  });
+
+  it('flushes a held live command prefix as text when it never becomes a command', async () => {
+    const enqueueSegment = vi.fn();
+    const manager: any = {
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingCoordinator: { enqueueSegment },
+      preferences: { getPreference: vi.fn(() => undefined) },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.handleLiveTypingChunk('ready go');
+    manager.flushLiveTypingPendingCommandText();
+
+    expect(enqueueSegment).toHaveBeenCalledWith('ready');
+    expect(enqueueSegment).toHaveBeenCalledWith('go');
+    expect(manager.liveTypingOutputSegments).toEqual(['ready', 'go']);
+  });
+
+  it('pastes only the live typing remainder and avoids pasteStack when no screenshots exist', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-live-typing-'));
+    const wavPath = path.join(tempDir, 'tail.wav');
+    writeFileSync(wavPath, 'tiny');
+
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const handleVoiceCommand = vi.fn(async () => false);
+    const detectCommands = vi.fn(() => ({ detected: false }));
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      activeRecordingSource: 'microphone',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => path.join(tempDir, 'chunk.wav')),
+        stopRecording: vi.fn(async () => wavPath),
+        checkFocusedTextInput: vi.fn(async () => true),
+        typeIntoApp,
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardLiveTranscript: 'hello later',
+      standardLiveSegments: [
+        { text: 'hello', endMs: 500 },
+        { text: 'later', endMs: 1000 },
+      ],
+      liveTypingCoordinator: {
+        finish: vi.fn(async () => ({ typedSegmentCount: 1 })),
+        cancel: vi.fn(),
+      },
+      liveTypingTargetBundleId: 'com.apple.TextEdit',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: { showTranscribing: vi.fn() },
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+        manager.standardLiveSegments = [];
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: { handleVoiceCommand },
+      commandsManager: { detectCommands },
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'full text'),
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    try {
+      await manager.stopRecordingAndTranscribe();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.apple.TextEdit', 'later ', false);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(handleVoiceCommand).not.toHaveBeenCalled();
+    expect(detectCommands).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalledWith('later ');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'hello later');
+  });
+
+  it('pastes stop-time ASR tail when all live segments were already typed', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-live-typing-tail-'));
+    const wavPath = path.join(tempDir, 'tail.wav');
+    writeFileSync(wavPath, Buffer.alloc(100_000));
+
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      activeRecordingSource: 'microphone',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => path.join(tempDir, 'chunk.wav')),
+        stopRecording: vi.fn(async () => wavPath),
+        checkFocusedTextInput: vi.fn(async () => true),
+        typeIntoApp,
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardLiveTranscript: 'hello',
+      standardLiveSegments: [{ text: 'hello', endMs: 500 }],
+      liveTypingCoordinator: {
+        finish: vi.fn(async () => ({ typedSegmentCount: 1 })),
+        cancel: vi.fn(),
+      },
+      liveTypingTargetBundleId: 'com.apple.TextEdit',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: { showTranscribing: vi.fn() },
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+        manager.standardLiveSegments = [];
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: { handleVoiceCommand: vi.fn(async () => false) },
+      commandsManager: { detectCommands: vi.fn(() => ({ detected: false })) },
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'tail words'),
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    try {
+      await manager.stopRecordingAndTranscribe();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.apple.TextEdit', 'tail words ', false);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.emit).toHaveBeenCalledWith('result', 'tail words');
   });
 
   it('keeps standard finalization on full-file transcription even when figure metadata exists', async () => {

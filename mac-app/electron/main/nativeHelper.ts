@@ -10,6 +10,7 @@ import {
   NativeWindowInfo,
   GazeTrackingStatusMessage,
   GazeSampleMessage,
+  TextTargetFailureReason,
 } from './types/audio';
 import { createLogger } from './logger';
 import { DEFAULT_GAZE_TARGET_FPS } from './types/gaze';
@@ -699,6 +700,95 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Insert one live-typing segment into the currently focused field of a target app.
+   * Unlike typeIntoApp, this never writes to the pasteboard or activates the app.
+   */
+  async insertTextSegment(
+    bundleId: string,
+    text: string
+  ): Promise<{
+    success: boolean;
+    reason?: TextTargetFailureReason | 'helper-not-running' | 'timeout';
+    accessibilityTrusted?: boolean;
+  }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, reason: 'helper-not-running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, reason: 'timeout' });
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'insertTextSegmentResult') {
+          cleanup();
+          resolve({
+            success: msg.success,
+            reason: msg.reason,
+            accessibilityTrusted: msg.accessibilityTrusted,
+          });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'insertTextSegment', bundleId, text });
+    });
+  }
+
+  /**
+   * Submit the currently focused text target without writing to the pasteboard.
+   */
+  async submitTextTarget(
+    bundleId: string,
+    submitMode: 'enter' | 'command-enter'
+  ): Promise<{
+    success: boolean;
+    reason?: TextTargetFailureReason | 'helper-not-running' | 'timeout';
+    accessibilityTrusted?: boolean;
+  }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, reason: 'helper-not-running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, reason: 'timeout' });
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'submitTextTargetResult') {
+          cleanup();
+          resolve({
+            success: msg.success,
+            reason: msg.reason,
+            accessibilityTrusted: msg.accessibilityTrusted,
+          });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'submitTextTarget', bundleId, submitMode });
+    });
+  }
+
+  /**
    * Focus a specific window of an app by matching a substring in its title.
    * Used by Hot Mic to focus the correct terminal window when multiple exist.
    */
@@ -1046,6 +1136,16 @@ export class NativeHelper extends EventEmitter {
 
       case 'typeIntoAppResult':
         // Response to typeIntoApp - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'insertTextSegmentResult':
+        // Response to insertTextSegment - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'submitTextTargetResult':
+        // Response to submitTextTarget - handled by promise listener.
         this.emit('message', msg);
         break;
 
