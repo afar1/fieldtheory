@@ -461,19 +461,61 @@ describe('TranscriberManager auto-improve toggle', () => {
     vi.clearAllMocks();
   });
 
-  it('keeps auto-improve disabled even when setAutoImprove(true) is requested', async () => {
+  it('persists auto-improve when setAutoImprove(true) is requested', async () => {
     const save = vi.fn(async () => undefined);
+    const prefs: Record<string, unknown> = {};
     const manager: any = {
       preferences: {
         save,
+        getPreference: (key: string) => prefs[key],
       },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.setAutoImprove(true);
+    prefs.autoImproveTranscripts = true;
 
-    expect(manager.getAutoImprove()).toBe(false);
-    expect(save).toHaveBeenCalledWith({ autoImproveTranscripts: false });
+    expect(manager.getAutoImprove()).toBe(true);
+    expect(save).toHaveBeenCalledWith({ autoImproveTranscripts: true });
+  });
+
+  it('defaults auto-improve to local provider and persists valid providers', async () => {
+    const save = vi.fn(async () => undefined);
+    const manager: any = {
+      preferences: {
+        save,
+        getPreference: (key: string) => key === 'autoImproveProvider' ? 'unexpected' : undefined,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.getAutoImproveProvider()).toBe('local');
+    await manager.setAutoImproveProvider('codex');
+
+    expect(save).toHaveBeenCalledWith({ autoImproveProvider: 'codex' });
+  });
+
+  it('runs the transcript improve runner only when enabled and above the word threshold', async () => {
+    const runner = vi.fn(async () => 'cleaned transcript');
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => {
+          if (key === 'autoImproveTranscripts') return true;
+          if (key === 'autoImproveMinWords') return 3;
+          if (key === 'autoImproveProvider') return 'local';
+          return undefined;
+        },
+      },
+      transcriptImproveRunner: runner,
+      cursorStatusManager: { showRecordingNote: vi.fn() },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await expect(manager.improveTranscriptForPaste('too short')).resolves.toBeNull();
+    await expect(manager.improveTranscriptForPaste('this is long enough')).resolves.toBe('cleaned transcript');
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner).toHaveBeenCalledWith({ text: 'this is long enough', provider: 'local' });
   });
 });
 
@@ -1377,7 +1419,87 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(storeText).toHaveBeenCalledWith('dictated text', 'transcript', undefined, undefined);
     expect(manager.currentStack).toContain(42);
     expect(pasteStack).toHaveBeenCalledWith(false);
+    expect(manager.emit).toHaveBeenCalledWith('transcriptRecorded', { wordCount: 2 });
     expect(manager.emit).toHaveBeenCalledWith('result', 'dictated text');
+  });
+
+  it('does not run auto-improve after a standard session is cancelled post-store', async () => {
+    const improveRunner = vi.fn(async () => 'cleaned text');
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText: vi.fn(async () => {
+          manager.standardSessionCancelRequested = true;
+          return 42;
+        }),
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'dictated text with enough words'),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      transcriptImproveRunner: improveRunner,
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'autoImproveTranscripts') return true;
+          if (key === 'autoImproveMinWords') return 3;
+          if (key === 'autoImproveProvider') return 'local';
+          return undefined;
+        }),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(improveRunner).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.emit).not.toHaveBeenCalledWith('transcriptRecorded', { wordCount: 5 });
+    expect(manager.emit).not.toHaveBeenCalledWith('result', expect.any(String));
   });
 
   it('runs full-file transcription even when real-time transcript text exists', async () => {

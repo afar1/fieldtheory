@@ -54,6 +54,8 @@ export class TrayManager {
   private takeScreenshotCallback: (() => void) | null = null;
   private takeFullScreenCallback: (() => void) | null = null;
   private takeActiveWindowCallback: (() => void) | null = null;
+  private getAutoImproveCallback: (() => boolean) | null = null;
+  private setAutoImproveCallback: ((enabled: boolean) => Promise<void> | void) | null = null;
   private openDevToolsCallback: (() => void) | null = null;
   private isLoggedInCallback: (() => boolean) | null = null;
   private historyHotkey: string = 'Option+Space';
@@ -140,6 +142,15 @@ export class TrayManager {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
+  }
+
+  setAutoImproveCallbacks(callbacks: {
+    get: () => boolean;
+    set: (enabled: boolean) => Promise<void> | void;
+  }): void {
+    this.getAutoImproveCallback = callbacks.get;
+    this.setAutoImproveCallback = callbacks.set;
+    this.refreshMenu();
   }
 
   setRecordingActive(active: boolean): void {
@@ -495,6 +506,18 @@ export class TrayManager {
         }
       },
     });
+
+    if (this.getAutoImproveCallback && this.setAutoImproveCallback) {
+      items.push({
+        label: 'Auto-Improve Transcripts',
+        type: 'checkbox',
+        checked: this.getAutoImproveCallback(),
+        click: async (item) => {
+          await this.setAutoImproveCallback?.(item.checked);
+          this.refreshMenu();
+        },
+      });
+    }
 
     items.push({
       label: 'Take Screenshot',

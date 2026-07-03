@@ -47,6 +47,7 @@ import {
   type TranscriptionEngine,
   type HotMicEngine,
   type ParakeetEngine,
+  type AutoImproveProvider,
 } from './types/transcribe';
 import { runParakeetPythonPreflight } from './parakeetPythonPreflight';
 import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
@@ -63,6 +64,12 @@ const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
 const WHISPER_TIMESTAMP_PATTERN = /\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g;
 const WHISPER_METADATA_PATTERN = /\[(?:id:\s*\d+|start:|end:)[^\]]*\]/gi;
 const WHISPER_SPEAKER_TURN_PATTERN = /\[SPEAKER_TURN\]/gi;
+const AUTO_IMPROVE_PROVIDERS = new Set<AutoImproveProvider>(['local', 'codex', 'claude']);
+
+export type TranscriptImproveRunner = (input: {
+  text: string;
+  provider: AutoImproveProvider;
+}) => Promise<string | null>;
 
 export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
   const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
@@ -167,6 +174,8 @@ export interface TranscriberEvents {
   parakeetSetupProgress: (progress: ParakeetSetupProgress) => void;
   stackChanged: (count: number) => void;
   stackingDisabled: (data: { itemId: number; message: string }) => void;
+  transcriptRecorded: (data: { wordCount: number }) => void;
+  transcriptImproved: (data: { wordCount: number; provider: AutoImproveProvider }) => void;
 }
 
 /**
@@ -234,6 +243,7 @@ export class TranscriberManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
+  private transcriptImproveRunner: TranscriptImproveRunner | null = null;
   private squaresManager: any | null = null;  // SquaresManager for voice-triggered window management
   private hasShownQuotaMessageThisPeriod: boolean = false;
   private recordingStartTime: number = 0;
@@ -336,6 +346,42 @@ export class TranscriberManager extends EventEmitter {
         this.lastExternalPasteTargetBundleId = bundleId;
       }
     });
+  }
+
+  setTranscriptImproveRunner(runner: TranscriptImproveRunner | null): void {
+    this.transcriptImproveRunner = runner;
+  }
+
+  private normalizeAutoImproveProvider(value: unknown): AutoImproveProvider {
+    return typeof value === 'string' && AUTO_IMPROVE_PROVIDERS.has(value as AutoImproveProvider)
+      ? value as AutoImproveProvider
+      : 'local';
+  }
+
+  private countWords(text: string): number {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  private async improveTranscriptForPaste(text: string): Promise<string | null> {
+    if (!this.getAutoImprove()) return null;
+    const minWords = this.getAutoImproveMinWords();
+    if (this.countWords(text) < minWords) return null;
+
+    const provider = this.getAutoImproveProvider();
+    if (!this.transcriptImproveRunner) {
+      log.warn('Auto-improve skipped: no transcript improve runner configured');
+      return null;
+    }
+
+    try {
+      this.cursorStatusManager?.showRecordingNote('Improving transcript...');
+      const improved = await this.transcriptImproveRunner({ text, provider });
+      const trimmed = improved?.trim() ?? '';
+      return trimmed.length > 0 ? trimmed : null;
+    } catch (error) {
+      log.warn('Auto-improve failed; using raw transcript:', error);
+      return null;
+    }
   }
   
   /**
@@ -1551,6 +1597,8 @@ export class TranscriberManager extends EventEmitter {
       cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
       this.clearStandardLiveTranscript();
 
+      let transcriptItemId = 0;
+
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
         // Check if continuous context mode is active - if so, use its stackId.
@@ -1566,6 +1614,7 @@ export class TranscriberManager extends EventEmitter {
           effectiveStackId
         );
         if (itemId > 0) {
+          transcriptItemId = itemId;
           this.currentStack.push(itemId);
           
           // Auto-stack: if screenshots were taken during recording, group them with transcript.
@@ -1609,8 +1658,24 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
 
-      // Transcript improvement is disabled in this release.
-      const finalText = cleanedText;
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-before-improve', wavPath);
+        return;
+      }
+
+      const improvedText = await this.improveTranscriptForPaste(cleanedText);
+      const finalText = improvedText ?? cleanedText;
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-after-improve', wavPath);
+        return;
+      }
+      if (improvedText && transcriptItemId > 0) {
+        this.clipboardManager?.saveImprovedContent(transcriptItemId, improvedText);
+        this.emit('transcriptImproved', {
+          wordCount: this.countWords(improvedText),
+          provider: this.getAutoImproveProvider(),
+        });
+      }
 
       // Update lastTranscription with the final text.
       this.lastTranscription = finalText;
@@ -1632,6 +1697,7 @@ export class TranscriberManager extends EventEmitter {
       }
       const pasteMs = Math.round(performance.now() - pasteStart);
       const finalTotalMs = Math.round(performance.now() - finalPassStart);
+      this.emit('transcriptRecorded', { wordCount: this.countWords(cleanedText) });
       this.emit('result', finalText);
 
       log.info(
@@ -1902,7 +1968,7 @@ export class TranscriberManager extends EventEmitter {
    * Set whether to automatically improve transcripts after completion.
    */
   async setAutoImprove(enabled: boolean): Promise<void> {
-    await this.preferences.save({ autoImproveTranscripts: false });
+    await this.preferences.save({ autoImproveTranscripts: enabled });
   }
 
   /**
@@ -1910,7 +1976,19 @@ export class TranscriberManager extends EventEmitter {
    * Default is false (disabled) for new users.
    */
   getAutoImprove(): boolean {
-    return false;
+    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
+  }
+
+  async setAutoImproveProvider(provider: AutoImproveProvider): Promise<void> {
+    await this.preferences.save({
+      autoImproveProvider: this.normalizeAutoImproveProvider(provider),
+    });
+  }
+
+  getAutoImproveProvider(): AutoImproveProvider {
+    return this.normalizeAutoImproveProvider(
+      this.preferences.getPreference('autoImproveProvider')
+    );
   }
 
   /**
