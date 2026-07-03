@@ -110,6 +110,11 @@ export type SquaresAction =
 
 export type SquaresActionSource = 'default' | 'command-launcher';
 
+export interface SquaresActionOptions {
+  source?: SquaresActionSource;
+  includeFieldTheoryWindows?: boolean;
+}
+
 /**
  * Squares configuration.
  * Stored in preferences. Sensible defaults out of the box.

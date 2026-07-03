@@ -51,6 +51,119 @@ const GazeIPCChannels = {
   SCREEN_OVERLAY_STATE_CHANGED: 'gaze:screenOverlayStateChanged',
 } as const;
 
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
+  'library-sort-mode',
+  'wiki-expanded-folders',
+  'wiki-recent-collapsed',
+  'library-pinned-item-ids',
+  'library-sidebar-icon-color-indices',
+  'library-sidebar-icon-color-order',
+  'library-new-doc-location',
+  'librarian-last-selection',
+  'librarian-immersive',
+  'librarian-editor-session',
+  'fieldtheory.libraryRenameTrace',
+  'fieldtheory.contentToolbar.pinnedActions.v2',
+  'librarian-text-size',
+  'librarian-typography-preset',
+  'librarian-line-height',
+  'librarian-unordered-list-marker',
+  'librarian-todo-marker',
+  'librarian-maxwell-items',
+  'librarian-html-layout-by-path',
+  'fieldtheory-line-numbers',
+  'fieldtheory-rendered-edit-click-mode',
+  'fieldtheory-text-cursor-blink',
+  'fieldtheory-rendered-text-cursor-style',
+  'fieldtheory-rendered-block-cursor-opacity',
+  'fieldtheory-shared-file-toggle-hotkey',
+  'librarian-sidebar-width',
+  'librarian-sidebar-collapsed',
+  'bookmarks-view-mode',
+  'bookmarks-show-text',
+  'commands-text-size',
+  'commands-sidebar-width',
+  'darkMode',
+  'glassEffect',
+  'accentPreset',
+  'themeStylePreset',
+  'darkModeIntensity',
+  'fieldtheory-rendered-editor-debug',
+] as const;
+
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
+
+function hydrateBrowserLibraryRendererStorageBeforeAppBoot(): void {
+  const storage = (globalThis as unknown as {
+    localStorage?: {
+      getItem: (key: string) => string | null;
+      setItem: (key: string, value: string) => void;
+      removeItem: (key: string) => void;
+    };
+  }).localStorage;
+  if (!storage) return;
+
+  try {
+    const snapshot = ipcRenderer.sendSync('browser-library:get-renderer-storage-sync') as {
+      available?: boolean;
+      values?: Record<string, string | null>;
+    } | null;
+    if (!snapshot?.available || !snapshot.values) return;
+    for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
+      if (storage.getItem(key) !== null) continue;
+      const value = snapshot.values[key];
+      if (typeof value === 'string') {
+        storage.setItem(key, value);
+      }
+    }
+  } catch {
+    // Best effort only; renderer-storage event sync will still catch up later.
+  }
+}
+
+function installBrowserLibraryRendererStorageForwarding(): void {
+  const storage = (globalThis as unknown as {
+    localStorage: {
+      getItem: (key: string) => string | null;
+      setItem: (key: string, value: string) => void;
+      removeItem: (key: string) => void;
+    };
+  }).localStorage;
+  const originalSetItem = storage.setItem.bind(storage);
+  const originalRemoveItem = storage.removeItem.bind(storage);
+
+  storage.setItem = (key: string, value: string) => {
+    originalSetItem(key, value);
+    if (BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) {
+      ipcRenderer.send('browser-library:renderer-storage-changed', { key, value });
+    }
+  };
+
+  storage.removeItem = (key: string) => {
+    originalRemoveItem(key);
+    if (BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) {
+      ipcRenderer.send('browser-library:renderer-storage-changed', { key, value: null });
+    }
+  };
+}
+
+function flushBrowserLibraryRendererStorageToBridge(): void {
+  const storage = (globalThis as unknown as {
+    localStorage?: {
+      getItem: (key: string) => string | null;
+    };
+  }).localStorage;
+  if (!storage) return;
+
+  for (const key of BROWSER_LIBRARY_RENDERER_STORAGE_KEYS) {
+    ipcRenderer.send('browser-library:renderer-storage-changed', { key, value: storage.getItem(key) });
+  }
+}
+
+hydrateBrowserLibraryRendererStorageBeforeAppBoot();
+installBrowserLibraryRendererStorageForwarding();
+flushBrowserLibraryRendererStorageToBridge();
+
 const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
   GET_MODEL_STATUS: 'transcribe:getModelStatus',
@@ -75,6 +188,18 @@ const TranscribeIPCChannels = {
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_PROVIDER: 'transcribe:getAutoImproveProvider',
+  SET_AUTO_IMPROVE_PROVIDER: 'transcribe:setAutoImproveProvider',
+  GET_AUTO_IMPROVE_PROVIDER_STATUS: 'transcribe:getAutoImproveProviderStatus',
+  GET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:getAutoImproveModelOptions',
+  SET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:setAutoImproveModelOptions',
+  GET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:getAutoImproveWritingPreferences',
+  SET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:setAutoImproveWritingPreferences',
+  GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
+  SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
+  CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -110,6 +235,7 @@ const ClipboardIPCChannels = {
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  SAVE_PASTED_IMAGE_FILE: 'clipboard:savePastedImageFile',
   EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
@@ -133,12 +259,16 @@ const ClipboardIPCChannels = {
   // Local LLM model management
   GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
   GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_HEALTH: 'clipboard:getLocalLLMHealth',
   GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
   SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
   DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',
   DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
+  GET_MEETING_SUMMARY_PROMPT: 'clipboard:getMeetingSummaryPrompt',
+  SAVE_MEETING_SUMMARY_PROMPT: 'clipboard:saveMeetingSummaryPrompt',
+  RESET_MEETING_SUMMARY_PROMPT: 'clipboard:resetMeetingSummaryPrompt',
 
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
@@ -172,6 +302,7 @@ const OnboardingIPCChannels = {
   GET_ONBOARDING_STATE: 'onboarding:getState',
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
+  COMPLETE_LOCAL_SETUP: 'onboarding:completeLocalSetup',
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
@@ -222,12 +353,19 @@ const UpdaterIPCChannels = {
   UPDATE_NOT_AVAILABLE: 'updater:updateNotAvailable',
   DOWNLOAD_PROGRESS: 'updater:downloadProgress',
   UPDATE_DOWNLOADED: 'updater:updateDownloaded',
+  INSTALLING: 'updater:installing',
   UPDATE_ERROR: 'updater:error',
 } as const;
 
 const DiagnosticsIPCChannels = {
   GET_DIAGNOSTICS: 'diagnostics:get',
   GET_DIAGNOSTICS_MARKDOWN: 'diagnostics:getMarkdown',
+  APPEND_RENDERED_EDITOR_DEBUG: 'diagnostics:appendRenderedEditorDebug',
+  APPEND_SCROLL_DIAGNOSTICS: 'diagnostics:appendScrollDiagnostics',
+  GET_RENDERED_EDITOR_DEBUG_LOG_PATH: 'diagnostics:getRenderedEditorDebugLogPath',
+  GET_SCROLL_DIAGNOSTICS_LOG_PATH: 'diagnostics:getScrollDiagnosticsLogPath',
+  CLEAR_RENDERED_EDITOR_DEBUG_LOG: 'diagnostics:clearRenderedEditorDebugLog',
+  CLEAR_SCROLL_DIAGNOSTICS_LOG: 'diagnostics:clearScrollDiagnosticsLog',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -383,6 +521,25 @@ type AutoImproveStats = {
   inputTokens: number;
   outputTokens: number;
 };
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+type AutoImproveModelOptions = {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+};
+type AutoImproveContextFile = {
+  path: string;
+  enabled: boolean;
+};
+type AutoImproveProviderStatus = {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+};
 
 // Sound configuration for recording actions.
 type SoundConfig = {
@@ -404,6 +561,7 @@ type ModelInfo = {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 };
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
@@ -624,6 +782,7 @@ const SocialIPCChannels = {
   GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',
   UPDATE_FEEDBACK_STATUS: 'social:updateFeedbackStatus',
   GET_ACTIVITY_LOG: 'social:getActivityLog',
+  SET_FEEDBACK_REALTIME_ACTIVE: 'social:setFeedbackRealtimeActive',
   
   // Contact operations
   GET_CONTACTS: 'social:getContacts',
@@ -777,6 +936,18 @@ export interface TranscribeAPI {
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences: () => Promise<string>;
+  setAutoImproveWritingPreferences: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping: () => Promise<boolean>;
+  setLiveTyping: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
@@ -788,7 +959,7 @@ export interface TranscribeAPI {
   getParakeetStatus: () => Promise<import('./main/types/transcribe').ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
@@ -814,6 +985,7 @@ export interface ClipboardAPI {
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath: () => Promise<string | null>;
+  savePastedImageFile: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath: (id: number) => Promise<string | null>;
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
@@ -831,6 +1003,7 @@ export interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowLibrary: (callback: () => void) => () => void;
   onShowTranscriptHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
   onCollapseImmersive: (callback: () => void) => () => void;
@@ -853,14 +1026,18 @@ export interface ClipboardAPI {
   startDrag: (stackId: string) => Promise<void>;
 
   // Local LLM model management
-  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
+  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string; license: string; sourceUrl: string; baseModelUrl: string; ollamaTag?: string }>>;
   getLocalLLMStatus: () => Promise<Record<string, boolean>>;
+  getLocalLLMHealth: () => Promise<Record<string, { status: 'ready' | 'missing' | 'corrupt'; modelPath: string; fileSizeBytes: number | null; expectedSizeBytes: number; minValidSizeBytes: number }>>;
   getLocalLLMSelected: () => Promise<string>;
   setLocalLLMSelected: (model: string) => Promise<{ success: boolean; error?: string }>;
-  downloadLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM: (model: string) => Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }>;
   deleteLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
   getUseLocalLLM: () => Promise<boolean>;
   setUseLocalLLM: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMeetingSummaryPrompt: () => Promise<string>;
+  saveMeetingSummaryPrompt: (prompt: string) => Promise<{ success: boolean; prompt?: string; error?: string }>;
+  resetMeetingSummaryPrompt: () => Promise<{ success: boolean; prompt: string; error?: string }>;
   onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
@@ -973,6 +1150,12 @@ export interface PermissionsAPI {
 export interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
+  appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  appendScrollDiagnostics: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  getRenderedEditorDebugLogPath: () => Promise<string>;
+  getScrollDiagnosticsLogPath: () => Promise<string>;
+  clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
+  clearScrollDiagnosticsLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 const audioAPI: AudioAPI = {
@@ -1274,6 +1457,54 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
   },
 
+  getAutoImproveProvider: async (): Promise<AutoImproveProvider> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER);
+  },
+
+  setAutoImproveProvider: async (provider: AutoImproveProvider): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, provider);
+  },
+
+  getAutoImproveProviderStatus: async (provider: AutoImproveProvider): Promise<AutoImproveProviderStatus> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, provider);
+  },
+
+  getAutoImproveModelOptions: async (): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS);
+  },
+
+  setAutoImproveModelOptions: async (options: Partial<AutoImproveModelOptions>): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, options);
+  },
+
+  getAutoImproveWritingPreferences: async (): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES);
+  },
+
+  setAutoImproveWritingPreferences: async (preferences: string): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, preferences);
+  },
+
+  getAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  setAutoImproveContextFiles: async (files: AutoImproveContextFile[]): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, files);
+  },
+
+  chooseAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  getLiveTyping: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_LIVE_TYPING);
+  },
+
+  setLiveTyping: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_LIVE_TYPING, enabled);
+  },
+
   getAutoImproveMinWords: async (): Promise<number> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS);
   },
@@ -1315,7 +1546,7 @@ const transcribeAPI: TranscribeAPI = {
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
   },
-  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string }> => {
+  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET, engine);
   },
   uninstallParakeet: async (): Promise<{ success: boolean; error?: string }> => {
@@ -1464,6 +1695,10 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH);
   },
 
+  savePastedImageFile: async (file: { name?: string | null; type?: string | null; data: Uint8Array }): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_PASTED_IMAGE_FILE, file);
+  },
+
   exportItemImagePath: async (id: number): Promise<string | null> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, id);
   },
@@ -1544,6 +1779,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showHistory', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  onShowLibrary: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:showLibrary', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:showLibrary', handler);
     };
   },
 
@@ -1684,6 +1929,10 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS);
   },
 
+  getLocalLLMHealth: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_HEALTH);
+  },
+
   getLocalLLMSelected: async () => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED);
   },
@@ -1706,6 +1955,18 @@ const clipboardAPI: ClipboardAPI = {
 
   setUseLocalLLM: async (useLocal: boolean) => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_USE_LOCAL_LLM, useLocal);
+  },
+
+  getMeetingSummaryPrompt: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_MEETING_SUMMARY_PROMPT);
+  },
+
+  saveMeetingSummaryPrompt: async (prompt: string) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_MEETING_SUMMARY_PROMPT, prompt);
+  },
+
+  resetMeetingSummaryPrompt: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.RESET_MEETING_SUMMARY_PROMPT);
   },
 
   onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => {
@@ -2045,6 +2306,11 @@ const onboardingAPI = {
     return ipcRenderer.invoke(OnboardingIPCChannels.COMPLETE_ONBOARDING);
   },
 
+  // Mark local-only setup as complete without requiring account sign-in.
+  completeLocalSetup: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.COMPLETE_LOCAL_SETUP);
+  },
+
   // Skip onboarding (set up later).
   skip: async (): Promise<boolean> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.SKIP_ONBOARDING);
@@ -2111,7 +2377,11 @@ const updaterAPI = {
     return ipcRenderer.sendSync('app:getVersion');
   },
 
-  getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null> => {
+  isEnabled: (): boolean => {
+    return ipcRenderer.sendSync('updater:isEnabled');
+  },
+
+  getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null> => {
     return ipcRenderer.invoke('updater:getStatus');
   },
 
@@ -2159,6 +2429,12 @@ const updaterAPI = {
     const handler = (_event: Electron.IpcRendererEvent, info: UpdateInfo) => callback(info);
     ipcRenderer.on(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
     return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
+  },
+
+  onInstalling: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(UpdaterIPCChannels.INSTALLING, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.INSTALLING, handler);
   },
 
   onError: (callback: (error: string) => void): (() => void) => {
@@ -2330,6 +2606,10 @@ type TaggedDocsAPI = typeof taggedDocsAPI;
 // =============================================================================
 
 const authAPI = {
+  // Whether account-backed auth is configured in this build.
+  isConfigured: (): Promise<boolean> =>
+    ipcRenderer.invoke('auth:isConfigured'),
+
   // Sign up with email and password.
   signUp: (email: string, password: string) =>
     ipcRenderer.invoke('auth:signUp', email, password),
@@ -2611,6 +2891,11 @@ const socialAPI = {
   getActivityLog: async (feedbackId: string): Promise<ActivityLogEntry[]> => {
     return ipcRenderer.invoke(SocialIPCChannels.GET_ACTIVITY_LOG, feedbackId);
   },
+
+  // Tell the main process when feedback needs near-realtime delivery.
+  setFeedbackRealtimeActive: async (active: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SET_FEEDBACK_REALTIME_ACTIVE, active);
+  },
   
   // =========================================================================
   // Contact Operations
@@ -2853,12 +3138,74 @@ const agentImproveAPI = {
 
 type AgentImproveAPI = typeof agentImproveAPI;
 
+type LocalCommandRunMode = 'document' | 'selection';
+type LocalCommandRunRequest = {
+  commandName?: string;
+  customInstruction?: string;
+  mode?: LocalCommandRunMode;
+  selection?: {
+    start?: number;
+    end?: number;
+    text?: string;
+  } | null;
+  useMemory?: boolean;
+};
+type LocalCommandRunResult = {
+  success: boolean;
+  error?: string;
+  filePath?: string;
+  commandName?: string;
+  mode?: LocalCommandRunMode;
+  runId?: string;
+};
+type LocalCommandStatus = {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  detail?: string;
+  eventKind?: 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
+  commandName?: string;
+  filePath?: string;
+  mode?: LocalCommandRunMode;
+  runId?: string;
+  phase?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  changedLines?: number;
+  changedBytes?: number;
+  error?: string;
+  updatedAt: number;
+};
+
+type ReplaceSelectedMarkdownTextRequest = {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
+};
+
 const diagnosticsAPI: DiagnosticsAPI = {
   getDiagnostics: async (): Promise<unknown> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
   },
   getDiagnosticsMarkdown: async (): Promise<string> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS_MARKDOWN);
+  },
+  appendRenderedEditorDebug: async (entry: unknown): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.APPEND_RENDERED_EDITOR_DEBUG, entry);
+  },
+  appendScrollDiagnostics: async (entry: unknown): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.APPEND_SCROLL_DIAGNOSTICS, entry);
+  },
+  getRenderedEditorDebugLogPath: async (): Promise<string> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_RENDERED_EDITOR_DEBUG_LOG_PATH);
+  },
+  getScrollDiagnosticsLogPath: async (): Promise<string> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_SCROLL_DIAGNOSTICS_LOG_PATH);
+  },
+  clearRenderedEditorDebugLog: async (): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.CLEAR_RENDERED_EDITOR_DEBUG_LOG);
+  },
+  clearScrollDiagnosticsLog: async (): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.CLEAR_SCROLL_DIAGNOSTICS_LOG);
   },
 };
 
@@ -2872,10 +3219,26 @@ const CommandsIPCChannels = {
   SET_DIRECTORY: 'commands:setDirectory',
   BROWSE_DIRECTORY: 'commands:browseDirectory',
   GET_COMMANDS: 'commands:getCommands',
+  GET_COMMAND_DIRECTORIES: 'commands:getCommandDirectories',
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
+  GET_LAUNCHER_FILE_ICON: 'commands:getLauncherFileIcon',
+  SEARCH_LAUNCHER_FILES: 'commands:searchLauncherFiles',
+  OPEN_LAUNCHER_FILE: 'commands:openLauncherFile',
+  WARM_LAUNCHER_FILE_INDEX: 'commands:warmLauncherFileIndex',
+  GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
+  SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
+  RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  RUN_GLOBAL_IMPROVE_SELECTION: 'commands:runGlobalImproveSelection',
+  LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
+  GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
+  SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
+  CANCEL_MAXWELL_RUN: 'commands:cancelMaxwellRun',
+  UNDO_MAXWELL_RUN: 'commands:undoMaxwellRun',
+  REDO_MAXWELL_RUN: 'commands:redoMaxwellRun',
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',
+  LOCAL_COMMAND_STATUS: 'commands:localCommandStatus',
   // Multi-directory management
   INITIALIZE: 'commands:initialize',
   GET_WATCHED_DIRS: 'commands:getWatchedDirs',
@@ -2904,6 +3267,45 @@ type PortableCommandInfo = {
   name: string;
   displayName: string;
   filePath: string;
+  lastModified: number;
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
+};
+
+type PortableCommandDirectoryInfo = {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
+};
+
+type LauncherFileInfo = {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+};
+
+type LauncherFileSearchResult = {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+};
+
+type LauncherFileIconResult = {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+};
+
+type LauncherSettings = {
+  rootSearchEnabledKinds: Record<string, boolean>;
 };
 
 type CommandsWatchedDir = {
@@ -2944,6 +3346,84 @@ type DocumentSaveResult =
   | { ok: true; version: DocumentVersion }
   | { ok: false; reason: 'blocked' | 'conflict' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
 
+type MaxwellRunStatus =
+  | 'pending'
+  | 'generated'
+  | 'success'
+  | 'generation_error'
+  | 'selection_error'
+  | 'save_conflict'
+  | 'save_error'
+  | 'cancelled'
+  | 'reverted';
+
+type MaxwellRunMode = 'document' | 'selection';
+type MaxwellTargetType = 'wiki' | 'reading';
+
+interface MaxwellRunSummary {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: MaxwellRunStatus;
+  commandName: string;
+  targetPath: string;
+  targetRelPath: string | null;
+  targetType: MaxwellTargetType;
+  mode: MaxwellRunMode;
+  summary: string | null;
+  errorMessage: string | null;
+  model: string | null;
+  harness: string | null;
+  memoryUsed: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+type MaxwellUndoFailureReason =
+  | 'not-ready'
+  | 'not-found'
+  | 'not-applied'
+  | 'not-reverted'
+  | 'conflict'
+  | 'blocked'
+  | 'save-error'
+  | 'error';
+
+type MaxwellRedoFailureReason = MaxwellUndoFailureReason;
+
+type MaxwellUndoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellUndoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellRedoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellCancelResult = {
+  success: boolean;
+  error?: string;
+  run?: MaxwellRunSummary;
+};
+
+type MaxwellMemoryState = {
+  enabled: boolean;
+  content: string;
+  path: string;
+  updatedAt: number | null;
+  maxChars: number;
+};
+
+type MaxwellMemorySaveRequest = {
+  enabled: boolean;
+  content: string;
+};
+
+type MaxwellMemorySaveResult = {
+  success: boolean;
+  error?: string;
+  memory?: MaxwellMemoryState;
+};
+
 type HandoffInfo = {
   name: string;
   displayName: string;
@@ -2958,9 +3438,21 @@ type MarkdownPreview = {
 };
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
+  selectionStart?: number;
+  selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
+};
+
+type LibraryDocumentWindowTarget = {
+  kind: 'wiki' | 'artifact' | 'external';
+  path: string;
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
+  sidebarCollapsed?: boolean;
 };
 
 type ActiveLibraryFileContext = {
@@ -2969,6 +3461,34 @@ type ActiveLibraryFileContext = {
   relPath: string;
   filePath: string;
   title: string;
+};
+
+type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+
+type MeetingSession = {
+  meetingId: string;
+  title: string;
+  type: 'wiki' | 'external';
+  filePath: string;
+  relPath: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: MeetingStatus;
+  audioPath: string | null;
+  transcriptPath: string | null;
+  rawTranscriptPath: string | null;
+  speakerDiarizationSupported: boolean;
+  summaryRunId?: string;
+  summaryError?: string;
+};
+
+type MeetingActionResult = {
+  success: boolean;
+  error?: string;
+  session?: MeetingSession;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryRunId?: string;
+  summaryError?: string;
 };
 
 type LauncherPreviewPayload =
@@ -2994,6 +3514,10 @@ const commandsAPI = {
   // Get all available commands.
   getCommands: async (): Promise<PortableCommandInfo[]> => {
     return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMANDS);
+  },
+
+  getCommandDirectories: async (): Promise<PortableCommandDirectoryInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_DIRECTORIES);
   },
 
   // Refresh the commands list by rescanning the directory.
@@ -3100,8 +3624,70 @@ const commandsAPI = {
   // ==========================================================================
 
   // Invoke a command by name (paste file or reference to target app).
-  invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('commands:invoke', commandName);
+  invokeCommand: async (commandName: string, traceContext?: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:invoke', commandName, traceContext);
+  },
+
+  getLauncherFileIcon: async (filePath: string): Promise<LauncherFileIconResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_LAUNCHER_FILE_ICON, filePath);
+  },
+
+  searchLauncherFiles: async (query: string): Promise<LauncherFileSearchResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SEARCH_LAUNCHER_FILES, query);
+  },
+
+  openLauncherFile: async (filePath: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.OPEN_LAUNCHER_FILE, filePath);
+  },
+
+  warmLauncherFileIndex: async (): Promise<{ started: boolean }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.WARM_LAUNCHER_FILE_INDEX);
+  },
+
+  getLauncherSettings: async (): Promise<LauncherSettings> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_LAUNCHER_SETTINGS);
+  },
+
+  setLauncherSettings: async (settings: LauncherSettings): Promise<LauncherSettings> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SET_LAUNCHER_SETTINGS, settings);
+  },
+
+  runLocalCommand: async (request: string | LocalCommandRunRequest): Promise<LocalCommandRunResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RUN_LOCAL_COMMAND, request);
+  },
+
+  runGlobalImproveSelection: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION);
+  },
+
+  listMaxwellRuns: async (limit?: number): Promise<MaxwellRunSummary[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.LIST_MAXWELL_RUNS, limit);
+  },
+
+  getMaxwellMemory: async (): Promise<MaxwellMemoryState> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_MAXWELL_MEMORY);
+  },
+
+  saveMaxwellMemory: async (request: MaxwellMemorySaveRequest): Promise<MaxwellMemorySaveResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SAVE_MAXWELL_MEMORY, request);
+  },
+
+  cancelMaxwellRun: async (runId: string): Promise<MaxwellCancelResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.CANCEL_MAXWELL_RUN, runId);
+  },
+
+  undoMaxwellRun: async (runId: string): Promise<MaxwellUndoResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.UNDO_MAXWELL_RUN, runId);
+  },
+
+  redoMaxwellRun: async (runId: string): Promise<MaxwellRedoResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.REDO_MAXWELL_RUN, runId);
+  },
+
+  onLocalCommandStatus: (callback: (status: LocalCommandStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: LocalCommandStatus) => callback(status);
+    ipcRenderer.on(CommandsIPCChannels.LOCAL_COMMAND_STATUS, handler);
+    return () => ipcRenderer.removeListener(CommandsIPCChannels.LOCAL_COMMAND_STATUS, handler);
   },
 
   // Resize the command launcher window.
@@ -3110,7 +3696,7 @@ const commandsAPI = {
   },
 
   // Close the command launcher window.
-  launcherClose: (options?: { skipActivation?: boolean }): void => {
+  launcherClose: (options?: { skipActivation?: boolean; generation?: number }): void => {
     ipcRenderer.send('command-launcher:close', options);
   },
 
@@ -3149,11 +3735,19 @@ const commandsAPI = {
   },
 
   // Listen for reset events (when launcher is shown).
-  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean }) => callback(payload);
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => callback(payload);
     ipcRenderer.on('command-launcher:reset', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:reset', handler);
+    };
+  },
+
+  onLauncherFocusInput: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => callback(payload);
+    ipcRenderer.on('command-launcher:focus-input', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher:focus-input', handler);
     };
   },
 
@@ -3210,7 +3804,7 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
 
-  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean }> => {
+  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: RunningApp | null }> => {
     return ipcRenderer.invoke('commands:getLauncherContext');
   },
 
@@ -3222,6 +3816,44 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:setActiveLibraryFileContext', context);
   },
 
+  archiveActiveLibraryFile: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:archiveActiveLibraryFile');
+  },
+
+  toggleActiveLibraryLineNumbers: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:toggleActiveLibraryLineNumbers');
+  },
+
+  createMeetingNote: async (title?: string): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:create', title);
+  },
+
+  startMeetingHere: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:startHere');
+  },
+
+  stopMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:stop');
+  },
+
+  cancelMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:cancel');
+  },
+
+  summarizeCurrentMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:summarizeCurrent');
+  },
+
+  getActiveMeeting: async (): Promise<MeetingSession | null> => {
+    return ipcRenderer.invoke('meetings:getActive');
+  },
+
+  onMeetingStatus: (callback: (session: MeetingSession) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, session: MeetingSession) => callback(session);
+    ipcRenderer.on('meetings:status', handler);
+    return () => ipcRenderer.removeListener('meetings:status', handler);
+  },
+
   openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:openFieldTheoryMarkdown', target);
   },
@@ -3230,10 +3862,20 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:insertMarkdownText', text);
   },
 
+  insertClipboardItemsAsMarkdown: async (ids: number[]): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:insertClipboardItemsAsMarkdown', ids);
+  },
+
   onOpenMarkdownFromLauncher: (callback: (target: FieldTheoryMarkdownTarget) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, target: FieldTheoryMarkdownTarget) => callback(target);
     ipcRenderer.on('commands:openMarkdownFromLauncher', handler);
     return () => ipcRenderer.removeListener('commands:openMarkdownFromLauncher', handler);
+  },
+
+  onToggleLineNumbersFromLauncher: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('commands:toggleLineNumbersFromLauncher', handler);
+    return () => ipcRenderer.removeListener('commands:toggleLineNumbersFromLauncher', handler);
   },
 };
 
@@ -3306,6 +3948,9 @@ const librarianAPI = {
 
   // Get a single reading with full content (by path)
   getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
+
+  traceNavigation: (stage: string, payload: Record<string, unknown>): Promise<void> =>
+    ipcRenderer.invoke('librarian:traceNavigation', stage, payload),
 
   // Save reading content to disk
   saveReading: (filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
@@ -3400,9 +4045,35 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:insertMarkdownText', handler);
   },
 
+  onInsertPlainMarkdownText: (callback: (text: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
+    ipcRenderer.on('librarian:insertPlainMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:insertPlainMarkdownText', handler);
+  },
+
+  onReplaceSelectedMarkdownText: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>): (() => void) => {
+    const handler = async (_event: Electron.IpcRendererEvent, request: ReplaceSelectedMarkdownTextRequest) => {
+      let success = false;
+      try {
+        success = await callback(request);
+      } catch {
+        success = false;
+      }
+      ipcRenderer.send('librarian:replaceSelectedMarkdownTextResult', {
+        requestId: request.requestId,
+        success,
+      });
+    };
+    ipcRenderer.on('librarian:replaceSelectedMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:replaceSelectedMarkdownText', handler);
+  },
+
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
   setImmersiveDismissable: (dismissable: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveDismissable', dismissable);
+  },
+  setWindowButtonVisibility: (visible: boolean): void => {
+    ipcRenderer.send('window:setWindowButtonVisibility', visible);
   },
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw'): void => {
     ipcRenderer.send('clipboard-history:setSizeKey', key);
@@ -3560,6 +4231,278 @@ const librarianAPI = {
 };
 
 type LibrarianAPI = typeof librarianAPI;
+
+// =============================================================================
+// Shared/River Files API
+// =============================================================================
+
+type SharedFileType = 'document' | 'command' | 'plan';
+
+type SharedFileStatus = {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+  error?: string;
+};
+
+type SharedFileAudienceStatus = {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+};
+
+type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
+
+type SharedFileShareTarget = {
+  id: string;
+  kind: SharedFileDestinationKind;
+};
+
+type RiverShareTarget = {
+  id: string;
+  kind: RiverTargetKind;
+};
+
+type RiverTarget = {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+};
+
+type RiverDefaultDestination = {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+};
+
+type RiverSourcePreference = {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+};
+
+type RiverMutationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+type RiverTimelineQuery = {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+};
+
+type RiverTimelineItem = {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+};
+
+type SharedFileDestination = {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
+};
+
+type SharedFileShareInput = {
+  filePath: string;
+  title?: string;
+  content: string;
+  type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
+};
+
+type SharedFileAudienceUpdateInput = {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
+};
+
+type SharedFileUpdateResult = {
+  ok: boolean;
+  revision?: number;
+  cachePath?: string;
+  conflictPath?: string;
+  remoteContent?: string;
+  error?: string;
+};
+
+type SharedFilePresenceUser = {
+  userId: string;
+  email: string | null;
+  initials: string;
+};
+
+type SharedFilesAvailability = {
+  available: boolean;
+  canWrite: boolean;
+  hasTeamMembers: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  currentTeamScopeUserId?: string | null;
+  stale?: boolean;
+};
+
+type SharedFilePinResult = {
+  ok: boolean;
+  pinned?: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  error?: string;
+};
+
+const sharedFilesAPI = {
+  getAvailability: (): Promise<SharedFilesAvailability> =>
+    ipcRenderer.invoke('sharedFiles:getAvailability'),
+  getStatus: (filePath: string): Promise<SharedFileStatus> =>
+    ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  getAudience: (filePath: string): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:getAudience', filePath),
+  getTimeline: (query: RiverTimelineQuery): Promise<RiverTimelineItem[]> =>
+    ipcRenderer.invoke('sharedFiles:getTimeline', query),
+  getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
+    ipcRenderer.invoke('sharedFiles:getDestinations', query),
+  getTargets: (query?: string): Promise<RiverTarget[]> =>
+    ipcRenderer.invoke('sharedFiles:getTargets', query),
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:setDefaultDestinations', destinations),
+  getSourcePreferences: (): Promise<RiverSourcePreference[]> =>
+    ipcRenderer.invoke('sharedFiles:getSourcePreferences'),
+  updateSourcePreferences: (preferences: RiverSourcePreference[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:updateSourcePreferences', preferences),
+  share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
+    ipcRenderer.invoke('sharedFiles:share', input),
+  updateAudience: (input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:updateAudience', input),
+  unshare: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('sharedFiles:unshare', filePath),
+  sync: (): Promise<{ written: number; removed: number; created: number; errors: string[] }> =>
+    ipcRenderer.invoke('sharedFiles:sync'),
+  updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null): Promise<SharedFileUpdateResult> =>
+    ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision, documentPath),
+  setActivePresence: (sharedId: string | null): Promise<SharedFilePresenceUser[]> =>
+    ipcRenderer.invoke('sharedFiles:setActivePresence', sharedId),
+  getPinnedItemIds: (): Promise<string[]> =>
+    ipcRenderer.invoke('sharedFiles:getPinnedItemIds'),
+  setPinned: (filePath: string, pinned: boolean): Promise<SharedFilePinResult> =>
+    ipcRenderer.invoke('sharedFiles:setPinned', filePath, pinned),
+  onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { sharedId: string; users: SharedFilePresenceUser[] }) => callback(payload);
+    ipcRenderer.on('sharedFiles:presenceChanged', handler);
+    return () => ipcRenderer.removeListener('sharedFiles:presenceChanged', handler);
+  },
+  onPinsChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('sharedFiles:pinsChanged', handler);
+    return () => ipcRenderer.removeListener('sharedFiles:pinsChanged', handler);
+  },
+};
+
+type SharedFilesAPI = typeof sharedFilesAPI;
+
+type SharedTeamUnavailableReason =
+  | 'not_authenticated'
+  | 'not_entitled'
+  | 'no_team_members'
+  | 'pending_only'
+  | 'ambiguous_team_scope'
+  | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
+
+interface SharedTeamMember {
+  contactId: string;
+  userId: string | null;
+  email: string;
+  role: 'owner' | 'member';
+  teamScopeUserId: string;
+}
+
+interface SharedTeamInvite {
+  contactId: string;
+  ownerUserId: string;
+  contactUserId: string | null;
+  email: string;
+  direction: 'incoming' | 'outgoing';
+  createdAt: string | null;
+}
+
+interface SharedTeamState {
+  available: boolean;
+  currentTeamScopeUserId: string | null;
+  reason?: SharedTeamUnavailableReason;
+  isOwner: boolean;
+  members: SharedTeamMember[];
+  pendingIncoming: SharedTeamInvite[];
+  pendingOutgoing: SharedTeamInvite[];
+}
+
+interface SharedTeamMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+const teamAPI = {
+  getEntitlement: (): Promise<SharedTeamEntitlementState> =>
+    ipcRenderer.invoke('team:getEntitlement'),
+  getState: (): Promise<SharedTeamState> =>
+    ipcRenderer.invoke('team:getState'),
+  inviteMember: (email: string): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:inviteMember', email),
+  respondToInvite: (contactId: string, accept: boolean): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:respondToInvite', contactId, accept),
+  removeMember: (contactId: string): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:removeMember', contactId),
+  leaveTeam: (): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:leaveTeam'),
+  onTeamChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('team:changed', handler);
+    return () => ipcRenderer.removeListener('team:changed', handler);
+  },
+};
+
+type TeamAPI = typeof teamAPI;
 
 // =============================================================================
 // Metrics API - User-visible usage stats
@@ -3823,6 +4766,8 @@ type ScenarioAPI = typeof scenarioAPI;
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
+contextBridge.exposeInMainWorld('sharedFilesAPI', sharedFilesAPI);
+contextBridge.exposeInMainWorld('teamAPI', teamAPI);
 
 interface WikiPageMeta {
   relPath: string;
@@ -3830,18 +4775,34 @@ interface WikiPageMeta {
   name: string;
   title: string;
   lastUpdated: number;
+  documentKind?: 'markdown' | 'html' | 'css';
   todoState?: MarkdownTodoState;
+  archived?: boolean;
 }
 interface WikiPage extends WikiPageMeta {
   content: string;
   documentVersion: DocumentVersion;
+}
+interface WikiBacklinkRelationDocument {
+  target: { kind: 'wiki'; relPath: string };
+  title: string;
+  content: string;
+}
+type LibraryBacklinkTarget =
+  | { kind: 'wiki'; relPath: string }
+  | { kind: 'artifact'; path: string }
+  | { kind: 'command'; path: string };
+interface LibraryBacklinkRelationDocument {
+  target: LibraryBacklinkTarget;
+  title: string;
+  content: string;
 }
 interface WikiFolder {
   name: string;
   files: WikiPageMeta[];
 }
 type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 interface LibraryRoot {
   path: string;
@@ -3861,6 +4822,16 @@ interface LibraryRenameEvent {
   source?: 'app' | 'watcher' | 'external';
   detectedAt?: number;
   emittedAt?: number;
+}
+interface LibraryChangeEvent {
+  type: 'file-added' | 'file-changed' | 'file-deleted';
+  rootPath: string;
+  relPath: string;
+  absPath: string;
+  builtin: boolean;
+  source: 'watcher' | 'app' | 'external';
+  detectedAt: number;
+  page?: WikiPageMeta;
 }
 interface LibraryMigrationFile {
   relPath: string;
@@ -3995,8 +4966,12 @@ const libraryAPI = {
   moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
-  onRootsChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  getBacklinkRelationDocuments: (target: LibraryBacklinkTarget): Promise<LibraryBacklinkRelationDocument[]> =>
+    ipcRenderer.invoke('library:getBacklinkRelationDocuments', target),
+  openDocumentWindow: (target: LibraryDocumentWindowTarget): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('library:openDocumentWindow', target),
+  onRootsChanged: (callback: (event?: LibraryChangeEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: LibraryChangeEvent) => callback(payload);
     ipcRenderer.on('library:changed', handler);
     return () => ipcRenderer.removeListener('library:changed', handler);
   },
@@ -4010,6 +4985,8 @@ const libraryAPI = {
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
+  getBacklinkRelationDocuments: (relPath: string): Promise<WikiBacklinkRelationDocument[]> =>
+    ipcRenderer.invoke('wiki:getBacklinkRelationDocuments', relPath),
   findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string): Promise<WikiPage | null> =>
     ipcRenderer.invoke('wiki:findPageByDocumentVersion', version, previousRelPath),
   save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
@@ -4022,8 +4999,8 @@ const wikiAPI = {
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   rename: (relPath: string, newName: string): Promise<string | null> =>
     ipcRenderer.invoke('wiki:rename', relPath, newName),
-  onPageChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onPageChanged: (callback: (event?: LibraryChangeEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: LibraryChangeEvent) => callback(payload);
     ipcRenderer.on('wiki:changed', handler);
     return () => ipcRenderer.removeListener('wiki:changed', handler);
   },
@@ -4132,6 +5109,8 @@ const externalAPI = {
     ipcRenderer.invoke('external:findLibraryFileByDocumentVersion', version, previousAbsPath),
   rename: (absPath: string, newName: string): Promise<ExternalMarkdownFile | null> =>
     ipcRenderer.invoke('external:rename', absPath, newName),
+  delete: (absPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('external:delete', absPath),
   onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
     ipcRenderer.on('external:openPage', handler);
@@ -4139,6 +5118,33 @@ const externalAPI = {
   },
 };
 contextBridge.exposeInMainWorld('externalAPI', externalAPI);
+
+const markdownImagesAPI = {
+  copyImageForDocument: (
+    documentPath: string,
+    imagePath: string,
+    alt?: string,
+  ): Promise<{ markdown: string; destination: string; copiedPath: string } | null> =>
+    ipcRenderer.invoke('markdownImages:copyImageForDocument', documentPath, imagePath, alt),
+  copyImageDataUrlForDocument: (
+    documentPath: string,
+    dataUrl: string,
+    alt?: string,
+  ): Promise<{ markdown: string; destination: string; copiedPath: string } | null> =>
+    ipcRenderer.invoke('markdownImages:copyImageDataUrlForDocument', documentPath, dataUrl, alt),
+  makeImagesPortable: (
+    documentPath: string,
+    content: string,
+  ): Promise<{ content: string; copied: number; rewritten: number; missing: number }> =>
+    ipcRenderer.invoke('markdownImages:makeImagesPortable', documentPath, content),
+  deleteUnusedCopiedImages: (
+    documentPath: string,
+    removedMarkdown: string,
+    remainingContent: string,
+  ): Promise<{ deleted: number; skipped: number; missing: number }> =>
+    ipcRenderer.invoke('markdownImages:deleteUnusedCopiedImages', documentPath, removedMarkdown, remainingContent),
+};
+contextBridge.exposeInMainWorld('markdownImagesAPI', markdownImagesAPI);
 
 interface RecentEntry {
   kind: 'wiki' | 'external';
@@ -4152,8 +5158,8 @@ const recentAPI = {
   visit: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:visit', entry),
   remove: (kind: 'wiki' | 'external', entryPath: string): Promise<RecentEntry[]> =>
     ipcRenderer.invoke('recent:remove', kind, entryPath),
-  onChanged: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onChanged: (callback: (entries?: RecentEntry[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, entries?: RecentEntry[]) => callback(entries);
     ipcRenderer.on('recent:changed', handler);
     return () => ipcRenderer.removeListener('recent:changed', handler);
   },
@@ -4401,6 +5407,21 @@ const hotMicAPI = {
   setIslandStayOnLaptop: async (value: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setIslandStayOnLaptop', value);
   },
+  getRecordingIndicatorMode: async (): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getRecordingIndicatorMode');
+  },
+  setRecordingIndicatorMode: async (mode: 'auto' | 'notch' | 'floating'): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:setRecordingIndicatorMode', mode);
+  },
+  getResolvedRecordingIndicatorMode: async (): Promise<'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getResolvedRecordingIndicatorMode');
+  },
+  getFloatingIndicatorPosition: async (): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:getFloatingIndicatorPosition');
+  },
+  setFloatingIndicatorPosition: async (position: { x: number; y: number } | null): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:setFloatingIndicatorPosition', position);
+  },
   getIslandAutoHide: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getIslandAutoHide');
   },
@@ -4413,11 +5434,26 @@ const hotMicAPI = {
   setSubmitWord: async (word: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setSubmitWord', word);
   },
+  getCommandEnterWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getCommandEnterWords');
+  },
+  setCommandEnterWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setCommandEnterWords', words);
+  },
   getHotkey: async (): Promise<string | null> => {
     return ipcRenderer.invoke('hotmic:getHotkey');
   },
   setHotkey: async (hotkey: string | null): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setHotkey', hotkey);
+  },
+  onHotkeyChanged: (callback: (hotkey: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, hotkey: string | null) => {
+      callback(hotkey);
+    };
+    ipcRenderer.on('hotmic:hotkeyChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:hotkeyChanged', handler);
+    };
   },
   getPasteWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getPasteWords');
@@ -4608,6 +5644,146 @@ const hotMicAPI = {
 };
 contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 
+type CodexTerminalSessionSummary = {
+  id: string;
+  title: string;
+  cwd: string;
+  engine: 'pty';
+  createdAt: string;
+  exitedAt: string | null;
+  exitCode: number | null;
+  restored: boolean;
+  modelRunActive: boolean;
+  transcriptPath: string;
+  attachedContexts: CodexTerminalAttachedContext[];
+};
+
+type CodexTerminalAttachedContext = {
+  sessionId: string;
+  sessionTitle: string;
+  sessionCwd: string;
+  launchedCommand: string;
+  repoPath: string | null;
+  gitBranch: string | null;
+  filePath: string;
+  title: string;
+  sourcePath: string;
+  kind: CodexTerminalPageContext['kind'];
+  attachedAt: string;
+};
+
+type CodexTerminalPageContext = {
+  title: string;
+  path: string;
+  kind: 'wiki' | 'artifact' | 'external' | 'unknown';
+  contentMode: string;
+  content: string;
+  selectionText?: string;
+  lineMapping?: {
+    activeLineKind: 'source' | 'renderedVisual';
+    contentMode: string;
+    visibleRowsOnly?: boolean;
+    lines: Array<{
+      visibleLine: number;
+      sourceLine: number;
+      rowInSourceLine?: number;
+      rowsInSourceLine?: number;
+      text: string;
+    }>;
+  };
+};
+
+type CodexTerminalAttachResult = {
+  ok: boolean;
+  filePath?: string;
+  prompt?: string;
+  error?: string;
+};
+
+type CodexTerminalHistoryEntry = {
+  filePath: string;
+  fileName: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  sizeBytes: number;
+  preview: string;
+};
+
+type CodexTerminalHistoryPreview = {
+  filePath: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  preview: string;
+  truncated: boolean;
+};
+
+const codexTerminalAPI = {
+  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }): Promise<CodexTerminalSessionSummary> => {
+    return ipcRenderer.invoke('codexTerminal:create', input);
+  },
+  list: async (): Promise<CodexTerminalSessionSummary[]> => {
+    return ipcRenderer.invoke('codexTerminal:list');
+  },
+  listHistory: async (input?: { query?: string; limit?: number }): Promise<CodexTerminalHistoryEntry[]> => {
+    return ipcRenderer.invoke('codexTerminal:listHistory', input);
+  },
+  readHistoryPreview: async (filePath: string, input?: { maxBytes?: number }): Promise<CodexTerminalHistoryPreview | null> => {
+    return ipcRenderer.invoke('codexTerminal:readHistoryPreview', filePath, input);
+  },
+  getBuffer: async (id: string): Promise<string | null> => {
+    return ipcRenderer.invoke('codexTerminal:getBuffer', id);
+  },
+  input: async (id: string, data: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:input', id, data);
+  },
+  setLauncherTargetSession: async (id: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:setLauncherTargetSession', id);
+  },
+  resize: async (id: string, cols: number, rows: number): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:resize', id, cols, rows);
+  },
+  kill: async (id: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:kill', id);
+  },
+  rename: async (id: string, title: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:rename', id, title);
+  },
+  readClipboardText: async (): Promise<string> => {
+    return ipcRenderer.invoke('codexTerminal:readClipboardText');
+  },
+  readTerminalPasteText: async (): Promise<string> => {
+    return ipcRenderer.invoke('codexTerminal:readTerminalPasteText');
+  },
+  writeClipboardText: async (text: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:writeClipboardText', text);
+  },
+  attachPageContext: async (id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }): Promise<CodexTerminalAttachResult> => {
+    return ipcRenderer.invoke('codexTerminal:attachPageContext', id, context, options);
+  },
+  onData: (callback: (event: { id: string; data: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }) => callback(payload);
+    ipcRenderer.on('codexTerminal:data', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:data', handler);
+  },
+  onExit: (callback: (session: CodexTerminalSessionSummary) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, session: CodexTerminalSessionSummary) => callback(session);
+    ipcRenderer.on('codexTerminal:exit', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:exit', handler);
+  },
+  onSessionsChanged: (callback: (sessions: CodexTerminalSessionSummary[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, sessions: CodexTerminalSessionSummary[]) => callback(sessions);
+    ipcRenderer.on('codexTerminal:sessionsChanged', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:sessionsChanged', handler);
+  },
+};
+contextBridge.exposeInMainWorld('codexTerminalAPI', codexTerminalAPI);
+
 // =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
 // =============================================================================
@@ -4676,8 +5852,11 @@ declare global {
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
+    sharedFilesAPI: SharedFilesAPI;
+    teamAPI: TeamAPI;
     metricsAPI: MetricsAPI;
     squaresAPI: SquaresAPIType;
+    codexTerminalAPI: typeof codexTerminalAPI;
     scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;

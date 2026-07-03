@@ -3,47 +3,93 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, lazy, Suspense } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
-import ContentToolbar from './ContentToolbar';
-import FieldTheoryProse from './FieldTheoryProse';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
+import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import RiverPicker, { type RiverPickerTarget } from './RiverPicker';
+import { SidebarRiverIcon } from './SidebarIcons';
+import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
+import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
+  EMBER_ITEM_ID,
+  RIVER_ITEM_ID,
+  LOCAL_WIKI_ADDED_EVENT,
+  LOCAL_WIKI_DELETED_EVENT,
+  LOCAL_WIKI_RENAMED_EVENT,
   dispatchLocalWikiAdded,
   dispatchLocalWikiDeleted,
   dispatchLocalWikiRenamed,
+  type WikiArchiveController,
   type LibraryCreateLocation,
   type UnifiedItem,
   type WikiCreationController,
 } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
+import EmberPane from './EmberPane';
+import RiverReader from './RiverReader';
 import { prefetchBookmarks } from '../services/bookmarksCache';
-import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
+import {
+  getFocusChromeScopedItemOpacity,
+  getFocusChromeSurfaceOpacity,
+  getGroupedFocusChromeProximityOpacity,
+} from '../utils/focusChrome';
+export {
+  getFocusChromeScopedItemOpacity,
+  getFocusChromeSurfaceOpacity,
+  getGroupedFocusChromeProximityOpacity,
+  shouldRevealFocusChrome,
+  shouldRevealGroupedFocusChrome,
+} from '../utils/focusChrome';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
-  RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT,
+  LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  type RenderedTextCursorStyle,
+  isFadedLineNumbersShortcut,
+  getMarkdownFormattingShortcut,
+  getMarkdownListShortcutKind,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isCopyFilePathShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
+  isLineNumbersToggleShortcut,
   isMarkdownModeToggleShortcut,
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
-  isSidebarToggleShortcut,
-  restoreRenderedEditClickMode,
+  isSharedFileToggleShortcut,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
+  restoreRenderedBlockCursorOpacity,
+  restoreSharedFileToggleHotkey,
+  restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
-  shouldEnterEditOnClick,
-  type RenderedEditClickMode,
+  persistRenderedTextCursorStyle,
+  persistTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
+  RENDERED_EDITOR_DEBUG_ENTRY_LIMIT,
+  RENDERED_EDITOR_DEBUG_STORAGE_KEY,
+  getElementDebugSummary,
+  getRectDebugSummary,
+  getRenderedSelectionDebug,
+  type RenderedEditorDebugApi,
+  type RenderedEditorDebugEntry,
+  type RenderedEditorTimingEntry,
+} from '../utils/renderedMarkdownEditor';
+import {
   getMarkdownTodoState,
+  parseMarkdownEditActor,
   parseMarkdownFrontmatter,
   setMarkdownTodoState as setFrontmatterMarkdownTodoState,
   type MarkdownTodoState,
@@ -51,18 +97,23 @@ import {
 export type { MarkdownTodoState };
 import {
   LIBRARIAN_LINE_HEIGHT_OPTIONS,
+  LIBRARIAN_LINE_HEIGHT_STORAGE_KEY,
+  LIBRARIAN_TYPOGRAPHY_STORAGE_KEY,
   LIBRARIAN_TYPOGRAPHY_PRESETS,
   isLibrarianLineHeightId,
   isLibrarianTypographyPresetId,
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
+  resolveLibrarianDocumentMaxWidth,
   resolveLibrarianLineHeight,
   resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
   restoreLibrarianTypographyPreset,
   type LibrarianLineHeightId,
+  type LibrarianTextSizeId,
   type LibrarianTypographyPresetId,
 } from '../utils/librarianTypography';
+import { getMarkdownFormattingEdit } from '../utils/markdownFormatting';
 import {
   MARKDOWN_URL_PASTE_OPTIONS,
   getMarkdownUrlPasteEdit,
@@ -71,44 +122,196 @@ import {
   type MarkdownUrlPasteKind,
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import {
+  getActiveMarkdownSlashCommandCompletion,
+  getMarkdownDrawCommandEdit,
+  insertMarkdownBlockAt,
+  rankMarkdownSlashCommandSuggestions,
+  removeActiveMarkdownSlashCommandCompletion,
+  type MarkdownSlashCommandCompletion,
+  type MarkdownSlashCommandSuggestion,
+} from '../utils/markdownSlashCommands';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
+import { getHtmlPreviewSrcDoc as buildHtmlPreviewSrcDoc, getLocalFileUrl as buildLocalFileUrl } from '../utils/htmlPreview';
 import MarkdownCodeEditor, {
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
+  RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
+  getRenderedMarkdownBlockBodyStartForLine,
+  getRenderedMarkdownInlineHtmlBlockRanges,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
+  isRenderedMarkdownSelectionInsideInlineHtmlBlock,
+  isRenderedMarkdownDrawingAlt,
+  type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
   type MarkdownCodeEditorSelectionSnapshot,
 } from './MarkdownCodeEditor';
+import LinkedDocumentsSection from './LinkedDocumentsSection';
+import ImagePreviewOverlay from './ImagePreviewOverlay';
 import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
+import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
 import {
+  coerceMarkdownContentMode,
+  getNextMarkdownContentMode,
+  isMarkdownContentMode,
+  type MarkdownContentMode,
+} from '../utils/markdownContentMode';
+import {
   buildWikiIndex,
-  classifyLinkHref,
+  getActiveMarkdownMentionCompletion,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownLinkRelationMetadataDocuments,
+  getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionCommitEdit,
+  getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
-  getWikiLinkTargetKey,
-  isUnresolvedWikiHref,
+  getMarkdownMentionCompletionReplacement,
+  mergeMarkdownLinkRelationDocuments,
   normalizeWikiRelPath,
+  removeMarkdownLinkRelationDocument,
   transformWikiLinks,
+  upsertMarkdownLinkRelationDocument,
+  type WikiIndex,
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
+  type MarkdownMentionCompletion,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
   type WikiLinkTarget,
 } from '../utils/wikiLinks';
+import {
+  getActiveMarkdownEmojiCompletion,
+  getMarkdownEmojiCompletionReplacement,
+  rankMarkdownEmojiSuggestions,
+  type MarkdownEmojiCompletion,
+  type MarkdownEmojiSuggestion,
+} from '../utils/emojiCompletion';
+import {
+  removeWikiIndexPages,
+  renameWikiIndexPages,
+  upsertWikiIndexPages,
+  wikiIndexPagesFromTree,
+  wikiTargetPartsFromUnresolvedTitle,
+} from '../utils/wikiIndexPages';
+
+const SketchView = lazy(() => import('./SketchView'));
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: MarkdownContentMode;
+  selectionStart?: number;
+  selectionEnd?: number;
 };
 
-export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+type InlineDrawInsertion = {
+  mode: 'markdown' | 'rendered';
+  documentPath: string;
+  insertionStart: number;
+  replaceFrom?: number;
+  replaceTo?: number;
+  backgroundImage?: {
+    dataUrl: string;
+    width: number;
+    height: number;
+  } | null;
+};
+
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external' | null;
+type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
+type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
+type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+type RiverShareTarget = NonNullable<Parameters<SharedFilesClient['share']>[0]['targets']>[number];
 const COPY_PATH_FEEDBACK_MS = 1600;
+const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
+const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
+const CODEX_TERMINAL_DOCK_STORAGE_KEY = 'fieldtheory.codexTerminal.dockSide';
+
+export type LibraryDocumentViewKind = 'markdown' | 'html' | 'css';
+type SharedFileType = 'document' | 'command' | 'plan';
+interface SharedFileStatus {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+  error?: string;
+}
+interface SharedFilePresenceUser {
+  userId: string;
+  email: string | null;
+  initials: string;
+}
+
+export function getLibraryDocumentViewKind(
+  filePath: string | null | undefined,
+  itemType: LibrarianSelectedItemType = null,
+): LibraryDocumentViewKind {
+  const extension = filePath?.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase() ?? '';
+  if (extension === 'html' || extension === 'htm') return 'html';
+  if (extension === 'css') return 'css';
+  if (itemType === 'wiki' || itemType === 'artifact' || itemType === 'external') return 'markdown';
+  return 'markdown';
+}
+
+export function getLibraryDocumentDefaultContentMode(kind: LibraryDocumentViewKind): MarkdownContentMode {
+  return kind === 'css' ? 'markdown' : 'rendered';
+}
+
+export function getLocalFileUrl(filePath: string): string {
+  return buildLocalFileUrl(filePath);
+}
+
+function getEditActorDisplay(actor: MarkdownEditActor | undefined): string | null {
+  const name = actor?.name.trim();
+  if (!name) return null;
+  const detail = actor?.detail?.trim();
+  return detail ? `${name} (${detail})` : name;
+}
+
+export function getReadingUpdatedByline(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign' | 'editActor'>): string {
+  const updated = `Updated ${formatRelativeTime(reading.mtime)}`;
+  const editActor = getEditActorDisplay(reading.editActor);
+  if (editActor) return `${updated} by ${editActor}`;
+  const callsign = reading.sharedAuthorCallsign?.trim();
+  return callsign ? `${updated} by ${callsign}` : updated;
+}
+
+export function getReadingUpdatedTitle(reading: Pick<Reading, 'mtime' | 'sharedAuthorCallsign' | 'editActor'>): string {
+  const updated = `Updated ${new Date(reading.mtime).toLocaleString()}`;
+  const editActor = getEditActorDisplay(reading.editActor);
+  if (editActor) return `${updated} by ${editActor}`;
+  const callsign = reading.sharedAuthorCallsign?.trim();
+  return callsign ? `${updated} by ${callsign}` : updated;
+}
+
+export function getHtmlPreviewSrcDoc(html: string, filePath: string): string {
+  return buildHtmlPreviewSrcDoc(html, filePath);
+}
+
+function riverTargetToPickerTarget(target: RiverTarget): RiverPickerTarget {
+  return {
+    id: target.id,
+    kind: target.kind,
+    label: target.label,
+    detail: target.detail,
+    callSign: target.callsign,
+    initials: target.initials,
+    avatarUrl: target.avatarUrl,
+    tint: target.tint,
+    status: target.status,
+  };
+}
 
 function libraryRenameTraceEnabled(): boolean {
   try {
@@ -116,6 +319,15 @@ function libraryRenameTraceEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+function traceLibraryNavigation(stage: string, extra: Record<string, unknown> = {}): void {
+  const payload = {
+    timestamp: Date.now(),
+    ...extra,
+  };
+  console.info('[LibraryNavigationTrace]', stage, payload);
+  void window.librarianAPI?.traceNavigation?.(stage, payload);
 }
 
 function traceLibraryRename(stage: string, event: LibraryRenameEvent, extra: Record<string, unknown> = {}): void {
@@ -155,6 +367,9 @@ function readingFromWikiPage(page: WikiPage): Reading {
     createdAt: page.lastUpdated,
     mtime: page.lastUpdated,
     todoState: page.todoState,
+    sharedOriginalSourcePath: page.sharedOriginalSourcePath,
+    sharedAuthorCallsign: page.sharedAuthorCallsign,
+    editActor: page.editActor,
     documentVersion: page.documentVersion,
   };
 }
@@ -170,8 +385,16 @@ function readingFromExternalMarkdownFile(file: ExternalMarkdownFile): Reading {
     modelSignature: null,
     createdAt: file.mtime,
     mtime: file.mtime,
+    editActor: parseMarkdownEditActor(file.content) ?? undefined,
     documentVersion: file.documentVersion,
   };
+}
+
+function inferSharedFileTypeForActiveReading(filePath: string | null): SharedFileType {
+  const normalized = (filePath ?? '').replace(/\\/g, '/').toLowerCase();
+  if (normalized.includes('/commands/')) return 'command';
+  if (normalized.includes('/plans/')) return 'plan';
+  return 'document';
 }
 
 export function deletedLibraryItemMatchesSelection(
@@ -204,6 +427,12 @@ export function splitFrontmatter(content: string): { body: string; meta: Record<
   const parsed = parseMarkdownFrontmatter(content);
   if (parsed.raw === null || !parsed.raw.trim()) return { body: content, meta: {}, todoState: null };
   return { body: parsed.body, meta: parsed.meta, todoState: getFrontmatterTodoState(parsed.meta) };
+}
+
+export function replaceMarkdownBodyPreservingFrontmatter(content: string, nextBody: string): string {
+  const parsed = parseMarkdownFrontmatter(content);
+  if (parsed.raw === null || !parsed.raw.trim()) return nextBody;
+  return `---\n${parsed.raw}\n---\n\n${nextBody}`;
 }
 
 export function getMarkdownRenderedBodyStartLineIndex(content: string): number {
@@ -261,14 +490,139 @@ export function rebaseMarkdownTodoStateChange(
 }
 
 export function shouldApplyLiveMarkdownFileUpdate(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   editContent: string;
   lastSavedContent: string | null;
   hasPendingRenderedSave?: boolean;
+  hasRenderedSaveInFlight?: boolean;
+  renderedEditingActive?: boolean;
 }): boolean {
+  if (input.contentMode === 'rendered' && input.renderedEditingActive) return false;
   if (input.hasPendingRenderedSave) return false;
-  if (input.contentMode !== 'markdown') return true;
+  if (input.hasRenderedSaveInFlight) return false;
   return input.lastSavedContent !== null && input.editContent === input.lastSavedContent;
+}
+
+export function getRenderedDisplayReadingContent(input: {
+  contentMode: MarkdownContentMode;
+  renderedEditingActive: boolean;
+  activeReadingPath: string | null;
+  renderedDisplayContent: { path: string; content: string } | null;
+  activeReadingContent: string | null;
+}): string | null {
+  if (
+    input.contentMode === 'rendered'
+    && input.renderedEditingActive
+    && input.activeReadingPath
+    && input.renderedDisplayContent?.path === input.activeReadingPath
+  ) {
+    return input.renderedDisplayContent.content;
+  }
+  return input.activeReadingContent;
+}
+
+type CodexTerminalLineMapping = NonNullable<CodexTerminalPageContextInput['lineMapping']>;
+
+type ActiveLibraryFileSelectionContext = {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
+};
+
+function getActiveLibraryFileContextKey(context: ActiveLibraryFileSelectionContext | null): string {
+  if (!context) return 'null';
+  return JSON.stringify([
+    context.type,
+    context.rootPath,
+    context.relPath,
+    context.filePath,
+    context.title,
+    context.selectionStart ?? null,
+    context.selectionEnd ?? null,
+    context.selectionText ?? null,
+  ]);
+}
+
+export function hasActiveLibraryFileSelectionContext(context: ActiveLibraryFileSelectionContext | null): boolean {
+  return typeof context?.selectionStart === 'number'
+    && typeof context.selectionEnd === 'number'
+    && context.selectionStart !== context.selectionEnd;
+}
+
+export function shouldReportActiveLibraryFileContextForSelection(
+  snapshot: Pick<MarkdownCodeEditorSelectionSnapshot, 'isCollapsed'>,
+  hasReportedSelection: boolean,
+): boolean {
+  return !snapshot.isCollapsed || hasReportedSelection;
+}
+
+export function buildSourceLineMapping(content: string, options: {
+  contentMode: MarkdownContentMode;
+  sourceLineOffset?: number;
+  maxLines?: number;
+}): CodexTerminalLineMapping {
+  const sourceLineOffset = options.sourceLineOffset ?? 0;
+  const lines = content.split('\n').slice(0, options.maxLines ?? 400).map((text, index) => ({
+    visibleLine: index + 1,
+    sourceLine: sourceLineOffset + index + 1,
+    text,
+  }));
+  return {
+    activeLineKind: 'source',
+    contentMode: options.contentMode,
+    visibleRowsOnly: false,
+    lines,
+  };
+}
+
+export function getVerifiedMarkdownSelectionReplacement(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  expectedText: string,
+  replacementText: string,
+): { nextValue: string; selectionStart: number; selectionEnd: number } | null {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  if (start === end || !expectedText || !replacementText) return null;
+  const selectedText = value.slice(start, end);
+  const selectedTrimmed = selectedText.trim();
+  if (selectedText !== expectedText && selectedTrimmed !== expectedText.trim()) return null;
+  const leading = selectedText.match(/^\s*/)?.[0] ?? '';
+  const trailing = selectedText.match(/\s*$/)?.[0] ?? '';
+  const insertedText = selectedText === expectedText
+    ? replacementText
+    : `${leading}${replacementText}${trailing}`;
+  return {
+    nextValue: `${value.slice(0, start)}${insertedText}${value.slice(end)}`,
+    selectionStart: start,
+    selectionEnd: start + insertedText.length,
+  };
+}
+
+export function getRenderedCaretEnsureSourceOffset(input: {
+  activeSourceOffset: number | null;
+  selectionRange: { start: number; end: number } | null;
+  contentLength: number;
+}): number {
+  const contentLength = Math.max(0, input.contentLength);
+  const clamp = (offset: number) => Math.max(0, Math.min(contentLength, offset));
+  if (typeof input.activeSourceOffset === 'number' && Number.isFinite(input.activeSourceOffset)) {
+    return clamp(input.activeSourceOffset);
+  }
+  if (
+    input.selectionRange
+    && input.selectionRange.start === input.selectionRange.end
+    && Number.isFinite(input.selectionRange.start)
+  ) {
+    return clamp(input.selectionRange.start);
+  }
+  return contentLength;
 }
 
 export function documentVersionsEqual(left: DocumentVersion | null | undefined, right: DocumentVersion | null | undefined): boolean {
@@ -286,16 +640,91 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
   return input.key === 'Tab'
     && !input.metaKey
     && !input.ctrlKey
-    && !input.altKey
+    && input.altKey
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
+}
+
+export function isTerminalEditorFocusToggleShortcut(input: {
+  key: string;
+  code?: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return input.key === 'Tab'
+    && input.ctrlKey
+    && !input.altKey
+    && !input.metaKey
+    && !input.shiftKey;
+}
+
+export function isTerminalPanelVisibilityToggleShortcut(input: {
+  key: string;
+  code?: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return input.metaKey
+    && !input.shiftKey
+    && !input.altKey
+    && !input.ctrlKey
+    && (input.key === '.' || input.code === 'Period');
+}
+
+export function shouldRestoreEditorWhenTogglingTerminalPanel(input: {
+  terminalVisible: boolean;
+  terminalFocused: boolean;
+  restoreEditorFocus?: boolean;
+}): boolean {
+  return input.terminalVisible && (input.restoreEditorFocus === true || input.terminalFocused);
+}
+
+export function shouldRestoreEditorWhenTogglingTerminalFocus(input: {
+  terminalVisible: boolean;
+  terminalFocused: boolean;
+  restoreEditorFocus?: boolean;
+}): boolean {
+  return input.terminalVisible && (input.restoreEditorFocus === true || input.terminalFocused);
+}
+
+export function isCodexTerminalEventTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && !!target.closest('[data-ft-codex-terminal-panel="true"]');
+}
+
+const MARKDOWN_IMAGE_REFERENCE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\n]+)\)/g;
+
+export function getMarkdownImageReferenceSnapshot(content: string): string[] {
+  return Array.from(content.matchAll(MARKDOWN_IMAGE_REFERENCE_RE), (match) => match[0]);
+}
+
+export function markdownContentMayNeedPortableImages(content: string): boolean {
+  return getMarkdownImageReferenceSnapshot(content).length > 0;
+}
+
+export function markdownPortableImagesChanged(previousContent: string | null | undefined, nextContent: string): boolean {
+  const nextImages = getMarkdownImageReferenceSnapshot(nextContent);
+  if (nextImages.length === 0) return false;
+  if (previousContent === null || previousContent === undefined) return true;
+  const previousImages = getMarkdownImageReferenceSnapshot(previousContent);
+  if (previousImages.length !== nextImages.length) return true;
+  return nextImages.some((image, index) => image !== previousImages[index]);
 }
 
 export function shouldOpenMarkdownLinkFromMouseDown(input: {
   button: number;
+  metaKey?: boolean;
   altKey: boolean;
   ctrlKey: boolean;
+  renderedEditingActive?: boolean;
+  actionKind?: LinkAction['kind'];
 }): boolean {
-  return input.button === 0 && !input.altKey && !input.ctrlKey;
+  if (input.button !== 0 || input.altKey || input.ctrlKey) return false;
+  if (input.renderedEditingActive && (input.actionKind === 'wiki' || input.actionKind === 'create')) return true;
+  if (input.renderedEditingActive) return input.metaKey === true;
+  return true;
 }
 
 export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
@@ -304,7 +733,13 @@ export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
   altKey: boolean;
   ctrlKey: boolean;
 }): boolean {
-  return input.button === 0 && input.metaKey && !input.altKey && !input.ctrlKey;
+  return input.button === 0 && !input.altKey && !input.ctrlKey;
+}
+
+export function isRenderedMarkdownLinkEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false;
+  const element = target instanceof Element ? target : target.parentElement;
+  return element?.closest(`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`) !== null;
 }
 
 export function isLibrarianDocumentFocusChromeActive(input: {
@@ -321,6 +756,102 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
 }
 
+export function getFocusChromeContentCenterX(input: {
+  readerLeft: number;
+  readerRight: number;
+  terminalLeft: number | null;
+  terminalDockedRight: boolean;
+  terminalVisible: boolean;
+}): number {
+  const contentRight = input.terminalVisible && input.terminalDockedRight && input.terminalLeft !== null
+    ? Math.max(input.readerLeft, Math.min(input.readerRight, input.terminalLeft))
+    : input.readerRight;
+  return Math.round(input.readerLeft + ((contentRight - input.readerLeft) / 2));
+}
+
+const RESPONSIVE_PANEL_MIN_EDITOR_WIDTH = 560;
+const RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH = 640;
+const RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH = 360;
+const RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT = 220;
+const RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL = 360;
+const RESPONSIVE_PANEL_SIDEBAR_GAP = 4;
+const RESPONSIVE_PANEL_RESTORE_BAND = 36;
+
+export type ResponsivePanelState = {
+  autoCollapseSidebar: boolean;
+  autoDockTerminalBottom: boolean;
+  autoHideTerminal: boolean;
+  reason: 'unmeasured' | 'wide' | 'sidebar' | 'terminal-bottom' | 'terminal-hidden' | 'forced-sidebar';
+};
+
+export function getResponsivePanelState(input: {
+  containerWidth: number;
+  containerHeight: number;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  sidebarForcedVisible: boolean;
+  terminalVisible: boolean;
+  terminalDockSide: CodexTerminalDockSide;
+  userResizing?: boolean;
+  autoCollapseSidebarSuppressed?: boolean;
+  previous?: ResponsivePanelState;
+}): ResponsivePanelState {
+  if (input.userResizing && input.previous) {
+    return input.previous;
+  }
+
+  if (input.containerWidth <= 0 || input.containerHeight <= 0) {
+    return { autoCollapseSidebar: false, autoDockTerminalBottom: false, autoHideTerminal: false, reason: 'unmeasured' };
+  }
+
+  const sidebarThreshold = input.sidebarWidth
+    + RESPONSIVE_PANEL_SIDEBAR_GAP
+    + RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH
+    + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const sidebarRestoreThreshold = sidebarThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
+  const autoCollapseSidebar = !input.sidebarCollapsed
+    && !input.sidebarForcedVisible
+    && (input.containerWidth < sidebarThreshold
+      || (input.previous?.autoCollapseSidebar === true && input.containerWidth < sidebarRestoreThreshold));
+  const effectiveSidebarCollapsed = input.sidebarCollapsed
+    || (autoCollapseSidebar && !input.autoCollapseSidebarSuppressed);
+  const readerWidth = input.containerWidth - (effectiveSidebarCollapsed ? 0 : input.sidebarWidth + RESPONSIVE_PANEL_SIDEBAR_GAP);
+  const rightDockThreshold = RESPONSIVE_PANEL_STABLE_EDITOR_WIDTH + RESPONSIVE_PANEL_RIGHT_TERMINAL_MIN_WIDTH;
+  const rightDockRestoreThreshold = rightDockThreshold + RESPONSIVE_PANEL_RESTORE_BAND;
+  const canUseBottomDock = input.containerHeight >= (
+    RESPONSIVE_PANEL_MIN_EDITOR_HEIGHT_WITH_BOTTOM_TERMINAL + RESPONSIVE_PANEL_BOTTOM_TERMINAL_MIN_HEIGHT
+  );
+  const autoDockTerminalBottom = input.terminalVisible
+    && input.terminalDockSide === 'right'
+    && canUseBottomDock
+    && (readerWidth < rightDockThreshold
+      || (input.previous?.autoDockTerminalBottom === true && readerWidth < rightDockRestoreThreshold));
+  const effectiveTerminalDockSide = autoDockTerminalBottom ? 'bottom' : input.terminalDockSide;
+  const autoHideTerminal = input.terminalVisible
+    && (
+      readerWidth < RESPONSIVE_PANEL_MIN_EDITOR_WIDTH
+      || (effectiveTerminalDockSide === 'bottom' && !canUseBottomDock)
+    );
+
+  const reason: ResponsivePanelState['reason'] =
+    input.sidebarForcedVisible ? 'forced-sidebar' :
+    autoHideTerminal ? 'terminal-hidden' :
+    autoDockTerminalBottom ? 'terminal-bottom' :
+    autoCollapseSidebar ? 'sidebar' :
+    'wide';
+
+  return { autoCollapseSidebar, autoDockTerminalBottom, autoHideTerminal, reason };
+}
+
+export function shouldAnimateResponsiveSidebar(input: {
+  responsivePanelState: Pick<ResponsivePanelState, 'autoCollapseSidebar' | 'autoDockTerminalBottom' | 'autoHideTerminal'>;
+  userResizing: boolean;
+}): boolean {
+  return !input.userResizing
+    && !input.responsivePanelState.autoDockTerminalBottom
+    && !input.responsivePanelState.autoHideTerminal;
+}
+
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -331,6 +862,13 @@ export function isBookmarksCanvasChromeActive(input: {
     && input.selectedItemType === 'bookmarks'
     && input.isFullScreen
     && input.bookmarksCanvasActive;
+}
+
+export function isLibrarianSidebarHidden(input: {
+  isFullScreen: boolean;
+  selectedItemType: LibrarianSelectedItemType;
+}): boolean {
+  return input.isFullScreen;
 }
 
 export function isTextEntryInputType(type: string | null | undefined): boolean {
@@ -351,24 +889,97 @@ export function isTextEntryInputType(type: string | null | undefined): boolean {
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
-const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
+const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 40;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
-const LIBRARIAN_CONTENT_BOTTOM_PADDING_PX = 0;
+const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
+const LIBRARIAN_READER_SCROLLBAR_GUTTER_PX = 14;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
-const RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED = false;
+const LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS = 180;
+const CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS = 500;
+const FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
+const RENDERED_SAVE_INITIAL_DELAY_MS = 400;
+const RENDERED_SAVE_QUIET_DELAY_MS = 750;
+const RENDERED_SAVE_IN_FLIGHT_RETRY_MS = 150;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
+const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
+const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
+export const LIBRARIAN_TEXT_SIZE_STORAGE_KEY = 'librarian-text-size';
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
 export const LIBRARIAN_TODO_MARKER_STORAGE_KEY = 'librarian-todo-marker';
+export const LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY = 'librarian-maxwell-items';
+export const LIBRARIAN_HTML_LAYOUT_STORAGE_KEY = 'librarian-html-layout-by-path';
+export const LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY = 'librarian-sidebar-width';
+const LIBRARIAN_SIDEBAR_MIN_WIDTH = 180;
+const LIBRARIAN_SIDEBAR_DEFAULT_WIDTH = 220;
+const LIBRARIAN_SIDEBAR_MAX_WIDTH = 400;
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
 
 export type LibrarianUnorderedListMarker = 'dash' | 'carrot';
 export type LibrarianTodoMarker = 'circle' | 'square';
+export type LibrarianHtmlLayout = 'contained' | 'full';
+export type LibrarianMaxwellItem = {
+  id: string;
+  type: 'wiki' | 'artifact' | 'external';
+  title: string;
+  path: string;
+  relPath?: string;
+};
+
+type MaxwellToolbarSelection = { start: number; end: number; text?: string } | null;
+type TerminalPastePopover = { text: string; top: number; left: number } | null;
+type SelectionPastePopoverSide = 'left' | 'right';
+const TERMINAL_PASTE_POPOVER_SIZE_PX = 30;
+const TERMINAL_PASTE_POPOVER_GAP_PX = 8;
+const TERMINAL_PASTE_POPOVER_SIDE_GAP_PX = 14;
+const TERMINAL_PASTE_POPOVER_EDGE_PX = 12;
+type MaxwellToolbarRunMode =
+  | { mode: 'document' }
+  | { mode: 'selection'; selection: { start: number; end: number } };
+export type InlineGemmaLocalCommandRequest = {
+  customInstruction: string;
+  mode: 'selection';
+  selection: { start: number; end: number; text?: string };
+};
+const LIVE_RENDERER_STORAGE_PREFERENCE_KEYS = new Set([
+  LIBRARIAN_TEXT_SIZE_STORAGE_KEY,
+  LIBRARIAN_TYPOGRAPHY_STORAGE_KEY,
+  LIBRARIAN_LINE_HEIGHT_STORAGE_KEY,
+  LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY,
+  LIBRARIAN_TODO_MARKER_STORAGE_KEY,
+  LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY,
+  LIBRARIAN_HTML_LAYOUT_STORAGE_KEY,
+  LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY,
+  LINE_NUMBERS_STORAGE_KEY,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
+]);
 
 export function isLibrarianUnorderedListMarker(value: unknown): value is LibrarianUnorderedListMarker {
   return value === 'dash' || value === 'carrot';
+}
+
+export function isLiveLibrarianRendererStoragePreferenceKey(key: string | null | undefined): boolean {
+  return key !== null && key !== undefined && LIVE_RENDERER_STORAGE_PREFERENCE_KEYS.has(key);
+}
+
+export function restoreLibrarianSidebarWidth(storage: Pick<Storage, 'getItem'> = localStorage): number {
+  const saved = storage.getItem(LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY);
+  const width = saved ? parseInt(saved, 10) : LIBRARIAN_SIDEBAR_DEFAULT_WIDTH;
+  return Number.isFinite(width)
+    ? Math.max(LIBRARIAN_SIDEBAR_MIN_WIDTH, Math.min(LIBRARIAN_SIDEBAR_MAX_WIDTH, width))
+    : LIBRARIAN_SIDEBAR_DEFAULT_WIDTH;
+}
+
+export function restoreLibrarianTextSize(storage: Pick<Storage, 'getItem'>): LibrarianTextSizeId {
+  const saved = storage.getItem(LIBRARIAN_TEXT_SIZE_STORAGE_KEY);
+  return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
+}
+
+export function restoreLibrarianLineNumbersMode(storage: Pick<Storage, 'getItem'>): 'hidden' | 'visible' | 'faded' {
+  const saved = storage.getItem(LINE_NUMBERS_STORAGE_KEY);
+  return saved === 'visible' || saved === 'faded' ? saved : 'hidden';
 }
 
 export function restoreLibrarianUnorderedListMarker(
@@ -403,10 +1014,233 @@ export function persistLibrarianTodoMarker(
   storage.setItem(LIBRARIAN_TODO_MARKER_STORAGE_KEY, marker);
 }
 
+export function restoreLibrarianMaxwellItems(
+  storage: Pick<Storage, 'getItem'>,
+): LibrarianMaxwellItem[] {
+  try {
+    const raw = storage.getItem(LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is LibrarianMaxwellItem => (
+      item
+      && (item.type === 'wiki' || item.type === 'artifact' || item.type === 'external')
+      && typeof item.id === 'string'
+      && typeof item.title === 'string'
+      && typeof item.path === 'string'
+      && (item.relPath === undefined || typeof item.relPath === 'string')
+    ));
+  } catch {
+    return [];
+  }
+}
+
+export function persistLibrarianMaxwellItems(
+  storage: Pick<Storage, 'setItem'>,
+  items: LibrarianMaxwellItem[],
+): void {
+  storage.setItem(LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY, JSON.stringify(items));
+}
+
+export function isLibrarianHtmlLayout(value: unknown): value is LibrarianHtmlLayout {
+  return value === 'contained' || value === 'full';
+}
+
+export function restoreLibrarianHtmlLayoutByPath(
+  storage: Pick<Storage, 'getItem'>,
+): Record<string, LibrarianHtmlLayout> {
+  try {
+    const raw = storage.getItem(LIBRARIAN_HTML_LAYOUT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, LibrarianHtmlLayout] => (
+        typeof entry[0] === 'string' && isLibrarianHtmlLayout(entry[1])
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function persistLibrarianHtmlLayoutByPath(
+  storage: Pick<Storage, 'setItem'>,
+  layouts: Record<string, LibrarianHtmlLayout>,
+): void {
+  storage.setItem(LIBRARIAN_HTML_LAYOUT_STORAGE_KEY, JSON.stringify(layouts));
+}
+
+export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): MaxwellToolbarRunMode {
+  if (!selection || selection.start === selection.end) {
+    return { mode: 'document' };
+  }
+  return {
+    mode: 'selection',
+    selection: {
+      start: Math.min(selection.start, selection.end),
+      end: Math.max(selection.start, selection.end),
+      ...(selection.text ? { text: selection.text } : {}),
+    },
+  };
+}
+
+export function getInlineGemmaLocalCommandRequest(
+  instruction: string,
+  selection: MaxwellToolbarSelection,
+): InlineGemmaLocalCommandRequest | null {
+  const trimmed = instruction.trim();
+  const runMode = getMaxwellToolbarRunMode(selection);
+  if (!trimmed || runMode.mode !== 'selection') return null;
+  return {
+    customInstruction: trimmed,
+    ...runMode,
+  };
+}
+
+function isInlineGemmaCommandShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key.toLowerCase() === 'g'
+    && event.metaKey
+    && event.shiftKey
+    && !event.altKey
+    && !event.ctrlKey;
+}
+
+export function isPasteSelectionToTerminalShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key.toLowerCase() === 't'
+    && event.metaKey
+    && event.altKey
+    && !event.ctrlKey
+    && !event.shiftKey;
+}
+
+export function getTerminalPastePopoverPosition(
+  rect: Pick<DOMRect, 'height' | 'left' | 'right' | 'top'>,
+  viewport: { width: number; height: number },
+  side: SelectionPastePopoverSide = 'right',
+): { top: number; left: number } {
+  const maxLeft = viewport.width - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_EDGE_PX;
+  const maxTop = viewport.height - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_GAP_PX;
+  const preferredLeft = side === 'left'
+    ? rect.left - TERMINAL_PASTE_POPOVER_SIZE_PX - TERMINAL_PASTE_POPOVER_SIDE_GAP_PX
+    : rect.right + TERMINAL_PASTE_POPOVER_SIDE_GAP_PX;
+  return {
+    top: Math.max(
+      TERMINAL_PASTE_POPOVER_GAP_PX,
+      Math.min(maxTop, rect.top + rect.height / 2 - TERMINAL_PASTE_POPOVER_SIZE_PX / 2),
+    ),
+    left: Math.max(
+      TERMINAL_PASTE_POPOVER_EDGE_PX,
+      Math.min(maxLeft, preferredLeft),
+    ),
+  };
+}
+
+export function getNativeTerminalPastePopoverPosition(
+  selectionRect: Pick<DOMRect, 'height' | 'left' | 'right' | 'top'>,
+  viewport: { width: number; height: number },
+  contentRect: Pick<DOMRect, 'right'> | null,
+): { top: number; left: number } {
+  if (!contentRect) {
+    return getTerminalPastePopoverPosition(selectionRect, viewport, 'right');
+  }
+  return getTerminalPastePopoverPosition(
+    { ...selectionRect, right: contentRect.right },
+    viewport,
+    'right',
+  );
+}
+
+export function shouldPreserveEditorSelectionPastePopover(input: {
+  activeElement: Element | null;
+  latestEditorSnapshot: MarkdownCodeEditorSelectionSnapshot | null;
+}): boolean {
+  const { activeElement, latestEditorSnapshot } = input;
+  if (!activeElement?.closest('.cm-editor') || !latestEditorSnapshot || latestEditorSnapshot.isCollapsed) {
+    return false;
+  }
+  return latestEditorSnapshot.value.slice(
+    latestEditorSnapshot.selectionStart,
+    latestEditorSnapshot.selectionEnd,
+  ).trim().length > 0;
+}
+
+export function getEditorSelectionBackgroundRect(root: ParentNode | null): Pick<DOMRect, 'height' | 'left' | 'right' | 'top'> | null {
+  const rects = Array.from(root?.querySelectorAll<HTMLElement>('.cm-selectionBackground') ?? [])
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 || rect.height > 0);
+  if (rects.length === 0) return null;
+  const first = rects[0];
+  let left = first.left;
+  let right = first.right;
+  let top = first.top;
+  let bottom = first.bottom;
+  for (const rect of rects.slice(1)) {
+    left = Math.min(left, rect.left);
+    right = Math.max(right, rect.right);
+    top = Math.min(top, rect.top);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  return {
+    height: bottom - top,
+    left,
+    right,
+    top,
+  };
+}
+
+export function getTerminalImagePastePath(src: string | null): string | null {
+  if (!src) return null;
+  try {
+    if (/^ftlocalfile:/i.test(src)) {
+      return decodeURIComponent(new URL(src.replace(/^ftlocalfile:/i, 'file:')).pathname);
+    }
+    if (/^file:/i.test(src)) {
+      return decodeURIComponent(new URL(src).pathname);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function collectTerminalPasteTextFromNode(node: Node, parts: string[]): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    parts.push(node.textContent ?? '');
+    return;
+  }
+  if (!(node instanceof Element)) return;
+
+  if (node.classList.contains(RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS)) {
+    const imagePath = getTerminalImagePastePath(node.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR));
+    if (imagePath) parts.push(imagePath);
+    return;
+  }
+
+  node.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+}
+
+export function getTerminalPasteTextFromSelection(selection: Selection | null): string {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
+  const parts: string[] = [];
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const fragment = selection.getRangeAt(index).cloneContents();
+    fragment.childNodes.forEach((child) => collectTerminalPasteTextFromNode(child, parts));
+  }
+  return parts.join('');
+}
+
 type MarkdownTextEdit = {
   nextValue: string;
   selectionStart: number;
   selectionEnd: number;
+  deletedMarkdownImages?: string[];
+};
+
+type ReplaceSelectedMarkdownTextRequest = {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
 };
 
 type MarkdownUndoSnapshot = {
@@ -425,13 +1259,60 @@ function parseCarrotListLine(line: string): { indent: string; markers: string; t
   };
 }
 
+function getMarkdownProtectedListMarkerEnd(line: string): number | null {
+  const task = line.match(/^\s*(?:(?:[-*+]|\d+[.)]|›+)\s+)?\[(?: |x|X)\]\s+/);
+  if (task) return task[0].length;
+
+  const list = line.match(/^\s*(?:[-*+]|\d+[.)]|›+)\s+/);
+  if (list) return list[0].length;
+
+  return null;
+}
+
+function getMarkdownWordDeleteBackwardStart(value: string, floor: number, sourceStart: number): number {
+  let index = sourceStart;
+  const startedAfterWhitespace = /\s/.test(value[index - 1] ?? '');
+  const shouldRemovePreviousSeparator = startedAfterWhitespace && !/\S/.test(value[sourceStart] ?? '');
+  while (index > floor && /\s/.test(value[index - 1] ?? '')) index -= 1;
+  while (index > floor && !/\s/.test(value[index - 1] ?? '')) index -= 1;
+  if (shouldRemovePreviousSeparator) {
+    while (index > floor && /\s/.test(value[index - 1] ?? '')) index -= 1;
+  }
+  return index;
+}
+
+export function getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const markerEnd = getMarkdownProtectedListMarkerEnd(line);
+  if (markerEnd === null) return null;
+
+  const sourceFloor = lineStart + markerEnd;
+  if (selectionStart <= sourceFloor) return null;
+
+  const deleteStart = getMarkdownWordDeleteBackwardStart(value, sourceFloor, selectionStart);
+  if (deleteStart >= selectionStart) return null;
+
+  return {
+    nextValue: `${value.slice(0, deleteStart)}${value.slice(selectionStart)}`,
+    selectionStart: deleteStart,
+    selectionEnd: deleteStart,
+  };
+}
+
 function isNormalizedCarrotListLine(line: string): boolean {
   return line.trimStart().startsWith(`- ${CARROT_LIST_SENTINEL}`);
 }
 
 export function preserveMarkdownBlankLines(content: string): string {
-  if (!content || !content.trim()) return content;
-
   const output: string[] = [];
   const lines = content.split('\n');
   let inFence = false;
@@ -448,7 +1329,7 @@ export function preserveMarkdownBlankLines(content: string): string {
         output.push(line);
         continue;
       }
-      output.push('', PRESERVED_BLANK_MARKDOWN_LINE, '');
+      output.push('', PRESERVED_BLANK_MARKDOWN_LINE.repeat(Math.max(1, line.length)), '');
       continue;
     }
 
@@ -525,6 +1406,11 @@ export function normalizeMarkdownCarrotLists(content: string): string {
   return output.join('\n');
 }
 
+export function getRenderedMarkdownDisplayContent(body: string, wikiIndex: WikiIndex): string {
+  const linked = transformWikiLinks(body, wikiIndex);
+  return preserveMarkdownBlankLines(normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(linked)));
+}
+
 export function getMarkdownBodySelectionRange(value: string): { start: number; end: number } | null {
   if (!value.startsWith('# ')) return null;
   const firstLineEnd = value.indexOf('\n');
@@ -578,6 +1464,12 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
   const lineEndIndex = value.indexOf('\n', selectionStart);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
   const line = value.slice(lineStart, lineEnd);
+  const insertAt = (minimumOffsetInLine: number, insertion: string) => {
+    const offset = Math.max(selectionStart, lineStart + minimumOffsetInLine);
+    const nextValue = `${value.slice(0, offset)}${insertion}${value.slice(offset)}`;
+    const nextSelection = offset + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  };
 
   const bareTask = line.match(/^(\s*)(\[(?: |x|X)?\])\s*(.*)$/);
   if (bareTask) {
@@ -590,9 +1482,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
     }
     const nextMarker = bareTask[2] === '[ ]' ? '[ ]' : '[]';
     const insertion = `\n${bareTask[1]}${nextMarker} `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - bareTask[3].length, insertion);
   }
 
   const task = line.match(/^(\s*)[-*+]\s+\[(?: |x|X)\]\s*(.*)$/);
@@ -605,9 +1495,34 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
       };
     }
     const insertion = `\n${task[1]}- [ ] `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - task[2].length, insertion);
+  }
+
+  const ordered = line.match(/^(\s*)(\d+)([.)])\s+(.*)$/);
+  if (ordered) {
+    if (ordered[4].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const nextNumber = Number.parseInt(ordered[2], 10) + 1;
+    const insertion = `\n${ordered[1]}${nextNumber}${ordered[3]} `;
+    return insertAt(line.length - ordered[4].length, insertion);
+  }
+
+  const quote = line.match(/^(\s*)>\s?(.*)$/);
+  if (quote) {
+    if (quote[2].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const insertion = `\n${quote[1]}> `;
+    return insertAt(line.length - quote[2].length, insertion);
   }
 
   const unordered = line.match(/^(\s*)([-*+])\s+(.*)$/);
@@ -621,9 +1536,79 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
   }
 
   const insertion = `\n${unordered[1]}${unordered[2]} `;
-  const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-  const nextSelection = selectionStart + insertion.length;
-  return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  return insertAt(line.length - unordered[3].length, insertion);
+}
+
+function getEmptyMarkdownListLineRange(value: string, selectionStart: number, selectionEnd: number): { lineStart: number; lineEnd: number } | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const marker = line.match(/^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s+\[(?: |x|X)\]\s*|\[(?: |x|X)?\]\s*)$/);
+  if (!marker) return null;
+  return { lineStart, lineEnd };
+}
+
+export function getEmptyMarkdownListMarkerDeleteEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  const range = getEmptyMarkdownListLineRange(value, selectionStart, selectionEnd);
+  if (!range) return null;
+  return {
+    nextValue: `${value.slice(0, range.lineStart)}${value.slice(range.lineEnd)}`,
+    selectionStart: range.lineStart,
+    selectionEnd: range.lineStart,
+  };
+}
+
+export function getSingleCharacterRenderedListBodyDeleteEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: 'Backspace' | 'Delete',
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const markerEnd = getMarkdownProtectedListMarkerEnd(line);
+  if (markerEnd === null) return null;
+  const bodyStart = lineStart + markerEnd;
+  if (lineEnd - bodyStart !== 1) return null;
+
+  const deleteStart = key === 'Backspace' ? selectionStart - 1 : selectionStart;
+  if (deleteStart !== bodyStart) return null;
+
+  return {
+    nextValue: `${value.slice(0, bodyStart)}${value.slice(lineEnd)}`,
+    selectionStart: bodyStart,
+    selectionEnd: bodyStart,
+  };
+}
+
+export function getRenderedMarkdownPasteTextEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  pastedText: string,
+): MarkdownTextEdit | null {
+  const range = getEmptyMarkdownListLineRange(value, selectionStart, selectionEnd);
+  if (!range) return null;
+  const pastedTask = pastedText.trim().match(/^(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.+)$/);
+  if (!pastedTask?.[1]?.trim()) return null;
+  const line = value.slice(range.lineStart, range.lineEnd);
+  if (!/^\s*(?:[-*+]\s+)?\[(?: |x|X)?\]\s*$/.test(line)) return null;
+  const nextLine = `${line}${pastedTask[1].trim()}`;
+  const nextSelection = range.lineStart + nextLine.length;
+  return {
+    nextValue: `${value.slice(0, range.lineStart)}${nextLine}${value.slice(range.lineEnd)}`,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
 }
 
 export function getCarrotListTabEdit(
@@ -700,41 +1685,561 @@ export function getMarkdownListToggleEdit(
   const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(lineStart, lineEnd);
   const lines = block.split('\n');
-
-  const orderedRe = /^(\s*)(\d+)\.\s/;
-  const unorderedRe = /^(\s*)[-*+]\s/;
-  const carrotRe = /^(\s*)›+\s/;
+  type ToggleLine = {
+    indent: string;
+    marker: 'ordered' | 'unordered' | 'carrot' | 'task' | 'none';
+    markerLength: number;
+    text: string;
+  };
+  const parseToggleLine = (line: string): ToggleLine => {
+    const task = line.match(/^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.*)$/);
+    if (task) return { indent: task[1], marker: 'task', markerLength: line.length - task[2].length, text: task[2] };
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
+    if (ordered) return { indent: ordered[1], marker: 'ordered', markerLength: line.length - ordered[2].length, text: ordered[2] };
+    const unordered = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (unordered) return { indent: unordered[1], marker: 'unordered', markerLength: line.length - unordered[2].length, text: unordered[2] };
+    const carrot = line.match(/^(\s*)›+\s+(.*)$/);
+    if (carrot) return { indent: carrot[1], marker: 'carrot', markerLength: line.length - carrot[2].length, text: carrot[2] };
+    const plain = line.match(/^(\s*)(.*)$/);
+    return { indent: plain?.[1] ?? '', marker: 'none', markerLength: plain?.[1].length ?? 0, text: plain?.[2] ?? line };
+  };
+  const markerText = kind === 'ordered'
+    ? (counter: number) => `${counter}. `
+    : () => (unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ');
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
+  if (nonBlank.length === 0 && selectionStart === selectionEnd) {
+    const line = lines[0] ?? '';
+    const indent = line.match(/^\s*/)?.[0] ?? '';
+    const marker = kind === 'ordered'
+      ? '1. '
+      : unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ';
+    const nextBlock = `${indent}${marker}`;
+    const nextSelection = lineStart + nextBlock.length;
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
+
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
-    kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
+    kind === 'ordered'
+      ? parseToggleLine(line).marker === 'ordered'
+      : ['unordered', 'carrot'].includes(parseToggleLine(line).marker)
   ));
 
   let counter = 1;
-  const transformed = lines.map((line) => {
+  let collapsedSelection: number | null = null;
+  let blockOffset = 0;
+  const selectionIsCollapsed = selectionStart === selectionEnd;
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
     if (line.trim().length === 0) return line;
-    const orderedMatch = line.match(orderedRe);
-    const unorderedMatch = line.match(unorderedRe);
-    const carrotMatch = line.match(carrotRe);
-    const stripped = orderedMatch
-      ? line.slice(orderedMatch[0].length)
-      : unorderedMatch
-      ? line.slice(unorderedMatch[0].length)
-      : carrotMatch
-      ? line.slice(carrotMatch[0].length)
-      : line;
-    if (allMarked) return stripped;
-    if (kind === 'ordered') return `${counter++}. ${stripped}`;
-    return unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
+    const parsed = parseToggleLine(line);
+    const nextLine = allMarked
+      ? `${parsed.indent}${parsed.text}`
+      : `${parsed.indent}${markerText(counter++)}${parsed.text}`;
+    if (
+      selectionIsCollapsed
+      && collapsedSelection === null
+      && selectionStart >= lineStart + lineOffset
+      && selectionStart <= lineStart + lineOffset + line.length
+    ) {
+      const nextMarkerLength = nextLine.length - parsed.text.length;
+      const relativeSelection = selectionStart - lineStart - lineOffset;
+      const delta = relativeSelection >= parsed.markerLength
+        ? nextMarkerLength - parsed.markerLength
+        : 0;
+      collapsedSelection = lineStart + lineOffset + Math.max(0, relativeSelection + delta);
+    }
+    return nextLine;
   });
 
   const nextBlock = transformed.join('\n');
   if (nextBlock === block) return null;
+  if (selectionIsCollapsed) {
+    const nextSelection = Math.max(lineStart, Math.min(lineStart + nextBlock.length, collapsedSelection ?? selectionStart));
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
   return {
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,
     selectionEnd: lineStart + nextBlock.length,
   };
+}
+
+export function getMarkdownListIndentEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  direction: 'in' | 'out',
+): MarkdownTextEdit | null {
+  const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+  const selectionIsBlock = selectionStart !== selectionEnd;
+  let changed = false;
+  let collapsedDelta = 0;
+  let blockOffset = 0;
+  const listLinePattern = /^(\s*)(?:[-*+]\s+(?:\[(?: |x|X)\]\s*)?|\d+[.)]\s+|\[(?: |x|X)?\]\s*|>\s?)/;
+
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
+    if (!listLinePattern.test(line)) return line;
+
+    if (direction === 'in') {
+      changed = true;
+      if (!selectionIsBlock && selectionStart > lineStart + lineOffset) collapsedDelta = 2;
+      return `  ${line}`;
+    }
+
+    const removableSpaces = line.match(/^ {1,2}/)?.[0].length ?? 0;
+    if (removableSpaces === 0) return line;
+    changed = true;
+    if (!selectionIsBlock && selectionStart > lineStart + lineOffset) collapsedDelta = -Math.min(
+      removableSpaces,
+      Math.max(0, selectionStart - lineStart - lineOffset),
+    );
+    return line.slice(removableSpaces);
+  });
+
+  if (!changed) return null;
+  const nextBlock = transformed.join('\n');
+  const nextValue = `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`;
+  if (selectionIsBlock) {
+    return {
+      nextValue,
+      selectionStart: lineStart,
+      selectionEnd: lineStart + nextBlock.length,
+    };
+  }
+  const nextSelection = Math.max(lineStart, selectionStart + collapsedDelta);
+  return {
+    nextValue,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
+}
+
+export function getRenderedMarkdownShortcutEdit(input: {
+  event: KeyboardEvent;
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+  unorderedListMarker?: LibrarianUnorderedListMarker;
+}): MarkdownTextEdit | null {
+  const formattingKind = getMarkdownFormattingShortcut(input.event);
+  if (formattingKind) {
+    return getMarkdownFormattingEdit(
+      input.value,
+      input.selectionStart,
+      input.selectionEnd,
+      formattingKind,
+    );
+  }
+
+  if (isMarkdownTaskToggleShortcut(input.event)) {
+    return getMarkdownTaskToggleEdit(input.value, input.selectionStart, input.selectionEnd);
+  }
+
+  if (!input.event.metaKey || !input.event.shiftKey || input.event.altKey || input.event.ctrlKey) return null;
+  if (isMarkdownTaskShortcut(input.event)) {
+    return getMarkdownTaskShortcutEdit(input.value, input.selectionStart, input.selectionEnd);
+  }
+
+  const listShortcutKind = getMarkdownListShortcutKind(input.event);
+  if (!listShortcutKind) return null;
+  return getMarkdownListToggleEdit(
+    input.value,
+    input.selectionStart,
+    input.selectionEnd,
+    listShortcutKind,
+    input.unorderedListMarker ?? 'dash',
+  );
+}
+
+function getRenderedMarkdownHiddenInlineSuffixEnd(value: string, offset: number): number {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  let index = Math.max(0, Math.min(offset, lineEnd));
+  const lineBefore = () => value.slice(lineStart, index);
+  const hasOddTokenCount = (token: string) => lineBefore().split(token).length % 2 === 0;
+  const hasUnclosedMarkdownLinkLabel = () => lineBefore().lastIndexOf('[') > lineBefore().lastIndexOf(']');
+  const hasUnclosedUnderline = () => lineBefore().lastIndexOf('<u>') > lineBefore().lastIndexOf('</u>');
+  const hasUnclosedWikiLink = () => lineBefore().lastIndexOf('[[') > lineBefore().lastIndexOf(']]');
+  const hasUnclosedStandaloneAsterisk = () => (lineBefore().match(/(?<!\*)\*(?!\*)/g)?.length ?? 0) % 2 === 1;
+
+  while (index < lineEnd) {
+    const tail = value.slice(index, lineEnd);
+    const linkClose = tail.match(/^\]\([^)\n]*\)/);
+    if (linkClose && hasUnclosedMarkdownLinkLabel()) {
+      index += linkClose[0].length;
+      continue;
+    }
+    if (tail.startsWith('</u>') && hasUnclosedUnderline()) {
+      index += '</u>'.length;
+      continue;
+    }
+    if (tail.startsWith(']]') && hasUnclosedWikiLink()) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('**') && hasOddTokenCount('**')) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('~~') && hasOddTokenCount('~~')) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('*') && hasUnclosedStandaloneAsterisk()) {
+      index += 1;
+      continue;
+    }
+    if (tail.startsWith('`') && hasOddTokenCount('`')) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+
+  return index;
+}
+
+function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: number): number {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const prefix = value.slice(lineStart, offset);
+  const suffix = value.slice(offset, lineEnd);
+  if (prefix.endsWith('**') && suffix.includes('**')) return offset - 2;
+  if (prefix.endsWith('~~') && suffix.includes('~~')) return offset - 2;
+  if (prefix.endsWith('<u>') && suffix.includes('</u>')) return offset - '<u>'.length;
+  if (prefix.endsWith('[[') && suffix.includes(']]')) return offset - 2;
+  if (prefix.endsWith('[') && /^[^\]\n]+\]\([^)\n]*\)/.test(suffix)) return offset - 1;
+  if (prefix.endsWith('`') && suffix.includes('`')) return offset - 1;
+  if (prefix.endsWith('*') && hasUnclosedStandaloneAsterisk(prefix) && /(?<!\*)\*(?!\*)/.test(suffix)) return offset - 1;
+  return offset;
+}
+
+function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): number | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const visibleStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
+  if (visibleStart === null || caret !== visibleStart) return null;
+  return value.slice(visibleStart, lineEnd).trim().length > 0 ? lineStart : null;
+}
+
+function isRenderedMarkdownEmptyLineAtOffset(value: string, offset: number): boolean {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return caret === lineStart && value.slice(lineStart, lineEnd).length === 0;
+}
+
+export function getRenderedMarkdownEnterEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStartOffset = getRenderedMarkdownLineStartEditOffset(value, selectionStart);
+  const directListEnterEdit = lineStartOffset === null
+    ? (getCarrotListEnterEdit(value, selectionStart, selectionEnd)
+      ?? getMarkdownListEnterEdit(value, selectionStart, selectionEnd))
+    : null;
+  if (directListEnterEdit) return directListEnterEdit;
+  const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, lineStartOffset ?? selectionStart);
+  const insertionOffset = openingOffset === selectionStart
+    ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
+    : openingOffset;
+  const keepCaretOnInsertedBlankLine = (
+    (lineStartOffset === insertionOffset && !isRenderedMarkdownEmptyLineAtOffset(value, insertionOffset))
+    || openingOffset !== selectionStart
+  );
+  const listEnterEdit = lineStartOffset === insertionOffset
+    ? null
+    : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
+      ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset));
+  if (!listEnterEdit && lineStartOffset === null && insertionOffset === selectionStart) return null;
+  return listEnterEdit
+    ?? {
+      nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
+      selectionStart: keepCaretOnInsertedBlankLine ? insertionOffset : insertionOffset + 1,
+      selectionEnd: keepCaretOnInsertedBlankLine ? insertionOffset : insertionOffset + 1,
+    };
+}
+
+function linePrefixAt(value: string, offset: number): string {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  return value.slice(lineStart, offset);
+}
+
+function lineSuffixAt(value: string, offset: number): string {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return value.slice(offset, lineEnd);
+}
+
+function hasUnclosedStandaloneAsterisk(prefix: string): boolean {
+  return (prefix.match(/(?<!\*)\*(?!\*)/g)?.length ?? 0) % 2 === 1;
+}
+
+function isRenderedMarkdownOpeningBoundary(value: string, offset: number): boolean {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const blockBodyStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
+  if (blockBodyStart !== null && offset === blockBodyStart) return true;
+  const prefix = linePrefixAt(value, offset);
+  const suffix = lineSuffixAt(value, offset);
+  if (/^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s+\[(?: |x|X)\]\s*|\[(?: |x|X)?\]\s*)$/.test(prefix)) {
+    return true;
+  }
+  if (prefix.endsWith('**') && suffix.includes('**')) return true;
+  if (prefix.endsWith('~~') && suffix.includes('~~')) return true;
+  if (prefix.endsWith('<u>') && suffix.includes('</u>')) return true;
+  if (prefix.endsWith('[[') && suffix.includes(']]')) return true;
+  if (prefix.endsWith('[') && /^[^\]\n]+\]\([^)\n]*\)/.test(suffix)) return true;
+  if (prefix.endsWith('`') && suffix.includes('`')) return true;
+  return prefix.endsWith('*') && hasUnclosedStandaloneAsterisk(prefix) && /(?<!\*)\*(?!\*)/.test(suffix);
+}
+
+export function shouldSuppressRenderedMarkdownBoundaryDelete(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: string,
+): boolean {
+  if (selectionStart !== selectionEnd) return false;
+  const offset = Math.max(0, Math.min(selectionStart, value.length));
+  if (key === 'Backspace') return isRenderedMarkdownOpeningBoundary(value, offset);
+  if (key === 'Delete') return getRenderedMarkdownHiddenInlineSuffixEnd(value, offset) > offset;
+  return false;
+}
+
+function expandRenderedMarkdownImageDeleteRange(value: string, start: number, end: number): { start: number; end: number } {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', end);
+  const lineEnd = lineEndIndex >= 0 ? lineEndIndex : value.length;
+  const before = value.slice(lineStart, start);
+  const after = value.slice(end, lineEnd);
+  if (before.trim() !== '' || after.trim() !== '') return { start, end };
+  if (lineEndIndex >= 0) return { start: lineStart, end: lineEnd + 1 };
+  if (lineStart > 0) return { start: lineStart - 1, end: lineEnd };
+  return { start: lineStart, end: lineEnd };
+}
+
+const RENDERED_MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]*)\)/g;
+
+type RenderedMarkdownImageDeleteRange = {
+  start: number;
+  end: number;
+  deletedMarkdownImages: string[];
+};
+
+type RenderedMarkdownAtomicDeleteRange = {
+  start: number;
+  end: number;
+};
+
+function expandRenderedMarkdownBlockDeleteRange(value: string, start: number, end: number): RenderedMarkdownAtomicDeleteRange {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', end);
+  const lineEnd = lineEndIndex >= 0 ? lineEndIndex : value.length;
+  const before = value.slice(lineStart, start);
+  const after = value.slice(end, lineEnd);
+  if (before.trim() !== '' || after.trim() !== '') return { start, end };
+  if (lineEndIndex >= 0) {
+    const afterLineBreak = lineEnd + 1;
+    return { start: lineStart, end: value[afterLineBreak] === '\n' ? afterLineBreak + 1 : afterLineBreak };
+  }
+  if (lineStart > 0) return { start: lineStart - 1, end: lineEnd };
+  return { start: lineStart, end: lineEnd };
+}
+
+function getRenderedMarkdownInlineHtmlDeleteRange(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: 'Backspace' | 'Delete',
+): RenderedMarkdownAtomicDeleteRange | null {
+  const blocks = getRenderedMarkdownInlineHtmlBlockRanges(value);
+  if (selectionStart !== selectionEnd) {
+    const touched = blocks.filter((block) => selectionStart < block.to && selectionEnd > block.from);
+    if (!touched.length) return null;
+    const start = Math.min(selectionStart, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).start));
+    const end = Math.max(selectionEnd, ...touched.map((block) => expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to).end));
+    return { start, end };
+  }
+
+  const block = blocks.find((candidate) => (
+    key === 'Backspace'
+      ? candidate.from < selectionStart && selectionStart <= candidate.to
+      : candidate.from <= selectionStart && selectionStart < candidate.to
+  ));
+  return block ? expandRenderedMarkdownBlockDeleteRange(value, block.from, block.to) : null;
+}
+
+function getAdjacentRenderedMarkdownImageDeleteRange(
+  value: string,
+  offset: number,
+  direction: 'backward' | 'forward',
+): RenderedMarkdownImageDeleteRange | null {
+  for (const match of value.matchAll(RENDERED_MARKDOWN_IMAGE_RE)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (
+      (direction === 'backward' && start < offset && offset <= end)
+      || (direction === 'forward' && start <= offset && offset < end)
+    ) {
+      return {
+        ...expandRenderedMarkdownImageDeleteRange(value, start, end),
+        deletedMarkdownImages: [match[0]],
+      };
+    }
+  }
+  return null;
+}
+
+function getSelectedRenderedMarkdownImageDeleteRange(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): RenderedMarkdownImageDeleteRange | null {
+  let deleteStart = selectionStart;
+  let deleteEnd = selectionEnd;
+  const deletedMarkdownImages: string[] = [];
+  for (const match of value.matchAll(RENDERED_MARKDOWN_IMAGE_RE)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (selectionStart < end && selectionEnd > start) {
+      const range = expandRenderedMarkdownImageDeleteRange(value, start, end);
+      deleteStart = Math.min(deleteStart, range.start);
+      deleteEnd = Math.max(deleteEnd, range.end);
+      deletedMarkdownImages.push(match[0]);
+    }
+  }
+  return deletedMarkdownImages.length
+    ? { start: deleteStart, end: deleteEnd, deletedMarkdownImages }
+    : null;
+}
+
+export function getRenderedMarkdownDeleteShortcutEdit(input: {
+  event: KeyboardEvent;
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+}): MarkdownTextEdit | null {
+  const key = input.event.key;
+  if (key !== 'Backspace' && key !== 'Delete') return null;
+  if (input.event.ctrlKey || input.event.altKey || input.event.shiftKey) return null;
+
+  const selectionStart = Math.max(0, Math.min(input.selectionStart, input.value.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(input.selectionEnd, input.value.length));
+  const inlineHtmlRange = getRenderedMarkdownInlineHtmlDeleteRange(input.value, selectionStart, selectionEnd, key);
+  if (inlineHtmlRange) {
+    return {
+      nextValue: `${input.value.slice(0, inlineHtmlRange.start)}${input.value.slice(inlineHtmlRange.end)}`,
+      selectionStart: inlineHtmlRange.start,
+      selectionEnd: inlineHtmlRange.start,
+    };
+  }
+
+  if (selectionStart !== selectionEnd) {
+    const imageRange = getSelectedRenderedMarkdownImageDeleteRange(input.value, selectionStart, selectionEnd);
+    if (imageRange) {
+      return {
+        nextValue: `${input.value.slice(0, imageRange.start)}${input.value.slice(imageRange.end)}`,
+        selectionStart: imageRange.start,
+        selectionEnd: imageRange.start,
+        deletedMarkdownImages: imageRange.deletedMarkdownImages,
+      };
+    }
+    return {
+      nextValue: `${input.value.slice(0, selectionStart)}${input.value.slice(selectionEnd)}`,
+      selectionStart,
+      selectionEnd: selectionStart,
+    };
+  }
+
+  const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
+  if (emptyMarkerEdit) return emptyMarkerEdit;
+
+  const markerDeleteEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(input.value, selectionStart);
+  if (markerDeleteEdit) {
+    return {
+      nextValue: `${input.value.slice(0, markerDeleteEdit.from)}${markerDeleteEdit.insert}${input.value.slice(markerDeleteEdit.to)}`,
+      selectionStart: markerDeleteEdit.selection,
+      selectionEnd: markerDeleteEdit.selection,
+    };
+  }
+
+  const listBodyDeleteEdit = getSingleCharacterRenderedListBodyDeleteEdit(
+    input.value,
+    selectionStart,
+    selectionEnd,
+    key,
+  );
+  if (listBodyDeleteEdit) return listBodyDeleteEdit;
+
+  const imageRange = getAdjacentRenderedMarkdownImageDeleteRange(
+    input.value,
+    selectionStart,
+    key === 'Backspace' ? 'backward' : 'forward',
+  );
+  if (imageRange) {
+    return {
+      nextValue: `${input.value.slice(0, imageRange.start)}${input.value.slice(imageRange.end)}`,
+      selectionStart: imageRange.start,
+      selectionEnd: imageRange.start,
+      deletedMarkdownImages: imageRange.deletedMarkdownImages,
+    };
+  }
+
+  if (!input.event.metaKey) return null;
+
+  let deleteStart = selectionStart;
+  let deleteEnd = selectionEnd;
+  if (key === 'Backspace') {
+    deleteStart = input.value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+    if (deleteStart === deleteEnd && deleteStart > 0) deleteStart -= 1;
+  } else {
+    const lineEnd = input.value.indexOf('\n', selectionEnd);
+    deleteEnd = lineEnd >= 0 ? lineEnd : input.value.length;
+    if (deleteStart === deleteEnd && deleteEnd < input.value.length) deleteEnd += 1;
+  }
+  if (deleteStart === deleteEnd) return null;
+  return {
+    nextValue: `${input.value.slice(0, deleteStart)}${input.value.slice(deleteEnd)}`,
+    selectionStart: deleteStart,
+    selectionEnd: deleteStart,
+  };
+}
+
+export function shouldLetRenderedCodeMirrorHandleLineBoundaryDelete(input: {
+  event: KeyboardEvent;
+  selectionStart: number;
+  selectionEnd: number;
+}): boolean {
+  const key = input.event.key;
+  return (key === 'Backspace' || key === 'Delete')
+    && input.event.metaKey
+    && !input.event.ctrlKey
+    && !input.event.altKey
+    && !input.event.shiftKey
+    && input.selectionStart === input.selectionEnd;
 }
 
 export type RenderedMarkdownFormatAction = 'bold' | 'italic' | 'code' | 'link' | 'unordered-list';
@@ -828,6 +2333,22 @@ function getRenderedMarkdownInlineToggleEdit(
   close: string,
 ): MarkdownTextEdit {
   const selected = value.slice(start, end);
+  const splitClosePrefix = value.slice(end).match(/^\s*\n\s*/)?.[0] ?? null;
+  if (
+    value.slice(start - open.length, start) === open
+    && splitClosePrefix !== null
+    && value.slice(end + splitClosePrefix.length, end + splitClosePrefix.length + close.length) === close
+  ) {
+    const nextStart = start - open.length;
+    const nextEnd = end - open.length;
+    const closeStart = end + splitClosePrefix.length;
+    return {
+      nextValue: `${value.slice(0, nextStart)}${selected}${value.slice(end, closeStart)}${value.slice(closeStart + close.length)}`,
+      selectionStart: nextStart,
+      selectionEnd: nextEnd,
+    };
+  }
+
   if (hasInlineWrapperAroundSelection(value, start, end, open, close)) {
     const nextStart = start - open.length;
     const nextEnd = end - open.length;
@@ -921,20 +2442,6 @@ export function getRenderedMarkdownSelectionFormatEdit(
   return getRenderedMarkdownInlineToggleEdit(value, start, end, open, close);
 }
 
-export function getRenderedMarkdownClickBehavior(input: {
-  target: EventTarget | null;
-  detail?: number;
-  metaKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
-  shiftKey?: boolean;
-}, mode: RenderedEditClickMode = 'click'): 'source' | null {
-  if (typeof input.detail === 'number' && input.detail > 1) return null;
-  if (input.altKey || input.ctrlKey || input.shiftKey) return null;
-  if (!shouldEnterEditOnClick(input, mode)) return null;
-  return 'source';
-}
-
 export function toggleMarkdownTaskLine(content: string, text: string, checked: boolean): string {
   const target = text.trim();
   if (!target) return content;
@@ -983,6 +2490,47 @@ export function getMarkdownTaskLines(content: string): MarkdownTaskLine[] {
   return tasks;
 }
 
+export function getRenderedTaskLinesByRenderedLine(content: string): Map<number, MarkdownTaskLine> {
+  const body = removeEmptyMarkdownCommentPlaceholders(splitFrontmatter(content).body);
+  const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(content);
+  const sourceTaskLinesByIndex = new Map(
+    getMarkdownTaskLines(content).map((taskLine) => [taskLine.lineIndex, taskLine]),
+  );
+  const renderedLinesByRenderedLine = new Map<number, MarkdownTaskLine>();
+  const normalizedLines = normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(body)).split('\n');
+  let inFence = false;
+  let renderedLineIndex = 0;
+
+  normalizedLines.forEach((line, bodyLineIndex) => {
+    const sourceLineIndex = bodyStartLineIndex + bodyLineIndex;
+    const taskLine = sourceTaskLinesByIndex.get(sourceLineIndex);
+    if (taskLine) renderedLinesByRenderedLine.set(renderedLineIndex + 1, taskLine);
+
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      renderedLineIndex += 1;
+      return;
+    }
+
+    if (!inFence && line.trim() === '') {
+      const keepsSingleRenderedLine = (
+        isNormalizedCarrotListLine(normalizedLines[bodyLineIndex - 1] ?? '')
+        || isNormalizedCarrotListLine(normalizedLines[bodyLineIndex + 1] ?? '')
+      );
+      if (keepsSingleRenderedLine) {
+        renderedLineIndex += 1;
+        return;
+      }
+      renderedLineIndex += 3;
+      return;
+    }
+
+    renderedLineIndex += 1;
+  });
+
+  return renderedLinesByRenderedLine;
+}
+
 export function toggleMarkdownTaskLineAtIndex(content: string, lineIndex: number, checked: boolean): string {
   const lines = content.split('\n');
   const line = lines[lineIndex];
@@ -1028,32 +2576,6 @@ export function findNextMarkdownMatch(content: string, query: string, fromIndex:
   const forward = haystack.indexOf(needle, startFrom);
   const wrapped = forward >= 0 ? forward : haystack.indexOf(needle, 0);
   return wrapped >= 0 ? { start: wrapped, end: wrapped + needle.length } : null;
-}
-
-export function resolveMarkdownCaretOffsetFromRenderedText(
-  markdown: string,
-  renderedText: string,
-  renderedOffset: number,
-): number | null {
-  if (!renderedText) return null;
-  const body = splitFrontmatter(markdown).body;
-  const bodyStart = getMarkdownBodyStartOffset(markdown);
-  const clampedOffset = Math.max(0, Math.min(renderedOffset, renderedText.length));
-  const sourceIndex = body.indexOf(renderedText);
-  if (sourceIndex >= 0) return bodyStart + sourceIndex + clampedOffset;
-
-  const before = renderedText.slice(0, clampedOffset);
-  if (!before) return null;
-  const beforeIndex = body.indexOf(before);
-  if (beforeIndex >= 0) return bodyStart + beforeIndex + before.length;
-
-  let renderedCount = 0;
-  for (let index = 0; index < body.length; index += 1) {
-    if (/[*_`#>\[\]()!-]/.test(body[index])) continue;
-    renderedCount += 1;
-    if (renderedCount >= clampedOffset) return bodyStart + index + 1;
-  }
-  return null;
 }
 
 function clearFileFindMarks(root: HTMLElement): void {
@@ -1114,6 +2636,42 @@ function clipboardDataHasImage(data: DataTransfer): boolean {
   return Array.from(data.items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
 }
 
+function getClipboardImageFile(data: DataTransfer): File | null {
+  const fileFromFiles = Array.from(data.files).find((file) => file.type.startsWith('image/'));
+  if (fileFromFiles) return fileFromFiles;
+
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile?.();
+    if (file) return file;
+  }
+
+  return null;
+}
+
+async function getPastedClipboardImagePath(data: DataTransfer): Promise<string | null> {
+  const file = getClipboardImageFile(data);
+  if (!file) {
+    return window.clipboardAPI?.getClipboardImagePath?.() ?? null;
+  }
+
+  const buffer = await file.arrayBuffer();
+  return window.clipboardAPI?.savePastedImageFile?.({
+    name: file.name || null,
+    type: file.type || null,
+    data: new Uint8Array(buffer),
+  }) ?? null;
+}
+
+function getClipboardMarkdownFileReferenceText(data: DataTransfer, pastedText: string): string {
+  const filePaths = Array.from(data.files)
+    .map((file) => (file as File & { path?: string }).path)
+    .filter((path): path is string => !!path);
+  if (filePaths.length > 0) return filePaths.join('\n');
+  const uriList = data.getData('text/uri-list');
+  return uriList.trim() ? uriList : pastedText;
+}
+
 export function shouldInsertClipboardImagePathForPaste(input: { pastedText: string; hasImage: boolean }): boolean {
   return input.hasImage;
 }
@@ -1125,19 +2683,21 @@ export const LIBRARIAN_EDITOR_SESSION_STORAGE_KEY = 'librarian-editor-session';
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
   | { type: 'artifact'; path: string }
-  | { type: 'bookmarks' };
+  | { type: 'external'; path: string }
+  | { type: 'bookmarks' }
+  | { type: 'ember' };
 
 export type LibrarianEditorSession = {
   itemType: 'wiki' | 'artifact' | 'external';
   itemPath: string;
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   selectionStart: number;
   selectionEnd: number;
   scrollTop: number;
 };
 
 export type LibrarianNavigationEntry = {
-  itemType: 'wiki' | 'artifact' | 'external';
+  itemType: 'wiki' | 'artifact' | 'external' | 'river' | 'ember';
   itemPath: string;
 };
 
@@ -1152,6 +2712,16 @@ export const EMPTY_LIBRARIAN_NAVIGATION_HISTORY: LibrarianNavigationHistory = {
 };
 
 const LIBRARIAN_NAVIGATION_HISTORY_LIMIT = 50;
+
+export function getLibrarianBracketNavigationDirection(
+  event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'shiftKey' | 'ctrlKey' | 'altKey'>,
+  input: { canNavigateBack: boolean; canNavigateForward: boolean },
+): -1 | 0 | 1 | null {
+  if (!event.metaKey || event.shiftKey || event.ctrlKey || event.altKey) return null;
+  if (event.key === '[') return input.canNavigateBack ? -1 : 0;
+  if (event.key === ']') return input.canNavigateForward ? 1 : 0;
+  return null;
+}
 
 function sameLibrarianNavigationEntry(
   a: LibrarianNavigationEntry | null,
@@ -1222,8 +2792,17 @@ export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): Li
         path: parsed.path.trim(),
       };
     }
+    if (parsed?.type === 'external' && typeof parsed.path === 'string' && parsed.path.trim()) {
+      return {
+        type: 'external',
+        path: parsed.path.trim(),
+      };
+    }
     if (parsed?.type === 'bookmarks') {
       return { type: 'bookmarks' };
+    }
+    if (parsed?.type === 'ember') {
+      return { type: 'ember' };
     }
   } catch {
     return null;
@@ -1244,6 +2823,14 @@ export function persistLibrarianSelection(
   storage.setItem(LIBRARIAN_SELECTION_STORAGE_KEY, JSON.stringify(selection));
 }
 
+export function persistNativeLibrarianSelection(
+  storage: Pick<Storage, 'setItem' | 'removeItem'>,
+  selection: LibrarianStoredSelection | null
+): boolean {
+  persistLibrarianSelection(storage, selection);
+  return true;
+}
+
 export function restoreLibrarianEditorSession(storage: Pick<Storage, 'getItem'>): LibrarianEditorSession | null {
   const raw = storage.getItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY);
   if (!raw) return null;
@@ -1253,7 +2840,7 @@ export function restoreLibrarianEditorSession(storage: Pick<Storage, 'getItem'>)
     if (
       (parsed?.itemType === 'wiki' || parsed?.itemType === 'artifact' || parsed?.itemType === 'external') &&
       typeof parsed.itemPath === 'string' &&
-      (parsed.contentMode === 'rendered' || parsed.contentMode === 'markdown')
+      isMarkdownContentMode(parsed.contentMode)
     ) {
       return {
         itemType: parsed.itemType,
@@ -1278,6 +2865,10 @@ export function persistLibrarianEditorSession(
   storage.setItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
+export function clearLibrarianEditorSession(storage: Pick<Storage, 'removeItem'>): void {
+  storage.removeItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY);
+}
+
 export function editorSessionMatchesSelection(
   session: LibrarianEditorSession | null,
   selection: LibrarianStoredSelection | null
@@ -1285,12 +2876,31 @@ export function editorSessionMatchesSelection(
   if (!session || !selection) return false;
   if (selection.type === 'wiki') return session.itemType === 'wiki' && session.itemPath === selection.relPath;
   if (selection.type === 'artifact') return session.itemType === 'artifact' && session.itemPath === selection.path;
+  if (selection.type === 'external') return session.itemType === 'external' && session.itemPath === selection.path;
   return false;
+}
+
+export function resolveLibrarianInitialSelection(
+  restoredSelection: LibrarianStoredSelection | null,
+  restoredEditorSession: LibrarianEditorSession | null,
+  hasInitialOpenTarget: boolean,
+): LibrarianStoredSelection | null {
+  if (hasInitialOpenTarget) return null;
+  if (restoredEditorSession?.itemType === 'wiki') {
+    return { type: 'wiki', relPath: restoredEditorSession.itemPath };
+  }
+  if (restoredEditorSession?.itemType === 'artifact') {
+    return { type: 'artifact', path: restoredEditorSession.itemPath };
+  }
+  if (restoredEditorSession?.itemType === 'external') {
+    return { type: 'external', path: restoredEditorSession.itemPath };
+  }
+  return restoredSelection;
 }
 
 export function resolveWikiCreateFolder(
   requestedFolderName: string,
-  selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | 'external' | null,
+  selectedItemType: LibrarianSelectedItemType,
   wikiSelectedRelPath: string | null
 ): string {
   if (requestedFolderName && requestedFolderName !== 'artifacts') {
@@ -1302,6 +2912,16 @@ export function resolveWikiCreateFolder(
   }
 
   return 'entries';
+}
+
+export function resolveCurrentWikiCreateFolder(
+  selectedItemType: LibrarianSelectedItemType,
+  wikiSelectedRelPath: string | null
+): string {
+  if (selectedItemType !== 'wiki' || !wikiSelectedRelPath?.includes('/')) {
+    return 'scratchpad';
+  }
+  return wikiSelectedRelPath.split('/').slice(0, -1).join('/') || 'scratchpad';
 }
 
 export function formatBreadcrumb(
@@ -1318,6 +2938,14 @@ export function formatBreadcrumb(
   return parts.length > 1 ? parts[parts.length - 2] : 'External';
 }
 
+export function getLibrarianTitleFontSize(title: string, contentMode: MarkdownContentMode): number {
+  const base = contentMode === 'markdown' ? 26 : 30;
+  const length = title.trim().length;
+  if (length <= 48) return base;
+  if (length <= 96) return Math.max(18, Math.round((base - (length - 48) * 0.2) * 10) / 10);
+  return Math.max(16, Math.round((base - 9.6 - (length - 96) * 0.1) * 10) / 10);
+}
+
 function clampScrollRatio(ratio: number): number {
   if (!Number.isFinite(ratio)) return 0;
   return Math.min(1, Math.max(0, ratio));
@@ -1328,10 +2956,25 @@ type MarkdownWikiLinkCompletionState = MarkdownWikiLinkCompletion & {
   left: number;
 };
 
+type MarkdownMentionCompletionState = MarkdownMentionCompletion & {
+  top: number;
+  left: number;
+};
+
+type MarkdownEmojiCompletionState = MarkdownEmojiCompletion & {
+  top: number;
+  left: number;
+};
+
+type MarkdownSlashCommandCompletionState = MarkdownSlashCommandCompletion & {
+  top: number;
+  left: number;
+};
+
 export type MarkdownWikiLinkSuggestion = {
   title: string;
   detail: string;
-  kind: 'wiki' | 'artifact' | 'command';
+  kind: 'wiki' | 'artifact' | 'command' | 'bookmarks';
 };
 
 function isTwitterLikeWikiLinkSuggestion(item: MarkdownWikiLinkSuggestion): boolean {
@@ -1380,6 +3023,39 @@ export function getMarkdownWikiLinkCompletionState(
   return completion ? { ...completion, ...position } : null;
 }
 
+export function getMarkdownMentionCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownMentionCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownMentionCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
+}
+
+export function getMarkdownEmojiCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownEmojiCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownEmojiCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
+}
+
+export function getMarkdownSlashCommandCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownSlashCommandCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownSlashCommandCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
+}
+
 export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
   const maxScrollTop = scrollHeight - clientHeight;
   if (maxScrollTop <= 0) return 0;
@@ -1406,17 +3082,15 @@ export function getMarkdownEditorEdgeFades(
   };
 }
 
-export function shouldRevealFocusChrome(
-  cursorClientY: number,
-  paneClientTop: number,
-  revealDistancePx = 96,
-): boolean {
-  if (!Number.isFinite(cursorClientY) || !Number.isFinite(paneClientTop)) return false;
-  return cursorClientY >= paneClientTop && cursorClientY <= paneClientTop + Math.max(0, revealDistancePx);
+export function shouldShowFocusToolbarControls(input: {
+  focusChromeActive: boolean;
+  focusChromePinnedVisible: boolean;
+}): boolean {
+  return !input.focusChromeActive || input.focusChromePinnedVisible;
 }
 
 export function getLibrarianContentTopPadding(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   focusChromeActive: boolean;
   isFullScreen: boolean;
 }): number {
@@ -1431,15 +3105,28 @@ export function getLibrarianContentTopPadding(input: {
     : normalTopPadding;
 }
 
+export function getLibrarianContentBottomScrollSpace(input: {
+  contentMode: MarkdownContentMode;
+  focusChromeActive: boolean;
+}): number {
+  if (input.contentMode === 'markdown') return 0;
+  return LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX;
+}
+
 interface LibrarianViewProps {
   active?: boolean;
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
+  onNavigateToSignIn?: () => void;
+  browserLibrarySurface?: boolean;
   onFullScreenChange?: (isFullScreen: boolean) => void;
-  onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean) => void;
+  onFocusChromeActiveChange?: (active: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
   onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
   onSelectedItemTypeChange?: (type: LibrarianSelectedItemType) => void;
+  focusChromeGroupOpacity?: number;
+  focusChromeEnabled?: boolean;
+  onFocusChromeEnabledChange?: (enabled: boolean) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in legacy fullscreen/immersive mode when supported.
@@ -1453,14 +3140,14 @@ interface LibrarianViewProps {
   onOpenCommandPath?: (path: string) => void;
   onFocusChromeShortcut?: () => void;
   onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
+  onActionFeedback?: (message: string) => void;
+  onFocusChromeContentCenterChange?: (centerX: number | null) => void;
   preserveCurrentSizeKey?: boolean;
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
-}
-
-function isArtifactModelSignatureText(text: string): boolean {
-  return /^(Model|Signed by):\s+.+$/i.test(text.trim());
+  sidebarToggleRequestKey?: number;
+  shortcutsHelpRequestKey?: number;
 }
 
 type MarkdownRenderNode = {
@@ -1471,6 +3158,10 @@ type MarkdownRenderNode = {
   position?: {
     start?: {
       line?: unknown;
+      offset?: unknown;
+    };
+    end?: {
+      offset?: unknown;
     };
   };
   properties?: {
@@ -1480,22 +3171,35 @@ type MarkdownRenderNode = {
   };
 };
 
-type CaretPointDocument = Document & {
-  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-  caretRangeFromPoint?: (x: number, y: number) => Range | null;
-};
+function getMarkdownSourceOffsetDebug(content: string | null, offset: number | null): Record<string, unknown> | null {
+  if (typeof content !== 'string' || typeof offset !== 'number' || !Number.isFinite(offset)) return null;
+  const clampedOffset = Math.max(0, Math.min(content.length, offset));
+  let line = 1;
+  let lineStart = 0;
+  for (let index = 0; index < clampedOffset; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      line += 1;
+      lineStart = index + 1;
+    }
+  }
+  const nextLineBreak = content.indexOf('\n', clampedOffset);
+  const lineEnd = nextLineBreak === -1 ? content.length : nextLineBreak;
+  return {
+    offset: clampedOffset,
+    line,
+    column: clampedOffset - lineStart + 1,
+    lineStart,
+    lineEnd,
+    lineLength: lineEnd - lineStart,
+    before: content.slice(Math.max(lineStart, clampedOffset - 40), clampedOffset),
+    after: content.slice(clampedOffset, Math.min(lineEnd, clampedOffset + 40)),
+  };
+}
 
-type RenderedTextPoint = {
-  text: string;
-  offset: number;
-};
-
-function extractMarkdownText(node: unknown): string {
-  if (!node || typeof node !== 'object') return '';
-  const renderNode = node as MarkdownRenderNode;
-  if (renderNode.type === 'text' && typeof renderNode.value === 'string') return renderNode.value;
-  if (Array.isArray(renderNode.children)) return renderNode.children.map(extractMarkdownText).join('');
-  return '';
+function isRenderedSelectionElementBoundary(selection: Record<string, unknown>): boolean {
+  return selection.startNodeType !== Node.TEXT_NODE
+    || selection.endNodeType !== Node.TEXT_NODE
+    || selection.caretRect === null;
 }
 
 export function getRenderedMarkdownNodeStartLine(node: unknown): number | null {
@@ -1525,94 +3229,23 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
-  let stripped = false;
-
-  const stripNode = (node: ReactNode): ReactNode => {
-    if (stripped) return node;
-    if (typeof node === 'string') {
-      if (!node.startsWith(CARROT_LIST_SENTINEL)) return node;
-      stripped = true;
-      return node.slice(CARROT_LIST_SENTINEL.length);
-    }
-    if (Array.isArray(node)) {
-      return Children.map(node, stripNode);
-    }
-    if (isValidElement<{ children?: ReactNode }>(node)) {
-      const childProps = node.props as { children?: ReactNode };
-      if (childProps.children === undefined) return node;
-      return cloneElement(
-        node as ReactElement<{ children?: ReactNode }>,
-        undefined,
-        stripNode(childProps.children),
-      );
-    }
-    return node;
-  };
-
-  return Children.map(children, stripNode);
-}
-
-function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode | null; content: ReactNode[] } {
-  const nodes = Children.toArray(children);
-  const checkboxIndex = nodes.findIndex((child) => {
-    if (!isValidElement<{ type?: unknown }>(child)) return false;
-    if (typeof child.type === 'string' && child.type === 'input') return true;
-    return child.props.type === 'checkbox';
-  });
-  if (checkboxIndex < 0) return { checkbox: null, content: nodes };
-  const checkbox = nodes[checkboxIndex];
-  const content = nodes.filter((_, index) => index !== checkboxIndex);
-  return { checkbox, content };
-}
-
-const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: '→',
-  inbound: '←',
-  bidirectional: '↔',
-};
-
-const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: 'This document links out',
-  inbound: 'Links back to this document',
-  bidirectional: 'Linked both ways',
-};
-
-const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
-  wiki: 'Wiki',
-  artifact: 'Artifact',
-  command: 'Command',
-};
-
-function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoint | null {
-  const doc = event.currentTarget.ownerDocument as CaretPointDocument;
-  const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
-  if (position?.offsetNode.nodeType === Node.TEXT_NODE) {
-    const textNode = position.offsetNode as Text;
-    return {
-      text: textNode.textContent ?? '',
-      offset: position.offset,
-    };
-  }
-
-  const range = doc.caretRangeFromPoint?.(event.clientX, event.clientY);
-  if (range?.startContainer.nodeType !== Node.TEXT_NODE) return null;
-  const textNode = range.startContainer as Text;
-  return {
-    text: textNode.textContent ?? '',
-    offset: range.startOffset,
-  };
-}
-
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onNavigateToSignIn, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
+  const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
+  const handledInitialOpenTargetKeyRef = useRef<string | null>(null);
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
+  const initialSelection = useMemo(
+    () => resolveLibrarianInitialSelection(restoredSelection, restoredEditorSession, hadInitialOpenTargetRef.current),
+    [restoredEditorSession, restoredSelection],
+  );
   const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
+  const restoredExternalSessionOpenedRef = useRef(false);
+  const restoredInitialExternalSelectionOpenedRef = useRef(false);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
-  const [selectedPath, setSelectedPath] = useState<string | null>(() => restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(() => initialSelection?.type === 'artifact' ? initialSelection.path : null);
   const [selectedReading, setSelectedReading] = useState<Reading | null>(null);
   const [loading, setLoading] = useState(true);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null); // null = loading
@@ -1624,16 +3257,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Populated when there's unsaved content pending — call to flush the
   // pending debounced save synchronously (Esc, Cmd+S, switching files).
   const flushSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const sharedContentSyncRef = useRef<{
+    sharedId: string;
+    content: string;
+    expectedRevision: number;
+    documentPath: string | null;
+  } | null>(null);
+  const sharedContentSyncTimerRef = useRef<number | null>(null);
+  const sharedContentSyncInFlightRef = useRef(false);
+  const sharedFileStatusRef = useRef<SharedFileStatus | null>(null);
+  const sharedFileStatusPathRef = useRef<string | null>(null);
   // Tracks what's actually on disk. activeReading.content goes stale after
   // the first save (we intentionally don't re-fetch to preserve the
-  // textarea's native undo stack), so comparing against it would miss the
+  // editor's undo stack), so comparing against it would miss the
   // "typed a char then deleted it" case.
   const lastSavedContentRef = useRef<string | null>(null);
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
-  const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
-    const saved = localStorage.getItem('librarian-text-size');
-    return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
-  });
+  const lastSeededPathRef = useRef<string | null>(null);
+  const pendingCopiedImageDeletesRef = useRef<Array<{ documentPath: string; markdownImages: string[] }>>([]);
+  const [textSize, setTextSize] = useState<LibrarianTextSizeId>(() => restoreLibrarianTextSize(localStorage));
   const [typographyPresetId, setTypographyPresetId] = useState<LibrarianTypographyPresetId>(() => (
     restoreLibrarianTypographyPreset(localStorage)
   ));
@@ -1646,26 +3288,52 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [todoMarker, setTodoMarker] = useState<LibrarianTodoMarker>(() => (
     restoreLibrarianTodoMarker(localStorage)
   ));
+  const [maxwellItems, setMaxwellItems] = useState<LibrarianMaxwellItem[]>(() => (
+    restoreLibrarianMaxwellItems(localStorage)
+  ));
+  const [htmlLayoutByPath, setHtmlLayoutByPath] = useState<Record<string, LibrarianHtmlLayout>>(() => (
+    restoreLibrarianHtmlLayoutByPath(localStorage)
+  ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
-  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
-  const [renderedSelectionToolbar, setRenderedSelectionToolbar] = useState<{
-    start: number;
-    end: number;
-    top: number;
-    left: number;
-  } | null>(null);
+  const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
+    restoreRenderedTextCursorStyle(localStorage)
+  ));
+  const [renderedBlockCursorOpacity, setRenderedBlockCursorOpacity] = useState(() => (
+    restoreRenderedBlockCursorOpacity(localStorage)
+  ));
+  const [lineNumbersMode, setLineNumbersMode] = useState<'hidden' | 'visible' | 'faded'>(() => (
+    restoreLibrarianLineNumbersMode(localStorage)
+  ));
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
-    if (!restoredSelection) return null;
-    if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
-    if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
+    if (!initialSelection) return null;
+    if (initialSelection.type === 'wiki') return `wiki:${initialSelection.relPath}`;
+    if (initialSelection.type === 'artifact') return `artifact:${initialSelection.path}`;
+    if (initialSelection.type === 'external') return `external:${initialSelection.path}`;
+    if (initialSelection.type === 'ember') return EMBER_ITEM_ID;
     return BOOKMARKS_ITEM_ID;
   });
-  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
-  const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
+  const selectedItemIdRef = useRef<string | null>(selectedItemId);
+  const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => initialSelection?.type ?? null);
+  const selectedItemTypeRef = useRef<LibrarianSelectedItemType>(selectedItemType);
+  const canUseFocusImmersive =
+    selectedItemType === 'wiki' ||
+    selectedItemType === 'artifact' ||
+    selectedItemType === 'external' ||
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'river';
+  const selectedItemUsesLegacyImmersive = selectedItemType === null;
   const [isFullScreen, setIsFullScreen] = useState(() => (
-    restoredSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
+    initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
   ));
-  const [focusImmersive, setFocusImmersive] = useState(false);
+  const [uncontrolledFocusImmersive, setUncontrolledFocusImmersive] = useState(false);
+  const focusImmersive = focusChromeEnabled ?? uncontrolledFocusImmersive;
+  const setFocusImmersive = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    const nextValue = typeof next === 'function' ? next(focusImmersive) : next;
+    if (focusChromeEnabled === undefined) {
+      setUncontrolledFocusImmersive(nextValue);
+    }
+    onFocusChromeEnabledChange?.(nextValue);
+  }, [focusChromeEnabled, focusImmersive, onFocusChromeEnabledChange]);
   const toggleImmersive = useCallback(() => {
     if (selectedItemUsesLegacyImmersive) {
       setIsFullScreen((prev) => !prev);
@@ -1675,7 +3343,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       onFocusChromeShortcut?.();
     }
     setFocusImmersive((prev) => !prev);
-  }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive]);
+  }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive, setFocusImmersive]);
+  useLayoutEffect(() => {
+    selectedItemIdRef.current = selectedItemId;
+    selectedItemTypeRef.current = selectedItemType;
+  }, [selectedItemId, selectedItemType]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const markdownEditorEdgeFadesRef = useRef({ top: false, bottom: false });
   const [markdownDocumentTopFade, setMarkdownDocumentTopFade] = useState(false);
@@ -1683,15 +3355,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownWikiLinkCompletion, setMarkdownWikiLinkCompletion] = useState<MarkdownWikiLinkCompletionState | null>(null);
   const [markdownWikiLinkSuggestionIndex, setMarkdownWikiLinkSuggestionIndex] = useState(0);
+  const [markdownMentionCompletion, setMarkdownMentionCompletion] = useState<MarkdownMentionCompletionState | null>(null);
+  const [markdownMentionSuggestionIndex, setMarkdownMentionSuggestionIndex] = useState(0);
+  const [markdownEmojiCompletion, setMarkdownEmojiCompletion] = useState<MarkdownEmojiCompletionState | null>(null);
+  const [markdownEmojiSuggestionIndex, setMarkdownEmojiSuggestionIndex] = useState(0);
+  const [markdownSlashCommandCompletion, setMarkdownSlashCommandCompletion] = useState<MarkdownSlashCommandCompletionState | null>(null);
+  const [markdownSlashCommandSuggestionIndex, setMarkdownSlashCommandSuggestionIndex] = useState(0);
+  const [renderedImagePreview, setRenderedImagePreview] = useState<MarkdownCodeEditorImagePreview | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('librarian-sidebar-width');
-    return saved ? parseInt(saved, 10) : 180;
+    return restoreLibrarianSidebarWidth(localStorage);
   });
   const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
-  const [discoveredDirs, setDiscoveredDirs] = useState<string[]>([]);
-  const [isDiscovering, setIsDiscovering] = useState(false);
-  const [addingDir, setAddingDir] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [fileFindOpen, setFileFindOpen] = useState(false);
   const [fileFindQuery, setFileFindQuery] = useState('');
@@ -1705,16 +3380,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const sidebarKeyboardActiveRef = useRef(false);
   const [sidebarKeyboardActive, setSidebarKeyboardActive] = useState(false);
   const [sidebarTodoStateOverrides, setSidebarTodoStateOverrides] = useState<Record<string, MarkdownTodoState | null>>({});
+  const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
+  const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
+  const wikiArchiveRef = useRef<WikiArchiveController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
-  const renderedLinkMouseDownHandledRef = useRef(false);
+  const renderedMarkdownEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
+  const activeReadingPathRef = useRef<string | null>(null);
+  const activeReadingContentRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileContextRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileHasSelectionRef = useRef(false);
+  const markdownEditorFocusedRef = useRef(false);
+  const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
+  const pendingMarkdownInsertionSelectionRef = useRef<{ value: string; start: number; end: number } | null>(null);
   const renderedSaveTimerRef = useRef<number | null>(null);
   const pendingRenderedSaveRef = useRef<(() => void) | null>(null);
+  const renderedReactCommitTimerRef = useRef<number | null>(null);
+  const pendingRenderedReactCommitRef = useRef<{ path: string; content: string } | null>(null);
+  const renderedSaveInFlightRef = useRef(0);
+  const lastRenderedEditAtRef = useRef(0);
+  const activeRenderedCaretOffsetRef = useRef<number | null>(null);
+  const latestRenderedContentRef = useRef<{ path: string; content: string } | null>(null);
+  const renderedDisplayContentRef = useRef<{ path: string; content: string } | null>(null);
+  const latestMarkdownCursorSnapshotRef = useRef<(MarkdownCodeEditorSelectionSnapshot & { timestamp: number; stage: string }) | null>(null);
+  const editorCursorSettleTimerRef = useRef<number | null>(null);
+  const pendingRenderedEditorSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const pendingRenderedDeleteScrollRestoreRef = useRef<{ path: string | null; scrollTop: number } | null>(null);
+  const scheduleEditorSessionPersistRef = useRef<(() => void) | null>(null);
+  const terminalReturnEditorSelectionRef = useRef<{ mode: MarkdownContentMode; start: number; end: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
+  const sampleRenderedEditorInteraction = useInteractionFpsSampler('rendered-editor-input');
   const setContentScrollRef = useCallback(
     (el: HTMLDivElement | null) => {
       contentScrollRef.current = el;
@@ -1723,18 +3422,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     [renderedScrollSamplerRef],
   );
   const pendingRenderedEditSelectionRef = useRef<number | null>(null);
+  const pendingRenderedEditSelectionEndRef = useRef<number | null>(null);
   const pendingTitleEditPathRef = useRef<string | null>(null);
   const titleCommitInFlightRef = useRef(false);
   const [editingTitlePath, setEditingTitlePath] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
-  const previousRenderedTaskContentRef = useRef<{ path: string | null; content: string } | null>(null);
-  const taskAnimationTimerRef = useRef<number | null>(null);
-  const [animatingTaskTexts, setAnimatingTaskTexts] = useState<Set<string>>(() => new Set());
   const focusMarkdownEditorOnOpenRef = useRef(false);
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
   const markdownEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
+  const renderedEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
 
   const activateSidebarKeyboard = useCallback(() => {
     sidebarKeyboardActiveRef.current = true;
@@ -1756,10 +3454,66 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [sharedFilesCanWrite, setSharedFilesCanWrite] = useState(false);
+  const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
+  const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
+  const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [riverSharePickerOpen, setRiverSharePickerOpen] = useState(false);
+  const [riverTargets, setRiverTargets] = useState<RiverTarget[]>([]);
+  const [selectedRiverTargetIds, setSelectedRiverTargetIds] = useState<string[]>([]);
+  const [riverDefaultTargetIds, setRiverDefaultTargetIds] = useState<string[]>([]);
+  const [riverTargetsLoading, setRiverTargetsLoading] = useState(false);
+  const [riverPickerError, setRiverPickerError] = useState<string | null>(null);
+  const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
-  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
+  const [readerStatusFeedbackLeft, setReaderStatusFeedbackLeft] = useState<number | null>(null);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAvailability = async () => {
+      const availability = await window.sharedFilesAPI?.getAvailability?.();
+      const available = availability?.available === true;
+      if (!cancelled) {
+        setSharedFilesAvailable(available);
+        setSharedFilesCanWrite(availability?.canWrite === true);
+      }
+      if (available) {
+        void window.sharedFilesAPI?.sync?.()
+          .then((result) => {
+            if (result && (result.written > 0 || result.removed > 0 || result.created > 0)) {
+              window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+            }
+          })
+          .catch((error) => {
+            console.warn('[Librarian] River startup sync failed:', error);
+          });
+      }
+    };
+    void loadAvailability();
+    const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
+      void loadAvailability();
+    });
+    const unsubscribeAuth = window.authAPI?.onSessionChanged?.(() => {
+      void loadAvailability();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      unsubscribeAuth?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSharedFileHotkeyChanged = () => {
+      setSharedFileToggleHotkey(restoreSharedFileToggleHotkey(localStorage));
+    };
+    window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
+    return () => window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
+  }, []);
 
   // Narration state
   const [narrationStatus, setNarrationStatus] = useState<{
@@ -1775,20 +3529,455 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [isMutedForToday, setIsMutedForToday] = useState(false);
   const [isMuting, setIsMuting] = useState(false);
 
-  // Content mode: 'rendered' shows formatted prose, 'markdown' shows editable raw source
-  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>(() => (
-    editorSessionMatchesSelection(restoredEditorSession, restoredSelection)
-      ? restoredEditorSession?.contentMode ?? 'rendered'
-      : 'rendered'
+  // Content mode: rendered prose, markdown source, or gated Typedown spike.
+  const [contentMode, setContentMode] = useState<MarkdownContentMode>('rendered');
+  const codexTerminalAvailable = !browserLibrarySurface;
+  const [codexTerminalVisible, setCodexTerminalVisible] = useState(() => (
+    codexTerminalAvailable && localStorage.getItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY) === 'true'
   ));
+  const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
+  const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
+  const [terminalPastePopover, setTerminalPastePopover] = useState<TerminalPastePopover>(null);
+  const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
+    localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
+  ));
+  const [responsivePanelSize, setResponsivePanelSize] = useState({ width: 0, height: 0 });
+  const responsivePanelStateRef = useRef<ResponsivePanelState | undefined>(undefined);
+  const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
+  const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
+  const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
+  const userResizingPanel = isResizing || codexTerminalResizing;
+  const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
+  const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
+  const responsivePanelState = getResponsivePanelState({
+    containerWidth: responsivePanelSize.width,
+    containerHeight: responsivePanelSize.height,
+    sidebarWidth,
+    sidebarCollapsed,
+    sidebarForcedVisible: sidebarForcedVisibleForEmptySelection,
+    terminalVisible: codexTerminalAvailable && codexTerminalVisible,
+    terminalDockSide: codexTerminalDockSide,
+    userResizing: userResizingPanel,
+    autoCollapseSidebarSuppressed: suppressAutoCollapseSidebar,
+    previous: responsivePanelStateRef.current,
+  });
+  responsivePanelStateRef.current = responsivePanelState;
+  const effectiveSidebarCollapsed = sidebarCollapsed
+    || (responsivePanelState.autoCollapseSidebar && !suppressAutoCollapseSidebar);
+  const effectiveCodexTerminalDockSide: CodexTerminalDockSide =
+    !codexTerminalAvailable || responsivePanelState.autoDockTerminalBottom ? 'bottom' : codexTerminalDockSide;
+  const effectiveCodexTerminalVisible = codexTerminalAvailable
+    && codexTerminalVisible
+    && !(responsivePanelState.autoHideTerminal && !suppressAutoHideTerminal);
+  const selectionPastePopoverAvailable = false;
+  const animateResponsiveSidebar = shouldAnimateResponsiveSidebar({
+    responsivePanelState,
+    userResizing: userResizingPanel,
+  });
+  useEffect(() => {
+    if (sidebarToggleRequestKey > 0 && effectiveSidebarCollapsed && !isFullScreen) {
+      setSidebarHoverExpanded((expanded) => !expanded);
+    }
+  }, [effectiveSidebarCollapsed, isFullScreen, sidebarToggleRequestKey]);
+  useEffect(() => {
+    if (shortcutsHelpRequestKey > 0) setShortcutsHelpOpen(true);
+  }, [shortcutsHelpRequestKey]);
+  const [renderedEditingActive, setRenderedEditingActive] = useState(false);
+  const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
+    localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
+  ));
+  const renderedEditorDebugEnabledRef = useRef(renderedEditorDebugEnabled);
+  const renderedEditingActiveRef = useRef(renderedEditingActive);
   const contentModeRef = useRef(contentMode);
   const editContentRef = useRef(editContent);
   useLayoutEffect(() => {
     contentModeRef.current = contentMode;
     editContentRef.current = editContent;
-  }, [contentMode, editContent]);
-  const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
-  const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
+    renderedEditingActiveRef.current = renderedEditingActive;
+    renderedEditorDebugEnabledRef.current = renderedEditorDebugEnabled;
+  }, [contentMode, editContent, renderedEditingActive, renderedEditorDebugEnabled]);
+  const getRenderedCursorDebugState = useCallback((label = 'cursor'): Record<string, unknown> => {
+    const root = renderedContentRef.current;
+    const editor = renderedMarkdownEditorRef.current;
+    const content = activeReadingContentRef.current;
+    const doc = root?.ownerDocument ?? document;
+    const activeElement = doc.activeElement;
+    const scrollEl = contentScrollRef.current;
+    const editorSnapshot = editor?.getSelectionSnapshot() ?? null;
+    const editorRange = editor?.getSelectionRange() ?? null;
+    const activeOffset = editorSnapshot?.selectionHead ?? editorRange?.end ?? activeRenderedCaretOffsetRef.current;
+    const selection = editorSnapshot
+      ? {
+          exists: true,
+          surface: 'rendered-code-editor',
+          selectionStart: editorSnapshot.selectionStart,
+          selectionEnd: editorSnapshot.selectionEnd,
+          selectionHead: editorSnapshot.selectionHead,
+          isCollapsed: editorSnapshot.isCollapsed,
+        }
+      : root ? getRenderedSelectionDebug(root) : { exists: false, reason: 'no-rendered-root' };
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      rootExists: !!root,
+      inputExists: !!editor,
+      contentLength: content?.length ?? null,
+      activeSourceOffset: activeOffset,
+      activeSource: getMarkdownSourceOffsetDebug(content, activeOffset),
+      selection,
+      focus: {
+        activeElement: getElementDebugSummary(activeElement),
+        rootIsActiveElement: activeElement === root,
+        rootContainsActiveElement: !!root && !!activeElement && root.contains(activeElement),
+      },
+      scroll: scrollEl ? {
+        top: scrollEl.scrollTop,
+        height: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      } : null,
+    };
+  }, []);
+  const getMarkdownCursorDebugState = useCallback((
+    label = 'markdown-cursor',
+    snapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ): Record<string, unknown> => {
+    const editor = markdownCodeEditorRef.current;
+    const latestSnapshot = latestMarkdownCursorSnapshotRef.current;
+    const liveSnapshot = snapshot
+      ?? editor?.getSelectionSnapshot()
+      ?? latestSnapshot
+      ?? null;
+    const value = liveSnapshot?.value ?? editor?.getValue() ?? editContentRef.current;
+    const selectionRange = editor?.getSelectionRange();
+    const selectionStart = liveSnapshot?.selectionStart ?? selectionRange?.start ?? 0;
+    const selectionEnd = liveSnapshot?.selectionEnd ?? selectionRange?.end ?? selectionStart;
+    const selectionHead = liveSnapshot?.selectionHead ?? selectionEnd;
+    const selectionAnchor = liveSnapshot?.selectionAnchor ?? selectionStart;
+    const doc = document;
+    const activeElement = doc.activeElement;
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      live: !!editor,
+      snapshotOnly: !editor && !!latestSnapshot,
+      contentLength: value.length,
+      snapshotAgeMs: latestSnapshot ? Date.now() - latestSnapshot.timestamp : null,
+      snapshotStage: latestSnapshot?.stage ?? null,
+      selectionStart,
+      selectionEnd,
+      selectionAnchor,
+      selectionHead,
+      isCollapsed: liveSnapshot?.isCollapsed ?? selectionStart === selectionEnd,
+      selectionStartSource: liveSnapshot?.selectionStartSource ?? getMarkdownSourceOffsetDebug(value, selectionStart),
+      selectionEndSource: liveSnapshot?.selectionEndSource ?? getMarkdownSourceOffsetDebug(value, selectionEnd),
+      selectionHeadSource: liveSnapshot?.selectionHeadSource ?? getMarkdownSourceOffsetDebug(value, selectionHead),
+      caretPosition: liveSnapshot?.caretPosition ?? null,
+      caretRect: liveSnapshot?.caretRect ?? null,
+      input: liveSnapshot
+        ? {
+            docChanged: liveSnapshot.docChanged,
+            inputType: liveSnapshot.inputType ?? null,
+            inputDataLength: liveSnapshot.inputData?.length ?? 0,
+          }
+        : null,
+      focus: {
+        activeElement: getElementDebugSummary(activeElement),
+        activeElementIsCodeMirror: activeElement instanceof Element
+          ? !!activeElement.closest('.cm-editor, .cm-content')
+          : false,
+      },
+      scroll: liveSnapshot?.scroll ?? (editor ? {
+        top: editor.scrollTop,
+        height: editor.scrollHeight,
+        clientHeight: editor.clientHeight,
+      } : null),
+    };
+  }, []);
+  const getEditorCursorDebugState = useCallback((
+    label = 'editor-cursor',
+    markdownSnapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ): Record<string, unknown> => {
+    const markdown = getMarkdownCursorDebugState(`${label}-markdown`, markdownSnapshot);
+    const rendered = getRenderedCursorDebugState(`${label}-rendered`);
+    const markdownHead = typeof markdown.selectionHead === 'number' ? markdown.selectionHead : null;
+    const renderedSource = typeof rendered.activeSourceOffset === 'number' ? rendered.activeSourceOffset : null;
+    const activeSurface = contentModeRef.current === 'markdown' ? 'markdown' : 'rendered';
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      activeSurface,
+      activeCursor: {
+        surface: activeSurface,
+        sourceOffset: activeSurface === 'markdown' ? markdownHead : renderedSource,
+        source: activeSurface === 'markdown' ? markdown.selectionHeadSource ?? null : rendered.activeSource ?? null,
+      },
+      markdown,
+      rendered,
+      sourceOffsetComparison: {
+        markdownHead,
+        markdownLive: markdown.live === true,
+        renderedSource,
+        renderedLive: rendered.rootExists === true,
+        delta: typeof markdownHead === 'number' && typeof renderedSource === 'number'
+          ? markdownHead - renderedSource
+          : null,
+      },
+    };
+  }, [getMarkdownCursorDebugState, getRenderedCursorDebugState]);
+  const getRenderedEditorDebugState = useCallback((): Record<string, unknown> => {
+    const root = renderedContentRef.current;
+    const editor = renderedMarkdownEditorRef.current;
+    const editorSnapshot = editor?.getSelectionSnapshot() ?? null;
+    const doc = root?.ownerDocument ?? document;
+    const activeElement = doc.activeElement;
+    const scrollEl = contentScrollRef.current;
+    return {
+      enabled: localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true',
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      activeCaretOffset: activeRenderedCaretOffsetRef.current,
+      pendingSave: !!pendingRenderedSaveRef.current,
+      renderedSaveInFlight: renderedSaveInFlightRef.current,
+      saveTimerActive: renderedSaveTimerRef.current !== null,
+      activeElement: getElementDebugSummary(activeElement),
+      renderedRoot: {
+        exists: !!root,
+        isActiveElement: activeElement === root,
+        containsActiveElement: !!root && !!activeElement && root.contains(activeElement),
+        tabIndex: root?.tabIndex ?? null,
+        rect: getRectDebugSummary(root?.getBoundingClientRect()),
+      },
+      renderedInput: editor ? {
+        isActiveElement: activeElement instanceof Element
+          ? !!activeElement.closest('.cm-editor, .cm-content')
+          : false,
+        selectionStart: editorSnapshot?.selectionStart ?? editor.getSelectionRange().start,
+        selectionEnd: editorSnapshot?.selectionEnd ?? editor.getSelectionRange().end,
+        valueLength: editor.getValue().length,
+      } : null,
+      selection: root ? getRenderedSelectionDebug(root) : { exists: false, reason: 'no-rendered-root' },
+      scroll: scrollEl ? {
+        top: scrollEl.scrollTop,
+        height: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      } : null,
+      recentStages: renderedEditorDebugEntriesRef.current.slice(-8).map((entry) => entry.stage),
+      cursor: getRenderedCursorDebugState('state'),
+      editorCursor: getEditorCursorDebugState('state'),
+    };
+  }, [getEditorCursorDebugState, getRenderedCursorDebugState]);
+  const recordRenderedEditorDebug = useCallback((
+    stage: string,
+    details: Record<string, unknown> | (() => Record<string, unknown>) = {},
+  ) => {
+    if (!renderedEditorDebugEnabledRef.current) return null;
+    const entry: RenderedEditorDebugEntry = {
+      timestamp: Date.now(),
+      stage,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      scrollTop: contentScrollRef.current?.scrollTop ?? null,
+      details: typeof details === 'function' ? details() : details,
+    };
+    renderedEditorDebugEntriesRef.current = [...renderedEditorDebugEntriesRef.current, entry].slice(-RENDERED_EDITOR_DEBUG_ENTRY_LIMIT);
+    const api = (window as Window & { ftDebugRenderedEditor?: RenderedEditorDebugApi }).ftDebugRenderedEditor;
+    void window.diagnosticsAPI?.appendRenderedEditorDebug?.(entry);
+    if (api?.isEnabled()) {
+      console.log('[RenderedEditor]', stage, entry);
+    }
+    window.dispatchEvent(new CustomEvent('fieldtheory:rendered-editor-debug', { detail: entry }));
+    return entry;
+  }, []);
+  const getRenderedEditorTimingEntries = useCallback((limit = 80): RenderedEditorTimingEntry[] => {
+    const safeLimit = Math.max(1, Math.min(RENDERED_EDITOR_DEBUG_ENTRY_LIMIT, Math.floor(limit)));
+    const entries = renderedEditorDebugEntriesRef.current.slice(-safeLimit);
+    return entries.map((entry, index) => {
+      const detailStage = typeof entry.details.stage === 'string' ? entry.details.stage : null;
+      const duration = entry.details.durationMs;
+      const previous = index > 0 ? entries[index - 1] : null;
+      return {
+        index,
+        timestamp: entry.timestamp,
+        sincePreviousMs: previous ? entry.timestamp - previous.timestamp : null,
+        stage: detailStage && entry.stage === 'rendered-editor-timing'
+          ? detailStage
+          : entry.stage,
+        durationMs: typeof duration === 'number' ? duration : null,
+        path: entry.path,
+        contentMode: entry.contentMode,
+        editingActive: entry.editingActive,
+        details: entry.details,
+      };
+    });
+  }, []);
+  const logRenderedEditorTimingTable = useCallback((limit = 80): RenderedEditorTimingEntry[] => {
+    const timings = getRenderedEditorTimingEntries(limit);
+    console.table(timings.map((entry) => ({
+      index: entry.index,
+      stage: entry.stage,
+      durationMs: entry.durationMs,
+      sincePreviousMs: entry.sincePreviousMs,
+      editingActive: entry.editingActive,
+      contentMode: entry.contentMode,
+      path: entry.path,
+    })));
+    return timings;
+  }, [getRenderedEditorTimingEntries]);
+  const scheduleEditorCursorSettledDebug = useCallback((
+    reason: string,
+    markdownSnapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ) => {
+    latestMarkdownCursorSnapshotRef.current = markdownSnapshot
+      ? { ...markdownSnapshot, timestamp: Date.now(), stage: reason }
+      : latestMarkdownCursorSnapshotRef.current;
+    if (editorCursorSettleTimerRef.current !== null) {
+      window.clearTimeout(editorCursorSettleTimerRef.current);
+    }
+    recordRenderedEditorDebug('editor-cursor-observed', () => ({
+      reason,
+      cursor: getEditorCursorDebugState(`${reason}-observed`, markdownSnapshot),
+    }));
+    editorCursorSettleTimerRef.current = window.setTimeout(() => {
+      editorCursorSettleTimerRef.current = null;
+      recordRenderedEditorDebug('editor-cursor-settled', () => ({
+        reason,
+        cursor: getEditorCursorDebugState(`${reason}-settled`),
+      }));
+    }, 650);
+  }, [getEditorCursorDebugState, recordRenderedEditorDebug]);
+  useEffect(() => () => {
+    if (editorCursorSettleTimerRef.current !== null) {
+      window.clearTimeout(editorCursorSettleTimerRef.current);
+      editorCursorSettleTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => {
+    const handleRenderedEditorTiming = (event: Event) => {
+      const detail = event instanceof CustomEvent && typeof event.detail === 'object' && event.detail !== null
+        ? event.detail as Record<string, unknown>
+        : {};
+      recordRenderedEditorDebug('rendered-editor-timing', detail);
+    };
+    window.addEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleRenderedEditorTiming);
+    return () => window.removeEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleRenderedEditorTiming);
+  }, [recordRenderedEditorDebug]);
+  useEffect(() => {
+    const isEnabled = () => localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
+    const setEnabled = (enabled: boolean) => {
+      localStorage.setItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY, enabled ? 'true' : 'false');
+      renderedEditorDebugEnabledRef.current = enabled;
+      setRenderedEditorDebugEnabled(enabled);
+    };
+    const api: RenderedEditorDebugApi = {
+      enable: () => {
+        setEnabled(true);
+        recordRenderedEditorDebug('debug-enabled', { state: getRenderedEditorDebugState() });
+        console.log('[RenderedEditor]', 'debug enabled', {
+          commands: [
+            'window.ftDebugRenderedEditor.state()',
+            'window.ftDebugRenderedEditor.cursor()',
+            'window.ftDebugRenderedEditor.markdownCursor()',
+            'window.ftDebugRenderedEditor.renderedCursor()',
+            'window.ftDebugRenderedEditor.snapshot()',
+            'window.ftDebugRenderedEditor.timings()',
+            'window.ftDebugRenderedEditor.table()',
+            'window.ftDebugRenderedEditor.slow(8)',
+            'window.ftDebugRenderedEditor.mark("label")',
+          ],
+        });
+      },
+      disable: () => {
+        recordRenderedEditorDebug('debug-disabled', { state: getRenderedEditorDebugState() });
+        setEnabled(false);
+        console.log('[RenderedEditor]', 'debug disabled');
+      },
+      isEnabled,
+      state: getRenderedEditorDebugState,
+      cursor: () => getEditorCursorDebugState('api-cursor'),
+      markdownCursor: () => getMarkdownCursorDebugState('api-markdown-cursor'),
+      renderedCursor: () => getRenderedCursorDebugState('api-rendered-cursor'),
+      snapshot: () => [...renderedEditorDebugEntriesRef.current],
+      timings: getRenderedEditorTimingEntries,
+      slow: (thresholdMs = 8) => getRenderedEditorTimingEntries(RENDERED_EDITOR_DEBUG_ENTRY_LIMIT)
+        .filter((entry) => (entry.durationMs ?? 0) >= thresholdMs),
+      table: logRenderedEditorTimingTable,
+      last: () => renderedEditorDebugEntriesRef.current[renderedEditorDebugEntriesRef.current.length - 1] ?? null,
+      clear: () => {
+        renderedEditorDebugEntriesRef.current = [];
+        void window.diagnosticsAPI?.clearRenderedEditorDebugLog?.();
+        recordRenderedEditorDebug('debug-cleared');
+      },
+      mark: (label = 'manual') => recordRenderedEditorDebug('debug-mark', {
+        label,
+        state: getRenderedEditorDebugState(),
+      }),
+      root: () => renderedContentRef.current,
+    };
+    const debugWindow = window as Window & { ftDebugRenderedEditor?: RenderedEditorDebugApi };
+    debugWindow.ftDebugRenderedEditor = api;
+    if (api.isEnabled()) {
+      setRenderedEditorDebugEnabled(true);
+      recordRenderedEditorDebug('debug-api-installed', { state: getRenderedEditorDebugState() });
+    }
+    return () => {
+      if (debugWindow.ftDebugRenderedEditor === api) {
+        delete debugWindow.ftDebugRenderedEditor;
+      }
+    };
+  }, [getEditorCursorDebugState, getMarkdownCursorDebugState, getRenderedCursorDebugState, getRenderedEditorDebugState, getRenderedEditorTimingEntries, logRenderedEditorTimingTable, recordRenderedEditorDebug]);
+  useEffect(() => {
+    const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
+      if (!renderedEditorDebugEnabledRef.current) return;
+      const beforeScrollTop = contentScrollRef.current?.scrollTop ?? null;
+      recordRenderedEditorDebug('document-keydown-capture', () => ({
+        key: event.key,
+        code: event.code,
+        defaultPrevented: event.defaultPrevented,
+        target: getElementDebugSummary(event.target instanceof Element ? event.target : null),
+        state: getRenderedEditorDebugState(),
+      }));
+      window.setTimeout(() => {
+        const afterScrollTop = contentScrollRef.current?.scrollTop ?? null;
+        recordRenderedEditorDebug('document-keydown-after-default', () => ({
+          key: event.key,
+          code: event.code,
+          defaultPrevented: event.defaultPrevented,
+          beforeScrollTop,
+          afterScrollTop,
+          scrollDelta: typeof beforeScrollTop === 'number' && typeof afterScrollTop === 'number'
+            ? afterScrollTop - beforeScrollTop
+            : null,
+          state: getRenderedEditorDebugState(),
+        }));
+      }, 0);
+    };
+    window.addEventListener('keydown', handleDocumentKeyDownCapture, true);
+    return () => window.removeEventListener('keydown', handleDocumentKeyDownCapture, true);
+  }, [getRenderedEditorDebugState, recordRenderedEditorDebug]);
+  const clearRenderedEditingState = useCallback((reason = 'clear') => {
+    recordRenderedEditorDebug('clear', { reason });
+    renderedDisplayContentRef.current = null;
+    renderedEditingActiveRef.current = false;
+    setRenderedEditingActive(false);
+    activeRenderedCaretOffsetRef.current = null;
+  }, [recordRenderedEditorDebug]);
+
+  const activateRenderedEditing = useCallback(() => {
+    const path = activeReadingPathRef.current;
+    const content = activeReadingContentRef.current;
+    if (path && content !== null && renderedDisplayContentRef.current?.path !== path) {
+      renderedDisplayContentRef.current = { path, content };
+    }
+    renderedEditingActiveRef.current = true;
+    setRenderedEditingActive(true);
+  }, []);
+  const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && effectiveSidebarCollapsed && contentMode === 'markdown';
   const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
     active,
     selectedItemType,
@@ -1800,22 +3989,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     isLibrarianDocumentFocusChromeActive({
       canUseFocusImmersive,
       isFullScreen,
-      sidebarCollapsed,
+      sidebarCollapsed: effectiveSidebarCollapsed,
       focusImmersive,
       isFocusedWritingMode,
       writingChromeHidden,
     });
   const focusChromeUsesProximityFade = focusChromeActive;
-  const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
   const [focusToolbarMenuOpen, setFocusToolbarMenuOpen] = useState(false);
   const focusChromePinnedVisible = fileFindOpen || focusToolbarMenuOpen;
-  const focusChromeVisualVisible = !focusChromeUsesProximityFade || focusChromeProximityVisible || focusChromePinnedVisible;
-  const focusToolbarControlsVisible = !focusChromeActive || (focusChromeUsesProximityFade && (focusChromeProximityVisible || focusChromePinnedVisible));
+  const focusChromeProximityOpacity = focusChromeUsesProximityFade ? focusChromeGroupOpacity : 0;
+  const focusChromeVisualOpacity = !focusChromeUsesProximityFade || focusChromePinnedVisible
+    ? 1
+    : focusChromeProximityOpacity;
+  const focusStandaloneImmersiveOpacity = focusChromeUsesProximityFade
+    ? 0.6 + (focusChromeProximityOpacity * 0.4)
+    : 1;
+  const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
+  const focusChromeScopedItemOpacity = getFocusChromeScopedItemOpacity({
+    focusChromeActive,
+    visualOpacity: focusChromeVisualOpacity,
+  });
+  const focusChromeScopedItemVisible = !focusChromeActive || focusChromeVisualVisible;
+  const focusToolbarControlsVisible = shouldShowFocusToolbarControls({
+    focusChromeActive,
+    focusChromePinnedVisible,
+  });
+  const focusStandaloneImmersiveVisible = focusChromeActive && !focusToolbarControlsVisible && canUseFocusImmersive;
   const contentTopPadding = getLibrarianContentTopPadding({
     contentMode,
     focusChromeActive,
     isFullScreen,
   });
+  const contentBottomScrollSpace = getLibrarianContentBottomScrollSpace({ contentMode, focusChromeActive });
   const toggleFocusChromeShortcut = useCallback(() => {
     if (!selectedItemUsesLegacyImmersive && focusChromeActive) {
       setFocusImmersive(false);
@@ -1827,6 +4032,87 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const markWritingActive = useCallback(() => {
     if (isFocusedWritingMode) setWritingChromeHidden(true);
   }, [isFocusedWritingMode]);
+
+  useEffect(() => {
+    sharedFileStatusRef.current = sharedFileStatus;
+  }, [sharedFileStatus]);
+
+  const runSharedContentSync = useCallback(async () => {
+    if (sharedContentSyncInFlightRef.current) return;
+    const pending = sharedContentSyncRef.current;
+    if (!pending) return;
+
+    sharedContentSyncRef.current = null;
+    sharedContentSyncInFlightRef.current = true;
+    let shouldRetryPending = false;
+    const currentStatus = sharedFileStatusRef.current;
+    const expectedRevision = currentStatus?.sharedId === pending.sharedId
+      ? currentStatus.revision ?? pending.expectedRevision
+      : pending.expectedRevision;
+
+    try {
+      const sharedResult = await window.sharedFilesAPI?.updateContent(
+        pending.sharedId,
+        pending.content,
+        expectedRevision,
+        pending.documentPath,
+      );
+      if (sharedResult?.ok && sharedResult.cachePath && sharedResult.cachePath === pending.documentPath) {
+        const refreshed = await window.externalAPI?.open(sharedResult.cachePath);
+        if (activeReadingPathRef.current === pending.documentPath && refreshed?.documentVersion) {
+          lastSavedVersionRef.current = refreshed.documentVersion;
+        }
+      }
+      if (sharedResult?.revision !== undefined) {
+        setSharedFileStatus((prev) => {
+          if (!prev || prev.sharedId !== pending.sharedId) return prev;
+          return { ...prev, revision: sharedResult.revision, cachePath: sharedResult.cachePath ?? prev.cachePath };
+        });
+      }
+      if (sharedResult?.conflictPath) {
+        console.warn('[Librarian] River edit saved as private conflict copy:', sharedResult.conflictPath);
+      }
+    } catch (error) {
+      shouldRetryPending = true;
+      console.warn('[Librarian] River background sync failed:', error);
+    } finally {
+      if (shouldRetryPending && !sharedContentSyncRef.current) {
+        sharedContentSyncRef.current = pending;
+      }
+      sharedContentSyncInFlightRef.current = false;
+      if (sharedContentSyncRef.current && sharedContentSyncTimerRef.current === null) {
+        sharedContentSyncTimerRef.current = window.setTimeout(() => {
+          sharedContentSyncTimerRef.current = null;
+          void runSharedContentSync();
+        }, 1200);
+      }
+    }
+  }, []);
+
+  const scheduleSharedContentSync = useCallback((status: SharedFileStatus | null | undefined, content: string) => {
+    if (!status?.shared || !status.sharedId) return;
+    sharedContentSyncRef.current = {
+      sharedId: status.sharedId,
+      content,
+      expectedRevision: status.revision ?? 0,
+      documentPath: activeReadingPathRef.current,
+    };
+    if (sharedContentSyncTimerRef.current !== null) {
+      window.clearTimeout(sharedContentSyncTimerRef.current);
+    }
+    sharedContentSyncTimerRef.current = window.setTimeout(() => {
+      sharedContentSyncTimerRef.current = null;
+      void runSharedContentSync();
+    }, 1200);
+  }, [runSharedContentSync]);
+
+  useEffect(() => () => {
+    if (sharedContentSyncTimerRef.current !== null) {
+      window.clearTimeout(sharedContentSyncTimerRef.current);
+      sharedContentSyncTimerRef.current = null;
+    }
+    sharedContentSyncRef.current = null;
+  }, []);
 
   const setMarkdownEditorFades = useCallback((next: { top: boolean; bottom: boolean }) => {
     const current = markdownEditorEdgeFadesRef.current;
@@ -1845,83 +4131,194 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const next = !!scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight > 1 && scrollEl.scrollTop > 1;
     setRenderedDocumentTopFade((current) => current === next ? current : next);
   }, []);
-
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
-  const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
-  const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
+  const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => initialSelection?.type === 'bookmarks');
+  const [riverEverShown, setRiverEverShown] = useState<boolean>(false);
+  const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
+  const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
+  const [wikiSelectedPageLoading, setWikiSelectedPageLoading] = useState<boolean>(() => initialSelection?.type === 'wiki');
   // Local agent kickoff modal — opened by the toolbar agent button. Dispatches
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
   const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
+  const [inlineGemmaOpen, setInlineGemmaOpen] = useState(false);
+  const [inlineGemmaInstruction, setInlineGemmaInstruction] = useState('');
+  const [inlineGemmaSelection, setInlineGemmaSelection] = useState<MaxwellToolbarSelection>(null);
+  const [inlineGemmaError, setInlineGemmaError] = useState<string | null>(null);
+  const [inlineGemmaRunning, setInlineGemmaRunning] = useState(false);
+  const inlineGemmaInstructionRef = useRef<HTMLTextAreaElement | null>(null);
+  const [inlineDrawInsertion, setInlineDrawInsertion] = useState<InlineDrawInsertion | null>(null);
+  const [inlineDrawSaving, setInlineDrawSaving] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
   const [externalOpenFile, setExternalOpenFile] = useState<Reading | null>(null);
+  const wikiSelectedRelPathRef = useRef<string | null>(wikiSelectedRelPath);
+  const externalOpenPathRef = useRef<string | null>(externalOpenFile?.path ?? null);
+  useLayoutEffect(() => {
+    wikiSelectedRelPathRef.current = wikiSelectedRelPath;
+    externalOpenPathRef.current = externalOpenFile?.path ?? null;
+  }, [externalOpenFile?.path, wikiSelectedRelPath]);
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
+  const wikiIndexPagesRef = useRef<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const [markdownLinkRelationRepairVersion, setMarkdownLinkRelationRepairVersion] = useState(0);
+  const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
+  const markdownLinkRelationDocumentsRequestRef = useRef(0);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
+  const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
+  const libraryNavigationRequestIdRef = useRef(0);
+  const beginLibraryNavigation = useCallback((): number => {
+    libraryNavigationRequestIdRef.current += 1;
+    return libraryNavigationRequestIdRef.current;
+  }, []);
+  const isCurrentLibraryNavigation = useCallback((requestId: number): boolean => (
+    libraryNavigationRequestIdRef.current === requestId
+  ), []);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`artifact:${artifactPath}`);
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
+    setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
-  }, []);
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   // Load an external markdown file (outside wiki root) into the editor.
   // Deduped against the current external selection so re-opening the same
-  // file is a no-op — preserves the native textarea undo stack.
-  const selectExternalFile = useCallback(async (absPath: string): Promise<void> => {
+  // file is a no-op — preserves the editor's undo stack.
+  const selectExternalFile = useCallback(async (absPath: string): Promise<Reading | null> => {
+    traceLibraryNavigation('select-external-start', {
+      absPath,
+      currentExternalPath: externalOpenFile?.path ?? null,
+      selectedItemType,
+    });
     if (externalOpenFile?.path === absPath && selectedItemType === 'external') {
-      return;
+      traceLibraryNavigation('select-external-same-file', { absPath });
+      return externalOpenFile;
     }
+    const requestId = beginLibraryNavigation();
     await flushSaveRef.current?.();
+    if (!isCurrentLibraryNavigation(requestId)) return null;
     const file = await window.externalAPI?.open(absPath);
-    if (!file) return;
+    if (!isCurrentLibraryNavigation(requestId)) return null;
+    if (!file) {
+      traceLibraryNavigation('select-external-open-null', { absPath });
+      return null;
+    }
     const reading = readingFromExternalMarkdownFile(file);
     setExternalOpenFile(reading);
     setSelectedItemId(`external:${file.path}`);
     setSelectedItemType('external');
     setSelectedPath(null);
     setWikiSelectedRelPath(null);
-    setContentMode('rendered');
+    setWikiSelectedPageLoading(false);
+    setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(file.path, 'external')));
     void window.recentAPI?.visit({
       kind: 'external',
       path: file.path,
       title: reading.title,
       lastOpenedAt: Date.now(),
     });
-  }, [externalOpenFile?.path, selectedItemType]);
+    traceLibraryNavigation('select-external-done', {
+      requestedPath: absPath,
+      openedPath: file.path,
+      title: reading.title,
+    });
+    return reading;
+  }, [beginLibraryNavigation, externalOpenFile?.path, isCurrentLibraryNavigation, selectedItemType]);
+  const selectExternalFileRef = useRef(selectExternalFile);
+  useLayoutEffect(() => {
+    selectExternalFileRef.current = selectExternalFile;
+  }, [selectExternalFile]);
 
-  const openWikiPage = useCallback((relPath: string) => {
+  const openWikiPage = useCallback((relPath: string): number | null => {
     const normalized = normalizeWikiRelPath(relPath);
-    if (!normalized) return;
+    traceLibraryNavigation('open-wiki-request', { relPath, normalized });
+    if (!normalized) {
+      traceLibraryNavigation('open-wiki-empty', { relPath });
+      return null;
+    }
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
+    setWikiSelectedPageLoading(true);
     setSelectedPath(null);
     setExternalOpenFile(null);
-  }, []);
+    traceLibraryNavigation('open-wiki-state-set', { relPath: normalized });
+    return requestId;
+  }, [beginLibraryNavigation]);
+
+  useEffect(() => {
+    traceLibraryNavigation('restore-editor-session-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      hasInitialSelection: Boolean(initialSelection),
+      sessionItemType: restoredEditorSessionRef.current?.itemType ?? null,
+      sessionItemPath: restoredEditorSessionRef.current?.itemPath ?? null,
+    });
+    if (hadInitialOpenTargetRef.current || initialSelection) return;
+    if (restoredExternalSessionOpenedRef.current) return;
+    const session = restoredEditorSessionRef.current;
+    if (session?.itemType !== 'external') return;
+    restoredExternalSessionOpenedRef.current = true;
+    void selectExternalFile(session.itemPath);
+  }, [initialSelection, selectExternalFile]);
+
+  useEffect(() => {
+    traceLibraryNavigation('restore-initial-selection-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      initialSelectionType: initialSelection?.type ?? null,
+      initialSelectionPath: initialSelection?.type === 'external' ? initialSelection.path : null,
+    });
+    if (hadInitialOpenTargetRef.current) return;
+    if (initialSelection?.type !== 'external') return;
+    if (restoredInitialExternalSelectionOpenedRef.current) return;
+    restoredInitialExternalSelectionOpenedRef.current = true;
+    void selectExternalFile(initialSelection.path);
+  }, [initialSelection, selectExternalFile]);
 
   // Click on an unresolved [[wikilink]] — create the page in scratchpad using
   // the target text as the filename/title, then open it.
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+
+    const { folder, fileName, relPath } = wikiTargetPartsFromUnresolvedTitle(trimmed);
+    const existing = relPath ? await window.wikiAPI?.getPage(relPath) : null;
+    if (existing?.relPath) {
+      dispatchLocalWikiAdded(existing);
+      openWikiPage(existing.relPath);
+      return;
+    }
+
+    const page = await window.wikiAPI?.createFile(folder, fileName);
     if (page?.relPath) {
       dispatchLocalWikiAdded(page);
       openWikiPage(page.relPath);
     }
   }, [openWikiPage]);
+
+  const openBookmarksPane = useCallback(() => {
+    beginLibraryNavigation();
+    setSelectedItemId(BOOKMARKS_ITEM_ID);
+    setSelectedItemType('bookmarks');
+    setSelectedPath(null);
+    setWikiSelectedRelPath(null);
+    setWikiSelectedPageLoading(false);
+    setExternalOpenFile(null);
+    setContentMode('rendered');
+  }, [beginLibraryNavigation]);
 
   const openLinkAction = useCallback((action: LinkAction) => {
     switch (action.kind) {
@@ -1937,13 +4334,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       case 'command':
         onOpenCommandPath?.(action.path);
         return;
+      case 'bookmarks':
+        openBookmarksPane();
+        return;
       case 'external':
         window.shellAPI?.openExternal(action.href);
         return;
       case 'noop':
         return;
     }
-  }, [createUnresolvedWikiLink, onOpenCommandPath, openWikiPage, selectArtifactPath]);
+  }, [createUnresolvedWikiLink, onOpenCommandPath, openBookmarksPane, openWikiPage, selectArtifactPath]);
 
   const openMarkdownLinkTarget = useCallback((target: WikiLinkTarget) => {
     switch (target.kind) {
@@ -1956,8 +4356,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       case 'command':
         onOpenCommandPath?.(target.path);
         return;
+      case 'bookmarks':
+        openBookmarksPane();
+        return;
     }
-  }, [onOpenCommandPath, openWikiPage, selectArtifactPath]);
+  }, [onOpenCommandPath, openBookmarksPane, openWikiPage, selectArtifactPath]);
 
   const currentNavigationEntry = useMemo((): LibrarianNavigationEntry | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -1968,6 +4371,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     if (selectedItemType === 'external' && externalOpenFile?.path) {
       return { itemType: 'external', itemPath: externalOpenFile.path };
+    }
+    if (selectedItemType === 'river') {
+      return { itemType: 'river', itemPath: RIVER_ITEM_ID };
+    }
+    if (selectedItemType === 'ember') {
+      return { itemType: 'ember', itemPath: EMBER_ITEM_ID };
     }
     return null;
   }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
@@ -1982,6 +4391,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(entry.itemPath);
     } else if (entry.itemType === 'artifact') {
       selectArtifactPath(entry.itemPath);
+    } else if (entry.itemType === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
+    } else if (entry.itemType === 'ember') {
+      setSelectedItemId(EMBER_ITEM_ID);
+      setSelectedItemType('ember');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else {
       await selectExternalFile(entry.itemPath);
     }
@@ -2008,7 +4431,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   // Persist text size preference
   useEffect(() => {
-    localStorage.setItem('librarian-text-size', textSize);
+    localStorage.setItem(LIBRARIAN_TEXT_SIZE_STORAGE_KEY, textSize);
   }, [textSize]);
 
   useEffect(() => {
@@ -2028,6 +4451,66 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [todoMarker]);
 
   useEffect(() => {
+    persistLibrarianMaxwellItems(localStorage, maxwellItems);
+  }, [maxwellItems]);
+
+  useEffect(() => {
+    persistLibrarianHtmlLayoutByPath(localStorage, htmlLayoutByPath);
+  }, [htmlLayoutByPath]);
+
+  useEffect(() => {
+    const syncStoredPreference = (key: string | null | undefined) => {
+      if (key !== null && key !== undefined && !isLiveLibrarianRendererStoragePreferenceKey(key)) return;
+      const syncAll = key === null || key === undefined;
+
+      if (syncAll || key === LIBRARIAN_TEXT_SIZE_STORAGE_KEY) {
+        setTextSize(restoreLibrarianTextSize(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_TYPOGRAPHY_STORAGE_KEY) {
+        setTypographyPresetId(restoreLibrarianTypographyPreset(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_LINE_HEIGHT_STORAGE_KEY) {
+        setLineHeightId(restoreLibrarianLineHeight(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY) {
+        setUnorderedListMarker(restoreLibrarianUnorderedListMarker(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_TODO_MARKER_STORAGE_KEY) {
+        setTodoMarker(restoreLibrarianTodoMarker(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY) {
+        setMaxwellItems(restoreLibrarianMaxwellItems(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_HTML_LAYOUT_STORAGE_KEY) {
+        setHtmlLayoutByPath(restoreLibrarianHtmlLayoutByPath(localStorage));
+      }
+      if (syncAll || key === LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY) {
+        const nextWidth = restoreLibrarianSidebarWidth(localStorage);
+        sidebarWidthRef.current = nextWidth;
+        setSidebarWidth(nextWidth);
+      }
+      if (syncAll || key === LINE_NUMBERS_STORAGE_KEY) {
+        setLineNumbersMode(restoreLibrarianLineNumbersMode(localStorage));
+      }
+      if (syncAll || key === SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY) {
+        setSharedFileToggleHotkey(restoreSharedFileToggleHotkey(localStorage));
+      }
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      syncStoredPreference((event as CustomEvent<{ key?: string | null }>).detail?.key);
+    };
+    const handleStorage = (event: Event) => {
+      syncStoredPreference((event as StorageEvent).key);
+    };
+    window.addEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
     const syncTextCursorBlink = () => setBlinkTextCursor(restoreTextCursorBlink(localStorage));
     window.addEventListener('storage', syncTextCursorBlink);
     window.addEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, syncTextCursorBlink);
@@ -2038,14 +4521,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useEffect(() => {
-    const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
-    window.addEventListener('storage', syncRenderedEditClickMode);
-    window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    const syncRenderedTextCursorStyle = () => setRenderedTextCursorStyle(restoreRenderedTextCursorStyle(localStorage));
+    window.addEventListener('storage', syncRenderedTextCursorStyle);
+    window.addEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
     return () => {
-      window.removeEventListener('storage', syncRenderedEditClickMode);
-      window.removeEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+      window.removeEventListener('storage', syncRenderedTextCursorStyle);
+      window.removeEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
     };
   }, []);
+
+  useEffect(() => {
+    const syncRenderedBlockCursorOpacity = () => setRenderedBlockCursorOpacity(restoreRenderedBlockCursorOpacity(localStorage));
+    window.addEventListener('storage', syncRenderedBlockCursorOpacity);
+    window.addEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, syncRenderedBlockCursorOpacity);
+    return () => {
+      window.removeEventListener('storage', syncRenderedBlockCursorOpacity);
+      window.removeEventListener(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT, syncRenderedBlockCursorOpacity);
+    };
+  }, []);
+
+  const handleTextCursorBlinkChange = useCallback((enabled: boolean) => {
+    setBlinkTextCursor(enabled);
+    persistTextCursorBlink(localStorage, enabled);
+    window.dispatchEvent(new Event(TEXT_CURSOR_BLINK_CHANGED_EVENT));
+  }, []);
+
+  const handleRenderedTextCursorStyleChange = useCallback((nextStyle: RenderedTextCursorStyle) => {
+    setRenderedTextCursorStyle(nextStyle);
+    persistRenderedTextCursorStyle(localStorage, nextStyle);
+    window.dispatchEvent(new Event(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
+  }, [lineNumbersMode]);
 
   // Check mute status on mount
   useEffect(() => {
@@ -2083,14 +4592,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
     if (isResizing) return;
-    localStorage.setItem('librarian-sidebar-width', String(sidebarWidth));
+    localStorage.setItem(LIBRARIAN_SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
   }, [isResizing, sidebarWidth]);
 
   useEffect(() => {
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
       setBookmarksEverShown(true);
     }
-  }, [selectedItemType, bookmarksEverShown]);
+    if (selectedItemType === 'river' && !riverEverShown) {
+      setRiverEverShown(true);
+    }
+    if (selectedItemType === 'ember' && !emberEverShown) {
+      setEmberEverShown(true);
+    }
+  }, [selectedItemType, bookmarksEverShown, riverEverShown, emberEverShown]);
 
   useEffect(() => {
     onSelectedItemTypeChange?.(active ? selectedItemType : null);
@@ -2098,29 +4613,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-      persistLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath });
       return;
     }
     if (selectedItemType === 'artifact' && selectedPath) {
-      persistLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
       return;
     }
     if (selectedItemType === 'bookmarks') {
-      persistLibrarianSelection(localStorage, { type: 'bookmarks' });
+      clearLibrarianEditorSession(localStorage);
+      persistNativeLibrarianSelection(localStorage, { type: 'bookmarks' });
+      return;
+    }
+    if (selectedItemType === 'ember') {
+      clearLibrarianEditorSession(localStorage);
+      persistNativeLibrarianSelection(localStorage, { type: 'ember' });
       return;
     }
     if (selectedItemType === 'external') {
-      // External files are transient — don't overwrite the stored wiki/
-      // artifact/bookmarks selection, so closing and reopening the library
-      // restores the durable view.
+      if (externalOpenFile?.path) {
+        persistNativeLibrarianSelection(localStorage, { type: 'external', path: externalOpenFile.path });
+      }
       return;
     }
     if (selectedPath) {
-      persistLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
+      persistNativeLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
       return;
     }
-    persistLibrarianSelection(localStorage, null);
-  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
+    persistNativeLibrarianSelection(localStorage, null);
+  }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!currentNavigationEntry) return;
@@ -2148,8 +4669,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
 
       const newWidth = e.clientX - containerRect.left;
-      // Clamp between 120px and 400px
-      const clampedWidth = Math.max(120, Math.min(400, newWidth));
+      const clampedWidth = Math.max(
+        LIBRARIAN_SIDEBAR_MIN_WIDTH,
+        Math.min(LIBRARIAN_SIDEBAR_MAX_WIDTH, newWidth),
+      );
       sidebarWidthRef.current = clampedWidth;
       applySidebarWidth(clampedWidth);
     };
@@ -2184,32 +4707,131 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [isFocusedWritingMode]);
 
   useEffect(() => {
-    if (!canUseFocusImmersive) setFocusImmersive(false);
-  }, [canUseFocusImmersive]);
-
-  useEffect(() => {
-    if (!focusChromeUsesProximityFade) {
-      setFocusChromeProximityVisible(false);
+    const previous = previousSidebarCollapsedRef.current;
+    if (previous !== sidebarCollapsed) {
+      if (!sidebarCollapsed && responsivePanelState.autoCollapseSidebar) {
+        setSuppressAutoCollapseSidebar(true);
+      }
+      if (sidebarCollapsed) {
+        setSuppressAutoCollapseSidebar(false);
+      }
+      previousSidebarCollapsedRef.current = sidebarCollapsed;
       return;
     }
-
-    const updateProximity = (event: MouseEvent) => {
-      const paneTop = readerPaneRef.current?.getBoundingClientRect().top ?? 0;
-      setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, paneTop));
-    };
-    const hideProximityChrome = () => setFocusChromeProximityVisible(false);
-
-    window.addEventListener('mousemove', updateProximity);
-    window.addEventListener('mouseleave', hideProximityChrome);
-    return () => {
-      window.removeEventListener('mousemove', updateProximity);
-      window.removeEventListener('mouseleave', hideProximityChrome);
-    };
-  }, [focusChromeUsesProximityFade]);
+    if (!responsivePanelState.autoCollapseSidebar) {
+      setSuppressAutoCollapseSidebar(false);
+    }
+  }, [responsivePanelState.autoCollapseSidebar, sidebarCollapsed]);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(active && focusChromeActive, active && focusChromeActive && focusChromeVisualVisible);
-  }, [active, focusChromeActive, focusChromeVisualVisible, onFocusChromeActiveChange]);
+    if (!responsivePanelState.autoHideTerminal) {
+      setSuppressAutoHideTerminal(false);
+    }
+  }, [responsivePanelState.autoHideTerminal]);
+
+  useEffect(() => {
+    if (!canUseFocusImmersive && focusChromeEnabled === undefined) setFocusImmersive(false);
+  }, [canUseFocusImmersive, focusChromeEnabled, setFocusImmersive]);
+
+  useEffect(() => {
+    onFocusChromeActiveChange?.(active && focusChromeActive);
+  }, [active, focusChromeActive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    const visible = !active || !focusChromeActive || focusChromeProximityOpacity >= 0.95;
+    window.librarianAPI?.setWindowButtonVisibility?.(visible);
+  }, [active, focusChromeActive, focusChromeProximityOpacity]);
+
+  useEffect(() => {
+    return () => {
+      window.librarianAPI?.setWindowButtonVisibility?.(true);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    let frame: number | null = null;
+    let settleTimer: number | null = null;
+    const refreshEditorLayout = () => {
+      markdownCodeEditorRef.current?.refreshLayout();
+      renderedMarkdownEditorRef.current?.refreshLayout();
+      updateMarkdownEditorFades(markdownCodeEditorRef.current);
+      updateRenderedDocumentTopFade(contentScrollRef.current);
+    };
+    const updateResponsivePanelSize = () => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+      const width = Math.round(containerRect.width);
+      const height = Math.round(containerRect.height);
+      const containerSizeChanged = responsivePanelSize.width !== width || responsivePanelSize.height !== height;
+      if (containerSizeChanged && sidebarHoverExpanded) {
+        setSidebarHoverExpanded(false);
+      }
+      setResponsivePanelSize((previous) => {
+        if (previous.width === width && previous.height === height) return previous;
+        return { width, height };
+      });
+    };
+    const updateCenter = () => {
+      frame = null;
+      updateResponsivePanelSize();
+      refreshEditorLayout();
+      const readerPane = readerPaneRef.current;
+      const containerRect = containerRef.current?.getBoundingClientRect() ?? null;
+      if (!readerPane || !containerRect) {
+        setReaderStatusFeedbackLeft(null);
+        if (!active || !focusChromeActive) onFocusChromeContentCenterChange?.(null);
+        return;
+      }
+      const readerRect = readerPane.getBoundingClientRect();
+      const terminalRect = readerPane
+        .querySelector<HTMLElement>('[data-ft-codex-terminal-panel="true"]')
+        ?.getBoundingClientRect() ?? null;
+      const contentCenterX = getFocusChromeContentCenterX({
+        readerLeft: readerRect.left,
+        readerRight: readerRect.right,
+        terminalLeft: terminalRect?.left ?? null,
+        terminalDockedRight: effectiveCodexTerminalDockSide === 'right',
+        terminalVisible: effectiveCodexTerminalVisible,
+      });
+      setReaderStatusFeedbackLeft(Math.round(contentCenterX - containerRect.left));
+      if (!active || !focusChromeActive) {
+        onFocusChromeContentCenterChange?.(null);
+        return;
+      }
+      onFocusChromeContentCenterChange?.(contentCenterX);
+    };
+    const scheduleUpdateCenter = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(updateCenter);
+    };
+    const scheduleSettledUpdate = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        scheduleUpdateCenter();
+      }, 80);
+    };
+    const scheduleResizeUpdate = () => {
+      scheduleUpdateCenter();
+      scheduleSettledUpdate();
+    };
+
+    updateCenter();
+    scheduleUpdateCenter();
+    const resizeObserver = new ResizeObserver(scheduleResizeUpdate);
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
+    if (readerPaneRef.current) resizeObserver.observe(readerPaneRef.current);
+    for (const element of readerPaneRef.current?.querySelectorAll<HTMLElement>('[data-ft-codex-terminal-panel="true"]') ?? []) {
+      resizeObserver.observe(element);
+    }
+    window.addEventListener('resize', scheduleResizeUpdate);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', scheduleResizeUpdate);
+    };
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, responsivePanelSize.height, responsivePanelSize.width, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -2227,8 +4849,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     const dismissable = isFullScreen;
-    window.librarianAPI?.setImmersiveDismissable?.(dismissable);
-    return () => window.librarianAPI?.setImmersiveDismissable?.(false);
+    const applyImmersiveDismissable = () => {
+      window.librarianAPI?.setImmersiveDismissable?.(dismissable);
+    };
+    applyImmersiveDismissable();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applyImmersiveDismissable);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applyImmersiveDismissable);
+      window.librarianAPI?.setImmersiveDismissable?.(false);
+    };
   }, [active, isFullScreen]);
 
   // Push 'library' size-key for document sections. Bookmarks keeps the
@@ -2236,8 +4865,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active || preserveCurrentSizeKey) return;
     if (selectedItemType === 'bookmarks') return;
-    window.librarianAPI?.setSizeKey?.('library');
+    const applySizeKey = () => {
+      window.librarianAPI?.setSizeKey?.('library');
+    };
+    applySizeKey();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applySizeKey);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applySizeKey);
+    };
   }, [active, preserveCurrentSizeKey, selectedItemType]);
+
+  useEffect(() => {
+    if (!active || preserveCurrentSizeKey) return;
+    if (selectedItemType !== 'bookmarks' || !bookmarksCanvasActive) return;
+    const applySizeKey = () => {
+      window.librarianAPI?.setSizeKey?.('canvas');
+    };
+    applySizeKey();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applySizeKey);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applySizeKey);
+    };
+  }, [active, bookmarksCanvasActive, preserveCurrentSizeKey, selectedItemType]);
 
   // Initialize narration state and subscribe to events (feature flagged)
   useEffect(() => {
@@ -2298,25 +4947,365 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     () => LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === typographyPresetId) ?? LIBRARIAN_TYPOGRAPHY_PRESETS[0],
     [typographyPresetId],
   );
+  const documentMaxWidth = resolveLibrarianDocumentMaxWidth(typographyPreset.maxWidth, textSize);
 
   const activeReading: Reading | null =
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+  const hasActiveLibrarySurface =
+    Boolean(activeReading) ||
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'ember';
+  const effectiveFullScreen = isFullScreen || focusImmersive;
+  const activeReadingPath = activeReading?.path ?? null;
+  useEffect(() => {
+    if (!riverSharePickerOpen) return;
+    let cancelled = false;
+    setRiverTargetsLoading(true);
+    setRiverPickerError(null);
+    void Promise.all([
+      window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
+      activeReadingPath && sharedFileStatus?.shared
+        ? window.sharedFilesAPI?.getAudience?.(activeReadingPath) ?? Promise.resolve(null)
+        : Promise.resolve(null),
+    ])
+      .then(([targets, audience]) => {
+        if (cancelled) return;
+        const nextTargets = targets ?? [];
+        const defaultIds = nextTargets
+          .filter((target) => target.committable && target.isDefault)
+          .map((target) => target.id);
+        const audienceIds = audience?.shared
+          ? audience.targets.map((target) => target.id)
+          : [];
+        setRiverTargets(nextTargets);
+        setRiverDefaultTargetIds(defaultIds);
+        setSelectedRiverTargetIds(audienceIds.length > 0 ? audienceIds : defaultIds);
+        setRiverPickerError(audience?.error ?? null);
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River target lookup failed:', error);
+        if (!cancelled) {
+          setRiverTargets([]);
+          setRiverDefaultTargetIds([]);
+          setSelectedRiverTargetIds([]);
+          setRiverPickerError('Could not load River targets.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRiverTargetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeReadingPath, riverSharePickerOpen, sharedFileStatus?.shared]);
+  const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
+  const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
+  const activeIsHtmlDocument = activeDocumentKind === 'html';
+  const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
+  const activeHtmlLayout: LibrarianHtmlLayout = activeIsHtmlDocument && activeReadingPath
+    ? htmlLayoutByPath[activeReadingPath] ?? 'full'
+    : 'contained';
+  const activeHtmlUsesFullCanvas = activeIsHtmlDocument && contentMode !== 'markdown' && activeHtmlLayout === 'full';
+  const sidebarHidden = isLibrarianSidebarHidden({ isFullScreen, selectedItemType });
+  const latestRenderedContent = latestRenderedContentRef.current;
+  const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
+    ? latestRenderedContent.content
+    : activeReading?.content ?? null;
+  const showWikiSelectedPageLoadingShell =
+    selectedItemType === 'wiki' &&
+    Boolean(wikiSelectedRelPath) &&
+    wikiSelectedPageLoading &&
+    !activeReading;
+  useLayoutEffect(() => {
+    pendingScrollRatioRef.current = null;
+    if (contentScrollRef.current) {
+      contentScrollRef.current.scrollTop = 0;
+      updateRenderedDocumentTopFade(contentScrollRef.current);
+    }
+    if (markdownCodeEditorRef.current) {
+      markdownCodeEditorRef.current.scrollTop = 0;
+      updateMarkdownEditorFades(markdownCodeEditorRef.current);
+    }
+  }, [activeReadingPath, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
+  const activeMaxwellItem = useMemo<LibrarianMaxwellItem | null>(() => {
+    if (!activeReading || !activeReadingPath || !activeIsMarkdownDocument) return null;
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return {
+        id: `wiki:${wikiSelectedRelPath}`,
+        type: 'wiki',
+        title: activeReading.title,
+        path: activeReadingPath,
+        relPath: wikiSelectedRelPath,
+      };
+    }
+    if (selectedItemType === 'artifact') {
+      return {
+        id: `artifact:${activeReadingPath}`,
+        type: 'artifact',
+        title: activeReading.title,
+        path: activeReadingPath,
+      };
+    }
+    if (selectedItemType === 'external') {
+      return {
+        id: `external:${activeReadingPath}`,
+        type: 'external',
+        title: activeReading.title,
+        path: activeReadingPath,
+      };
+    }
+    return null;
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, selectedItemType, wikiSelectedRelPath]);
+  const showSelectPageState = useCallback(() => {
+    setSelectedItemId(null);
+    setSelectedItemType(null);
+    setSelectedPath(null);
+    setSelectedReading(null);
+    setWikiSelectedRelPath(null);
+    setWikiSelectedPage(null);
+    setWikiSelectedPageLoading(false);
+    setExternalOpenFile(null);
+    setShareStatus(null);
+    setLinkCopied(false);
+    setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
+  }, []);
+  const openDocumentTargetInWindow = useCallback((
+    target: { kind: 'wiki' | 'artifact' | 'external'; path: string; contentMode?: MarkdownContentMode; sidebarCollapsed?: boolean },
+    clearSource = true
+  ) => {
+    void (async () => {
+      await flushCurrentEdit();
+      const result = await window.libraryAPI?.openDocumentWindow?.(target);
+      if (clearSource && result?.success) showSelectPageState();
+    })();
+  }, [flushCurrentEdit, showSelectPageState]);
+  const openActiveDocumentInWindow = useCallback(() => {
+    if (!activeReadingPath) return;
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: wikiSelectedRelPath, contentMode });
+      return;
+    }
+    if (selectedItemType === 'artifact') {
+      openDocumentTargetInWindow({ kind: 'artifact', path: activeReadingPath, contentMode });
+      return;
+    }
+    if (selectedItemType === 'external') {
+      openDocumentTargetInWindow({ kind: 'external', path: activeReadingPath, contentMode });
+    }
+  }, [activeReadingPath, contentMode, openDocumentTargetInWindow, selectedItemType, wikiSelectedRelPath]);
+  const isSidebarItemActiveDocument = useCallback((item: UnifiedItem): boolean => {
+    if (item.type === 'wiki') return selectedItemType === 'wiki' && item.relPath === wikiSelectedRelPath;
+    if (item.type === 'artifact') return selectedItemType === 'artifact' && item.absPath === activeReadingPath;
+    if (item.type === 'external') return selectedItemType === 'external' && item.absPath === activeReadingPath;
+    return false;
+  }, [activeReadingPath, selectedItemType, wikiSelectedRelPath]);
+  const maxwellToolbarItems = useMemo(() => maxwellItems.map((item) => ({
+    id: item.id,
+    title: item.title,
+    subtitle: item.relPath ?? item.path,
+  })), [maxwellItems]);
+  const addActivePageToMaxwell = useCallback(() => {
+    if (!activeMaxwellItem) return;
+    setMaxwellItems((prev) => [
+      activeMaxwellItem,
+      ...prev.filter((item) => item.id !== activeMaxwellItem.id),
+    ].slice(0, 20));
+  }, [activeMaxwellItem]);
+  const removeMaxwellItem = useCallback((id: string) => {
+    setMaxwellItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+  const visitMaxwellItem = useCallback((id: string) => {
+    const item = maxwellItems.find((candidate) => candidate.id === id);
+    if (!item) return;
+    void (async () => {
+      await flushCurrentEdit();
+      if (item.type === 'wiki' && item.relPath) {
+        openWikiPage(item.relPath);
+      } else if (item.type === 'artifact') {
+        selectArtifactPath(item.path);
+      } else {
+        await selectExternalFile(item.path);
+      }
+      setContentMode('rendered');
+    })();
+  }, [flushCurrentEdit, maxwellItems, openWikiPage, selectArtifactPath, selectExternalFile]);
+  const getActiveMaxwellSelection = useCallback((): MaxwellToolbarSelection => {
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    const selection = editor?.getSelectionRange() ?? null;
+    if (!selection) return null;
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    const text = editor?.getValue().slice(start, end) ?? '';
+    return { start, end, text };
+  }, []);
+  const restoreInlineGemmaEditorSelection = useCallback((selection: MaxwellToolbarSelection) => {
+    if (!selection || selection.start === selection.end) return;
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    editor?.setSelectionRange(selection.start, selection.end);
+  }, []);
+  const openInlineGemmaCommand = useCallback(() => {
+    const selection = getActiveMaxwellSelection();
+    setInlineGemmaSelection(selection);
+    setInlineGemmaInstruction('');
+    setInlineGemmaError(getMaxwellToolbarRunMode(selection).mode === 'selection' ? null : 'Select text first.');
+    setInlineGemmaOpen(true);
+    requestAnimationFrame(() => {
+      restoreInlineGemmaEditorSelection(selection);
+      inlineGemmaInstructionRef.current?.focus();
+      requestAnimationFrame(() => {
+        restoreInlineGemmaEditorSelection(selection);
+      });
+    });
+  }, [getActiveMaxwellSelection, restoreInlineGemmaEditorSelection]);
+  const closeInlineGemmaCommand = useCallback(() => {
+    setInlineGemmaOpen(false);
+    setInlineGemmaInstruction('');
+    setInlineGemmaSelection(null);
+    setInlineGemmaError(null);
+  }, []);
+  const submitInlineGemmaCommand = useCallback(() => {
+    const request = getInlineGemmaLocalCommandRequest(inlineGemmaInstruction, inlineGemmaSelection);
+    if (!request) {
+      setInlineGemmaError(inlineGemmaInstruction.trim() ? 'Select text first.' : 'Enter an instruction.');
+      return;
+    }
+    setInlineGemmaRunning(true);
+    setInlineGemmaError(null);
+    setInlineGemmaOpen(false);
+    setInlineGemmaInstruction('');
+    setInlineGemmaSelection(null);
+    void (async () => {
+      restoreInlineGemmaEditorSelection(inlineGemmaSelection);
+      await flushCurrentEdit();
+      const result = await window.commandsAPI?.runLocalCommand?.(request);
+      if (!result) {
+        setInlineGemmaError('Local commands unavailable.');
+        return;
+      }
+      if (!result.success) {
+        setInlineGemmaError(result.error ?? 'Local command failed.');
+        return;
+      }
+    })().catch((err) => {
+      setInlineGemmaError(err instanceof Error ? err.message : 'Local command failed.');
+    }).finally(() => {
+      setInlineGemmaRunning(false);
+    });
+  }, [flushCurrentEdit, inlineGemmaInstruction, inlineGemmaSelection, restoreInlineGemmaEditorSelection]);
+  const runMaxwellItem = useCallback((id: string) => {
+    const item = maxwellItems.find((candidate) => candidate.id === id);
+    if (!item) return;
+    void (async () => {
+      let instruction: string | null = null;
+      if (item.type === 'wiki' && item.relPath) {
+        instruction = (await window.wikiAPI?.getPage(item.relPath))?.content ?? null;
+      } else if (item.type === 'artifact') {
+        instruction = (await window.librarianAPI?.getReading(item.path))?.content ?? null;
+      } else {
+        instruction = (await window.externalAPI?.open(item.path))?.content ?? null;
+      }
+      const trimmed = instruction?.trim();
+      if (!trimmed) return;
+      await window.commandsAPI?.runLocalCommand?.({
+        customInstruction: trimmed,
+        ...getMaxwellToolbarRunMode(getActiveMaxwellSelection()),
+      });
+    })().catch((err) => {
+      console.warn('[Librarian] Maxwell toolbar run failed:', err);
+    });
+  }, [getActiveMaxwellSelection, maxwellItems]);
+  const activeReadingToolbarHasBreadcrumb = !focusChromeActive
+    && (selectedItemType === 'wiki' || selectedItemType === 'external')
+    && Boolean(activeReadingPath);
+  const showActiveReadingInFolder = () => {
+    if (activeReadingPath) {
+      window.shellAPI?.showItemInFolder(activeReadingPath);
+    }
+  };
+  activeReadingPathRef.current = activeReadingPath;
+  const liveRenderedReadingContent = contentMode === 'rendered'
+    && renderedEditingActive
+    && activeReadingPath
+    && latestRenderedContentRef.current?.path === activeReadingPath
+    ? latestRenderedContentRef.current.content
+    : activeReadingContent;
+  activeReadingContentRef.current = liveRenderedReadingContent;
+  if (typeof liveRenderedReadingContent === 'string' && liveRenderedReadingContent !== activeReadingContent) {
+    editContentRef.current = liveRenderedReadingContent;
+  }
+  const renderedDisplayReadingContent = getRenderedDisplayReadingContent({
+    contentMode,
+    renderedEditingActive,
+    activeReadingPath,
+    renderedDisplayContent: renderedDisplayContentRef.current,
+    activeReadingContent,
+  });
   const activeTitlePath =
     activeReading && (selectedItemType === 'wiki' || selectedItemType === 'external')
       ? activeReading.path
       : null;
 
   useEffect(() => {
-    onActiveFileUpdatedChange?.(active && activeReading
+    onActiveFileUpdatedChange?.(activeReading
       ? { path: activeReading.path, title: activeReading.title, mtime: activeReading.mtime }
       : null);
-  }, [active, activeReading?.mtime, activeReading?.path, activeReading?.title, onActiveFileUpdatedChange]);
+  }, [activeReading?.mtime, activeReading?.path, activeReading?.title, onActiveFileUpdatedChange]);
 
   useEffect(() => {
-    if (!active || !activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) {
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+    if (activeIsSourceOnlyDocument && contentMode !== 'markdown') {
+      setContentMode('markdown');
+    }
+  }, [activeIsSourceOnlyDocument, contentMode]);
+
+  const getActiveLibraryFileSelectionContext = useCallback(() => {
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    const selection = editor?.getSelectionRange() ?? null;
+    if (!selection || selection.start === selection.end) return null;
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    const value = editor?.getValue() ?? activeReadingContentRef.current ?? '';
+    return {
+      selectionStart: start,
+      selectionEnd: end,
+      selectionText: value.slice(start, end),
+    };
+  }, []);
+
+  const withActiveLibraryFileSelectionContext = useCallback((context: ActiveLibraryFileSelectionContext): ActiveLibraryFileSelectionContext => {
+    const selection = getActiveLibraryFileSelectionContext();
+    return selection ? { ...context, ...selection } : context;
+  }, [getActiveLibraryFileSelectionContext]);
+
+  const publishActiveLibraryFileContext = useCallback((
+    context: ActiveLibraryFileSelectionContext | null,
+    options: { force?: boolean } = {},
+  ) => {
+    const nextKey = getActiveLibraryFileContextKey(context);
+    if (!options.force && lastReportedActiveLibraryFileContextRef.current === nextKey) return;
+    lastReportedActiveLibraryFileContextRef.current = nextKey;
+    lastReportedActiveLibraryFileHasSelectionRef.current = hasActiveLibraryFileSelectionContext(context);
+    void window.commandsAPI?.setActiveLibraryFileContext?.(context);
+  }, []);
+
+  const inferWikiRootPathForContext = useCallback((filePath: string, relPath: string): string => {
+    const normalizedFilePath = filePath.replace(/\\/g, '/');
+    const normalizedRelPath = relPath.replace(/\\/g, '/').replace(/\.md$/i, '');
+    const suffix = `/${normalizedRelPath}.md`;
+    return normalizedFilePath.endsWith(suffix) ? normalizedFilePath.slice(0, -suffix.length) : '';
+  }, []);
+
+  const reportActiveLibraryFileContext = useCallback((options: { force?: boolean } = {}) => {
+    if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')) {
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
@@ -2324,18 +5313,63 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       item.id === selectedItemId || item.absPath === activeReading.path
     ));
     if (!sidebarItem?.rootPath || !sidebarItem.relPath || (sidebarItem.type !== 'wiki' && sidebarItem.type !== 'external')) {
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      if (selectedItemType === 'wiki' && wikiSelectedRelPath && activeReading.path) {
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
+          type: 'wiki',
+          rootPath: inferWikiRootPathForContext(activeReading.path, wikiSelectedRelPath),
+          relPath: wikiSelectedRelPath,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        }), options);
+        return;
+      }
+      if (selectedItemType === 'external' && activeReading.path) {
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
+          type: 'external',
+          rootPath: '',
+          relPath: activeReading.path,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        }), options);
+        return;
+      }
+      if (selectedItemType === 'artifact' && activeReading.path) {
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
+          type: 'external',
+          rootPath: '',
+          relPath: activeReading.path,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        }), options);
+        return;
+      }
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
-    void window.commandsAPI?.setActiveLibraryFileContext?.({
+    publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
       type: sidebarItem.type,
       rootPath: sidebarItem.rootPath,
       relPath: sidebarItem.relPath,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
-    });
-  }, [active, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+    }), options);
+  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, publishActiveLibraryFileContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
+
+  useEffect(() => {
+    reportActiveLibraryFileContext();
+  }, [reportActiveLibraryFileContext]);
+
+  useEffect(() => {
+    if (!active) return;
+    const reportCurrentContext = () => {
+      reportActiveLibraryFileContext({ force: true });
+    };
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentContext);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentContext);
+    };
+  }, [active, reportActiveLibraryFileContext]);
 
   useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
@@ -2359,16 +5393,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => cancelAnimationFrame(frame);
   }, [activeTitlePath, editingTitlePath]);
 
-  const focusMarkdownBody = useCallback(() => {
+  const focusActiveDocumentBody = useCallback(() => {
     if (contentMode !== 'markdown') {
-      focusMarkdownEditorOnOpenRef.current = true;
-      setContentMode('markdown');
+      const currentContent = activeReadingContentRef.current ?? activeReading?.content ?? '';
+      const bodyEnd = removeEmptyMarkdownCommentPlaceholders(splitFrontmatter(currentContent).body).length;
+      const selection = { start: bodyEnd, end: bodyEnd };
+      pendingRenderedEditorSelectionRef.current = selection;
+      activateRenderedEditing();
+      requestAnimationFrame(() => {
+        const editor = renderedMarkdownEditorRef.current;
+        if (!editor) return;
+        const valueLength = editor.getValue().length;
+        const offset = Math.max(0, Math.min(bodyEnd, valueLength));
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(offset, offset);
+        activeRenderedCaretOffsetRef.current = offset;
+      });
       return;
     }
     requestAnimationFrame(() => {
       markdownCodeEditorRef.current?.focus({ preventScroll: true });
     });
-  }, [contentMode]);
+  }, [activeReading?.content, activateRenderedEditing, contentMode]);
 
   const beginTitleEdit = useCallback(() => {
     if (!activeReading || !activeTitlePath) return;
@@ -2382,7 +5428,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!trimmed || trimmed === activeReading.title) {
       setEditingTitlePath(null);
       setTitleDraft(activeReading.title);
-      if (options.focusBody) focusMarkdownBody();
+      if (options.focusBody) focusActiveDocumentBody();
       return;
     }
 
@@ -2400,7 +5446,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
 
         dispatchLocalWikiRenamed({
-          rootPath: '',
+          rootPath: inferWikiRootPathForContext(activeReading.path, oldRelPath),
           oldRelPath,
           newRelPath: nextRelPath,
           oldAbsPath: activeReading.path,
@@ -2453,12 +5499,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setEditingTitlePath(null);
     }
 
-    if (options.focusBody) focusMarkdownBody();
+    if (options.focusBody) focusActiveDocumentBody();
   }, [
+    activateRenderedEditing,
     activeReading,
     activeTitlePath,
-    focusMarkdownBody,
+    focusActiveDocumentBody,
     flushCurrentEdit,
+    inferWikiRootPathForContext,
     selectedItemType,
     titleDraft,
     wikiSelectedRelPath,
@@ -2470,6 +5518,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     void commitTitleEdit();
   }, [activeTitlePath, commitTitleEdit, editingTitlePath]);
 
+  const rememberSavedDocumentContent = useCallback((
+    targetPath: string | null,
+    content: string,
+    version: DocumentVersion | null,
+  ) => {
+    if (targetPath) {
+      latestRenderedContentRef.current = { path: targetPath, content };
+    }
+    if (activeReadingPathRef.current === targetPath) {
+      activeReadingContentRef.current = content;
+      editContentRef.current = content;
+    }
+    lastSavedContentRef.current = content;
+    if (version) lastSavedVersionRef.current = version;
+  }, []);
+
   const applySavedDocumentState = useCallback((
     targetType: LibrarianSelectedItemType,
     targetPath: string | null,
@@ -2480,6 +5544,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const nextTodoState = splitFrontmatter(content).todoState ?? undefined;
     const versionPatch = version ? { documentVersion: version } : {};
     const mtime = Date.now();
+    rememberSavedDocumentContent(targetPath, content, version);
 
     if (targetType === 'wiki') {
       setWikiSelectedPage((prev) => (prev && prev.path === targetPath
@@ -2495,9 +5560,32 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         : prev));
     }
 
-    lastSavedContentRef.current = content;
-    if (version) lastSavedVersionRef.current = version;
-  }, []);
+    const relationTarget: WikiLinkTarget | null = targetType === 'wiki' && wikiSelectedRelPath
+      ? { kind: 'wiki', relPath: wikiSelectedRelPath }
+      : targetType === 'artifact' && targetPath
+        ? { kind: 'artifact', path: targetPath }
+        : null;
+    const currentWikiIndex = wikiIndexRef.current;
+    if (relationTarget && currentWikiIndex) {
+      setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+        target: relationTarget,
+        title: fallbackTitle,
+        content,
+        linkHits: getMarkdownEditorLinkHits(content, currentWikiIndex),
+      }));
+    }
+
+  }, [rememberSavedDocumentContent, wikiSelectedRelPath]);
+
+  const handleSidebarItemContentChanged = useCallback((item: UnifiedItem, content: string, version: DocumentVersion | null) => {
+    if (item.type !== 'wiki' && item.type !== 'external') return;
+    if (activeReadingPathRef.current !== item.absPath) return;
+
+    applySavedDocumentState(item.type, item.absPath, content, version, item.title);
+    setEditContent(contentModeRef.current === 'markdown'
+      ? removeEmptyMarkdownCommentPlaceholders(content)
+      : content);
+  }, [applySavedDocumentState]);
 
   const resolveSaveConflict = useCallback(async (
     result: DocumentSaveResult,
@@ -2539,10 +5627,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       editContent: editContentRef.current,
       lastSavedContent: lastSavedContentRef.current,
       hasPendingRenderedSave: pendingRenderedSaveRef.current !== null,
+      hasRenderedSaveInFlight: renderedSaveInFlightRef.current > 0,
+      renderedEditingActive: renderedEditingActiveRef.current,
     })) {
       return false;
     }
 
+    if (currentContentMode === 'rendered' && targetPath) {
+      renderedDisplayContentRef.current = { path: targetPath, content: reading.content };
+    }
     applySavedDocumentState(targetType, targetPath, reading.content, reading.documentVersion, reading.title);
     const nextEditContent = currentContentMode === 'markdown'
       ? removeEmptyMarkdownCommentPlaceholders(reading.content)
@@ -2593,7 +5686,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
 
-  }, [activeReading?.path, applyLiveDiskDocumentState, selectedItemType, wikiSelectedRelPath]);
+    if (selectedItemType === 'artifact' && selectedPath) {
+      const reading = await window.librarianAPI?.getReading(selectedPath);
+      if (!reading) return;
+      applyLiveDiskDocumentState('artifact', reading.path, reading);
+    }
+  }, [activeReading?.path, applyLiveDiskDocumentState, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   useEffect(() => {
     const unsubscribe = window.agentKickoffAPI?.onStatus((event) => {
@@ -2606,7 +5704,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (
       !active
       || !activeReading?.path
-      || (selectedItemType !== 'wiki' && selectedItemType !== 'external')
+      || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')
     ) {
       return;
     }
@@ -2629,18 +5727,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading, selectedItemType, updateSelectedSidebarTodoState]);
 
   const clearSelectedLibraryItem = useCallback(() => {
-    setSelectedItemId(null);
-    setSelectedItemType(null);
-    setSelectedPath(null);
-    setSelectedReading(null);
-    setWikiSelectedRelPath(null);
-    setWikiSelectedPage(null);
-    setExternalOpenFile(null);
-    setShareStatus(null);
-    setLinkCopied(false);
-    setMarkdownUrlPasteChoice(null);
-    setMarkdownWikiLinkCompletion(null);
-  }, []);
+    showSelectPageState();
+  }, [showSelectPageState]);
 
   const getEditorSessionTarget = useCallback((): Pick<LibrarianEditorSession, 'itemType' | 'itemPath'> | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -2672,11 +5760,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     || (contentMode === 'markdown' && markdownDocumentTopFade)
   );
   const topFadeActive = !!activeReading && readerTopFadeVisible;
+  const readerTopFadeHeight = focusChromeActive ? 96 : 58;
+  const readerTopFadeSolidStop = focusChromeActive ? 18 : 8;
+  const readerTopFadeMaskSolidStop = focusChromeActive ? 22 : 10;
+  const activeReadingToolbarIdentityVisible = activeReadingToolbarHasBreadcrumb || topFadeActive;
+  const activeReadingToolbarIdentityPinned = topFadeActive && focusChromeActive;
+  const activeReadingBreadcrumbLabel = selectedItemType === 'wiki' || selectedItemType === 'external'
+    ? formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)
+    : selectedItemType === 'artifact'
+      ? 'Artifact'
+      : '';
 
   const markdownDisplay = useMemo(() => {
-    if ((selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
-    return splitFrontmatter(activeReading.content);
-  }, [selectedItemType, activeReading]);
+    if (!activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact') || !activeReading) return null;
+    return splitFrontmatter(renderedDisplayReadingContent ?? activeReading.content);
+  }, [activeIsMarkdownDocument, selectedItemType, activeReading, renderedDisplayReadingContent]);
 
   const wikiIndex = useMemo(() => buildWikiIndex([
     ...wikiIndexPages,
@@ -2687,6 +5785,120 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+  wikiIndexPagesRef.current = wikiIndexPages;
+  wikiIndexRef.current = wikiIndex;
+  const buildCurrentWikiIndexForPages = useCallback((pages: WikiIndexInput[]) => buildWikiIndex([
+    ...pages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings]);
+
+  const activeMarkdownLinkTarget = useMemo<WikiLinkTarget | null>(() => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return { kind: 'wiki', relPath: wikiSelectedRelPath };
+    }
+    if (selectedItemType === 'artifact' && activeReading?.path) {
+      return { kind: 'artifact', path: activeReading.path };
+    }
+    return null;
+  }, [activeReading?.path, selectedItemType, wikiSelectedRelPath]);
+
+  const linkedDocumentsSourceContent = activeReading
+    ? activeReadingContent ?? activeReading.content
+    : null;
+  const linkedDocumentsSourceIdentity = `${selectedItemType ?? 'none'}:${activeReadingPath ?? ''}`;
+  const [debouncedLinkedDocumentsContent, setDebouncedLinkedDocumentsContent] = useState<{
+    identity: string;
+    content: string | null;
+  }>({ identity: linkedDocumentsSourceIdentity, content: linkedDocumentsSourceContent });
+  useEffect(() => {
+    setDebouncedLinkedDocumentsContent({
+      identity: linkedDocumentsSourceIdentity,
+      content: linkedDocumentsSourceContent,
+    });
+  }, [linkedDocumentsSourceIdentity]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedLinkedDocumentsContent({
+        identity: linkedDocumentsSourceIdentity,
+        content: linkedDocumentsSourceContent,
+      });
+    }, LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [linkedDocumentsSourceContent, linkedDocumentsSourceIdentity]);
+  const linkedDocumentsContent = debouncedLinkedDocumentsContent.identity === linkedDocumentsSourceIdentity
+    ? debouncedLinkedDocumentsContent.content
+    : linkedDocumentsSourceContent;
+  const markdownLinkRelationMetadataDocuments = useMemo(() => getMarkdownLinkRelationMetadataDocuments([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
+  const visibleMarkdownLinkRelationDocuments = useMemo(() => (
+    mergeMarkdownLinkRelationDocuments(
+      markdownLinkRelationMetadataDocuments,
+      markdownLinkRelationDocuments,
+    )
+  ), [markdownLinkRelationDocuments, markdownLinkRelationMetadataDocuments]);
+
+  const linkedDocumentsResult = useMemo<{
+    links: MarkdownLinkedDocument[];
+    timing: Record<string, unknown>;
+  }>(() => {
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    const emptyTiming = (reason: string): Record<string, unknown> => ({
+      stage: 'linked-documents-compute',
+      durationMs: startedAt > 0 ? performance.now() - startedAt : null,
+      reason,
+      linkCount: 0,
+      relationDocumentCount: visibleMarkdownLinkRelationDocuments.length,
+      hydratedRelationDocumentCount: markdownLinkRelationDocuments.length,
+      contentLength: linkedDocumentsContent?.length ?? 0,
+    });
+    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks' || selectedItemType === 'ember') {
+      return { links: [], timing: emptyTiming('inactive') };
+    }
+    const linkedContent = linkedDocumentsContent ?? '';
+    const links = getMarkdownLinkedDocuments(
+      activeMarkdownLinkTarget,
+      linkedContent,
+      visibleMarkdownLinkRelationDocuments,
+      wikiIndex,
+    );
+    return {
+      links,
+      timing: {
+        stage: 'linked-documents-compute',
+        durationMs: startedAt > 0 ? performance.now() - startedAt : null,
+        linkCount: links.length,
+        relationDocumentCount: visibleMarkdownLinkRelationDocuments.length,
+        hydratedRelationDocumentCount: markdownLinkRelationDocuments.length,
+        contentLength: linkedContent.length,
+      },
+    };
+  }, [
+    activeMarkdownLinkTarget,
+    activeReading,
+    activeIsMarkdownDocument,
+    linkedDocumentsContent,
+    markdownLinkRelationDocuments,
+    selectedItemType,
+    visibleMarkdownLinkRelationDocuments,
+    wikiIndex,
+  ]);
+  const linkedDocuments = linkedDocumentsResult.links;
+  useEffect(() => {
+    if (!renderedEditorDebugEnabledRef.current) return;
+    recordRenderedEditorDebug('typing-hotpath', linkedDocumentsResult.timing);
+  }, [linkedDocumentsResult, recordRenderedEditorDebug]);
 
   const markdownWikiLinkSuggestionItems = useMemo(() => {
     const seen = new Set<string>();
@@ -2709,43 +5921,119 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     for (const command of commandIndexPages) {
       addItem(command.title, command.commandPath ?? command.relPath, 'command');
     }
+    addItem('bookmarks', 'Built-in Bookmarks view', 'bookmarks');
 
     return items.sort((a, b) => a.title.localeCompare(b.title));
   }, [commandIndexPages, readings, wikiIndexPages]);
+
+  const markdownMentionSuggestions = useMemo(() => {
+    if (!markdownMentionCompletion) return [];
+    return rankMarkdownWikiLinkSuggestions(markdownWikiLinkSuggestionItems, markdownMentionCompletion.query);
+  }, [markdownMentionCompletion, markdownWikiLinkSuggestionItems]);
 
   const markdownWikiLinkSuggestions = useMemo(() => {
     if (!markdownWikiLinkCompletion) return [];
     return rankMarkdownWikiLinkSuggestions(markdownWikiLinkSuggestionItems, markdownWikiLinkCompletion.query);
   }, [markdownWikiLinkCompletion, markdownWikiLinkSuggestionItems]);
 
-  const rawDisplaySourceBody = markdownDisplay ? markdownDisplay.body : (activeReading?.content ?? '');
+  const markdownEmojiSuggestions = useMemo(() => {
+    if (!markdownEmojiCompletion) return [];
+    return rankMarkdownEmojiSuggestions(markdownEmojiCompletion.query);
+  }, [markdownEmojiCompletion]);
+  const markdownSlashCommandSuggestions = useMemo(() => {
+    if (!markdownSlashCommandCompletion) return [];
+    return rankMarkdownSlashCommandSuggestions(markdownSlashCommandCompletion.query);
+  }, [markdownSlashCommandCompletion]);
+
+  const rawDisplaySourceBody = markdownDisplay ? markdownDisplay.body : (renderedDisplayReadingContent ?? activeReading?.content ?? '');
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
-  const displayContent = useMemo(() => {
-    const raw = displaySourceBody;
-    const linked = transformWikiLinks(raw, wikiIndex);
-    return preserveMarkdownBlankLines(normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(linked)));
-  }, [displaySourceBody, wikiIndex]);
-  const sourceTaskLines = useMemo(
-    () => getMarkdownTaskLines(activeReading?.content ?? ''),
-    [activeReading?.content],
+  const codexTerminalPageContextSourceContent = contentMode === 'markdown' ? editContent : displaySourceBody;
+  const codexTerminalPageContextIdentity = `${selectedItemType ?? 'none'}:${activeReadingPath ?? ''}:${contentMode}`;
+  const [debouncedCodexTerminalPageContextContent, setDebouncedCodexTerminalPageContextContent] = useState({
+    identity: codexTerminalPageContextIdentity,
+    content: codexTerminalPageContextSourceContent,
+  });
+  const codexTerminalPageContextSourceContentRef = useRef(codexTerminalPageContextSourceContent);
+  codexTerminalPageContextSourceContentRef.current = codexTerminalPageContextSourceContent;
+  useEffect(() => {
+    // File changes should attach immediately; content-only edits stay off the keystroke path.
+    setDebouncedCodexTerminalPageContextContent({
+      identity: codexTerminalPageContextIdentity,
+      content: codexTerminalPageContextSourceContentRef.current,
+    });
+  }, [codexTerminalPageContextIdentity]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCodexTerminalPageContextContent({
+        identity: codexTerminalPageContextIdentity,
+        content: codexTerminalPageContextSourceContent,
+      });
+    }, CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [codexTerminalPageContextIdentity, codexTerminalPageContextSourceContent]);
+  const codexTerminalPageContextContent =
+    debouncedCodexTerminalPageContextContent.identity === codexTerminalPageContextIdentity
+      ? debouncedCodexTerminalPageContextContent.content
+      : codexTerminalPageContextSourceContent;
+  const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
+    if (!activeReading) return null;
+    const kind: CodexTerminalPageContextInput['kind'] =
+      selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external'
+        ? selectedItemType
+        : 'unknown';
+    const selectionText = window.getSelection()?.toString().trim() || undefined;
+    return {
+      title: activeReading.title,
+      path: activeReading.path,
+      kind,
+      contentMode,
+      content: codexTerminalPageContextContent,
+      selectionText,
+    };
+  }, [activeReading, codexTerminalPageContextContent, contentMode, selectedItemType]);
+  const shouldLoadMarkdownLinkRelationDocuments = (
+    active
+    && !!activeReading
+    && activeIsMarkdownDocument
+    && selectedItemType !== 'bookmarks'
+    && selectedItemType !== 'ember'
   );
-  const sourceTaskLinesByRenderedLine = useMemo(() => {
-    const content = activeReading?.content ?? '';
-    const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(content);
-    const linesByRenderedLine = new Map<number, MarkdownTaskLine>();
-    for (const taskLine of sourceTaskLines) {
-      linesByRenderedLine.set(taskLine.lineIndex - bodyStartLineIndex + 1, taskLine);
-    }
-    return linesByRenderedLine;
-  }, [activeReading?.content, sourceTaskLines]);
-  const renderedDocumentVersionKey = activeReading?.documentVersion
-    ? `${activeReading.path}:${activeReading.documentVersion.size}:${activeReading.documentVersion.sha256}`
-    : activeReading?.path ?? 'empty';
+  useEffect(() => {
+    const requestId = markdownLinkBacklinkDocumentsRequestRef.current + 1;
+    markdownLinkBacklinkDocumentsRequestRef.current = requestId;
+    if (
+      !shouldLoadMarkdownLinkRelationDocuments
+      || !activeMarkdownLinkTarget
+      || activeMarkdownLinkTarget.kind === 'command'
+      || activeMarkdownLinkTarget.kind === 'bookmarks'
+    ) return;
+
+    const load = async () => {
+      const documents = await window.libraryAPI?.getBacklinkRelationDocuments?.(activeMarkdownLinkTarget);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (
+        markdownLinkBacklinkDocumentsRequestRef.current !== requestId
+        || !documents?.length
+        || !currentWikiIndex
+      ) return;
+      setMarkdownLinkRelationDocuments((prev) => documents.reduce((next, document) => (
+        upsertMarkdownLinkRelationDocument(next, {
+          ...document,
+          linkHits: getMarkdownEditorLinkHits(document.content, currentWikiIndex),
+        })
+      ), prev));
+    };
+
+    void load();
+  }, [activeMarkdownLinkTarget, shouldLoadMarkdownLinkRelationDocuments]);
 
   useEffect(() => {
-    if (!active) {
+    const requestId = markdownLinkRelationDocumentsRequestRef.current + 1;
+    markdownLinkRelationDocumentsRequestRef.current = requestId;
+
+    if (!shouldLoadMarkdownLinkRelationDocuments) {
       setMarkdownLinkRelationDocuments([]);
       return;
     }
@@ -2796,81 +6084,143 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             : null;
         }),
       );
-      if (cancelled) return;
+      if (cancelled || markdownLinkRelationDocumentsRequestRef.current !== requestId) return;
       setMarkdownLinkRelationDocuments(
         [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
           .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
-    void load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, FULL_LINK_RELATION_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [active, commandIndexPages, readings, wikiIndex, wikiIndexPages]);
-
-  const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
-    if (selectedItemType === 'wiki' && wikiSelectedRelPath) return { kind: 'wiki', relPath: wikiSelectedRelPath };
-    if (selectedItemType === 'artifact' && selectedPath) return { kind: 'artifact', path: selectedPath };
-    return null;
-  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
-
-  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
-    if (!activeReading) return [];
-    return getMarkdownLinkedDocuments(
-      activeLinkTarget,
-      activeReading.content,
-      markdownLinkRelationDocuments,
-      wikiIndex,
-    );
-  }, [activeLinkTarget, activeReading, markdownLinkRelationDocuments, wikiIndex]);
+  }, [commandIndexPages, markdownLinkRelationRepairVersion, readings, shouldLoadMarkdownLinkRelationDocuments, wikiIndex, wikiIndexPages]);
 
   useEffect(() => {
-    if (!activeReading) {
-      previousRenderedTaskContentRef.current = null;
-      setAnimatingTaskTexts(new Set());
-      return;
-    }
+    if (!shouldLoadMarkdownLinkRelationDocuments) return;
 
-    const previous = previousRenderedTaskContentRef.current;
-    previousRenderedTaskContentRef.current = {
-      path: activeReading.path,
-      content: activeReading.content,
+    let cancelled = false;
+    const upsertWikiRelationDocument = async (relPath: string) => {
+      const page = await window.wikiAPI?.getPage(relPath);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (cancelled || !page || !currentWikiIndex) return;
+      setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+        target: { kind: 'wiki', relPath: page.relPath },
+        title: page.title,
+        content: page.content,
+        linkHits: getMarkdownEditorLinkHits(page.content, currentWikiIndex),
+      }));
     };
 
-    if (!previous || previous.path !== activeReading.path || contentMode === 'markdown') return;
+    const onPageChanged = (event?: LibraryChangeEvent) => {
+      if (!event) return;
+      if ((event.type === 'file-added' || event.type === 'file-changed') && event.page?.relPath) {
+        markdownLinkRelationDocumentsRequestRef.current += 1;
+        setMarkdownLinkRelationRepairVersion((version) => version + 1);
+        void upsertWikiRelationDocument(event.page.relPath);
+        return;
+      }
+      if (event.type === 'file-deleted') {
+        markdownLinkRelationDocumentsRequestRef.current += 1;
+        setMarkdownLinkRelationRepairVersion((version) => version + 1);
+        setMarkdownLinkRelationDocuments((prev) => removeMarkdownLinkRelationDocument(prev, {
+          kind: 'wiki',
+          relPath: event.relPath,
+        }));
+      }
+    };
+    const onPageRenamed = (event: LibraryRenameEvent) => {
+      markdownLinkRelationDocumentsRequestRef.current += 1;
+      setMarkdownLinkRelationRepairVersion((version) => version + 1);
+      const renamedPages = renameWikiIndexPages(wikiIndexPagesRef.current, event.oldRelPath, event.newRelPath);
+      wikiIndexPagesRef.current = renamedPages;
+      wikiIndexRef.current = buildCurrentWikiIndexForPages(renamedPages);
+      setWikiIndexPages(renamedPages);
+      setMarkdownLinkRelationDocuments((prev) => removeMarkdownLinkRelationDocument(prev, {
+        kind: 'wiki',
+        relPath: event.oldRelPath,
+      }));
+      void upsertWikiRelationDocument(event.newRelPath);
+    };
 
-    const newlyChecked = getNewlyCheckedMarkdownTasks(previous.content, activeReading.content);
-    if (newlyChecked.length === 0) return;
+    const unsubscribeChanged = window.wikiAPI?.onPageChanged(onPageChanged);
+    const unsubscribeRenamed = window.wikiAPI?.onPageRenamed(onPageRenamed);
+    return () => {
+      cancelled = true;
+      unsubscribeChanged?.();
+      unsubscribeRenamed?.();
+    };
+  }, [buildCurrentWikiIndexForPages, shouldLoadMarkdownLinkRelationDocuments]);
 
-    setAnimatingTaskTexts(new Set(newlyChecked));
-    if (taskAnimationTimerRef.current) {
-      window.clearTimeout(taskAnimationTimerRef.current);
-    }
-    taskAnimationTimerRef.current = window.setTimeout(() => {
-      taskAnimationTimerRef.current = null;
-      setAnimatingTaskTexts(new Set());
-    }, 1500);
-  }, [activeReading?.path, activeReading?.content, contentMode]);
-
-  useEffect(() => () => {
-    if (taskAnimationTimerRef.current) {
-      window.clearTimeout(taskAnimationTimerRef.current);
-      taskAnimationTimerRef.current = null;
-    }
+  const flushPendingCopiedImageDeletes = useCallback((documentPath: string, remainingContent: string) => {
+    const pending = pendingCopiedImageDeletesRef.current;
+    const matching = pending.filter((item) => item.documentPath === documentPath);
+    if (matching.length === 0) return;
+    pendingCopiedImageDeletesRef.current = pending.filter((item) => item.documentPath !== documentPath);
+    void window.markdownImagesAPI?.deleteUnusedCopiedImages(
+      documentPath,
+      matching.flatMap((item) => item.markdownImages).join('\n'),
+      remainingContent,
+    );
   }, []);
 
   const saveRenderedContent = useCallback(async (nextContent: string) => {
-    if (!activeReading) return;
-    const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
+    const saveStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    if (!activeReading) {
+      recordRenderedEditorDebug('save-skipped', { reason: 'no-active-reading' });
+      return;
+    }
+    let normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
     const expectedVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetType = selectedItemType;
     const targetPath = activeReading.path;
     const targetTitle = activeReading.title;
-    setSaveStatus('saving');
+    const targetSharedFileStatus = sharedFileStatus;
+    const deferReactState = contentModeRef.current === 'rendered'
+      && renderedEditingActiveRef.current
+      && activeReadingPathRef.current === targetPath;
+    recordRenderedEditorDebug('save-start', {
+      targetType,
+      contentLength: normalizedContent.length,
+      expectedVersion,
+      deferReactState,
+      cursor: getRenderedCursorDebugState('save-start'),
+    });
+    if (!deferReactState) setSaveStatus('saving');
+    renderedSaveInFlightRef.current += 1;
     try {
+      const previousSavedContent = lastSavedContentRef.current;
+      const portableImagesChanged = markdownPortableImagesChanged(previousSavedContent, normalizedContent);
+      if (portableImagesChanged) {
+        const portableImagesStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+        const portableResult = await window.markdownImagesAPI?.makeImagesPortable(targetPath, normalizedContent);
+        normalizedContent = portableResult?.content ?? normalizedContent;
+        recordRenderedEditorDebug('save-phase', {
+          stage: 'portable-images',
+          durationMs: portableImagesStartedAt > 0 ? performance.now() - portableImagesStartedAt : null,
+          copied: portableResult?.copied ?? 0,
+          rewritten: portableResult?.rewritten ?? 0,
+          missing: portableResult?.missing ?? 0,
+          contentLength: normalizedContent.length,
+        });
+      } else {
+        recordRenderedEditorDebug('save-phase', {
+          stage: 'portable-images-skipped',
+          durationMs: 0,
+          reason: markdownContentMayNeedPortableImages(normalizedContent)
+            ? 'image-references-unchanged'
+            : 'no-markdown-images',
+          previousContentLength: previousSavedContent?.length ?? null,
+          contentLength: normalizedContent.length,
+        });
+      }
       let result: DocumentSaveResult | null | undefined;
       let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
+      const documentSaveStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
       if (targetType === 'wiki' && wikiSelectedRelPath) {
         result = await window.wikiAPI?.save(wikiSelectedRelPath, normalizedContent, expectedVersion);
         overwrite = (version) => window.wikiAPI?.save(wikiSelectedRelPath, normalizedContent, version) ?? Promise.resolve(undefined);
@@ -2881,25 +6231,101 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         result = await window.librarianAPI?.saveReading(activeReading.path, normalizedContent, expectedVersion);
         overwrite = (version) => window.librarianAPI?.saveReading(activeReading.path, normalizedContent, version) ?? Promise.resolve(undefined);
       } else {
+        recordRenderedEditorDebug('save-skipped', { reason: 'no-target-path', targetType });
         return;
       }
+      recordRenderedEditorDebug('save-phase', {
+        stage: 'document-save',
+        durationMs: documentSaveStartedAt > 0 ? performance.now() - documentSaveStartedAt : null,
+        targetType,
+        resultOk: isDocumentSaveOk(result),
+        resultReason: result && !isDocumentSaveOk(result) ? result.reason : null,
+      });
 
       if (isDocumentSaveConflict(result)) {
+        recordRenderedEditorDebug('save-conflict', { targetType });
         const resolved = await resolveSaveConflict(result, targetType, targetPath, normalizedContent, targetTitle, overwrite);
         setSaveStatus(resolved ? 'saved' : 'idle');
+        recordRenderedEditorDebug('save-conflict-resolved', { resolved });
         return;
       }
       if (!isDocumentSaveOk(result)) throw new Error('save failed');
-      applySavedDocumentState(targetType, targetPath, normalizedContent, getDocumentSaveVersion(result), targetTitle);
+      const nextVersion = getDocumentSaveVersion(result);
+      const currentSharedFileStatus = sharedFileStatusPathRef.current === targetPath
+        ? sharedFileStatusRef.current
+        : targetSharedFileStatus;
+      scheduleSharedContentSync(currentSharedFileStatus, normalizedContent);
+      if (deferReactState) {
+        rememberSavedDocumentContent(targetPath, normalizedContent, nextVersion);
+        flushPendingCopiedImageDeletes(targetPath, normalizedContent);
+        recordRenderedEditorDebug('save-ok', {
+          stage: 'save-rendered-content',
+          durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
+          targetType,
+          nextVersion,
+          deferredReactState: true,
+          cursor: getRenderedCursorDebugState('save-ok-deferred'),
+        });
+        return;
+      }
+      applySavedDocumentState(targetType, targetPath, normalizedContent, nextVersion, targetTitle);
       setEditContent(normalizedContent);
       setSaveStatus('saved');
-    } catch {
-      setSaveStatus('idle');
+      flushPendingCopiedImageDeletes(targetPath, normalizedContent);
+      recordRenderedEditorDebug('save-ok', {
+        stage: 'save-rendered-content',
+        durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
+        targetType,
+        nextVersion,
+        cursor: getRenderedCursorDebugState('save-ok'),
+      });
+    } catch (error) {
+      if (!deferReactState) setSaveStatus('idle');
+      recordRenderedEditorDebug('save-error', {
+        stage: 'save-rendered-content',
+        durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      renderedSaveInFlightRef.current = Math.max(0, renderedSaveInFlightRef.current - 1);
     }
-  }, [activeReading, applySavedDocumentState, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, flushPendingCopiedImageDeletes, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, scheduleSharedContentSync, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
 
-  const applyRenderedContentLocalState = useCallback((nextContent: string) => {
+  const applyRenderedContentLocalState = useCallback((
+    nextContent: string,
+    options: { updateRenderedDisplayContent?: boolean; updateReactState?: boolean } = {},
+  ) => {
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
     const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
+    const activePath = activeReadingPathRef.current;
+    const shouldUpdateReactState = options.updateReactState !== false;
+    recordRenderedEditorDebug('local-content-state-apply', () => ({
+      targetType: selectedItemType,
+      activePath,
+      nextLength: normalizedContent.length,
+      updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
+      updateReactState: shouldUpdateReactState,
+      cursorBeforeApply: getRenderedCursorDebugState('local-content-state-before-apply'),
+    }));
+    if (activePath) {
+      latestRenderedContentRef.current = { path: activePath, content: normalizedContent };
+      if (options.updateRenderedDisplayContent) {
+        renderedDisplayContentRef.current = { path: activePath, content: normalizedContent };
+      }
+    }
+    activeReadingContentRef.current = normalizedContent;
+    editContentRef.current = normalizedContent;
+    if (!shouldUpdateReactState) {
+      if (startedAt > 0) {
+        recordRenderedEditorDebug('local-content-state-scheduled', {
+          durationMs: performance.now() - startedAt,
+          updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
+          updateReactState: shouldUpdateReactState,
+          contentLength: normalizedContent.length,
+        });
+      }
+      return;
+    }
     if (selectedItemType === 'wiki') {
       setWikiSelectedPage((prev) => prev ? { ...prev, content: normalizedContent } : prev);
     } else if (selectedItemType === 'external') {
@@ -2908,7 +6334,59 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setSelectedReading((prev) => prev ? { ...prev, content: normalizedContent } : prev);
     }
     setEditContent(normalizedContent);
-  }, [selectedItemType]);
+    if (startedAt > 0) {
+      recordRenderedEditorDebug('local-content-state-scheduled', {
+        durationMs: performance.now() - startedAt,
+        updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
+        updateReactState: shouldUpdateReactState,
+        contentLength: normalizedContent.length,
+      });
+    }
+  }, [getRenderedCursorDebugState, recordRenderedEditorDebug, selectedItemType]);
+
+  const cancelPendingRenderedReactCommit = useCallback(() => {
+    if (renderedReactCommitTimerRef.current !== null) {
+      window.clearTimeout(renderedReactCommitTimerRef.current);
+      renderedReactCommitTimerRef.current = null;
+    }
+    pendingRenderedReactCommitRef.current = null;
+  }, []);
+
+  const scheduleRenderedReactCommit = useCallback((nextContent: string) => {
+    const activePath = activeReadingPathRef.current;
+    if (!activePath) return;
+    if (renderedReactCommitTimerRef.current !== null) {
+      window.clearTimeout(renderedReactCommitTimerRef.current);
+    }
+    pendingRenderedReactCommitRef.current = { path: activePath, content: nextContent };
+    recordRenderedEditorDebug('react-state-commit-scheduled', {
+      delayMs: 250,
+      contentLength: nextContent.length,
+    });
+    renderedReactCommitTimerRef.current = window.setTimeout(() => {
+      renderedReactCommitTimerRef.current = null;
+      const pending = pendingRenderedReactCommitRef.current;
+      pendingRenderedReactCommitRef.current = null;
+      if (!pending) return;
+      if (activeReadingPathRef.current !== pending.path) {
+        recordRenderedEditorDebug('react-state-commit-skipped', { reason: 'path-changed' });
+        return;
+      }
+      const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+      applyRenderedContentLocalState(pending.content, { updateRenderedDisplayContent: true });
+      recordRenderedEditorDebug('react-state-commit-fired', {
+        stage: 'react-state-commit',
+        durationMs: startedAt > 0 ? performance.now() - startedAt : null,
+        contentLength: pending.content.length,
+      });
+    }, 250);
+  }, [applyRenderedContentLocalState, recordRenderedEditorDebug]);
+
+  useEffect(() => () => {
+    if (renderedReactCommitTimerRef.current !== null) {
+      window.clearTimeout(renderedReactCommitTimerRef.current);
+    }
+  }, []);
 
   const flushPendingRenderedSave = useCallback(() => {
     if (renderedSaveTimerRef.current !== null) {
@@ -2917,8 +6395,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     const pending = pendingRenderedSaveRef.current;
     pendingRenderedSaveRef.current = null;
+    if (pending) recordRenderedEditorDebug('save-flush');
     pending?.();
-  }, []);
+  }, [recordRenderedEditorDebug]);
 
   const requestRenderedContentSave = useCallback((nextContent: string) => {
     if (renderedSaveTimerRef.current !== null) {
@@ -2927,87 +6406,1208 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     pendingRenderedSaveRef.current = () => {
       void saveRenderedContent(nextContent);
     };
-    renderedSaveTimerRef.current = window.setTimeout(() => {
-      renderedSaveTimerRef.current = null;
-      const pending = pendingRenderedSaveRef.current;
-      pendingRenderedSaveRef.current = null;
-      pending?.();
-    }, 400);
-  }, [saveRenderedContent]);
+    recordRenderedEditorDebug('save-scheduled', () => ({
+      contentLength: nextContent.length,
+      delayMs: RENDERED_SAVE_INITIAL_DELAY_MS,
+      cursor: getRenderedCursorDebugState('save-scheduled'),
+    }));
+    const scheduleSaveTimer = (delayMs: number) => {
+      renderedSaveTimerRef.current = window.setTimeout(() => {
+        renderedSaveTimerRef.current = null;
+        const pending = pendingRenderedSaveRef.current;
+        if (!pending) return;
+        if (contentModeRef.current === 'rendered' && renderedEditingActiveRef.current) {
+          const quietForMs = Date.now() - lastRenderedEditAtRef.current;
+          if (quietForMs < RENDERED_SAVE_QUIET_DELAY_MS) {
+            const nextDelayMs = Math.max(50, RENDERED_SAVE_QUIET_DELAY_MS - quietForMs);
+            recordRenderedEditorDebug('save-rescheduled-active-typing', {
+              quietForMs,
+              delayMs: nextDelayMs,
+            });
+            scheduleSaveTimer(nextDelayMs);
+            return;
+          }
+        }
+        if (renderedSaveInFlightRef.current > 0) {
+          recordRenderedEditorDebug('save-rescheduled-in-flight', {
+            inFlight: renderedSaveInFlightRef.current,
+            delayMs: RENDERED_SAVE_IN_FLIGHT_RETRY_MS,
+          });
+          scheduleSaveTimer(RENDERED_SAVE_IN_FLIGHT_RETRY_MS);
+          return;
+        }
+        pendingRenderedSaveRef.current = null;
+        recordRenderedEditorDebug('save-timer-fired');
+        pending();
+      }, delayMs);
+    };
+    scheduleSaveTimer(RENDERED_SAVE_INITIAL_DELAY_MS);
+  }, [getRenderedCursorDebugState, recordRenderedEditorDebug, saveRenderedContent]);
 
-  const applyRenderedMarkdownEdit = useCallback((edit: MarkdownTextEdit) => {
-    applyRenderedContentLocalState(edit.nextValue);
-    setRenderedSelectionToolbar(null);
-    (renderedContentRef.current?.ownerDocument.getSelection() ?? window.getSelection())?.removeAllRanges();
-    requestRenderedContentSave(edit.nextValue);
-  }, [applyRenderedContentLocalState, requestRenderedContentSave]);
+  const focusRenderedEditor = useCallback((selection?: { start: number; end: number } | null) => {
+    requestAnimationFrame(() => {
+      const editor = renderedMarkdownEditorRef.current;
+      if (!editor) return;
+      editor.focus({ preventScroll: true });
+      const targetSelection = selection ?? pendingRenderedEditorSelectionRef.current;
+      pendingRenderedEditorSelectionRef.current = null;
+      if (!targetSelection) return;
+      const valueLength = editor.getValue().length;
+      const start = Math.max(0, Math.min(targetSelection.start, valueLength));
+      const end = Math.max(start, Math.min(targetSelection.end, valueLength));
+      editor.setSelectionRange(start, end);
+      activeRenderedCaretOffsetRef.current = end;
+    });
+  }, []);
 
-  const updateRenderedSelectionToolbar = useCallback(() => {
-    if (!RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) {
-      setRenderedSelectionToolbar(null);
+  const captureRenderedDeleteSelectionScroll = useCallback((event: KeyboardEvent) => {
+    if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+    const editor = renderedMarkdownEditorRef.current;
+    const selection = editor?.getSelectionRange();
+    const scrollEl = contentScrollRef.current;
+    if (!selection || selection.start === selection.end || !scrollEl) return;
+    pendingRenderedDeleteScrollRestoreRef.current = {
+      path: activeReadingPathRef.current,
+      scrollTop: scrollEl.scrollTop,
+    };
+    recordRenderedEditorDebug('rendered-delete-scroll-captured', {
+      key: event.key,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+      scrollTop: scrollEl.scrollTop,
+    });
+  }, [recordRenderedEditorDebug]);
+
+  const restorePendingRenderedDeleteScroll = useCallback(() => {
+    const pending = pendingRenderedDeleteScrollRestoreRef.current;
+    if (!pending) return;
+    pendingRenderedDeleteScrollRestoreRef.current = null;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (pending.path !== activeReadingPathRef.current) return;
+        const scrollEl = contentScrollRef.current;
+        if (!scrollEl) return;
+        const maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        scrollEl.scrollTop = Math.max(0, Math.min(pending.scrollTop, maxScrollTop));
+        updateRenderedDocumentTopFade(scrollEl);
+        recordRenderedEditorDebug('rendered-delete-scroll-restored', {
+          scrollTop: scrollEl.scrollTop,
+        });
+      });
+    });
+  }, [recordRenderedEditorDebug, updateRenderedDocumentTopFade]);
+
+  const activateRenderedTextEditing = useCallback((selection?: { start: number; end: number } | null) => {
+    if (!activeReading) return;
+    const bodyLength = displaySourceBody.length;
+    const targetSelection = selection ?? { start: bodyLength, end: bodyLength };
+    pendingRenderedEditorSelectionRef.current = targetSelection;
+    activateRenderedEditing();
+    focusRenderedEditor(targetSelection);
+  }, [activateRenderedEditing, activeReading, displaySourceBody.length, focusRenderedEditor]);
+
+  const focusActiveFileBodyAtEnd = useCallback(() => {
+    if (!activeReading) return;
+    deactivateSidebarKeyboard();
+    if (contentMode === 'markdown') {
+      requestAnimationFrame(() => {
+        const editor = markdownCodeEditorRef.current;
+        if (!editor) return;
+        const length = editor.getValue().length;
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(length, length);
+      });
       return;
     }
-    if (contentMode !== 'rendered' || !activeReading) {
-      setRenderedSelectionToolbar(null);
+    activateRenderedTextEditing({ start: displaySourceBody.length, end: displaySourceBody.length });
+  }, [activateRenderedTextEditing, activeReading, contentMode, deactivateSidebarKeyboard, displaySourceBody.length]);
+
+  const captureTerminalReturnEditorSelection = useCallback(() => {
+    if (contentMode === 'markdown') {
+      const selection = markdownCodeEditorRef.current?.getSelectionRange();
+      terminalReturnEditorSelectionRef.current = {
+        mode: 'markdown',
+        start: selection?.start ?? editContentRef.current.length,
+        end: selection?.end ?? selection?.start ?? editContentRef.current.length,
+      };
       return;
     }
-    const root = renderedContentRef.current;
-    const selection = root?.ownerDocument.getSelection() ?? null;
-    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) {
-      setRenderedSelectionToolbar(null);
+    const selection = renderedMarkdownEditorRef.current?.getSelectionRange();
+    const offset = selection?.end ?? activeRenderedCaretOffsetRef.current ?? displaySourceBody.length;
+    terminalReturnEditorSelectionRef.current = {
+      mode: 'rendered',
+      start: selection?.start ?? offset,
+      end: selection?.end ?? offset,
+    };
+  }, [contentMode, displaySourceBody.length]);
+
+  const restoreTerminalReturnEditorSelection = useCallback(() => {
+    const target = terminalReturnEditorSelectionRef.current;
+    deactivateSidebarKeyboard();
+    if (target?.mode === 'markdown') {
+      setContentMode('markdown');
+      requestAnimationFrame(() => {
+        const editor = markdownCodeEditorRef.current;
+        if (!editor) return;
+        const length = editor.getValue().length;
+        const start = Math.max(0, Math.min(target.start, length));
+        const end = Math.max(start, Math.min(target.end, length));
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(start, end);
+      });
       return;
     }
+    const selection = target
+      ? { start: target.start, end: target.end }
+      : { start: activeRenderedCaretOffsetRef.current ?? displaySourceBody.length, end: activeRenderedCaretOffsetRef.current ?? displaySourceBody.length };
+    activateRenderedTextEditing(selection);
+  }, [activateRenderedTextEditing, deactivateSidebarKeyboard, displaySourceBody.length]);
 
-    const range = selection.getRangeAt(0);
-    if (!root.contains(range.commonAncestorContainer)) {
-      setRenderedSelectionToolbar(null);
+  const handleCodexTerminalVisibleChange = useCallback((nextVisible: boolean) => {
+    if (nextVisible && responsivePanelState.autoHideTerminal) {
+      setSuppressAutoHideTerminal(true);
+    }
+    if (!nextVisible) {
+      setSuppressAutoHideTerminal(false);
+    }
+    setCodexTerminalVisible(nextVisible);
+  }, [responsivePanelState.autoHideTerminal]);
+
+  const toggleTerminalEditorFocus = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    if (shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: codexTerminalVisible,
+      terminalFocused: codexTerminalFocused,
+      restoreEditorFocus: options?.restoreEditorFocus,
+    })) {
+      setCodexTerminalFocused(false);
+      restoreTerminalReturnEditorSelection();
       return;
     }
+    captureTerminalReturnEditorSelection();
+    handleCodexTerminalVisibleChange(true);
+    setCodexTerminalFocusRequestKey((key) => key + 1);
+  }, [
+    captureTerminalReturnEditorSelection,
+    codexTerminalFocused,
+    codexTerminalVisible,
+    handleCodexTerminalVisibleChange,
+    restoreTerminalReturnEditorSelection,
+  ]);
 
-    const rect = range.getBoundingClientRect();
-    const toolbar = getRenderedMarkdownSelectionToolbarState(activeReading.content, selection.toString(), rect);
-    if (!toolbar) {
-      setRenderedSelectionToolbar(null);
+  const closeCodexTerminalPanel = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    setCodexTerminalFocused(false);
+    setSuppressAutoHideTerminal(false);
+    setCodexTerminalVisible(false);
+    if (options?.restoreEditorFocus) {
+      window.requestAnimationFrame(() => restoreTerminalReturnEditorSelection());
+    }
+  }, [restoreTerminalReturnEditorSelection]);
+
+  const toggleCodexTerminalPanel = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    if (codexTerminalVisible) {
+      if (shouldRestoreEditorWhenTogglingTerminalPanel({
+        terminalVisible: codexTerminalVisible,
+        terminalFocused: codexTerminalFocused,
+        restoreEditorFocus: options?.restoreEditorFocus,
+      })) {
+        closeCodexTerminalPanel({ restoreEditorFocus: true });
+      } else {
+        closeCodexTerminalPanel();
+      }
       return;
     }
+    captureTerminalReturnEditorSelection();
+    handleCodexTerminalVisibleChange(true);
+  }, [captureTerminalReturnEditorSelection, closeCodexTerminalPanel, codexTerminalFocused, codexTerminalVisible, handleCodexTerminalVisibleChange]);
 
-    setRenderedSelectionToolbar(toolbar);
-  }, [activeReading, contentMode]);
+  const handleCodexTerminalLauncherTargetSessionChange = useCallback((sessionId: string | null) => {
+    void window.codexTerminalAPI?.setLauncherTargetSession?.(sessionId);
+  }, []);
 
-  const applyRenderedSelectionFormat = useCallback((action: RenderedMarkdownFormatAction) => {
-    if (!activeReading || !renderedSelectionToolbar) return;
-    const edit = getRenderedMarkdownSelectionFormatEdit(
-      activeReading.content,
-      renderedSelectionToolbar.start,
-      renderedSelectionToolbar.end,
-      action,
-    );
-    if (!edit) return;
-    applyRenderedMarkdownEdit(edit);
-  }, [activeReading, applyRenderedMarkdownEdit, renderedSelectionToolbar]);
+  const flashCopyFeedback = useCallback((label: string) => {
+    setCopyFeedbackLabel(label);
+    if (copyPathFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyPathFeedbackTimerRef.current);
+    }
+    copyPathFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyFeedbackLabel(null);
+      copyPathFeedbackTimerRef.current = null;
+    }, COPY_PATH_FEEDBACK_MS);
+  }, []);
+
+  const writeTextToClipboard = useCallback(async (text: string) => {
+    const nativeResult = await window.clipboardAPI?.writeText?.(text);
+    if (nativeResult) {
+      if (nativeResult.success === false) {
+        throw new Error(nativeResult.error ?? 'Clipboard write failed');
+      }
+      return;
+    }
+    await navigator.clipboard?.writeText(text);
+  }, []);
+
+  const pasteTextToCodexTerminal = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !window.codexTerminalAPI) return;
+    captureTerminalReturnEditorSelection();
+    handleCodexTerminalVisibleChange(true);
+    setSuppressAutoHideTerminal(true);
+    const sessions = await window.codexTerminalAPI.list();
+    let target = sessions.find((session) => !session.exitedAt) ?? null;
+    if (!target) {
+      target = await window.codexTerminalAPI.create({ auto: true, title: 'Terminal 1' });
+    }
+    if (!target) return;
+    await window.codexTerminalAPI.setLauncherTargetSession?.(target.id);
+    await window.codexTerminalAPI.input(target.id, text);
+    setTerminalPastePopover(null);
+    setCodexTerminalFocusRequestKey((key) => key + 1);
+  }, [captureTerminalReturnEditorSelection, handleCodexTerminalVisibleChange]);
+
+  const getNativeTerminalPasteContentRect = useCallback((): Pick<DOMRect, 'right'> | null => (
+    renderedContentRef.current?.getBoundingClientRect()
+    ?? (contentScrollRef.current?.firstElementChild instanceof HTMLElement
+      ? contentScrollRef.current.firstElementChild.getBoundingClientRect()
+      : null)
+  ), []);
+
+  const showSelectionPastePopoverFromEditorSnapshot = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const selectedText = snapshot.value.slice(snapshot.selectionStart, snapshot.selectionEnd);
+    const readerPane = readerPaneRef.current;
+    if (!selectionPastePopoverAvailable || snapshot.isCollapsed || !selectedText.trim() || !readerPane) {
+      setTerminalPastePopover(null);
+      return;
+    }
+    const viewportRect = snapshot.selectionRect?.viewport;
+    const rect = viewportRect
+      ? {
+        left: viewportRect.left,
+        right: viewportRect.left + viewportRect.width,
+        top: viewportRect.top,
+        height: viewportRect.height,
+      }
+      : getEditorSelectionBackgroundRect(readerPane);
+    if (!rect) {
+      setTerminalPastePopover(null);
+      return;
+    }
+    setTerminalPastePopover({
+      text: selectedText,
+      ...getNativeTerminalPastePopoverPosition(rect, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }, getNativeTerminalPasteContentRect()),
+    });
+  }, [getNativeTerminalPasteContentRect, selectionPastePopoverAvailable]);
 
   useEffect(() => {
-    if (!RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) return;
-    if (contentMode !== 'rendered') return;
-    const selectionDocument = renderedContentRef.current?.ownerDocument ?? document;
-    let frame: number | null = null;
-    const updateAfterSelectionChange = () => {
-      if (frame !== null) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        updateRenderedSelectionToolbar();
+    if (!selectionPastePopoverAvailable) setTerminalPastePopover(null);
+  }, [selectionPastePopoverAvailable]);
+
+  useEffect(() => {
+    const updateSelectionPopover = () => {
+      const selection = window.getSelection();
+      const pasteText = getTerminalPasteTextFromSelection(selection);
+      if (!selectionPastePopoverAvailable || !selection || selection.isCollapsed || !pasteText.trim() || selection.rangeCount === 0) {
+        const activeElement = document.activeElement;
+        const latestEditorSnapshot = latestMarkdownCursorSnapshotRef.current;
+        if (selectionPastePopoverAvailable && activeElement instanceof Element && latestEditorSnapshot && shouldPreserveEditorSelectionPastePopover({
+          activeElement,
+          latestEditorSnapshot,
+        })) {
+          showSelectionPastePopoverFromEditorSnapshot(latestEditorSnapshot);
+          return;
+        }
+        setTerminalPastePopover(null);
+        return;
+      }
+      const anchor = selection.anchorNode;
+      const focus = selection.focusNode;
+      const readerPane = readerPaneRef.current;
+      const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+      const focusElement = focus instanceof Element ? focus : focus?.parentElement ?? null;
+      if (
+        !readerPane
+        || (anchor && !readerPane.contains(anchor))
+        || (focus && !readerPane.contains(focus))
+        || Boolean(anchorElement?.closest('[data-ft-codex-terminal-panel="true"]'))
+        || Boolean(focusElement?.closest('[data-ft-codex-terminal-panel="true"]'))
+      ) {
+        setTerminalPastePopover(null);
+        return;
+      }
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      if (rect.width <= 0 && rect.height <= 0) {
+        setTerminalPastePopover(null);
+        return;
+      }
+      setTerminalPastePopover({
+        text: pasteText,
+        ...getNativeTerminalPastePopoverPosition(rect, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }, getNativeTerminalPasteContentRect()),
       });
     };
-    selectionDocument.addEventListener('selectionchange', updateAfterSelectionChange);
+
+    document.addEventListener('selectionchange', updateSelectionPopover);
+    window.addEventListener('mouseup', updateSelectionPopover, true);
+    window.addEventListener('keyup', updateSelectionPopover, true);
+    window.addEventListener('scroll', updateSelectionPopover, true);
+    window.addEventListener('resize', updateSelectionPopover);
     return () => {
-      if (frame !== null) cancelAnimationFrame(frame);
-      selectionDocument.removeEventListener('selectionchange', updateAfterSelectionChange);
+      document.removeEventListener('selectionchange', updateSelectionPopover);
+      window.removeEventListener('mouseup', updateSelectionPopover, true);
+      window.removeEventListener('keyup', updateSelectionPopover, true);
+      window.removeEventListener('scroll', updateSelectionPopover, true);
+      window.removeEventListener('resize', updateSelectionPopover);
     };
-  }, [contentMode, updateRenderedSelectionToolbar]);
+  }, [getNativeTerminalPasteContentRect, selectionPastePopoverAvailable, showSelectionPastePopoverFromEditorSnapshot]);
 
   useEffect(() => {
-    setRenderedSelectionToolbar(null);
-  }, [activeReading?.path, contentMode]);
+    const handleSelectionTerminalHotkey = (event: KeyboardEvent) => {
+      if (!isPasteSelectionToTerminalShortcut(event)) return;
+      const text = terminalPastePopover?.text || getTerminalPasteTextFromSelection(window.getSelection());
+      if (!text.trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void pasteTextToCodexTerminal(text);
+    };
+    window.addEventListener('keydown', handleSelectionTerminalHotkey, true);
+    return () => window.removeEventListener('keydown', handleSelectionTerminalHotkey, true);
+  }, [pasteTextToCodexTerminal, terminalPastePopover?.text]);
+
+  const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
+    setLineNumbersMode((current) => {
+      if (mode) return current === mode ? 'hidden' : mode;
+      return current === 'hidden' ? 'visible' : 'hidden';
+    });
+  }, []);
+
+  const applyRenderedEditorBody = useCallback((
+    nextBody: string,
+    options: { selectionStart?: number | null; selectionEnd?: number | null; preserveUndo?: boolean } = {},
+  ) => {
+    if (!activeReading || contentMode !== 'rendered') return;
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    const previousContent = activeReadingContentRef.current ?? activeReading.content;
+    if (!options.preserveUndo) {
+      const editor = renderedMarkdownEditorRef.current;
+      const selection = editor?.getSelectionRange() ?? { start: activeRenderedCaretOffsetRef.current ?? 0, end: activeRenderedCaretOffsetRef.current ?? 0 };
+      renderedEditUndoStackRef.current.push({
+        value: displaySourceBody,
+        selectionStart: selection.start,
+        selectionEnd: selection.end,
+      });
+    }
+    const nextContent = replaceMarkdownBodyPreservingFrontmatter(previousContent, nextBody);
+    const selectionStart = options.selectionStart ?? null;
+    const selectionEnd = options.selectionEnd ?? selectionStart;
+    if (typeof selectionEnd === 'number') activeRenderedCaretOffsetRef.current = selectionEnd;
+    markWritingActive();
+    lastRenderedEditAtRef.current = Date.now();
+    const deferReactState = options.preserveUndo === true && renderedEditingActiveRef.current;
+    applyRenderedContentLocalState(nextContent, {
+      updateRenderedDisplayContent: true,
+      updateReactState: !deferReactState,
+    });
+    if (deferReactState) {
+      scheduleRenderedReactCommit(nextContent);
+    } else {
+      cancelPendingRenderedReactCommit();
+    }
+    setMarkdownWikiLinkCompletion(null);
+    requestRenderedContentSave(nextContent);
+    restorePendingRenderedDeleteScroll();
+    if (startedAt > 0) {
+      recordRenderedEditorDebug('apply-rendered-editor-body', {
+        durationMs: performance.now() - startedAt,
+        bodyLength: nextBody.length,
+        contentLength: nextContent.length,
+        deferReactState,
+        preserveUndo: options.preserveUndo === true,
+        selectionStart,
+        selectionEnd,
+      });
+    }
+  }, [
+    activeReading,
+    applyRenderedContentLocalState,
+    cancelPendingRenderedReactCommit,
+    contentMode,
+    displaySourceBody,
+    markWritingActive,
+    recordRenderedEditorDebug,
+    requestRenderedContentSave,
+    restorePendingRenderedDeleteScroll,
+    scheduleRenderedReactCommit,
+  ]);
+
+  const handleRenderedEditorChange = useCallback((nextBody: string) => {
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    sampleRenderedEditorInteraction();
+    const selection = renderedMarkdownEditorRef.current?.getSelectionRange() ?? null;
+    applyRenderedEditorBody(nextBody, {
+      selectionStart: selection?.start ?? null,
+      selectionEnd: selection?.end ?? null,
+      preserveUndo: true,
+    });
+    scheduleEditorSessionPersistRef.current?.();
+    if (startedAt > 0) {
+      recordRenderedEditorDebug('handle-rendered-editor-change', {
+        durationMs: performance.now() - startedAt,
+        bodyLength: nextBody.length,
+        selectionStart: selection?.start ?? null,
+        selectionEnd: selection?.end ?? null,
+      });
+    }
+  }, [applyRenderedEditorBody, recordRenderedEditorDebug, sampleRenderedEditorInteraction]);
+
+  const getMarkdownMentionSuggestionHref = useCallback((suggestion: MarkdownWikiLinkSuggestion): string => {
+    if (suggestion.kind === 'wiki') return `wiki://${encodeURI(suggestion.detail)}`;
+    if (suggestion.kind === 'artifact') return `artifact://${encodeURIComponent(suggestion.detail)}`;
+    if (suggestion.kind === 'command') return `command://${encodeURIComponent(suggestion.detail)}`;
+    return 'bookmarks://root';
+  }, []);
+
+  const applyRenderedWikiLinkSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownWikiLinkCompletion | null,
+  ) => {
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownWikiLinkCompletionReplacement(currentValue, completion, suggestion.title);
+    if (!edit) return;
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
+  const applyRenderedMentionSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownMentionCompletion | null,
+  ) => {
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownMentionCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownMentionCompletionReplacement(
+      currentValue,
+      completion,
+      suggestion.title,
+      getMarkdownMentionSuggestionHref(suggestion),
+    );
+    if (!edit) return;
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownMentionCompletion(null);
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor, getMarkdownMentionSuggestionHref]);
+
+  const applyRenderedEmojiSuggestion = useCallback((
+    suggestion: MarkdownEmojiSuggestion,
+    completionFallback: MarkdownEmojiCompletion | null,
+  ) => {
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownEmojiCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownEmojiCompletionReplacement(currentValue, completion, suggestion);
+    if (!edit) return;
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownEmojiCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
+  const applyRenderedSlashCommandSuggestion = useCallback((
+    suggestion: MarkdownSlashCommandSuggestion,
+    completionFallback: MarkdownSlashCommandCompletion | null,
+  ) => {
+    if (suggestion.name !== 'draw' || !activeReading?.path) return;
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownSlashCommandCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = removeActiveMarkdownSlashCommandCompletion(currentValue, completion);
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownSlashCommandCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+    setInlineDrawInsertion({
+      mode: 'rendered',
+      documentPath: activeReading.path,
+      insertionStart: edit.selectionStart,
+    });
+  }, [activeReading?.path, applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
+  const restoreRenderedEditorProgrammaticUndo = useCallback((): boolean => {
+    const snapshot = renderedEditUndoStackRef.current.pop();
+    if (!snapshot) return false;
+    applyRenderedEditorBody(snapshot.value, {
+      selectionStart: snapshot.selectionStart,
+      selectionEnd: snapshot.selectionEnd,
+      preserveUndo: true,
+    });
+    pendingRenderedEditorSelectionRef.current = {
+      start: snapshot.selectionStart,
+      end: snapshot.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+    return true;
+  }, [applyRenderedEditorBody, focusRenderedEditor]);
+
+  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
+    captureRenderedDeleteSelectionScroll(event);
+    if (isInlineGemmaCommandShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openInlineGemmaCommand();
+      return true;
+    }
+
+    const slashCommandCompletion = markdownSlashCommandCompletion;
+    if (slashCommandCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownSlashCommandCompletion(null);
+        return true;
+      }
+
+      if (markdownSlashCommandSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index + 1) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index - 1 + markdownSlashCommandSuggestions.length) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownSlashCommandSuggestions[
+            Math.min(markdownSlashCommandSuggestionIndex, markdownSlashCommandSuggestions.length - 1)
+          ];
+          applyRenderedSlashCommandSuggestion(suggestion, slashCommandCompletion);
+          return true;
+        }
+      }
+    }
+
+    const emojiCompletion = markdownEmojiCompletion;
+    if (emojiCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownEmojiCompletion(null);
+        return true;
+      }
+
+      if (markdownEmojiSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownEmojiSuggestionIndex((index) => (
+            (index + 1) % markdownEmojiSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownEmojiSuggestionIndex((index) => (
+            (index - 1 + markdownEmojiSuggestions.length) % markdownEmojiSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownEmojiSuggestions[
+            Math.min(markdownEmojiSuggestionIndex, markdownEmojiSuggestions.length - 1)
+          ];
+          applyRenderedEmojiSuggestion(suggestion, emojiCompletion);
+          return true;
+        }
+      }
+    }
+
+    const mentionCompletion = markdownMentionCompletion;
+    if (mentionCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownMentionCompletion(null);
+        return true;
+      }
+
+      if (markdownMentionSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index + 1) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index - 1 + markdownMentionSuggestions.length) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownMentionSuggestions[
+            Math.min(markdownMentionSuggestionIndex, markdownMentionSuggestions.length - 1)
+          ];
+          applyRenderedMentionSuggestion(suggestion, mentionCompletion);
+          return true;
+        }
+      }
+    }
+
+    const completion = markdownWikiLinkCompletion;
+    if (completion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownWikiLinkCompletion(null);
+        return true;
+      }
+
+      if (
+        (event.key === 'Backspace' || event.key === 'Delete')
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.shiftKey
+      ) {
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const selection = editor?.getSelectionRange();
+        const liveCompletion = selection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionDeleteEdit(currentValue, liveCompletion ?? completion, event.key);
+        if (edit) {
+          event.preventDefault();
+          event.stopPropagation();
+          applyRenderedEditorBody(edit.nextValue, {
+            selectionStart: edit.selectionStart,
+            selectionEnd: edit.selectionEnd,
+          });
+          pendingRenderedEditorSelectionRef.current = {
+            start: edit.selectionStart,
+            end: edit.selectionEnd,
+          };
+          focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+          setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+            edit.nextValue,
+            edit.selectionStart,
+            edit.selectionEnd,
+            { top: completion.top, left: completion.left },
+          ));
+          return true;
+        }
+      }
+
+      if (markdownWikiLinkSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index + 1) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const suggestion = markdownWikiLinkSuggestions[
+            Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
+          ];
+          applyRenderedWikiLinkSuggestion(suggestion, completion);
+          return true;
+        }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const selection = editor?.getSelectionRange();
+        const liveCompletion = selection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionCommitEdit(currentValue, liveCompletion ?? completion);
+        if (!edit) return true;
+        applyRenderedEditorBody(edit.nextValue, {
+          selectionStart: edit.selectionStart,
+          selectionEnd: edit.selectionEnd,
+        });
+        setMarkdownWikiLinkCompletion(null);
+        pendingRenderedEditorSelectionRef.current = {
+          start: edit.selectionStart,
+          end: edit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+        return true;
+      }
+    }
+
+    if (isImmersiveToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleFocusChromeShortcut();
+      return true;
+    }
+
+    if (isLineNumbersToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('visible');
+      return true;
+    }
+
+    if (isFadedLineNumbersShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('faded');
+      return true;
+    }
+
+    if (isLineNumbersToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('visible');
+      return true;
+    }
+
+    if (isFadedLineNumbersShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('faded');
+      return true;
+    }
+
+    const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
+    if (navigationDirection !== null && navigationDirection !== 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      navigateHistory(navigationDirection);
+      return true;
+    }
+
+    if (event.key.toLowerCase() === 'z' && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+      if (restoreRenderedEditorProgrammaticUndo()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      clearRenderedEditingState('escape');
+      return true;
+    }
+
+    if (!activeReading) return false;
+
+    const editor = renderedMarkdownEditorRef.current;
+    if (!editor) return false;
+    const selection = editor.getSelectionRange();
+    const applyRenderedShortcutEdit = (edit: MarkdownTextEdit): true => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyRenderedEditorBody(edit.nextValue, {
+        selectionStart: edit.selectionStart,
+        selectionEnd: edit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: edit.selectionStart,
+        end: edit.selectionEnd,
+      };
+      if (edit.deletedMarkdownImages?.length) {
+        pendingCopiedImageDeletesRef.current.push({
+          documentPath: activeReading.path,
+          markdownImages: edit.deletedMarkdownImages,
+        });
+      }
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return true;
+    };
+
+    const value = editor.getValue();
+    if (
+      isRenderedMarkdownSelectionInsideInlineHtmlBlock(value, selection.start, selection.end)
+      && event.key !== 'Backspace'
+      && event.key !== 'Delete'
+      && event.key !== 'Escape'
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const indentEdit = getMarkdownListIndentEdit(value, selection.start, selection.end, event.shiftKey ? 'out' : 'in');
+      if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
+    }
+
+    if (!shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
+      event,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+    })) {
+      const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
+        event,
+        value,
+        selectionStart: selection.start,
+        selectionEnd: selection.end,
+      });
+      if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
+    }
+
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete')
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.shiftKey
+      && shouldSuppressRenderedMarkdownBoundaryDelete(value, selection.start, selection.end, event.key)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const drawEdit = getMarkdownDrawCommandEdit(value, selection.start, selection.end);
+      if (drawEdit) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyRenderedEditorBody(drawEdit.nextValue, {
+          selectionStart: drawEdit.selectionStart,
+          selectionEnd: drawEdit.selectionEnd,
+        });
+        pendingRenderedEditorSelectionRef.current = {
+          start: drawEdit.selectionStart,
+          end: drawEdit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+        setInlineDrawInsertion({
+          mode: 'rendered',
+          documentPath: activeReading.path,
+          insertionStart: drawEdit.selectionStart,
+        });
+        return true;
+      }
+
+      const enterEdit = getRenderedMarkdownEnterEdit(value, selection.start, selection.end);
+      if (enterEdit) return applyRenderedShortcutEdit(enterEdit);
+    }
+
+    const edit = getRenderedMarkdownShortcutEdit({
+      event,
+      value,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+      unorderedListMarker,
+    });
+    return edit ? applyRenderedShortcutEdit(edit) : false;
+  }, [
+    activeReading,
+    applyRenderedEditorBody,
+    applyRenderedEmojiSuggestion,
+    applyRenderedMentionSuggestion,
+    applyRenderedSlashCommandSuggestion,
+    applyRenderedWikiLinkSuggestion,
+    captureRenderedDeleteSelectionScroll,
+    clearRenderedEditingState,
+    canNavigateBack,
+    canNavigateForward,
+    displaySourceBody,
+    focusRenderedEditor,
+    markdownEmojiCompletion,
+    markdownEmojiSuggestionIndex,
+    markdownEmojiSuggestions,
+    markdownMentionCompletion,
+    markdownMentionSuggestionIndex,
+    markdownMentionSuggestions,
+    markdownSlashCommandCompletion,
+    markdownSlashCommandSuggestionIndex,
+    markdownSlashCommandSuggestions,
+    markdownWikiLinkCompletion,
+    markdownWikiLinkSuggestionIndex,
+    markdownWikiLinkSuggestions,
+    navigateHistory,
+    openInlineGemmaCommand,
+    restoreRenderedEditorProgrammaticUndo,
+    toggleFocusChromeShortcut,
+    toggleLineNumbers,
+    unorderedListMarker,
+  ]);
+
+  const updateRenderedEditorWikiLinkCompletion = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    const completionPosition = snapshot.caretPosition ?? { top: 0, left: 0 };
+    const autoCloseEdit = snapshot.docChanged && snapshot.inputType === 'insertText' && snapshot.inputData === '['
+      ? getMarkdownWikiLinkAutoCloseEdit(snapshot.value, snapshot.selectionStart, snapshot.selectionEnd)
+      : null;
+    if (autoCloseEdit) {
+      applyRenderedEditorBody(autoCloseEdit.nextValue, {
+        selectionStart: autoCloseEdit.selectionStart,
+        selectionEnd: autoCloseEdit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: autoCloseEdit.selectionStart,
+        end: autoCloseEdit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+        autoCloseEdit.nextValue,
+        autoCloseEdit.selectionStart,
+        autoCloseEdit.selectionEnd,
+        completionPosition,
+      ));
+      setMarkdownEmojiCompletion(null);
+      setMarkdownMentionCompletion(null);
+      setMarkdownSlashCommandCompletion(null);
+      if (startedAt > 0) {
+        recordRenderedEditorDebug('rendered-wiki-link-completion', {
+          durationMs: performance.now() - startedAt,
+          autoClose: true,
+          valueLength: autoCloseEdit.nextValue.length,
+        });
+      }
+      return;
+    }
+
+    const wikiCompletion = getMarkdownWikiLinkCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    );
+    const mentionCompletion = wikiCompletion ? null : getMarkdownMentionCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    );
+    const emojiCompletion = wikiCompletion || mentionCompletion ? null : getMarkdownEmojiCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    );
+    setMarkdownWikiLinkCompletion(wikiCompletion);
+    setMarkdownMentionCompletion(mentionCompletion);
+    setMarkdownEmojiCompletion(emojiCompletion);
+    setMarkdownSlashCommandCompletion(wikiCompletion || mentionCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    ));
+    if (startedAt > 0) {
+      recordRenderedEditorDebug('rendered-wiki-link-completion', {
+        durationMs: performance.now() - startedAt,
+        autoClose: false,
+        docChanged: snapshot.docChanged,
+        inputType: snapshot.inputType ?? null,
+        valueLength: snapshot.value.length,
+      });
+    }
+  }, [applyRenderedEditorBody, focusRenderedEditor, recordRenderedEditorDebug]);
+
+  const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
+    if (snapshot.docChanged && snapshot.inputType) {
+      renderedEditUndoStackRef.current = [];
+    }
+    activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
+    showSelectionPastePopoverFromEditorSnapshot(snapshot);
+    updateRenderedEditorWikiLinkCompletion(snapshot);
+    scheduleEditorSessionPersistRef.current?.();
+  }, [reportActiveLibraryFileContext, showSelectionPastePopoverFromEditorSnapshot, updateRenderedEditorWikiLinkCompletion]);
+
+  const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
+    if (!isRenderedMarkdownLinkEventTarget(event.target)) return false;
+    const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
+    if (action.kind === 'noop') return false;
+    if (!shouldOpenMarkdownLinkFromMouseDown({
+      button: event.button,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      renderedEditingActive: renderedEditingActiveRef.current,
+      actionKind: action.kind,
+    })) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    openLinkAction(action);
+    return true;
+  }, [displaySourceBody, openLinkAction, wikiIndex]);
+
+  const handleRenderedContentMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    deactivateSidebarKeyboard();
+    if (!activeReading || !activeIsMarkdownDocument || contentMode !== 'rendered') return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('.cm-editor, .cm-content, button, input, textarea, select, a, [role="button"]')) return;
+    if (renderedMarkdownEditorRef.current?.startRenderedVisualRowSelection(event.nativeEvent)) {
+      event.stopPropagation();
+    }
+  }, [activeIsMarkdownDocument, activeReading, contentMode, deactivateSidebarKeyboard]);
+
+  const applyRenderedTextInsertion = useCallback((
+    text: string,
+    options: { convertLocalImagePaths?: boolean } = {},
+  ) => {
+    if (!text || !activeReading || contentMode !== 'rendered') return;
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const selectionStart = selection?.start ?? currentValue.length;
+    const selectionEnd = selection?.end ?? selectionStart;
+    const shouldConvertLocalImagePaths = options.convertLocalImagePaths !== false;
+    const insertedText = shouldConvertLocalImagePaths
+      ? formatPastedLocalImageMarkdown(text) ?? text
+      : text;
+    const pasteEdit = getRenderedMarkdownPasteTextEdit(currentValue, selectionStart, selectionEnd, insertedText);
+    if (pasteEdit) {
+      applyRenderedEditorBody(pasteEdit.nextValue, {
+        selectionStart: pasteEdit.selectionStart,
+        selectionEnd: pasteEdit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: pasteEdit.selectionStart,
+        end: pasteEdit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return;
+    }
+    const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertedText.length;
+    applyRenderedEditorBody(nextValue, {
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    });
+    pendingRenderedEditorSelectionRef.current = {
+      start: nextSelection,
+      end: nextSelection,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [activeReading, applyRenderedEditorBody, contentMode, displaySourceBody, focusRenderedEditor]);
+
+  const insertPastedClipboardImagePathInRenderedEditor = useCallback(async (clipboardData: DataTransfer) => {
+    const imagePath = await getPastedClipboardImagePath(clipboardData);
+    if (!imagePath) return;
+    const portable = activeReading?.path
+      ? await window.markdownImagesAPI?.copyImageForDocument(activeReading.path, imagePath, 'Image')
+      : null;
+    applyRenderedTextInsertion(portable?.markdown ?? formatLocalImageMarkdown(imagePath));
+  }, [activeReading?.path, applyRenderedTextInsertion]);
+
+  const handleRenderedEditorPaste = useCallback((event: ClipboardEvent): boolean => {
+    const clipboardData = event.clipboardData;
+    const pastedText = clipboardData?.getData('text/plain') ?? '';
+    if (clipboardData && shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(clipboardData) })) {
+      void insertPastedClipboardImagePathInRenderedEditor(clipboardData);
+      return true;
+    }
+    if (!pastedText) return false;
+
+    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
+    applyRenderedTextInsertion(localImageMarkdown ?? pastedText);
+    return true;
+  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
+
+  useEffect(() => {
+    clearRenderedEditingState('path-or-mode-changed');
+  }, [activeReading?.path, clearRenderedEditingState, contentMode]);
+
+  useEffect(() => {
+    setRenderedImagePreview(null);
+  }, [activeReading?.path]);
 
   useEffect(() => {
     return () => {
@@ -3015,18 +7615,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, [activeReading?.path, contentMode, flushPendingRenderedSave]);
 
-  const toggleRenderedTask = useCallback((lineIndex: number, checked: boolean) => {
-    if (!activeReading) return;
-    const nextContent = toggleMarkdownTaskLineAtIndex(activeReading.content, lineIndex, checked);
-    if (nextContent === activeReading.content) return;
-    void saveRenderedContent(nextContent);
-  }, [activeReading, saveRenderedContent]);
-
   const cycleSelectedMarkdownTodoState = useCallback(async (direction: 'forward' | 'backward' = 'forward'): Promise<boolean> => {
     if (!activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) return false;
     if (selectedItemType === 'wiki' && !wikiSelectedRelPath) return false;
 
-    const sourceContent = contentMode === 'markdown' ? editContent : activeReading.content;
+    const sourceContent = contentMode === 'markdown' ? editContent : activeReadingContentRef.current ?? activeReading.content;
     const next = cycleMarkdownTodoState(sourceContent, direction);
     if (next.content === sourceContent) return false;
 
@@ -3151,24 +7744,45 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     const root = renderedContentRef.current;
-    if (!root || contentMode === 'markdown') return;
+    if (!root || contentMode === 'markdown' || activeIsMarkdownDocument) return;
     if (!fileFindOpen) {
       clearFileFindMarks(root);
       return;
     }
     highlightFileFindMatches(root, fileFindQuery);
     return () => clearFileFindMarks(root);
-  }, [contentMode, displayContent, fileFindOpen, fileFindQuery]);
+  }, [activeIsMarkdownDocument, contentMode, displaySourceBody, fileFindOpen, fileFindQuery]);
 
   const captureContentScrollRatio = useCallback(() => {
     const scrollEl = contentMode === 'markdown' ? markdownCodeEditorRef.current : contentScrollRef.current;
     if (!scrollEl) return;
-    pendingScrollRatioRef.current = getScrollRatio(
+    const ratio = getScrollRatio(
       scrollEl.scrollTop,
       scrollEl.scrollHeight,
       scrollEl.clientHeight,
     );
-  }, [contentMode]);
+    pendingScrollRatioRef.current = ratio;
+    recordRenderedEditorDebug('scroll-ratio-captured', {
+      contentMode,
+      ratio,
+      scrollTop: scrollEl.scrollTop,
+      scrollHeight: scrollEl.scrollHeight,
+      clientHeight: scrollEl.clientHeight,
+    });
+  }, [contentMode, recordRenderedEditorDebug]);
+
+  const exitEditMode = useCallback(async () => {
+    captureContentScrollRatio();
+    await flushCurrentEdit();
+    setContentMode('rendered');
+  }, [captureContentScrollRatio, flushCurrentEdit]);
+
+  const switchToTypedownMode = useCallback(async () => {
+    if (!FEATURE_TYPEDOWN_ENABLED) return;
+    captureContentScrollRatio();
+    await flushCurrentEdit();
+    setContentMode('typedown');
+  }, [captureContentScrollRatio, flushCurrentEdit]);
 
   const captureEditorSession = useCallback((): LibrarianEditorSession | null => {
     const target = getEditorSessionTarget();
@@ -3188,27 +7802,46 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const persistEditorSession = useCallback(() => {
     const session = captureEditorSession();
-    if (!session) return;
+    if (!session) {
+      recordRenderedEditorDebug('editor-session-persist-skipped', { reason: 'no-session-target' });
+      return;
+    }
     persistLibrarianEditorSession(localStorage, session);
-  }, [captureEditorSession]);
+    recordRenderedEditorDebug('editor-session-persisted', {
+      itemType: session.itemType,
+      itemPath: session.itemPath,
+      contentMode: session.contentMode,
+      selectionStart: session.selectionStart,
+      selectionEnd: session.selectionEnd,
+      scrollTop: session.scrollTop,
+    });
+  }, [captureEditorSession, recordRenderedEditorDebug]);
+
+  useEffect(() => {
+    persistEditorSession();
+  }, [persistEditorSession]);
 
   const scheduleEditorSessionPersist = useCallback(() => {
     if (editorSessionPersistTimerRef.current !== null) {
       window.clearTimeout(editorSessionPersistTimerRef.current);
     }
+    recordRenderedEditorDebug('editor-session-persist-scheduled', { delayMs: 160 });
     editorSessionPersistTimerRef.current = window.setTimeout(() => {
       editorSessionPersistTimerRef.current = null;
+      recordRenderedEditorDebug('editor-session-persist-timer-fired');
       persistEditorSession();
     }, 160);
-  }, [persistEditorSession]);
+  }, [persistEditorSession, recordRenderedEditorDebug]);
+  scheduleEditorSessionPersistRef.current = scheduleEditorSessionPersist;
 
   const flushEditorSessionPersist = useCallback(() => {
     if (editorSessionPersistTimerRef.current !== null) {
       window.clearTimeout(editorSessionPersistTimerRef.current);
       editorSessionPersistTimerRef.current = null;
     }
+    recordRenderedEditorDebug('editor-session-persist-flushed');
     persistEditorSession();
-  }, [persistEditorSession]);
+  }, [persistEditorSession, recordRenderedEditorDebug]);
 
   const applyMarkdownCodeEditorTextEdit = useCallback((
     edit: MarkdownTextEdit,
@@ -3225,7 +7858,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markWritingActive();
     setEditContent(edit.nextValue);
     setMarkdownUrlPasteChoice(null);
-    if (!options.preserveCompletion) setMarkdownWikiLinkCompletion(null);
+    if (!options.preserveCompletion) {
+      setMarkdownWikiLinkCompletion(null);
+      setMarkdownMentionCompletion(null);
+      setMarkdownEmojiCompletion(null);
+    }
     scheduleEditorSessionPersist();
     requestAnimationFrame(() => {
       const nextEditor = markdownCodeEditorRef.current;
@@ -3234,6 +7871,124 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       nextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const handleInlineDrawClose = useCallback(() => {
+    setInlineDrawInsertion(null);
+    setInlineDrawSaving(false);
+    if (contentMode === 'markdown') {
+      requestAnimationFrame(() => markdownCodeEditorRef.current?.focus({ preventScroll: true }));
+    } else {
+      focusRenderedEditor();
+    }
+  }, [contentMode, focusRenderedEditor]);
+
+  const handleInlineDrawSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
+    const insertion = inlineDrawInsertion;
+    if (!insertion || inlineDrawSaving) return;
+    setInlineDrawSaving(true);
+    try {
+      const copied = await window.markdownImagesAPI?.copyImageDataUrlForDocument(
+        insertion.documentPath,
+        imageData.dataUrl,
+        'Drawing',
+      );
+      if (!copied?.markdown) {
+        alert('Failed to save drawing. Please try again.');
+        setInlineDrawSaving(false);
+        return;
+      }
+
+      if (insertion.mode === 'rendered') {
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const edit = typeof insertion.replaceFrom === 'number' && typeof insertion.replaceTo === 'number'
+          ? {
+              nextValue: `${currentValue.slice(0, insertion.replaceFrom)}${copied.markdown}${currentValue.slice(insertion.replaceTo)}`,
+              selectionStart: insertion.replaceFrom + copied.markdown.length,
+              selectionEnd: insertion.replaceFrom + copied.markdown.length,
+            }
+          : insertMarkdownBlockAt(currentValue, insertion.insertionStart, copied.markdown);
+        applyRenderedEditorBody(edit.nextValue, {
+          selectionStart: edit.selectionStart,
+          selectionEnd: edit.selectionEnd,
+        });
+        pendingRenderedEditorSelectionRef.current = {
+          start: edit.selectionStart,
+          end: edit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      } else {
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const edit = typeof insertion.replaceFrom === 'number' && typeof insertion.replaceTo === 'number'
+          ? {
+              nextValue: `${currentValue.slice(0, insertion.replaceFrom)}${copied.markdown}${currentValue.slice(insertion.replaceTo)}`,
+              selectionStart: insertion.replaceFrom + copied.markdown.length,
+              selectionEnd: insertion.replaceFrom + copied.markdown.length,
+            }
+          : insertMarkdownBlockAt(currentValue, insertion.insertionStart, copied.markdown);
+        applyMarkdownCodeEditorTextEdit(edit);
+      }
+
+      setInlineDrawInsertion(null);
+      setInlineDrawSaving(false);
+    } catch {
+      alert('Failed to save drawing. Please try again.');
+      setInlineDrawSaving(false);
+    }
+  }, [
+    applyMarkdownCodeEditorTextEdit,
+    applyRenderedEditorBody,
+    displaySourceBody,
+    editContent,
+    focusRenderedEditor,
+    inlineDrawInsertion,
+    inlineDrawSaving,
+  ]);
+
+  const openRenderedDrawingEditor = useCallback(async (preview: MarkdownCodeEditorImagePreview): Promise<boolean> => {
+    if (!isRenderedMarkdownDrawingAlt(preview.alt) || !activeReading?.path || preview.sourceFrom === null || preview.sourceTo === null) return false;
+    try {
+      const response = await fetch(preview.src);
+      const blob = await response.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth || 800, height: img.naturalHeight || 600 });
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+      setRenderedImagePreview(null);
+      setInlineDrawInsertion({
+        mode: 'rendered',
+        documentPath: activeReading.path,
+        insertionStart: preview.sourceFrom,
+        replaceFrom: preview.sourceFrom,
+        replaceTo: preview.sourceTo,
+        backgroundImage: {
+          dataUrl,
+          width: dimensions.width,
+          height: dimensions.height,
+        },
+      });
+      return true;
+    } catch {
+      alert('Failed to open drawing. Please try again.');
+      return true;
+    }
+  }, [activeReading?.path]);
+
+  const handleRenderedImageAction = useCallback((preview: MarkdownCodeEditorImagePreview) => {
+    void (async () => {
+      const handled = await openRenderedDrawingEditor(preview);
+      if (!handled) setRenderedImagePreview(preview);
+    })();
+  }, [openRenderedDrawingEditor]);
 
   const updateMarkdownCodeEditorWikiLinkCompletion = useCallback((
     snapshot: MarkdownCodeEditorSelectionSnapshot,
@@ -3258,16 +8013,66 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         autoCloseEdit.selectionEnd,
         snapshot.caretPosition,
       ));
+      setMarkdownEmojiCompletion(null);
+      setMarkdownMentionCompletion(null);
+      setMarkdownSlashCommandCompletion(null);
       return;
     }
 
-    setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+    const wikiCompletion = getMarkdownWikiLinkCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    );
+    const mentionCompletion = wikiCompletion ? null : getMarkdownMentionCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    );
+    const emojiCompletion = wikiCompletion || mentionCompletion ? null : getMarkdownEmojiCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    );
+    setMarkdownWikiLinkCompletion(wikiCompletion);
+    setMarkdownMentionCompletion(mentionCompletion);
+    setMarkdownEmojiCompletion(emojiCompletion);
+    setMarkdownSlashCommandCompletion(wikiCompletion || mentionCompletion || emojiCompletion ? null : getMarkdownSlashCommandCompletionState(
       snapshot.value,
       snapshot.selectionStart,
       snapshot.selectionEnd,
       snapshot.caretPosition,
     ));
   }, [applyMarkdownCodeEditorTextEdit, markdownUrlPasteChoice, scheduleEditorSessionPersist]);
+
+  const handleMarkdownCodeEditorSelectionChange = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const reason = snapshot.docChanged ? 'markdown-input' : 'markdown-selection';
+    latestMarkdownCursorSnapshotRef.current = { ...snapshot, timestamp: Date.now(), stage: reason };
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
+    recordRenderedEditorDebug('markdown-cursor-change', () => ({
+      reason,
+      cursor: getMarkdownCursorDebugState(reason, snapshot),
+      editorCursor: getEditorCursorDebugState(reason, snapshot),
+    }));
+    scheduleEditorCursorSettledDebug(reason, snapshot);
+    showSelectionPastePopoverFromEditorSnapshot(snapshot);
+    updateMarkdownCodeEditorWikiLinkCompletion(snapshot);
+  }, [
+    getEditorCursorDebugState,
+    getMarkdownCursorDebugState,
+    recordRenderedEditorDebug,
+    reportActiveLibraryFileContext,
+    scheduleEditorCursorSettledDebug,
+    showSelectionPastePopoverFromEditorSnapshot,
+    updateMarkdownCodeEditorWikiLinkCompletion,
+  ]);
 
   const applyMarkdownWikiLinkSuggestion = useCallback((
     suggestion: MarkdownWikiLinkSuggestion,
@@ -3287,6 +8092,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markWritingActive();
     setEditContent(edit.nextValue);
     setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
     setMarkdownUrlPasteChoice(null);
     scheduleEditorSessionPersist();
 
@@ -3298,20 +8104,132 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
 
-  const applyMarkdownTextInsertion = useCallback((text: string) => {
+  const applyMarkdownMentionSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownMentionCompletion | null,
+  ) => {
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownMentionCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownMentionCompletionReplacement(
+      currentValue,
+      completion,
+      suggestion.title,
+      getMarkdownMentionSuggestionHref(suggestion),
+    );
+    if (!edit) return;
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownMentionCompletion(null);
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEmojiCompletion(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (!nextCodeEditor || nextCodeEditor.getValue() !== edit.nextValue) return;
+      nextCodeEditor.focus({ preventScroll: true });
+      nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+  }, [editContent, getMarkdownMentionSuggestionHref, markWritingActive, scheduleEditorSessionPersist]);
+
+  const applyMarkdownEmojiSuggestion = useCallback((
+    suggestion: MarkdownEmojiSuggestion,
+    completionFallback: MarkdownEmojiCompletion | null,
+  ) => {
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownEmojiCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownEmojiCompletionReplacement(currentValue, completion, suggestion);
+    if (!edit) return;
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownEmojiCompletion(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (!nextCodeEditor || nextCodeEditor.getValue() !== edit.nextValue) return;
+      nextCodeEditor.focus({ preventScroll: true });
+      nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+  }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const applyMarkdownSlashCommandSuggestion = useCallback((
+    suggestion: MarkdownSlashCommandSuggestion,
+    completionFallback: MarkdownSlashCommandCompletion | null,
+  ) => {
+    if (suggestion.name !== 'draw' || !activeReading?.path) return;
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownSlashCommandCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = removeActiveMarkdownSlashCommandCompletion(currentValue, completion);
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownSlashCommandCompletion(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (!nextCodeEditor || nextCodeEditor.getValue() !== edit.nextValue) return;
+      nextCodeEditor.focus({ preventScroll: true });
+      nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+    setInlineDrawInsertion({
+      mode: 'markdown',
+      documentPath: activeReading.path,
+      insertionStart: edit.selectionStart,
+    });
+  }, [activeReading?.path, editContent, markWritingActive, scheduleEditorSessionPersist]);
+
+  const applyMarkdownTextInsertion = useCallback((
+    text: string,
+    options: { convertLocalImagePaths?: boolean } = {},
+  ) => {
     if (!text) return;
     markWritingActive();
     setMarkdownUrlPasteChoice(null);
     setMarkdownWikiLinkCompletion(null);
+    setMarkdownMentionCompletion(null);
+    setMarkdownEmojiCompletion(null);
 
     const editor = markdownCodeEditorRef.current;
     const currentValue = editor?.getValue() ?? editContent;
     const selection = editor?.getSelectionRange();
     const selectionStart = selection?.start ?? currentValue.length;
     const selectionEnd = selection?.end ?? selectionStart;
-    const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
+    const shouldConvertLocalImagePaths = options.convertLocalImagePaths !== false;
+    const insertedText = shouldConvertLocalImagePaths
+      ? formatPastedLocalImageMarkdown(text) ?? text
+      : text;
     const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
     const nextSelection = selectionStart + insertedText.length;
+    pendingMarkdownInsertionSelectionRef.current = {
+      value: nextValue,
+      start: nextSelection,
+      end: nextSelection,
+    };
 
     setEditContent(nextValue);
     scheduleEditorSessionPersist();
@@ -3319,24 +8237,101 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     requestAnimationFrame(() => {
       const nextEditor = markdownCodeEditorRef.current;
       if (!nextEditor || nextEditor.getValue() !== nextValue) return;
+      pendingMarkdownInsertionSelectionRef.current = null;
       nextEditor.focus({ preventScroll: true });
       nextEditor.setSelectionRange(nextSelection, nextSelection);
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
 
+  const replaceSelectedMarkdownText = useCallback((request: ReplaceSelectedMarkdownTextRequest): boolean => {
+    if (contentMode === 'rendered') {
+      const editor = renderedMarkdownEditorRef.current;
+      const selection = editor?.getSelectionRange();
+      if (!editor || !selection) return false;
+      const edit = getVerifiedMarkdownSelectionReplacement(
+        editor.getValue(),
+        selection.start,
+        selection.end,
+        request.expectedText,
+        request.replacementText,
+      );
+      if (!edit) return false;
+      applyRenderedEditorBody(edit.nextValue, {
+        selectionStart: edit.selectionStart,
+        selectionEnd: edit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: edit.selectionStart,
+        end: edit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return true;
+    }
+
+    if (contentMode !== 'markdown') return false;
+    const editor = markdownCodeEditorRef.current;
+    const selection = editor?.getSelectionRange();
+    if (!editor || !selection) return false;
+    const edit = getVerifiedMarkdownSelectionReplacement(
+      editor.getValue(),
+      selection.start,
+      selection.end,
+      request.expectedText,
+      request.replacementText,
+    );
+    if (!edit) return false;
+    applyMarkdownCodeEditorTextEdit(edit);
+    return true;
+  }, [applyMarkdownCodeEditorTextEdit, applyRenderedEditorBody, contentMode, focusRenderedEditor]);
+
   const insertMarkdownText = useCallback((text: string) => {
+    if (contentMode === 'rendered') {
+      applyRenderedTextInsertion(text);
+      return;
+    }
     if (contentMode !== 'markdown') {
       setContentMode('markdown');
       requestAnimationFrame(() => applyMarkdownTextInsertion(text));
       return;
     }
     applyMarkdownTextInsertion(text);
-  }, [applyMarkdownTextInsertion, contentMode]);
+  }, [applyMarkdownTextInsertion, applyRenderedTextInsertion, contentMode]);
 
-  const insertCurrentClipboardImagePath = useCallback(async () => {
-    const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
-    if (imagePath) insertMarkdownText(formatLocalImageMarkdown(imagePath));
-  }, [insertMarkdownText]);
+  const insertPlainMarkdownText = useCallback((text: string) => {
+    const options = { convertLocalImagePaths: false };
+    if (contentMode === 'rendered') {
+      applyRenderedTextInsertion(text, options);
+      return;
+    }
+    if (contentMode !== 'markdown') {
+      setContentMode('markdown');
+      requestAnimationFrame(() => applyMarkdownTextInsertion(text, options));
+      return;
+    }
+    applyMarkdownTextInsertion(text, options);
+  }, [applyMarkdownTextInsertion, applyRenderedTextInsertion, contentMode]);
+
+  useLayoutEffect(() => {
+    if (contentMode !== 'markdown') return;
+    const frame = requestAnimationFrame(() => {
+      const pending = pendingMarkdownInsertionSelectionRef.current;
+      const editor = markdownCodeEditorRef.current;
+      if (!pending || !editor || editor.getValue() !== pending.value) return;
+      pendingMarkdownInsertionSelectionRef.current = null;
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(pending.start, pending.end);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, editContent]);
+
+  const insertPastedClipboardImagePath = useCallback(async (clipboardData: DataTransfer) => {
+    const imagePath = await getPastedClipboardImagePath(clipboardData);
+    if (!imagePath) return;
+    const portable = activeReading?.path
+      ? await window.markdownImagesAPI?.copyImageForDocument(activeReading.path, imagePath, 'Image')
+      : null;
+    insertMarkdownText(portable?.markdown ?? formatLocalImageMarkdown(imagePath));
+  }, [activeReading?.path, insertMarkdownText]);
 
   const applyMarkdownUrlPasteEdit = useCallback((pasteEdit: MarkdownUrlPasteEdit) => {
     markWritingActive();
@@ -3357,7 +8352,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const clipboardData = event.clipboardData;
     const pastedText = clipboardData?.getData('text/plain') ?? '';
     if (clipboardData && shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(clipboardData) })) {
-      void insertCurrentClipboardImagePath();
+      void insertPastedClipboardImagePath(clipboardData);
       return true;
     }
     if (!pastedText) return false;
@@ -3366,6 +8361,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (localImageMarkdown) {
       insertMarkdownText(localImageMarkdown);
       return true;
+    }
+
+    if (clipboardData) {
+      const wikiLinkPasteText = getMarkdownWikiLinkPasteText(
+        getClipboardMarkdownFileReferenceText(clipboardData, pastedText),
+        wikiIndex,
+      );
+      if (wikiLinkPasteText) {
+        insertMarkdownText(wikiLinkPasteText);
+        return true;
+      }
     }
 
     const editor = markdownCodeEditorRef.current;
@@ -3384,7 +8390,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     applyMarkdownUrlPasteEdit(pasteEdit);
     return true;
-  }, [applyMarkdownUrlPasteEdit, insertCurrentClipboardImagePath, insertMarkdownText]);
+  }, [applyMarkdownUrlPasteEdit, insertMarkdownText, insertPastedClipboardImagePath, wikiIndex]);
 
   const applyMarkdownUrlPasteKind = useCallback((kind: MarkdownUrlPasteKind) => {
     if (!markdownUrlPasteChoice) return;
@@ -3414,10 +8420,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const value = editor?.getValue() ?? editContent;
     const selection = editor?.getSelectionRange() ?? { start: 0, end: 0 };
 
+    if (
+      event.key === 'Escape'
+      && !markdownWikiLinkCompletion
+      && !markdownMentionCompletion
+      && !markdownEmojiCompletion
+      && !markdownSlashCommandCompletion
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      void exitEditMode();
+      return true;
+    }
+
     if (isImmersiveToggleShortcut(event)) {
       event.preventDefault();
       event.stopPropagation();
       toggleFocusChromeShortcut();
+      return true;
+    }
+
+    if (isInlineGemmaCommandShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openInlineGemmaCommand();
+      return true;
+    }
+
+    const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
+    if (navigationDirection !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (navigationDirection !== 0) navigateHistory(navigationDirection);
+      return true;
+    }
+
+    if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      void flushCurrentEdit()
+        .then(() => window.commandsAPI?.runGlobalImproveSelection?.())
+        .catch(() => {});
       return true;
     }
 
@@ -3426,6 +8469,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         event.preventDefault();
         return true;
       }
+    }
+
+    if (event.key === 'Backspace' && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      const edit = getMarkdownWordDeleteBackwardPreservingListMarkerEdit(value, selection.start, selection.end);
+      if (edit) {
+        event.preventDefault();
+        applyMarkdownCodeEditorTextEdit(edit);
+        return true;
+      }
+    }
+
+    const formattingKind = getMarkdownFormattingShortcut(event);
+    if (formattingKind) {
+      const edit = getMarkdownFormattingEdit(value, selection.start, selection.end, formattingKind);
+      event.preventDefault();
+      applyMarkdownCodeEditorTextEdit(edit);
+      return true;
     }
 
     if (isMarkdownTaskToggleShortcut(event)) {
@@ -3455,18 +8515,133 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return true;
       }
 
-      if (event.code === 'Digit7' || event.code === 'Digit8') {
+      const listShortcutKind = getMarkdownListShortcutKind(event);
+      if (listShortcutKind) {
         const edit = getMarkdownListToggleEdit(
           value,
           selection.start,
           selection.end,
-          event.code === 'Digit7' ? 'ordered' : 'unordered',
+          listShortcutKind,
           unorderedListMarker,
         );
         if (!edit) return false;
         event.preventDefault();
         applyMarkdownCodeEditorTextEdit(edit);
         return true;
+      }
+    }
+
+    const slashCommandCompletion = markdownSlashCommandCompletion;
+    if (slashCommandCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownSlashCommandCompletion(null);
+        return true;
+      }
+
+      if (markdownSlashCommandSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index + 1) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownSlashCommandSuggestionIndex((index) => (
+            (index - 1 + markdownSlashCommandSuggestions.length) % markdownSlashCommandSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownSlashCommandSuggestions[
+            Math.min(markdownSlashCommandSuggestionIndex, markdownSlashCommandSuggestions.length - 1)
+          ];
+          applyMarkdownSlashCommandSuggestion(suggestion, slashCommandCompletion);
+          return true;
+        }
+      }
+    }
+
+    const emojiCompletion = markdownEmojiCompletion;
+    if (emojiCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownEmojiCompletion(null);
+        return true;
+      }
+
+      if (markdownEmojiSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownEmojiSuggestionIndex((index) => (
+            (index + 1) % markdownEmojiSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownEmojiSuggestionIndex((index) => (
+            (index - 1 + markdownEmojiSuggestions.length) % markdownEmojiSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownEmojiSuggestions[
+            Math.min(markdownEmojiSuggestionIndex, markdownEmojiSuggestions.length - 1)
+          ];
+          applyMarkdownEmojiSuggestion(suggestion, emojiCompletion);
+          return true;
+        }
+      }
+    }
+
+    const mentionCompletion = markdownMentionCompletion;
+    if (mentionCompletion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownMentionCompletion(null);
+        return true;
+      }
+
+      if (markdownMentionSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index + 1) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownMentionSuggestionIndex((index) => (
+            (index - 1 + markdownMentionSuggestions.length) % markdownMentionSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const suggestion = markdownMentionSuggestions[
+            Math.min(markdownMentionSuggestionIndex, markdownMentionSuggestions.length - 1)
+          ];
+          applyMarkdownMentionSuggestion(suggestion, mentionCompletion);
+          return true;
+        }
       }
     }
 
@@ -3477,6 +8652,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         event.stopPropagation();
         setMarkdownWikiLinkCompletion(null);
         return true;
+      }
+
+      if (
+        (event.key === 'Backspace' || event.key === 'Delete')
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.shiftKey
+      ) {
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const liveSelection = editor?.getSelectionRange();
+        const liveCompletion = liveSelection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, liveSelection.start, liveSelection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionDeleteEdit(currentValue, liveCompletion ?? completion, event.key);
+        if (edit) {
+          event.preventDefault();
+          event.stopPropagation();
+          applyMarkdownCodeEditorTextEdit(edit, { preserveCompletion: true });
+          setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+            edit.nextValue,
+            edit.selectionStart,
+            edit.selectionEnd,
+            { top: completion.top, left: completion.left },
+          ));
+          return true;
+        }
       }
 
       if (markdownWikiLinkSuggestions.length > 0) {
@@ -3504,10 +8707,37 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           applyMarkdownWikiLinkSuggestion(suggestion, completion);
           return true;
         }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const liveSelection = editor?.getSelectionRange();
+        const liveCompletion = liveSelection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, liveSelection.start, liveSelection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionCommitEdit(currentValue, liveCompletion ?? completion);
+        if (!edit) return true;
+        applyMarkdownCodeEditorTextEdit(edit);
+        setMarkdownWikiLinkCompletion(null);
+        return true;
       }
     }
 
     if (event.key === 'Enter') {
+      const drawEdit = getMarkdownDrawCommandEdit(value, selection.start, selection.end);
+      if (drawEdit && activeReading?.path) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyMarkdownCodeEditorTextEdit(drawEdit);
+        setInlineDrawInsertion({
+          mode: 'markdown',
+          documentPath: activeReading.path,
+          insertionStart: drawEdit.selectionStart,
+        });
+        return true;
+      }
+
       const carrotEdit = getCarrotListEnterEdit(value, selection.start, selection.end);
       if (carrotEdit) {
         event.preventDefault();
@@ -3536,14 +8766,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     return false;
   }, [
+    activeReading,
     applyMarkdownCodeEditorTextEdit,
+    applyMarkdownEmojiSuggestion,
+    applyMarkdownMentionSuggestion,
     applyMarkdownWikiLinkSuggestion,
     editContent,
+    exitEditMode,
+    canNavigateBack,
+    canNavigateForward,
+    flushCurrentEdit,
+    markdownEmojiCompletion,
+    markdownEmojiSuggestionIndex,
+    markdownEmojiSuggestions,
+    markdownMentionCompletion,
+    markdownMentionSuggestionIndex,
+    markdownMentionSuggestions,
+    markdownSlashCommandCompletion,
+    markdownSlashCommandSuggestionIndex,
+    markdownSlashCommandSuggestions,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
+    navigateHistory,
+    openInlineGemmaCommand,
+    applyMarkdownSlashCommandSuggestion,
     restoreMarkdownCodeEditorProgrammaticUndo,
     scheduleEditorSessionPersist,
+    toggleLineNumbers,
     toggleFocusChromeShortcut,
     unorderedListMarker,
   ]);
@@ -3570,10 +8820,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const selectionEnd = Math.min(session.selectionEnd, length);
       editor.setSelectionRange(selectionStart, selectionEnd);
       editor.scrollTop = session.scrollTop;
+      recordRenderedEditorDebug('editor-session-restored', {
+        contentMode,
+        selectionStart,
+        selectionEnd,
+        scrollTop: session.scrollTop,
+      });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, editorSessionMatchesCurrent]);
+  }, [contentMode, editorSessionMatchesCurrent, recordRenderedEditorDebug]);
 
   useEffect(() => {
     const ratio = pendingScrollRatioRef.current;
@@ -3588,6 +8844,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         scrollEl.clientHeight,
         ratio,
       );
+      recordRenderedEditorDebug('scroll-ratio-restored', {
+        contentMode,
+        ratio,
+        scrollTop: scrollEl.scrollTop,
+        scrollHeight: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      });
       if (contentMode === 'markdown') {
         updateMarkdownEditorFades(scrollEl);
       } else {
@@ -3607,15 +8870,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       updateRenderedDocumentTopFade(null);
       return;
     }
-    const frame = requestAnimationFrame(() => updateRenderedDocumentTopFade(contentScrollRef.current));
-    return () => cancelAnimationFrame(frame);
-  }, [contentMode, displayContent, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
+    const sample = () => updateRenderedDocumentTopFade(contentScrollRef.current);
+    const frame = requestAnimationFrame(sample);
+    const settleTimer = window.setTimeout(sample, 80);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+    };
+  }, [contentMode, displaySourceBody, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     if (contentMode !== 'markdown') return;
     const frame = requestAnimationFrame(() => updateMarkdownEditorFades(markdownCodeEditorRef.current));
     return () => cancelAnimationFrame(frame);
-  }, [activeReading?.path, contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
+  }, [activeReading?.path, contentMode, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
 
   useEffect(() => {
     if (!markdownUrlPasteChoice) return;
@@ -3633,8 +8901,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length]);
 
   useEffect(() => {
+    setMarkdownEmojiSuggestionIndex(0);
+  }, [markdownEmojiCompletion?.query, markdownEmojiCompletion?.queryStart]);
+
+  useEffect(() => {
+    if (markdownEmojiSuggestionIndex < markdownEmojiSuggestions.length) return;
+    setMarkdownEmojiSuggestionIndex(0);
+  }, [markdownEmojiSuggestionIndex, markdownEmojiSuggestions.length]);
+
+  useEffect(() => {
     setMarkdownUrlPasteChoice(null);
     setMarkdownWikiLinkCompletion(null);
+    renderedEditUndoStackRef.current = [];
   }, [activeReading?.path, contentMode]);
 
   useEffect(() => {
@@ -3644,48 +8922,105 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, insertMarkdownText]);
 
   useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.librarianAPI?.onInsertPlainMarkdownText?.(insertPlainMarkdownText);
+    return () => unsubscribe?.();
+  }, [active, insertPlainMarkdownText]);
+
+  useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.librarianAPI?.onReplaceSelectedMarkdownText?.(replaceSelectedMarkdownText);
+    return () => unsubscribe?.();
+  }, [active, replaceSelectedMarkdownText]);
+
+  useEffect(() => {
+    const unsubscribe = window.commandsAPI?.onToggleLineNumbersFromLauncher?.(() => {
+      toggleLineNumbers('visible');
+    });
+    return () => unsubscribe?.();
+  }, [toggleLineNumbers]);
+
+  useEffect(() => {
     return () => window.librarianAPI?.setMarkdownEditorFocused(false);
   }, []);
 
+  useEffect(() => {
+    if (!active) {
+      markdownEditorFocusedRef.current = false;
+      window.librarianAPI?.setMarkdownEditorFocused(false);
+    }
+  }, [active]);
+
+  const reportCurrentMarkdownEditorFocus = useCallback(() => {
+    if (!active) {
+      markdownEditorFocusedRef.current = false;
+      window.librarianAPI?.setMarkdownEditorFocused(false);
+      return;
+    }
+    window.librarianAPI?.setMarkdownEditorFocused(markdownEditorFocusedRef.current);
+  }, [active]);
+
+  useEffect(() => {
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    };
+  }, [reportCurrentMarkdownEditorFocus]);
+
   const enterEditMode = useCallback((selectionStart?: number | null) => {
     captureContentScrollRatio();
+    const hadPendingRenderedSave = pendingRenderedSaveRef.current !== null;
+    flushPendingRenderedSave();
+    const activePath = activeReadingPathRef.current;
+    const latestRenderedContent = latestRenderedContentRef.current;
+    const shouldUseLatestRenderedContent = !!activePath && latestRenderedContent?.path === activePath;
+    const nextEditContent = shouldUseLatestRenderedContent
+      ? latestRenderedContent.content
+      : activeReading?.content;
+    if (activePath && typeof nextEditContent === 'string') {
+      const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextEditContent);
+      setEditContent(normalizedContent);
+      editContentRef.current = normalizedContent;
+      lastSeededPathRef.current = activePath;
+    }
+    recordRenderedEditorDebug('enter-markdown-source', {
+      selectionStart: typeof selectionStart === 'number' ? selectionStart : null,
+      usedLatestRenderedContent: shouldUseLatestRenderedContent,
+      flushedPendingRenderedSave: hadPendingRenderedSave,
+    });
     focusMarkdownEditorOnOpenRef.current = true;
     pendingRenderedEditSelectionRef.current = typeof selectionStart === 'number' ? selectionStart : null;
+    pendingRenderedEditSelectionEndRef.current = typeof selectionStart === 'number' ? selectionStart : null;
     setContentMode('markdown');
-  }, [captureContentScrollRatio]);
+  }, [activeReading?.content, captureContentScrollRatio, flushPendingRenderedSave, recordRenderedEditorDebug]);
 
   useEffect(() => {
     if (contentMode !== 'markdown' || !focusMarkdownEditorOnOpenRef.current) return;
     const frame = requestAnimationFrame(() => {
       focusMarkdownEditorOnOpenRef.current = false;
       const selectionStart = pendingRenderedEditSelectionRef.current;
-      const selectionEnd = selectionStart;
+      const selectionEnd = pendingRenderedEditSelectionEndRef.current ?? selectionStart;
       pendingRenderedEditSelectionRef.current = null;
+      pendingRenderedEditSelectionEndRef.current = null;
 
       const editor = markdownCodeEditorRef.current;
       if (!editor) {
         focusMarkdownEditorOnOpenRef.current = true;
         return;
       }
-      editor.focus({ preventScroll: true });
       if (typeof selectionStart === 'number') {
         const value = editor.getValue();
         const offset = Math.max(0, Math.min(selectionStart, value.length));
         const endOffset = Math.max(offset, Math.min(selectionEnd ?? offset, value.length));
         editor.setSelectionRange(offset, endOffset);
       }
+      editor.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [activeReading?.path, contentMode]);
 
-  const exitEditMode = useCallback(async () => {
-    captureContentScrollRatio();
-    await flushCurrentEdit();
-    setContentMode('rendered');
-  }, [captureContentScrollRatio, flushCurrentEdit]);
-
   // Debounced auto-save. Fires ~400ms after the last keystroke and doesn't
-  // round-trip the saved content back into React state, so the textarea's
+  // round-trip the saved content back into React state, so the editor's
   // native undo stack stays intact for Cmd+Z within the session.
   useEffect(() => {
     // Nothing pending unless/until a matching save is scheduled below.
@@ -3703,34 +9038,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetTitle = activeReading.title;
     const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = removeEmptyMarkdownCommentPlaceholders(editContent);
+    const previousSavedContent = lastSavedContentRef.current;
+    const targetSharedFileStatus = sharedFileStatus;
     let done = false;
     const doSave = async () => {
       if (done) return;
       done = true;
       setSaveStatus('saving');
       try {
+        const portableContent = targetReadingPath && markdownPortableImagesChanged(previousSavedContent, targetContent)
+          ? (await window.markdownImagesAPI?.makeImagesPortable(targetReadingPath, targetContent))?.content ?? targetContent
+          : targetContent;
         let result: DocumentSaveResult | null | undefined;
         let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
         if (targetType === 'wiki' && targetWikiPath) {
-          result = await window.wikiAPI?.save(targetWikiPath, targetContent, targetVersion);
-          overwrite = (version) => window.wikiAPI?.save(targetWikiPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.wikiAPI?.save(targetWikiPath, portableContent, targetVersion);
+          overwrite = (version) => window.wikiAPI?.save(targetWikiPath, portableContent, version) ?? Promise.resolve(undefined);
         } else if (targetType === 'external' && targetReadingPath) {
-          result = await window.externalAPI?.save(targetReadingPath, targetContent, targetVersion);
-          overwrite = (version) => window.externalAPI?.save(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.externalAPI?.save(targetReadingPath, portableContent, targetVersion);
+          overwrite = (version) => window.externalAPI?.save(targetReadingPath, portableContent, version) ?? Promise.resolve(undefined);
         } else if (targetReadingPath) {
-          result = await window.librarianAPI?.saveReading(targetReadingPath, targetContent, targetVersion);
-          overwrite = (version) => window.librarianAPI?.saveReading(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.librarianAPI?.saveReading(targetReadingPath, portableContent, targetVersion);
+          overwrite = (version) => window.librarianAPI?.saveReading(targetReadingPath, portableContent, version) ?? Promise.resolve(undefined);
         } else {
           return;
         }
 
         if (isDocumentSaveConflict(result)) {
-          const resolved = await resolveSaveConflict(result, targetType, targetReadingPath, targetContent, targetTitle, overwrite);
+          const resolved = await resolveSaveConflict(result, targetType, targetReadingPath, portableContent, targetTitle, overwrite);
           setSaveStatus(resolved ? 'saved' : 'idle');
           return;
         }
         if (!isDocumentSaveOk(result)) throw new Error('save failed');
-        applySavedDocumentState(targetType, targetReadingPath, targetContent, getDocumentSaveVersion(result), targetTitle);
+        applySavedDocumentState(targetType, targetReadingPath, portableContent, getDocumentSaveVersion(result), targetTitle);
+        const currentSharedFileStatus = sharedFileStatusPathRef.current === targetReadingPath
+          ? sharedFileStatusRef.current
+          : targetSharedFileStatus;
+        scheduleSharedContentSync(currentSharedFileStatus, portableContent);
         setSaveStatus('saved');
       } catch {
         setSaveStatus('idle');
@@ -3743,7 +9087,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     flushSaveRef.current = doSave;
     const timer = setTimeout(() => { void doSave(); }, 400);
     return () => clearTimeout(timer);
-  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, scheduleSharedContentSync, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
 
   // Keep the internal save state from staying in "saved" after auto-save settles.
   // 2.5s is long enough to notice when clicking away to another file without
@@ -3762,7 +9106,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const page = await window.libraryAPI?.createFile(location.rootPath, location.relPath, fileName.trim());
       if (page?.absPath) {
         await selectExternalFile(page.absPath);
-        setContentMode('markdown');
+        setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'external')));
         return page;
       }
       return false;
@@ -3772,7 +9116,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (page) {
       dispatchLocalWikiAdded(page);
       openWikiPage(page.relPath);
-      setContentMode('markdown');
+      setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'wiki')));
       return page;
     }
     return false;
@@ -3785,35 +9129,87 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setEditContent(page.content);
     lastSavedContentRef.current = page.content;
     lastSavedVersionRef.current = page.documentVersion;
-    setContentMode('markdown');
+    setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'wiki')));
   }, [openWikiPage]);
 
+  const applyInitialOpenMarkdownTargetMode = useCallback((
+    target: FieldTheoryMarkdownTarget,
+    content?: string | null,
+  ) => {
+    const requestedContentMode = coerceMarkdownContentMode(target.contentMode, {
+      typedownEnabled: FEATURE_TYPEDOWN_ENABLED,
+      fallback: 'rendered',
+    });
+    if (requestedContentMode === 'markdown') {
+      setContentMode('markdown');
+      setFocusImmersive(true);
+      focusMarkdownEditorOnOpenRef.current = true;
+      const selectionStart = typeof target.selectionStart === 'number'
+        ? target.selectionStart
+        : typeof content === 'string'
+          ? content.length
+          : null;
+      const selectionEnd = typeof target.selectionEnd === 'number'
+        ? target.selectionEnd
+        : selectionStart;
+      pendingRenderedEditSelectionRef.current = selectionStart;
+      pendingRenderedEditSelectionEndRef.current = selectionEnd;
+    } else if (requestedContentMode === 'typedown') {
+      setContentMode('typedown');
+    } else {
+      setContentMode('rendered');
+    }
+  }, []);
+
   useEffect(() => {
-    if (!initialOpenTarget) return;
+    if (!initialOpenTarget) {
+      traceLibraryNavigation('initial-open-target-cleared');
+      handledInitialOpenTargetKeyRef.current = null;
+      return;
+    }
+    const targetKey = JSON.stringify(initialOpenTarget);
+    if (handledInitialOpenTargetKeyRef.current === targetKey) {
+      traceLibraryNavigation('initial-open-target-skip-duplicate', { target: initialOpenTarget });
+      return;
+    }
+    handledInitialOpenTargetKeyRef.current = targetKey;
+    traceLibraryNavigation('initial-open-target-handle', { target: initialOpenTarget });
     if (initialOpenTarget.kind === 'wiki') {
       void (async () => {
         setSearchQuery('');
-        openWikiPage(initialOpenTarget.path);
-        if (initialOpenTarget.contentMode === 'markdown') {
-          setContentMode('markdown');
-          setFocusImmersive(true);
-          focusMarkdownEditorOnOpenRef.current = true;
-          const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
-          if (page) {
-            dispatchLocalWikiAdded(page);
-            setWikiSelectedPage(readingFromWikiPage(page));
-            setEditContent(page.content);
-            lastSavedContentRef.current = page.content;
-            lastSavedVersionRef.current = page.documentVersion;
-          }
+        const requestId = openWikiPage(initialOpenTarget.path);
+        const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
+        if (requestId !== null && !isCurrentLibraryNavigation(requestId)) return;
+        applyInitialOpenMarkdownTargetMode(initialOpenTarget, page?.content);
+        if (page) {
+          dispatchLocalWikiAdded(page);
+          setWikiSelectedPage(readingFromWikiPage(page));
+          setEditContent(page.content);
+          lastSavedContentRef.current = page.content;
+          lastSavedVersionRef.current = page.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'artifact') {
-      selectArtifactPath(initialOpenTarget.path);
-      onInitialOpenTargetConsumed?.();
+      void (async () => {
+        const requestId = selectArtifactPath(initialOpenTarget.path);
+        const reading = await window.librarianAPI?.getReading(initialOpenTarget.path);
+        if (!isCurrentLibraryNavigation(requestId)) return;
+        applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
+        if (reading) {
+          setSelectedReading(reading);
+          setEditContent(reading.content);
+          lastSavedContentRef.current = reading.content;
+          lastSavedVersionRef.current = reading.documentVersion;
+        }
+      })().finally(() => {
+        onInitialOpenTargetConsumed?.();
+      });
     } else if (initialOpenTarget.kind === 'external') {
-      void selectExternalFile(initialOpenTarget.path).finally(() => {
+      void selectExternalFile(initialOpenTarget.path).then((reading) => {
+        if (reading) applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading.content);
+      }).finally(() => {
         onInitialOpenTargetConsumed?.();
       });
     } else if (initialOpenTarget.kind === 'bookmarks') {
@@ -3825,8 +9221,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setExternalOpenFile(null);
       setContentMode('rendered');
       onInitialOpenTargetConsumed?.();
+    } else if (initialOpenTarget.kind === 'ember') {
+      setSearchQuery('');
+      setSelectedItemId(EMBER_ITEM_ID);
+      setSelectedItemType('ember');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
+      onInitialOpenTargetConsumed?.();
     }
-  }, [initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
+  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, isCurrentLibraryNavigation, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
   const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.builtin) return false;
@@ -3836,6 +9241,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     openPageForTitleEdit(page);
     return true;
   }, [openPageForTitleEdit]);
+
+  const createDefaultWikiFileInFolder = useCallback(async (folderRelPath: string, openInNewWindow: boolean) => {
+    const page = await window.wikiAPI?.createFileWithDefaultTitle(folderRelPath);
+    if (!page) return false;
+    dispatchLocalWikiAdded(page);
+    if (openInNewWindow) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: page.relPath, contentMode: 'rendered' });
+      return true;
+    }
+    openPageForTitleEdit(page);
+    return true;
+  }, [openDocumentTargetInWindow, openPageForTitleEdit]);
 
   const handleCreateDir = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.relPath.trim()) return false;
@@ -3853,9 +9270,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedPath === autoPopArtifactPath;
 
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    beginLibraryNavigation();
+    traceLibraryNavigation('handle-select-start', {
+      itemId: item.id,
+      itemType: item.type,
+      itemRelPath: item.relPath ?? null,
+      itemAbsPath: item.absPath ?? null,
+      previousSelectedItemId: selectedItemIdRef.current,
+      previousSelectedItemType: selectedItemType,
+      previousWikiRelPath: wikiSelectedRelPath,
+      previousExternalPath: externalOpenFile?.path ?? null,
+    });
+    selectedItemIdRef.current = item.id;
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
     await flushCurrentEdit();
+    traceLibraryNavigation('handle-select-after-flush', {
+      itemId: item.id,
+      itemType: item.type,
+    });
     if (item.taggedDocId && item.hasUnread) {
       void window.taggedDocsAPI?.markRead(item.taggedDocId);
     }
@@ -3867,10 +9300,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setContentMode('rendered');
     } else if (item.type === 'external') {
       await selectExternalFile(item.absPath);
-      setContentMode('rendered');
     } else if (item.type === 'bookmarks') {
       setSelectedItemId(BOOKMARKS_ITEM_ID);
       setSelectedItemType('bookmarks');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
+    } else if (item.type === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
+    } else if (item.type === 'ember') {
+      setSelectedItemId(EMBER_ITEM_ID);
+      setSelectedItemType('ember');
       setSelectedPath(null);
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
@@ -3882,7 +9328,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+    traceLibraryNavigation('handle-select-done', {
+      itemId: item.id,
+      itemType: item.type,
+    });
+  }, [beginLibraryNavigation, flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded, externalOpenFile?.path, selectedItemType, wikiSelectedRelPath]);
+
+  const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
+    const clearSource = isSidebarItemActiveDocument(item);
+    if (item.type === 'wiki' && item.relPath) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: item.relPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
+    } else if (item.type === 'artifact') {
+      openDocumentTargetInWindow({ kind: 'artifact', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
+    } else if (item.type === 'external') {
+      openDocumentTargetInWindow({ kind: 'external', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
+    }
+  }, [isSidebarItemActiveDocument, openDocumentTargetInWindow]);
+
+  const openEmberPerson = useCallback((relPath: string) => {
+    openWikiPage(relPath);
+    setContentMode('rendered');
+  }, [openWikiPage]);
 
   const handleDeletedLibraryItem = useCallback((item: UnifiedItem) => {
     const deletedSelection = deletedLibraryItemMatchesSelection(item, {
@@ -3894,12 +9360,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (deletedSelection) clearSelectedLibraryItem();
   }, [clearSelectedLibraryItem, selectedItemId, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
+  useEffect(() => {
+    if (!activeReading || contentMode === 'markdown') return;
+    const normalizedContent = removeEmptyMarkdownCommentPlaceholders(activeReading.content);
+    setEditContent(normalizedContent);
+    lastSavedContentRef.current = normalizedContent;
+    lastSavedVersionRef.current = activeReading.documentVersion;
+  }, [activeReading?.path, contentMode]);
+
   // Seed editContent when the user enters markdown mode on a file, or when
   // they switch to a different file while editing. Guarded by path so that
   // activeReading updates caused by our own save don't clobber in-progress
   // edits (setWikiSelectedPage after a write produces a new object but the
   // path is unchanged).
-  const lastSeededPathRef = useRef<string | null>(null);
   useEffect(() => {
     if (contentMode !== 'markdown' || !activeReading) {
       lastSeededPathRef.current = null;
@@ -3981,23 +9454,117 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
+  const openRiverSharePicker = useCallback(() => {
+    setSelectedRiverTargetIds([]);
+    setRiverPickerError(null);
+    setRiverSharePickerOpen(true);
+  }, []);
+
+  const commitRiverTargets = useCallback(async (targets: RiverShareTarget[]) => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+    if (targets.length === 0) {
+      flashCopyFeedback('Choose a River target');
+      return;
+    }
+
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      const status = sharedFileStatus?.shared
+        ? await window.sharedFilesAPI?.updateAudience({
+          filePath: activeReadingPath,
+          sharedId: sharedFileStatus.sharedId,
+          targets,
+        })
+        : await window.sharedFilesAPI?.share({
+          filePath: activeReadingPath,
+          title: activeReading.title,
+          content: activeReadingContentRef.current ?? activeReading.content,
+          type: inferSharedFileTypeForActiveReading(activeReadingPath),
+          targets,
+        });
+      const nextStatus = status ?? { shared: false, error: 'River share failed' };
+      setSharedFileStatus(nextStatus);
+      if (nextStatus.shared) {
+        setRiverSharePickerOpen(false);
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback(sharedFileStatus?.shared ? 'River audience updated' : 'Added to River');
+      } else {
+        flashCopyFeedback(nextStatus.error ?? 'River share failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River sharing error:', err);
+      flashCopyFeedback('River share failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFileStatus?.sharedId, sharedFilesAvailable]);
+
+  const updateRiverDefaults = useCallback((targetIds: string[]) => {
+    setRiverDefaultTargetIds(targetIds);
+    const targetMap = new Map(riverTargets.map((target) => [target.id, target]));
+    const destinations = targetIds
+      .map((targetId, position) => {
+        const target = targetMap.get(targetId);
+        return target && target.committable ? { kind: target.kind, targetId: target.targetId, position } : null;
+      })
+      .filter((target): target is { kind: RiverTarget['kind']; targetId: string; position: number } => target !== null);
+    void window.sharedFilesAPI?.setDefaultDestinations?.(destinations)
+      .then((result) => {
+        if (!result?.ok) {
+          const message = result?.error ?? 'River defaults update failed';
+          setRiverPickerError(message);
+          flashCopyFeedback(message);
+        }
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River defaults update failed:', error);
+        setRiverPickerError('River defaults update failed');
+        flashCopyFeedback('River defaults update failed');
+      });
+  }, [flashCopyFeedback, riverTargets]);
+
+  const handleToggleSharedFile = useCallback(() => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+    openRiverSharePicker();
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, openRiverSharePicker, sharedFilesAvailable]);
+
+  const unshareFromRiver = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument || !sharedFileStatus?.shared) return;
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+      if (success) {
+        setSharedFileStatus({ shared: false });
+        setRiverSharePickerOpen(false);
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback('Removed from River');
+      } else {
+        flashCopyFeedback('River remove failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River remove error:', err);
+      flashCopyFeedback('River remove failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
+
+  const toggleActiveHtmlLayout = useCallback(() => {
+    if (!activeIsHtmlDocument || !activeReadingPath) return;
+    setHtmlLayoutByPath((current) => ({
+      ...current,
+      [activeReadingPath]: (current[activeReadingPath] ?? 'full') === 'full' ? 'contained' : 'full',
+    }));
+  }, [activeIsHtmlDocument, activeReadingPath]);
+
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
-    await navigator.clipboard.writeText(shareStatus.url);
+    await writeTextToClipboard(shareStatus.url);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
-  }, [shareStatus?.url]);
-
-  const flashCopyPathCopied = useCallback(() => {
-    setCopyPathCopied(true);
-    if (copyPathFeedbackTimerRef.current !== null) {
-      window.clearTimeout(copyPathFeedbackTimerRef.current);
-    }
-    copyPathFeedbackTimerRef.current = window.setTimeout(() => {
-      setCopyPathCopied(false);
-      copyPathFeedbackTimerRef.current = null;
-    }, COPY_PATH_FEEDBACK_MS);
-  }, []);
+  }, [shareStatus?.url, writeTextToClipboard]);
 
   const getRenderedSelectionText = useCallback((): string => {
     const root = renderedContentRef.current;
@@ -4029,26 +9596,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return activeReading?.path ?? '';
   }, [activeReading?.path, contentMode, getRenderedSelectionText]);
 
-  const copyActiveReadingTextOrPath = useCallback(async () => {
+  const getActiveReadingCopyPayload = useCallback((): { text: string; label: string } | null => {
     const text = getActiveReadingCopyText();
-    if (!text) return;
+    if (!text) return null;
+    return {
+      text,
+      label: text === activeReading?.path ? 'Copied file path' : 'Copied segment',
+    };
+  }, [activeReading?.path, getActiveReadingCopyText]);
+
+  const copyActiveReadingTextOrPath = useCallback(async () => {
+    const payload = getActiveReadingCopyPayload();
+    if (!payload) return;
     try {
-      await navigator.clipboard.writeText(text);
-      flashCopyPathCopied();
+      await writeTextToClipboard(payload.text);
+      flashCopyFeedback(payload.label);
     } catch (err) {
       console.warn('[Librarian] Failed to copy text or path:', err);
     }
-  }, [flashCopyPathCopied, getActiveReadingCopyText]);
+  }, [flashCopyFeedback, getActiveReadingCopyPayload, writeTextToClipboard]);
 
   const copyActiveReadingPath = useCallback(async () => {
     if (!activeReading?.path) return;
     try {
-      await navigator.clipboard.writeText(activeReading.path);
-      flashCopyPathCopied();
+      await writeTextToClipboard(activeReading.path);
+      flashCopyFeedback('Copied file path');
     } catch (err) {
       console.warn('[Librarian] Failed to copy path:', err);
     }
-  }, [activeReading?.path, flashCopyPathCopied]);
+  }, [activeReading?.path, flashCopyFeedback, writeTextToClipboard]);
 
   useEffect(() => {
     return () => {
@@ -4084,12 +9660,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!selectedPath || !selectedReading) return;
       confirmDelete({
         title: 'Delete artifact?',
-        message: `Delete "${selectedReading.title}"? This cannot be undone.`,
+        message: `Move "${selectedReading.title}" to Trash?`,
+        confirmLabel: 'Move to Trash',
         onConfirm: async () => {
           if (shareStatus?.shared) {
             await window.librarianAPI?.unshareReading(selectedPath);
           }
           const success = await window.librarianAPI?.deleteReading(selectedPath);
+          if (success) clearSelectedLibraryItem();
+        },
+      });
+      return;
+    }
+
+    if (selectedItemType === 'external') {
+      if (!activeReading?.path) return;
+      confirmDelete({
+        title: 'Delete file?',
+        message: `Move "${activeReading.title}" to Trash?`,
+        confirmLabel: 'Move to Trash',
+        onConfirm: async () => {
+          const success = await window.externalAPI?.delete(activeReading.path);
           if (success) clearSelectedLibraryItem();
         },
       });
@@ -4114,28 +9705,72 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
 
   useEffect(() => {
-    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); return; }
+    if (!wikiSelectedRelPath) {
+      traceLibraryNavigation('wiki-load-clear-empty-relpath');
+      setWikiSelectedPage(null);
+      setWikiSelectedPageLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setWikiSelectedPageLoading(true);
+    traceLibraryNavigation('wiki-load-start', { relPath: wikiSelectedRelPath });
     (async () => {
-      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-      if (page) {
-        if (page.relPath !== wikiSelectedRelPath) {
-          setWikiSelectedRelPath(page.relPath);
-          setSelectedItemId(`wiki:${page.relPath}`);
+      try {
+        const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-cancelled', { relPath: wikiSelectedRelPath });
+          return;
         }
-        setWikiSelectedPage(readingFromWikiPage(page));
-        void window.recentAPI?.visit({
-          kind: 'wiki',
-          path: page.relPath,
-          title: page.title,
-          lastOpenedAt: Date.now(),
+        if (page) {
+          if (page.relPath !== wikiSelectedRelPath) {
+            traceLibraryNavigation('wiki-load-normalized-relpath', {
+              requestedRelPath: wikiSelectedRelPath,
+              pageRelPath: page.relPath,
+            });
+            setWikiSelectedRelPath(page.relPath);
+            setSelectedItemId(`wiki:${page.relPath}`);
+          }
+          setWikiSelectedPage(readingFromWikiPage(page));
+          traceLibraryNavigation('wiki-load-done', {
+            requestedRelPath: wikiSelectedRelPath,
+            pageRelPath: page.relPath,
+            absPath: page.absPath,
+            title: page.title,
+          });
+          void window.recentAPI?.visit({
+            kind: 'wiki',
+            path: page.relPath,
+            title: page.title,
+            lastOpenedAt: Date.now(),
+          });
+        } else {
+          // Target relPath disappeared between index refresh and navigation —
+          // clear the stale render so the reader sees empty state instead of
+          // the previous page, which would look like "the link did nothing".
+          traceLibraryNavigation('wiki-load-null-page', { relPath: wikiSelectedRelPath });
+          setWikiSelectedPage(null);
+        }
+      } catch (error) {
+        console.warn('[Librarian] Failed to load wiki page:', error);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-error-after-cancel', { relPath: wikiSelectedRelPath });
+          return;
+        }
+        traceLibraryNavigation('wiki-load-error', {
+          relPath: wikiSelectedRelPath,
+          error: error instanceof Error ? error.message : String(error),
         });
-      } else {
-        // Target relPath disappeared between index refresh and navigation —
-        // clear the stale render so the reader sees empty state instead of
-        // the previous page, which would look like "the link did nothing".
         setWikiSelectedPage(null);
+      } finally {
+        if (!cancelled) {
+          setWikiSelectedPageLoading(false);
+          traceLibraryNavigation('wiki-load-finish', { relPath: wikiSelectedRelPath });
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [wikiSelectedRelPath]);
 
   useEffect(() => {
@@ -4178,6 +9813,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
       if (cancelled) return;
+      dispatchLocalWikiDeleted(wikiSelectedRelPath);
       setWikiSelectedRelPath(null);
       setWikiSelectedPage(null);
       setSelectedItemId(null);
@@ -4188,6 +9824,54 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       unsubscribe?.();
     };
   }, [applyLiveDiskDocumentState, contentMode, editContent, wikiSelectedRelPath]);
+
+  useEffect(() => {
+    if (selectedItemType !== 'wiki' || !wikiSelectedRelPath) return;
+    let cancelled = false;
+
+    const reconcileSelectedWikiPage = async () => {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (cancelled || page) return;
+
+      const previousVersion = lastSavedVersionRef.current;
+      const renamedPage = previousVersion
+        ? await window.wikiAPI?.findPageByDocumentVersion(previousVersion, wikiSelectedRelPath)
+        : null;
+      if (cancelled) return;
+      if (renamedPage) {
+        const reading = readingFromWikiPage(renamedPage);
+        const hasUnsavedEdit = contentMode === 'markdown' && editContent !== lastSavedContentRef.current;
+        if (hasUnsavedEdit) reading.content = editContent;
+        const from = { itemType: 'wiki' as const, itemPath: wikiSelectedRelPath };
+        const to = { itemType: 'wiki' as const, itemPath: renamedPage.relPath };
+        historyNavigationTargetRef.current = to;
+        setNavigationHistory((prev) => replaceLibrarianNavigationEntry(prev, from, to));
+        lastSeededPathRef.current = reading.path;
+        setWikiSelectedRelPath(renamedPage.relPath);
+        setSelectedItemId(`wiki:${renamedPage.relPath}`);
+        setSelectedItemType('wiki');
+        setWikiSelectedPage(reading);
+        lastSavedContentRef.current = renamedPage.content;
+        lastSavedVersionRef.current = renamedPage.documentVersion;
+        return;
+      }
+
+      dispatchLocalWikiDeleted(wikiSelectedRelPath);
+      setWikiSelectedRelPath(null);
+      setWikiSelectedPage(null);
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+    };
+
+    const interval = window.setInterval(() => {
+      void reconcileSelectedWikiPage();
+    }, 750);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [contentMode, editContent, selectedItemType, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (selectedItemType !== 'external' || !externalOpenFile?.path) return;
@@ -4311,13 +9995,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         setReadings(result);
         const preferredArtifactPath =
           initialReadingPath ??
-          (restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
+          (initialSelection?.type === 'artifact' ? initialSelection.path : null);
 
         if (preferredArtifactPath && result.some((reading) => reading.path === preferredArtifactPath)) {
           selectArtifactPath(preferredArtifactPath);
-        } else if (result.length > 0 && !restoredSelection) {
+        } else if (result.length > 0 && !initialSelection && !hadInitialOpenTargetRef.current) {
           // Only default to the first artifact on a fresh session. Any
-          // restoredSelection (wiki, bookmarks, or an artifact that's since
+          // restored/initial selection (wiki, bookmarks, or an artifact that's since
           // been deleted) takes precedence and should not be clobbered.
           selectArtifactPath(result[0].path);
         }
@@ -4325,7 +10009,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setLoading(false);
     }
     loadReadings();
-  }, [initialReadingPath, restoredSelection, selectArtifactPath]);
+  }, [initialReadingPath, initialSelection, selectArtifactPath]);
 
   // Handle setup wizard completion
   const handleSetupComplete = useCallback(async () => {
@@ -4353,6 +10037,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     loadReading();
   }, [selectedPath]);
 
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    const reloadReadings = async () => {
+      const result = await window.librarianAPI?.getReadings();
+      if (cancelled) return;
+      if (result) setReadings(result);
+      if (!selectedPath) return;
+      const selected = await window.librarianAPI?.getReading(selectedPath);
+      if (cancelled) return;
+      if (selected) {
+        applyLiveDiskDocumentState('artifact', selected.path, selected);
+      } else {
+        setSelectedReading(null);
+      }
+    };
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadReadings);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadReadings);
+    };
+  }, [active, applyLiveDiskDocumentState, selectedPath]);
+
   // Load share status when reading changes
   useEffect(() => {
     async function loadShareStatus() {
@@ -4365,6 +10072,51 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     loadShareStatus();
   }, [selectedPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSharedFileStatus() {
+      if (!sharedFilesAvailable || !activeReadingPath || !activeIsMarkdownDocument) {
+        sharedFileStatusPathRef.current = null;
+        setSharedFileStatus(null);
+        return;
+      }
+      const status = await window.sharedFilesAPI?.getStatus(activeReadingPath);
+      if (!cancelled) {
+        const nextStatus = status ?? { shared: false };
+        sharedFileStatusPathRef.current = activeReadingPath;
+        sharedFileStatusRef.current = nextStatus;
+        setSharedFileStatus(nextStatus);
+      }
+    }
+    void loadSharedFileStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeIsMarkdownDocument, activeReadingPath, sharedFilesAvailable]);
+
+  useEffect(() => {
+    const sharedId = sharedFileStatus?.shared ? sharedFileStatus.sharedId ?? null : null;
+    if (!active || !sharedId) {
+      setSharedFilePresenceUsers([]);
+      void window.sharedFilesAPI?.setActivePresence(null);
+      return;
+    }
+
+    let cancelled = false;
+    const unsubscribe = window.sharedFilesAPI?.onPresenceChanged((payload) => {
+      if (payload.sharedId === sharedId) setSharedFilePresenceUsers(payload.users);
+    });
+    void window.sharedFilesAPI?.setActivePresence(sharedId).then((users) => {
+      if (!cancelled) setSharedFilePresenceUsers(users ?? []);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      void window.sharedFilesAPI?.setActivePresence(null);
+    };
+  }, [active, sharedFileStatus?.shared, sharedFileStatus?.sharedId]);
 
   // Listen for new readings
   useEffect(() => {
@@ -4486,27 +10238,54 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
+      if (!browserLibrarySurface && isTerminalPanelVisibilityToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleCodexTerminalPanel({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
+        return;
+      }
+
+      if (!browserLibrarySurface && isTerminalEditorFocusToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleTerminalEditorFocus({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
+        return;
+      }
+
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
         toggleFocusChromeShortcut();
         return;
       }
-      if (selectedItemType === 'bookmarks' && isSidebarToggleShortcut(e)) {
+      if (isLineNumbersToggleShortcut(e)) {
         e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        toggleImmersive();
+        toggleLineNumbers('visible');
+        return;
+      }
+      if (isFadedLineNumbersShortcut(e)) {
+        e.preventDefault();
+        toggleLineNumbers('faded');
+        return;
+      }
+      // Cmd+; - cycles the available markdown content modes.
+      if (isMarkdownModeToggleShortcut(e)) {
+        e.preventDefault();
+        const nextMode = getNextMarkdownContentMode(contentMode, {
+          typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED,
+        });
+        if (nextMode === 'rendered') {
+          void exitEditMode();
+        } else if (nextMode === 'markdown' && activeReading) {
+          enterEditMode();
+        } else if (nextMode === 'typedown') {
+          void switchToTypedownMode();
+        }
         return;
       }
 
-      // Cmd+. - toggle between rendered and markdown.
-      if (isMarkdownModeToggleShortcut(e)) {
+      if (sharedFilesAvailable && (sharedFilesCanWrite || sharedFileStatus?.shared) && isSharedFileToggleShortcut(e, sharedFileToggleHotkey) && activeReading?.path && activeIsMarkdownDocument) {
         e.preventDefault();
-        if (contentMode === 'markdown') {
-          void exitEditMode();
-        } else if (activeReading) {
-          enterEditMode();
-        }
+        void handleToggleSharedFile();
         return;
       }
 
@@ -4523,6 +10302,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      if (!inlineGemmaOpen && isInlineGemmaCommandShortcut(e)) {
+        e.preventDefault();
+        openInlineGemmaCommand();
+        return;
+      }
+
       // / focuses library search. Cmd+F remains available for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
@@ -4532,7 +10317,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      if (e.key === 'c' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && activeReading?.path) {
+      if (isCopyFilePathShortcut(e) && activeReading?.path) {
         e.preventDefault();
         void copyActiveReadingPath();
         return;
@@ -4547,20 +10332,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
 
-      // Cmd+N - create new file (inline input in sidebar)
+      // Cmd+N - create new file in the current wiki directory.
       if (e.key === 'n' && e.metaKey && !e.shiftKey) {
         e.preventDefault();
-        const folder = selectedItemType === 'wiki'
-          ? resolveWikiCreateFolder('', selectedItemType, wikiSelectedRelPath)
-          : undefined;
+        const folder = resolveCurrentWikiCreateFolder(selectedItemType, wikiSelectedRelPath);
         wikiCreationRef.current?.beginCreateFile(folder);
         return;
       }
 
-      // Cmd+Shift+N - create new directory (inline input in sidebar)
+      // Cmd+Shift+N - create a default page in the current wiki directory and pop it out.
       if (e.key === 'n' && e.metaKey && e.shiftKey) {
         e.preventDefault();
-        wikiCreationRef.current?.beginCreateDir();
+        const folder = resolveCurrentWikiCreateFolder(selectedItemType, wikiSelectedRelPath);
+        void createDefaultWikiFileInFolder(folder, true);
         return;
       }
 
@@ -4590,23 +10374,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // first so an in-flight debounce doesn't lose the last keystrokes.
       if (e.key === 'w' && e.metaKey) {
         e.preventDefault();
+        if (browserLibrarySurface) return;
         const pending = flushCurrentEdit();
         void pending.then(() => window.clipboardAPI?.closeWindow());
         return;
       }
 
       // Cmd+[ / Cmd+] - match the toolbar back and forward controls.
-      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-        if (e.key === '[' && canNavigateBack) {
-          e.preventDefault();
-          navigateHistory(-1);
-          return;
-        }
-        if (e.key === ']' && canNavigateForward) {
-          e.preventDefault();
-          navigateHistory(1);
-          return;
-        }
+      const navigationDirection = getLibrarianBracketNavigationDirection(e, { canNavigateBack, canNavigateForward });
+      if (navigationDirection !== null && navigationDirection !== 0) {
+        e.preventDefault();
+        navigateHistory(navigationDirection);
+        return;
       }
 
       if (document.activeElement === searchInputRef.current) {
@@ -4629,10 +10408,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         } else if (focusImmersive) {
           setFocusImmersive(false);
         } else if (isFullScreen && isOnAutoPopArtifact) {
-          window.clipboardAPI?.closeWindow();
+          if (browserLibrarySurface) {
+            setIsFullScreen(false);
+          } else {
+            window.clipboardAPI?.closeWindow();
+          }
         } else if (isFullScreen) {
           setIsFullScreen(false);
-        } else {
+        } else if (!browserLibrarySurface) {
           window.clipboardAPI?.closeWindow();
         }
         return;
@@ -4652,15 +10435,93 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      if (isCommandDeleteShortcut(e) && sidebarKeyboardActiveRef.current && selectedItemType === 'wiki') {
+      if (
+        isCommandDeleteShortcut(e)
+        && sidebarKeyboardActiveRef.current
+        && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
+      ) {
         e.preventDefault();
+        if (wikiArchiveRef.current?.hasExplicitSelection() && wikiArchiveRef.current.deleteSelectedItems()) {
+          return;
+        }
         handleDelete();
         return;
       }
 
       if (shouldHandleMarkdownTodoTabShortcut({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, selectedItemType })) {
         e.preventDefault();
+        if (wikiArchiveRef.current?.hasExplicitSelection()) {
+          void wikiArchiveRef.current.cycleSelectedTodoState(e.shiftKey ? 'backward' : 'forward');
+          return;
+        }
         void cycleSelectedMarkdownTodoState(e.shiftKey ? 'backward' : 'forward');
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'z'
+        && e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.hasArchiveUndo()
+      ) {
+        e.preventDefault();
+        void wikiArchiveRef.current.undoArchive();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'e'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.canArchiveSelected()
+      ) {
+        e.preventDefault();
+        void wikiArchiveRef.current.toggleSelectedArchive();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'x'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.toggleFocusedSelection(selectedItemIdRef.current)
+      ) {
+        e.preventDefault();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key === 'Tab'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+      ) {
+        e.preventDefault();
+        focusActiveFileBodyAtEnd();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key === 'Enter'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.renameFocusedItem(selectedItemIdRef.current)
+      ) {
+        e.preventDefault();
         return;
       }
 
@@ -4670,15 +10531,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // Arrow key / j/k navigation through the current sidebar folder.
       const items = flatItemsRef.current;
       if (items.length > 0) {
-        const currentIdx = items.findIndex((i) => i.id === selectedItemId);
+        const currentIdx = items.findIndex((i) => i.id === selectedItemIdRef.current);
         if (currentIdx < 0) return;
         if (e.key === 'ArrowUp' || e.key === 'k') {
           e.preventDefault();
           const newIdx = Math.max(0, currentIdx - 1);
+          if (newIdx === currentIdx) return;
+          selectedItemIdRef.current = items[newIdx].id;
           handleSelectItem(items[newIdx]);
         } else if (e.key === 'ArrowDown' || e.key === 'j') {
           e.preventDefault();
           const newIdx = Math.min(items.length - 1, currentIdx + 1);
+          if (newIdx === currentIdx) return;
+          selectedItemIdRef.current = items[newIdx].id;
           handleSelectItem(items[newIdx]);
         }
       }
@@ -4686,7 +10551,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, browserLibrarySurface, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath, inlineGemmaOpen, openInlineGemmaCommand]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -4707,22 +10572,68 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => unsubscribe?.();
   }, [openWikiPage]);
 
-  // Keep a flat list of all wiki pages for resolving [[wikilinks]]. Reloaded
-  // on mount and whenever the wiki tree changes so links to newly created
-  // pages resolve without a reopen.
+  // Keep a flat list of all wiki pages for resolving [[wikilinks]]. The sidebar
+  // already patches its tree from local add/rename/delete events; the link index
+  // should follow the same incremental path so clicks work before a full rescan.
+  // Full getTree() reloads stay debounced as a reconciliation backstop.
   useEffect(() => {
-    if (!active) return;
-    const load = async () => {
+    let cancelled = false;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const loadFullIndex = async () => {
       const folders = await window.wikiAPI?.getTree();
-      if (!folders) return;
-      setWikiIndexPages(
-        folders.flatMap((f) => f.files.map((p) => ({ relPath: p.relPath, title: p.title }))),
-      );
+      if (cancelled || !folders) return;
+      setWikiIndexPages(wikiIndexPagesFromTree(folders));
     };
-    void load();
-    const unsubscribe = window.wikiAPI?.onPageChanged(() => { void load(); });
-    return () => unsubscribe?.();
-  }, [active]);
+
+    const scheduleFullReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        void loadFullIndex();
+      }, 250);
+    };
+
+    void loadFullIndex();
+    const unsubscribe = window.wikiAPI?.onPageChanged(scheduleFullReload);
+
+    const onLocalWikiAdded = (event: Event) => {
+      const page = (event as CustomEvent<WikiPage>).detail;
+      if (!page?.relPath) return;
+      setWikiIndexPages((prev) => upsertWikiIndexPages(prev, page));
+    };
+    const onLocalWikiRenamed = (event: Event) => {
+      const rename = (event as CustomEvent<LibraryRenameEvent>).detail;
+      if (!rename?.oldRelPath || !rename.newRelPath) return;
+      setWikiIndexPages((prev) => renameWikiIndexPages(prev, rename.oldRelPath, rename.newRelPath));
+    };
+    const onWikiRenamed = (event: LibraryRenameEvent) => {
+      if (!event?.oldRelPath || !event.newRelPath) return;
+      setWikiIndexPages((prev) => renameWikiIndexPages(prev, event.oldRelPath, event.newRelPath));
+      scheduleFullReload();
+    };
+    const onLocalWikiDeleted = (event: Event) => {
+      const payload = (event as CustomEvent<{ relPaths: string[] }>).detail;
+      if (!payload?.relPaths?.length) return;
+      setWikiIndexPages((prev) => removeWikiIndexPages(prev, payload.relPaths));
+    };
+
+    const unsubscribeRenamed = window.wikiAPI?.onPageRenamed?.(onWikiRenamed);
+    window.addEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+    window.addEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+    window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, scheduleFullReload);
+
+    return () => {
+      cancelled = true;
+      if (reloadTimer) clearTimeout(reloadTimer);
+      unsubscribe?.();
+      unsubscribeRenamed?.();
+      window.removeEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+      window.removeEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+      window.removeEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, scheduleFullReload);
+    };
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -4747,16 +10658,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const unsubscribe = window.commandsAPI?.onCommandsChanged((commands) => {
       setCommandIndexPages(toIndexPages(commands));
     });
-    return () => unsubscribe?.();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
+    };
   }, [active]);
 
   // macOS `open-file` for paths outside the wiki root.
   useEffect(() => {
     const unsubscribe = window.externalAPI?.onOpenExternal((absPath) => {
-      void selectExternalFile(absPath);
+      traceLibraryNavigation('external-open-event', {
+        absPath,
+        selectedItemId: selectedItemIdRef.current,
+        selectedItemType: selectedItemTypeRef.current,
+        wikiSelectedRelPath: wikiSelectedRelPathRef.current,
+        externalOpenPath: externalOpenPathRef.current,
+      });
+      void selectExternalFileRef.current(absPath);
     });
     return () => unsubscribe?.();
-  }, [selectExternalFile]);
+  }, []);
 
   // Mirror the current file into the native macOS title bar (proxy icon +
   // Cmd-click menu showing the full path). Only external files get this —
@@ -4764,246 +10686,638 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // point users to an opaque internal path.
   useEffect(() => {
     const representedPath = active && selectedItemType === 'external' ? activeReading?.path ?? '' : '';
-    void window.shellAPI?.setRepresentedFilename(representedPath);
+    const applyRepresentedFilename = () => {
+      void window.shellAPI?.setRepresentedFilename(representedPath);
+    };
+    applyRepresentedFilename();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applyRepresentedFilename);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, applyRepresentedFilename);
+    };
   }, [active, selectedItemType, activeReading?.path]);
 
-  // Discover existing .librarian directories on empty state
-  useEffect(() => {
-    if (active && !loading && readings.length === 0 && discoveredDirs.length === 0 && !isDiscovering) {
-      setIsDiscovering(true);
-      window.librarianAPI?.discoverLibrarianDirs().then((dirs) => {
-        setDiscoveredDirs(dirs);
-        setIsDiscovering(false);
-      });
-    }
-  }, [active, loading, readings.length, discoveredDirs.length, isDiscovering]);
+  const renderMarkdownWikiLinkSuggestionMenu = (
+    onSelectSuggestion: (
+      suggestion: MarkdownWikiLinkSuggestion,
+      completion: MarkdownWikiLinkCompletion,
+    ) => void,
+    mode: 'wiki' | 'mention' = 'wiki',
+  ) => {
+    const completion = mode === 'mention' ? markdownMentionCompletion : markdownWikiLinkCompletion;
+    const suggestions = mode === 'mention' ? markdownMentionSuggestions : markdownWikiLinkSuggestions;
+    const selectedIndex = mode === 'mention' ? markdownMentionSuggestionIndex : markdownWikiLinkSuggestionIndex;
+    const setSelectedIndex = mode === 'mention' ? setMarkdownMentionSuggestionIndex : setMarkdownWikiLinkSuggestionIndex;
+    if (!completion || suggestions.length === 0) return null;
 
-  // Helper to format path for display (show project name from path)
-  const formatDirPath = (dirPath: string): { projectName: string; location: string } => {
-    // Remove .librarian suffix and get parent (project) directory
-    const projectPath = dirPath.replace(/\/.librarian$/, '');
-    const parts = projectPath.split('/');
-    const projectName = parts[parts.length - 1];
-    // Show abbreviated parent path
-    const parentPath = parts.slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
-    return { projectName, location: parentPath };
+    return (
+      <div
+        role="listbox"
+        aria-label={mode === 'mention' ? 'Mention suggestions' : 'Wiki link suggestions'}
+        onMouseDown={(e) => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: `${completion.top}px`,
+          left: `${completion.left}px`,
+          width: '260px',
+          maxHeight: '176px',
+          overflowY: 'auto',
+          zIndex: 4,
+          padding: '4px',
+          borderRadius: '6px',
+          backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}
+      >
+        {suggestions.map((suggestion, index) => {
+          const selected = index === selectedIndex;
+          return (
+            <button
+              key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onMouseEnter={() => setSelectedIndex(index)}
+              onClick={() => onSelectSuggestion(suggestion, completion)}
+              style={{
+                display: 'block',
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 7px',
+                textAlign: 'left',
+                backgroundColor: selected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                  : 'transparent',
+                color: theme.text,
+                cursor: 'pointer',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}
+            >
+              <span
+                style={{
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '12px',
+                  lineHeight: '16px',
+                }}
+              >
+                {suggestion.title}
+              </span>
+              <span
+                style={{
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '10px',
+                  lineHeight: '13px',
+                  color: theme.textSecondary,
+                }}
+              >
+                {suggestion.kind} - {suggestion.detail}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
   };
 
-  // Add a discovered directory
-  const handleAddDiscoveredDir = async (dirPath: string) => {
-    setAddingDir(dirPath);
-    try {
-      const result = await window.librarianAPI?.addWatchedDir(dirPath);
-      if (result) {
-        // Remove from discovered list and reload readings
-        setDiscoveredDirs((prev) => prev.filter((d) => d !== dirPath));
-        const newReadings = await window.librarianAPI?.getReadings();
-        if (newReadings) {
-          setReadings(newReadings);
-          if (newReadings.length > 0) {
-            selectArtifactPath(newReadings[0].path);
-          }
-        }
-      }
-    } finally {
-      setAddingDir(null);
-    }
+  const renderMarkdownEmojiSuggestionMenu = (
+    onSelectSuggestion: (
+      suggestion: MarkdownEmojiSuggestion,
+      completion: MarkdownEmojiCompletion,
+    ) => void,
+  ) => {
+    const completion = markdownEmojiCompletion;
+    if (!completion || markdownEmojiSuggestions.length === 0) return null;
+
+    return (
+      <div
+        role="listbox"
+        aria-label="Emoji suggestions"
+        onMouseDown={(e) => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: `${completion.top}px`,
+          left: `${completion.left}px`,
+          width: '220px',
+          maxHeight: '176px',
+          overflowY: 'auto',
+          zIndex: 4,
+          padding: '4px',
+          borderRadius: '6px',
+          backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}
+      >
+        {markdownEmojiSuggestions.map((suggestion, index) => {
+          const selected = index === markdownEmojiSuggestionIndex;
+          return (
+            <button
+              key={`${suggestion.emoji}:${suggestion.name}`}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onMouseEnter={() => setMarkdownEmojiSuggestionIndex(index)}
+              onClick={() => onSelectSuggestion(suggestion, completion)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 7px',
+                textAlign: 'left',
+                backgroundColor: selected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                  : 'transparent',
+                color: theme.text,
+                cursor: 'pointer',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}
+            >
+              <span style={{ width: '22px', fontSize: '16px', lineHeight: '20px' }}>{suggestion.emoji}</span>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '12px',
+                  lineHeight: '16px',
+                }}
+              >
+                {suggestion.name}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
   };
 
-  // Add all discovered directories
-  const handleAddAllDiscoveredDirs = async () => {
-    for (const dirPath of discoveredDirs) {
-      await window.librarianAPI?.addWatchedDir(dirPath);
-    }
-    setDiscoveredDirs([]);
-    const newReadings = await window.librarianAPI?.getReadings();
-    if (newReadings) {
-      setReadings(newReadings);
-      if (newReadings.length > 0) {
-        selectArtifactPath(newReadings[0].path);
-      }
-    }
+  const renderMarkdownSlashCommandMenu = (
+    onSelectSuggestion: (
+      suggestion: MarkdownSlashCommandSuggestion,
+      completion: MarkdownSlashCommandCompletion,
+    ) => void,
+  ) => {
+    const completion = markdownSlashCommandCompletion;
+    if (!completion || markdownSlashCommandSuggestions.length === 0) return null;
+
+    return (
+      <div
+        role="listbox"
+        aria-label="Slash commands"
+        onMouseDown={(e) => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: `${completion.top}px`,
+          left: `${completion.left}px`,
+          width: '220px',
+          zIndex: 4,
+          padding: '4px',
+          borderRadius: '6px',
+          backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}
+      >
+        {markdownSlashCommandSuggestions.map((suggestion, index) => {
+          const selected = index === markdownSlashCommandSuggestionIndex;
+          return (
+            <button
+              key={suggestion.name}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onMouseEnter={() => setMarkdownSlashCommandSuggestionIndex(index)}
+              onClick={() => onSelectSuggestion(suggestion, completion)}
+              style={{
+                display: 'block',
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 7px',
+                textAlign: 'left',
+                backgroundColor: selected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                  : 'transparent',
+                color: theme.text,
+                cursor: 'pointer',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}
+            >
+              <span style={{ display: 'block', fontSize: '12px', lineHeight: '16px' }}>
+                /{suggestion.name}
+              </span>
+              <span style={{ display: 'block', fontSize: '10px', lineHeight: '13px', color: theme.textSecondary }}>
+                {suggestion.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
   };
+
+  const sidebarForcedVisible = sidebarForcedVisibleForEmptySelection || (!hadInitialOpenTargetRef.current && !hasActiveLibrarySurface && !isFullScreen);
+  const sidebarTemporarilyExpanded = effectiveSidebarCollapsed && sidebarHoverExpanded && !userResizingPanel && !isFullScreen && !sidebarForcedVisible;
+  const sidebarVisible = !effectiveSidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisible;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
+  const dismissBookmarksExpandedSidebar = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSidebarHoverExpanded(false);
+  }, []);
+
+  const inlineDrawUsesMarkdownOverlay = inlineDrawInsertion?.mode === 'markdown';
+  const inlineDrawSurface = inlineDrawInsertion ? (
+    <div
+      role="region"
+      aria-label="Drawing"
+      data-ft-inline-draw-region="true"
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: inlineDrawUsesMarkdownOverlay ? '100%' : 'min(520px, calc(100vh - 180px))',
+        minHeight: inlineDrawUsesMarkdownOverlay ? 0 : '360px',
+        margin: inlineDrawUsesMarkdownOverlay ? 0 : '8px 0 18px 0',
+        overflow: 'hidden',
+        borderRadius: '8px',
+        border: `1px solid ${theme.border}`,
+        backgroundColor: theme.isDark ? '#111' : '#fff',
+        boxShadow: theme.isDark ? '0 10px 30px rgba(0,0,0,0.28)' : '0 10px 30px rgba(0,0,0,0.08)',
+      }}
+    >
+      {inlineDrawSaving && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: '10px',
+            right: '12px',
+            zIndex: 2,
+            padding: '4px 8px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: theme.textSecondary,
+            backgroundColor: theme.isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.8)',
+            border: `1px solid ${theme.border}`,
+          }}
+        >
+          Saving...
+        </div>
+      )}
+      <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary }}>Loading...</div>}>
+        <SketchView
+          onSave={handleInlineDrawSave}
+          onClose={handleInlineDrawClose}
+          existingSketch={null}
+          backgroundImage={inlineDrawInsertion.backgroundImage ?? null}
+        />
+      </Suspense>
+    </div>
+  ) : null;
+
+  const inlineGemmaCanRun = Boolean(inlineGemmaInstruction.trim())
+    && getMaxwellToolbarRunMode(inlineGemmaSelection).mode === 'selection'
+    && !inlineGemmaRunning;
+  const inlineGemmaDialog = inlineGemmaOpen ? (
+    <div
+      role="dialog"
+      aria-label="Gemma command"
+      aria-modal="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 70,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.48)' : 'rgba(15,23,42,0.18)',
+      }}
+      onMouseDown={closeInlineGemmaCommand}
+    >
+      <div
+        style={{
+          width: 'min(560px, 100%)',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '16px',
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginBottom: '10px',
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              color: theme.text,
+              fontSize: '17px',
+              lineHeight: '24px',
+              fontWeight: 650,
+            }}
+          >
+            Gemma command
+          </h2>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={closeInlineGemmaCommand}
+            style={{
+              width: '30px',
+              height: '30px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bgSecondary,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+              fontSize: '18px',
+              lineHeight: '26px',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <textarea
+          ref={inlineGemmaInstructionRef}
+          aria-label="Instruction"
+          value={inlineGemmaInstruction}
+          onChange={(event) => {
+            setInlineGemmaInstruction(event.target.value);
+            if (inlineGemmaError === 'Enter an instruction.') setInlineGemmaError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              closeInlineGemmaCommand();
+            }
+            if (event.key === 'Enter' && event.metaKey) {
+              event.preventDefault();
+              submitInlineGemmaCommand();
+            }
+          }}
+          placeholder="Instruction"
+          rows={5}
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            resize: 'vertical',
+            minHeight: '126px',
+            borderRadius: '7px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.inputBg ?? theme.bg,
+            color: theme.text,
+            padding: '10px 11px',
+            fontFamily: fonts.sans,
+            fontSize: '14px',
+            lineHeight: '20px',
+            outlineColor: theme.accent,
+          }}
+        />
+        <div
+          role={inlineGemmaError ? 'alert' : undefined}
+          style={{
+            minHeight: '20px',
+            marginTop: '8px',
+            color: inlineGemmaError ? '#dc2626' : theme.textSecondary,
+            fontSize: '13px',
+            lineHeight: '20px',
+          }}
+        >
+          {inlineGemmaError ?? 'Selected text will be used as context.'}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            marginTop: '12px',
+          }}
+        >
+          <button
+            type="button"
+            onClick={closeInlineGemmaCommand}
+            style={{
+              height: '34px',
+              padding: '0 12px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bgSecondary,
+              color: theme.text,
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submitInlineGemmaCommand}
+            disabled={!inlineGemmaCanRun}
+            style={{
+              height: '34px',
+              padding: '0 14px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.accent}`,
+              backgroundColor: inlineGemmaCanRun ? theme.accent : (theme.surface2 ?? theme.bgSecondary),
+              color: inlineGemmaCanRun ? '#fff' : theme.textSecondary,
+              cursor: inlineGemmaCanRun ? 'pointer' : 'default',
+              fontSize: '13px',
+              fontWeight: 650,
+            }}
+          >
+            {inlineGemmaRunning ? 'Running...' : 'Run'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const readerStatusFeedback = copyFeedbackLabel ? (
+    <div
+      role="status"
+      data-ft-reader-status-feedback="true"
+      style={{
+        position: 'absolute',
+        left: readerStatusFeedbackLeft === null ? '50%' : `${readerStatusFeedbackLeft}px`,
+        bottom: '14px',
+        transform: 'translateX(-50%)',
+        padding: '4px 8px',
+        borderRadius: '5px',
+        fontSize: '11px',
+        color: theme.isDark ? '#d1fae5' : '#065f46',
+        backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
+        border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
+        pointerEvents: 'none',
+        zIndex: 6,
+      }}
+    >
+      {copyFeedbackLabel}
+    </div>
+  ) : null;
+
+  const riverPickerTargets = riverTargets.map(riverTargetToPickerTarget);
+  const selectedRiverTargets = riverTargets.filter((target) => selectedRiverTargetIds.includes(target.id) && target.committable);
+  const selectedRiverShareTargets: RiverShareTarget[] = selectedRiverTargets.map((target) => ({
+    id: target.id,
+    kind: target.kind,
+  }));
+  const riverPrimaryLabel = selectedRiverTargets.length === 1
+    ? sharedFileStatus?.shared
+      ? `Update ${selectedRiverTargets[0]?.label ?? 'River'}`
+      : `Share to ${selectedRiverTargets[0]?.label ?? 'River'}`
+    : selectedRiverTargets.length > 1
+      ? sharedFileStatus?.shared
+        ? `Update ${selectedRiverTargets.length} targets`
+        : `Share to ${selectedRiverTargets.length} targets`
+      : 'Choose a destination';
+
+  const toggleRiverTarget = (targetId: string) => {
+    setSelectedRiverTargetIds((current) => (
+      current.includes(targetId)
+        ? current.filter((id) => id !== targetId)
+        : [...current, targetId]
+    ));
+  };
+
+  const confirmRiverShare = () => {
+    if (selectedRiverShareTargets.length === 0) return;
+    void commitRiverTargets(selectedRiverShareTargets);
+  };
+
+  const riverSharePicker = riverSharePickerOpen ? (
+    <div
+      role="dialog"
+      aria-label="Share to River"
+      aria-modal="true"
+      onMouseDown={() => setRiverSharePickerOpen(false)}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.46)' : 'rgba(15,23,42,0.18)',
+      }}
+    >
+      <div
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(460px, 100%)',
+          maxHeight: 'min(560px, calc(100vh - 40px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: theme.text, fontSize: '15px', fontWeight: 650 }}>Share to River</div>
+            <div style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeReading?.title ?? 'Selected document'}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setRiverSharePickerOpen(false)}
+            style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <RiverPicker
+          targets={riverPickerTargets}
+          selectedIds={selectedRiverTargetIds}
+          defaultIds={riverDefaultTargetIds}
+          surface="popover"
+          intent="share"
+          status={riverTargetsLoading ? 'loading' : riverPickerError ? 'error' : 'ready'}
+          disabled={isTogglingSharedFile}
+          errorMessage={riverPickerError}
+          emptyLabel="No River contacts or groups yet."
+          pendingOnlyLabel="No accepted River targets are available yet."
+          commitLabel={isTogglingSharedFile ? 'Sharing...' : riverPrimaryLabel}
+          onToggleTarget={toggleRiverTarget}
+          onCommit={confirmRiverShare}
+          onDefaultChange={updateRiverDefaults}
+        />
+        {sharedFileStatus?.shared && (
+          <button
+            type="button"
+            disabled={isTogglingSharedFile}
+            onClick={() => void unshareFromRiver()}
+            style={{
+              height: '32px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: '#dc2626',
+              cursor: isTogglingSharedFile ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 650,
+            }}
+          >
+            Remove from River
+          </button>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
   }
 
-  // Empty state
-  if (!loading && readings.length === 0) {
-    return (
-      <div
-        ref={containerRef}
-        tabIndex={0}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100%',
-          padding: '32px',
-          color: theme.textSecondary,
-          textAlign: 'center',
-          outline: 'none',
-        }}
-      >
-        <div style={{ fontSize: '32px', marginBottom: '16px' }}>
-          {theme.isDark ? '📚' : '📖'}
-        </div>
-        <div style={{ fontSize: '16px', fontWeight: 500, marginBottom: '8px', color: theme.text }}>
-          No artifacts yet
-        </div>
-
-        {/* Show discovered directories if any */}
-        {discoveredDirs.length > 0 ? (
-          <>
-            <div style={{ fontSize: '13px', marginBottom: '16px', maxWidth: '320px' }}>
-              Found {discoveredDirs.length} existing reading{discoveredDirs.length === 1 ? '' : 's'} collection{discoveredDirs.length === 1 ? '' : 's'}:
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-                marginBottom: '16px',
-                maxWidth: '400px',
-                width: '100%',
-              }}
-            >
-              {discoveredDirs.map((dirPath) => {
-                const { projectName, location } = formatDirPath(dirPath);
-                const isAdding = addingDir === dirPath;
-                return (
-                  <div
-                    key={dirPath}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '10px 14px',
-                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                      borderRadius: '8px',
-                      textAlign: 'left',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, color: theme.text, fontSize: '13px' }}>
-                        {projectName}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          color: theme.textSecondary,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {location}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleAddDiscoveredDir(dirPath)}
-                      disabled={isAdding}
-                      style={{
-                        padding: '4px 12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'white',
-                        backgroundColor: theme.accent,
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: isAdding ? 'default' : 'pointer',
-                        opacity: isAdding ? 0.6 : 1,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {isAdding ? 'Adding...' : 'Add'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            {discoveredDirs.length > 1 && (
-              <button
-                onClick={handleAddAllDiscoveredDirs}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: 'white',
-                  backgroundColor: theme.accent,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  marginBottom: '16px',
-                }}
-              >
-                Add All
-              </button>
-            )}
-            <div
-              style={{
-                fontSize: '11px',
-                color: theme.textSecondary,
-                marginTop: '8px',
-              }}
-            >
-              Or{' '}
-              <button
-                onClick={onSwitchToSettings}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: theme.accent,
-                  cursor: 'pointer',
-                  fontSize: '11px',
-                  textDecoration: 'underline',
-                  padding: 0,
-                }}
-              >
-                open Settings
-              </button>{' '}
-              to add a new directory
-            </div>
-          </>
-        ) : isDiscovering ? (
-          <div style={{ fontSize: '13px', marginBottom: '24px', color: theme.textSecondary }}>
-            Searching for existing artifacts...
-          </div>
-        ) : (
-          <>
-          <div style={{ fontSize: '13px', marginBottom: '24px', maxWidth: '280px' }}>
-              Add a watched directory in Settings to start collecting artifacts from your coding sessions.
-            </div>
-            {onSwitchToSettings && (
-              <button
-                onClick={onSwitchToSettings}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: 'white',
-                  backgroundColor: theme.accent,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Open Settings
-              </button>
-            )}
-          </>
-        )}
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
       tabIndex={0}
+      onMouseDownCapture={handleCollapsedSidebarSurfaceMouseDownCapture}
+      onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
+      onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
         display: 'flex',
         flex: 1,
@@ -5014,33 +11328,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }}
     >
       <ScrollDiagnosticsHUD />
+      {readerStatusFeedback}
+      {riverSharePicker}
+      {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
+        <div
+          aria-hidden="true"
+          data-fieldtheory-collapsed-sidebar-hover-strip="true"
+          onMouseOver={collapsedSidebarHoverReveal.handleHoverStripMouseOver}
+          onClick={collapsedSidebarHoverReveal.handleHoverStripClick}
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: `${collapsedSidebarHoverReveal.hoverStripWidth}px`,
+            zIndex: 25,
+            cursor: 'pointer',
+            opacity: collapsedSidebarHoverReveal.affordanceOpacity,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+            boxShadow: theme.isDark ? 'inset 1px 0 rgba(255,255,255,0.16)' : 'inset 1px 0 rgba(0,0,0,0.14)',
+            transition: 'opacity 120ms ease',
+          }}
+        />
+      )}
       <style>
         {`
-          @keyframes ftRenderedTaskCompletedLive {
-            0% {
-              background: rgba(52, 199, 89, 0);
-              box-shadow: inset 0 0 0 0 rgba(52, 199, 89, 0);
-              transform: translateX(0);
-            }
-            18% {
-              background: rgba(52, 199, 89, 0.16);
-              box-shadow: inset 3px 0 0 rgba(52, 199, 89, 0.8);
-              transform: translateX(2px);
-            }
-            100% {
-              background: rgba(52, 199, 89, 0);
-              box-shadow: inset 0 0 0 0 rgba(52, 199, 89, 0);
-              transform: translateX(0);
-            }
-          }
-          .ft-rendered-task-completed-live {
-            animation: ftRenderedTaskCompletedLive 1.4s ease-out;
-          }
-          .ft-rendered-task-completed-live span {
-            text-decoration: line-through;
-            text-decoration-thickness: 1.5px;
-            text-decoration-color: rgba(52, 199, 89, 0.85);
-          }
           @keyframes ftMarkdownEditorFadeIn {
             from { opacity: 0.72; }
             to { opacity: 1; }
@@ -5050,14 +11362,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
         ref={sidebarPaneRef}
+        data-fieldtheory-collapsed-sidebar-pane="true"
         style={{
-          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-          display: isFullScreen ? 'none' : 'block',
+          width: sidebarVisible ? `${sidebarWidth}px` : '0px',
+          minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
+          display: sidebarHidden ? 'none' : 'block',
           overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
           flexShrink: 0,
-          transition: isResizing ? 'none' : 'width 0.18s ease, min-width 0.18s ease',
+          zIndex: sidebarTemporarilyExpanded ? 30 : undefined,
+          boxShadow: sidebarTemporarilyExpanded ? (theme.isDark ? '12px 0 24px rgba(0,0,0,0.36)' : '12px 0 24px rgba(0,0,0,0.12)') : undefined,
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease' : 'none',
         }}
       >
         <div
@@ -5069,11 +11384,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             flexDirection: 'column',
             padding: '12px 0 0',
             minHeight: 0,
-            pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+            pointerEvents: sidebarVisible ? 'auto' : 'none',
           }}
         >
           <WikiSidebar
             active={active}
+            canHideSidebarDefaultFolders={!browserLibrarySurface}
+            persistPreferences={!hadInitialOpenTargetRef.current}
             selectedId={selectedItemId}
             selectedKeyboardActive={sidebarKeyboardActive}
             todoStateOverrides={sidebarTodoStateOverrides}
@@ -5086,6 +11403,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             onSearchQueryChange={setSearchQuery}
             searchInputRef={searchInputRef}
             creationControllerRef={wikiCreationRef}
+            archiveControllerRef={wikiArchiveRef}
+            onOpenItemInNewWindow={handleOpenSidebarItemInWindow}
+            onSidebarItemContentChanged={handleSidebarItemContentChanged}
             onDeletedItem={handleDeletedLibraryItem}
             onKeyboardScopeActive={activateSidebarKeyboard}
           />
@@ -5093,17 +11413,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       </div>
       {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
+        data-fieldtheory-sidebar-resize-handle="true"
         onMouseDown={handleResizeMouseDown}
         style={{
-          width: sidebarCollapsed ? '0px' : '4px',
-          minWidth: sidebarCollapsed ? '0px' : '4px',
+          width: sidebarVisible ? '4px' : '0px',
+          minWidth: sidebarVisible ? '4px' : '0px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
-          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
+          borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
+          transition: animateResponsiveSidebar ? 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease' : 'background-color 0.15s ease',
           flexShrink: 0,
-          display: isFullScreen ? 'none' : 'block',
-          pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+          display: sidebarHidden ? 'none' : 'block',
+          pointerEvents: sidebarVisible ? 'auto' : 'none',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -5121,35 +11442,120 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
       {/* Reader pane */}
       <div
+        data-fieldtheory-reader-pane="true"
         ref={readerPaneRef}
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
+          flexDirection: effectiveCodexTerminalVisible && effectiveCodexTerminalDockSide === 'right' ? 'row' : 'column',
+          overflow: focusChromeActive && effectiveCodexTerminalVisible && effectiveCodexTerminalDockSide === 'right' ? 'visible' : 'hidden',
           minHeight: 0, // Required for flex child to shrink below content size
           position: 'relative',
         }}
       >
+        {sidebarTemporarilyExpanded && selectedItemType === 'bookmarks' && (
+          <div
+            aria-label="Close sidebar"
+            data-fieldtheory-bookmarks-sidebar-dismiss-shield="true"
+            role="button"
+            tabIndex={-1}
+            onMouseDown={dismissBookmarksExpandedSidebar}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 28,
+              backgroundColor: theme.isDark ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.06)',
+              cursor: 'default',
+            }}
+          />
+        )}
         {bookmarksEverShown && (
           <div
             style={{
               flex: 1,
               display: selectedItemType === 'bookmarks' ? 'flex' : 'none',
               flexDirection: 'column',
+              minWidth: 0,
               minHeight: 0,
             }}
           >
             <BookmarksPane
               active={active && selectedItemType === 'bookmarks'}
-              isFullScreen={isFullScreen}
+              isFullScreen={effectiveFullScreen}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
               onToggleFullScreen={toggleImmersive}
               onCanvasModeActiveChange={setBookmarksCanvasActive}
               onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}
+              onActionFeedback={(message) => {
+                onActionFeedback?.(message);
+                flashCopyFeedback(message);
+              }}
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && (<Fragment>
+        {riverEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'river' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <RiverReader
+              active={active && selectedItemType === 'river'}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              isFullScreen={effectiveFullScreen}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
+              onToggleFullScreen={toggleImmersive}
+              onOpenItem={(item) => {
+                if (!item.cachePath) {
+                  flashCopyFeedback('River item is not cached yet');
+                  return;
+                }
+                void selectExternalFile(item.cachePath);
+              }}
+              onActionFeedback={flashCopyFeedback}
+              onNavigateToSignIn={onNavigateToSignIn}
+            />
+          </div>
+        )}
+        {emberEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'ember' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <EmberPane
+              active={active && selectedItemType === 'ember'}
+              onOpenPerson={openEmberPerson}
+              onPersonCreated={dispatchLocalWikiAdded}
+            />
+          </div>
+        )}
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'river' && selectedItemType !== 'ember' && (
+        <div
+          data-ft-reader-editor-pane="true"
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
           style={{
@@ -5185,7 +11591,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               alignItems: 'center',
               justifyContent: 'center',
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
-              backgroundColor: theme.bg,
+              backgroundColor: focusChromeActive && !activeReadingToolbarIdentityPinned ? 'transparent' : theme.bg,
               flexShrink: 0,
               position: focusChromeActive ? 'absolute' : 'relative',
               top: focusChromeActive ? 0 : undefined,
@@ -5193,38 +11599,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               right: focusChromeActive ? 0 : undefined,
               zIndex: focusChromeActive ? 20 : undefined,
               boxSizing: 'border-box',
-              opacity: focusChromeVisualVisible ? 1 : 0,
-              pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
-              transition: 'opacity 180ms ease',
+              opacity: 1,
+              pointerEvents: focusChromeActive && !focusToolbarControlsVisible && !activeReadingToolbarIdentityPinned && !focusStandaloneImmersiveVisible ? 'none' : 'auto',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
             <div
               style={{
-                maxWidth: typographyPreset.maxWidth,
+                maxWidth: documentMaxWidth,
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
               }}
             >
-              {/* Nav: back (only visible in fullscreen). Copy-path moved to
-                  the right of the immersive toggle inside ContentToolbar. */}
-              {isFullScreen && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
-                  <button
-                    onClick={() => setIsFullScreen(false)}
-                    style={{ padding: '3px 6px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                    title="Back to standard view"
-                  >←</button>
-                </div>
-              )}
-              {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
-                  + External chip for external. Artifacts skip this (title
-                  already renders prominently in the content area). */}
-              {focusToolbarControlsVisible && (selectedItemType === 'wiki' || selectedItemType === 'external') && activeReading && (
+              {activeReadingToolbarIdentityVisible && activeReading && (
                 <div
                   style={{
                     display: 'flex',
@@ -5232,13 +11621,72 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     gap: '6px',
                     minWidth: 0,
                     flexShrink: 1,
+                    opacity: activeReadingToolbarIdentityPinned ? 1 : focusChromeScopedItemOpacity,
+                    pointerEvents: activeReadingToolbarIdentityPinned || focusChromeScopedItemVisible ? 'auto' : 'none',
+                    transition: 'opacity 90ms linear',
                     // @ts-ignore - opt the breadcrumb out of the drag region so
                     // clicks on the External chip's title tooltip land.
                     WebkitAppRegion: 'no-drag',
                   }}
                   title={activeReading.path}
                 >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1px', marginRight: '2px', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => navigateHistory(-1)}
+                      disabled={!canNavigateBack}
+                      title="Back"
+                      aria-label="Back"
+                      style={{
+                        width: '22px',
+                        height: '24px',
+                        padding: 0,
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: canNavigateBack ? 'pointer' : 'default',
+                        opacity: canNavigateBack ? 1 : 0.32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateHistory(1)}
+                      disabled={!canNavigateForward}
+                      title="Forward"
+                      aria-label="Forward"
+                      style={{
+                        width: '22px',
+                        height: '24px',
+                        padding: 0,
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: canNavigateForward ? 'pointer' : 'default',
+                        opacity: canNavigateForward ? 1 : 0.32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+                      </svg>
+                    </button>
+                  </div>
+                  {!focusChromeActive && (
+                    <ContentToolbarFolderButton onShowInFolder={showActiveReadingInFolder} />
+                  )}
                   <span
+                    data-ft-active-document-identity="true"
                     style={{
                       fontSize: '11px',
                       color: theme.textSecondary,
@@ -5246,122 +11694,155 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                       fontFamily: 'system-ui, sans-serif',
+                      minWidth: 0,
                     }}
                   >
-                    {formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)}
+                    {topFadeActive ? (
+                      <>
+                        <span
+                          data-ft-active-document-scrolled-title="true"
+                          style={{
+                            color: theme.text,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {activeReading.title}
+                        </span>
+                        {activeReadingBreadcrumbLabel && (
+                          <span style={{ color: theme.textSecondary }}>
+                            {' · '}
+                            {activeReadingBreadcrumbLabel}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      activeReadingBreadcrumbLabel
+                    )}
                   </span>
-                  {selectedItemType === 'external' && (
-                    <span
-                      style={{
-                        fontSize: '9px',
-                        fontWeight: 600,
-                        letterSpacing: '0.4px',
-                        textTransform: 'uppercase',
-                        color: theme.isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        padding: '2px 6px',
-                        borderRadius: '10px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      External
-                    </span>
-                  )}
                 </div>
               )}
-              <ContentToolbar
-                filePath={activeReading?.path || undefined}
-                isFullScreen={isFullScreen}
-                canNavigateBack={canNavigateBack}
-                canNavigateForward={canNavigateForward}
-                onNavigateBack={() => navigateHistory(-1)}
-                onNavigateForward={() => navigateHistory(1)}
-                textSize={textSize}
-                onTextSizeChange={setTextSize}
-                showTextSize={focusToolbarControlsVisible}
-                typographyPreset={typographyPresetId}
-                typographyPresetOptions={focusToolbarControlsVisible ? LIBRARIAN_TYPOGRAPHY_PRESETS : undefined}
-                onTypographyPresetChange={focusToolbarControlsVisible ? (preset) => {
-                  if (isLibrarianTypographyPresetId(preset)) {
-                    setTypographyPresetId(preset);
-                  }
-                } : undefined}
-                lineHeight={lineHeightId}
-                lineHeightOptions={focusToolbarControlsVisible ? LIBRARIAN_LINE_HEIGHT_OPTIONS : undefined}
-                onLineHeightChange={focusToolbarControlsVisible ? (lineHeight) => {
-                  if (isLibrarianLineHeightId(lineHeight)) {
-                    setLineHeightId(lineHeight);
-                  }
-                } : undefined}
-                unorderedListMarker={unorderedListMarker}
-                onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
-                todoMarker={todoMarker}
-                onTodoMarkerChange={focusToolbarControlsVisible ? setTodoMarker : undefined}
-                onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
-                onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
-                showDelete={focusToolbarControlsVisible}
-                onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
-                showFolder={focusToolbarControlsVisible}
-                onCopy={focusToolbarControlsVisible && shareStatus?.shared ? copyShareLink : undefined}
-                showCopy={focusToolbarControlsVisible && !!shareStatus?.shared}
-                shareStatus={shareStatus}
-                isSharing={isSharing}
-                showShare={false}
-                onCopyPath={focusToolbarControlsVisible && activeReading?.path ? copyActiveReadingTextOrPath : undefined}
-                copyPathCopied={copyPathCopied}
-                copyPathTitle="Copy selected text or file path (⌘C)"
-              />
-
-              {/* Agent kickoff — opens a popup that dispatches the user's
-                  locally-installed Claude Code / Codex CLI against this file. */}
-              {LIBRARIAN_AGENT_KICKOFF_ENABLED && focusToolbarControlsVisible && activeReading?.path
-                && (selectedItemType === 'wiki' || selectedItemType === 'external')
-                && (
-                <button
-                  type="button"
-                  onClick={() => setAgentKickoffOpen(true)}
-                  title="Run a local agent on this file (Claude Code or Codex)"
-                  aria-label="Run agent on this file"
+              {focusToolbarControlsVisible && (
+                <ContentToolbar
+                  filePath={activeReading?.path || undefined}
+                  isFullScreen={isFullScreen || focusImmersive}
+                  onToggleFullScreen={toggleFocusChromeShortcut}
+                  dragSpacer={!focusChromeActive}
+                  textSize={textSize}
+                  onTextSizeChange={setTextSize}
+                  showTextSize
+                  typographyPreset={typographyPresetId}
+                  typographyPresetOptions={LIBRARIAN_TYPOGRAPHY_PRESETS}
+                  onTypographyPresetChange={(preset) => {
+                    if (isLibrarianTypographyPresetId(preset)) {
+                      setTypographyPresetId(preset);
+                    }
+                  }}
+                  lineHeight={lineHeightId}
+                  lineHeightOptions={LIBRARIAN_LINE_HEIGHT_OPTIONS}
+                  onLineHeightChange={(lineHeight) => {
+                    if (isLibrarianLineHeightId(lineHeight)) {
+                      setLineHeightId(lineHeight);
+                    }
+                  }}
+                  unorderedListMarker={unorderedListMarker}
+                  onUnorderedListMarkerChange={setUnorderedListMarker}
+                  todoMarker={todoMarker}
+                  onTodoMarkerChange={setTodoMarker}
+                  blinkTextCursor={blinkTextCursor}
+                  onBlinkTextCursorChange={handleTextCursorBlinkChange}
+                  renderedTextCursorStyle={renderedTextCursorStyle}
+                  onRenderedTextCursorStyleChange={handleRenderedTextCursorStyleChange}
+                  onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
+                  onDelete={handleDelete}
+                  showDelete
+                  onShowInFolder={activeReadingPath ? showActiveReadingInFolder : undefined}
+                  showFolder={!activeReadingToolbarIdentityVisible}
+                  onCopy={shareStatus?.shared ? copyShareLink : undefined}
+                  showCopy={!!shareStatus?.shared}
+                  shareStatus={sharedFileStatus}
+                  isSharing={isTogglingSharedFile}
+                  onToggleShare={handleToggleSharedFile}
+                  showShare={sharedFilesAvailable && activeIsMarkdownDocument}
+                  shareTitle="Add to River (shared)"
+                  sharedTitle="Edit River audience (shared)"
+                  onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
+                  copyPathTitle="Copy selected text or file path (⌘C)"
+                  onOpenInNewWindow={activeReadingPath && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external') ? openActiveDocumentInWindow : undefined}
+                  onSwitchContentMode={() => {
+                    const nextMode = getNextMarkdownContentMode(contentMode, { typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED });
+                    if (nextMode === 'rendered') {
+                      void exitEditMode();
+                    } else if (nextMode === 'typedown') {
+                      void switchToTypedownMode();
+                    } else if (activeReading) {
+                      enterEditMode();
+                    }
+                  }}
+                  contentMode={contentMode}
+                  contentModeTitle={(() => {
+                    const nextMode = getNextMarkdownContentMode(contentMode, { typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED });
+                    if (nextMode === 'markdown') return activeIsMarkdownDocument ? 'Switch to Markdown source' : 'Switch to source';
+                    if (nextMode === 'typedown') return 'Switch to Typedown';
+                    return 'Switch to rendered view';
+                  })()}
+                  contentModeDisabled={activeIsSourceOnlyDocument}
+                  onToggleHtmlLayout={activeIsHtmlDocument ? toggleActiveHtmlLayout : undefined}
+                  htmlLayoutTitle={activeHtmlLayout === 'full' ? 'Use contained HTML layout' : 'Use full-width HTML layout'}
+                  htmlLayoutActive={activeHtmlLayout === 'full'}
+                  onToggleTerminal={browserLibrarySurface ? undefined : () => toggleCodexTerminalPanel()}
+                  terminalVisible={codexTerminalAvailable && codexTerminalVisible}
+                  maxwellItems={maxwellToolbarItems}
+                  maxwellCanAddCurrent={!!activeMaxwellItem}
+                  maxwellCurrentItemId={activeMaxwellItem?.id ?? null}
+                  onMaxwellAddCurrent={addActivePageToMaxwell}
+                  onMaxwellVisitItem={visitMaxwellItem}
+                  onMaxwellRunItem={runMaxwellItem}
+                  onMaxwellRemoveItem={removeMaxwellItem}
+                  onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
+                />
+              )}
+              {focusStandaloneImmersiveVisible && (
+                <div style={{ marginLeft: 'auto', opacity: focusStandaloneImmersiveOpacity, pointerEvents: 'auto' }}>
+                  <ImmersiveToggle
+                    isFullScreen={isFullScreen || focusImmersive}
+                    onToggle={toggleFocusChromeShortcut}
+                  />
+                </div>
+              )}
+              {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
+                <div
+                  aria-label="River viewers"
                   style={{
-                    width: '26px',
-                    height: '24px',
-                    padding: 0,
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '5px',
-                    cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
                     gap: '4px',
-                    transition: 'background-color 0.15s ease, color 0.15s ease',
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                    e.currentTarget.style.color = theme.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.color = theme.textSecondary;
+                    marginLeft: '4px',
+                    flexShrink: 0,
                   }}
                 >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v4" />
-                    <path d="m6.41 6.41-2.83-2.83" />
-                    <path d="M2 12h4" />
-                    <path d="m6.41 17.59-2.83 2.83" />
-                    <path d="M12 18v4" />
-                    <path d="m17.59 17.59 2.83 2.83" />
-                    <path d="M18 12h4" />
-                    <path d="m17.59 6.41 2.83-2.83" />
-                    <circle cx="12" cy="12" r="4" />
-                  </svg>
-                </button>
+                  {sharedFilePresenceUsers.slice(0, 4).map((user) => (
+                    <span
+                      key={user.userId}
+                      title={user.email ?? 'Viewing this River file'}
+                      style={{
+                        minWidth: '22px',
+                        height: '22px',
+                        padding: '0 5px',
+                        borderRadius: '999px',
+                        border: `1px solid ${theme.border}`,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        color: theme.textSecondary,
+                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      }}
+                    >
+                      {user.initials}
+                    </span>
+                  ))}
+                </div>
               )}
 
               {fileFindOpen && (
@@ -5402,7 +11883,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               )}
 
               {/* Narration Play/Stop button (feature flagged) */}
-              {FEATURE_NARRATION_ENABLED && selectedReading && contentMode !== 'markdown' && (
+              {focusToolbarControlsVisible && FEATURE_NARRATION_ENABLED && selectedReading && contentMode !== 'markdown' && (
                 <button
                   onClick={isPlaying || isGenerating ? handleStopNarration : handlePlayNarration}
                   disabled={isGenerating}
@@ -5456,94 +11937,56 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 </button>
               )}
 
-              {/* Content mode toggle - raw markdown / rendered view */}
-              {focusToolbarControlsVisible && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '2px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                    borderRadius: '6px',
-                    padding: '2px',
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      if (contentMode !== 'markdown' && activeReading) enterEditMode();
-                    }}
-                    title="Markdown source"
-                    aria-label="Markdown source"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: contentMode === 'markdown' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: contentMode === 'markdown'
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="5 4 2 8 5 12" />
-                      <polyline points="11 4 14 8 11 12" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (contentMode === 'markdown') void exitEditMode();
-                    }}
-                    title="Rendered"
-                    aria-label="Rendered"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: contentMode === 'rendered' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: contentMode === 'rendered'
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 4h12M2 8h12M2 12h8" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-
-              {/* Immersive/fullscreen toggle sits to the right of the mode
-                  toggle so the editor controls stay grouped together. */}
-              <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleFocusChromeShortcut} />
             </div>
           </div>
         )}
 
         {/* Scrollable content area */}
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
         <div
-          ref={setContentScrollRef}
-          onScroll={(e) => {
-            if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
+          onWheel={(event) => {
+            const scrollEl = contentScrollRef.current;
+            if (!scrollEl || contentMode === 'markdown') return;
+            const target = event.target instanceof Node ? event.target : null;
+            if (target && scrollEl.contains(target)) return;
+            event.preventDefault();
+            scrollEl.scrollBy({ top: event.deltaY, left: event.deltaX });
+            updateRenderedDocumentTopFade(scrollEl);
           }}
           style={{
+            position: 'relative',
             flex: 1,
             minHeight: 0,
+            overflow: 'hidden',
+            display: 'flex',
+            justifyContent: 'center',
+          }}
+        >
+        <div
+          ref={setContentScrollRef}
+          data-ft-librarian-content-scroll="true"
+          data-ft-quality-scroll={contentMode === 'markdown' ? undefined : 'rendered'}
+          onScroll={(e) => {
+            if (contentMode !== 'markdown') {
+              updateRenderedDocumentTopFade(e.currentTarget);
+            }
+          }}
+          style={{
+            flex: activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
+            width: activeHtmlUsesFullCanvas
+              ? '100%'
+              : lineNumbersMode === 'hidden'
+                ? `min(100%, calc(${documentMaxWidth} + 64px))`
+                : `min(100%, calc(${documentMaxWidth} + 64px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH}))`,
+            minHeight: 0,
+            marginLeft: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
+              ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET
+              : undefined,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
-            padding: `${contentTopPadding}px 32px ${LIBRARIAN_CONTENT_BOTTOM_PADDING_PX}px 32px`,
+            padding: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
+              ? `${contentTopPadding}px 32px 0 calc(32px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`
+              : `${contentTopPadding}px 32px 0 32px`,
+            scrollPaddingBottom: `${contentBottomScrollSpace}px`,
+            scrollbarGutter: contentMode === 'markdown' ? undefined : 'stable',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -5551,12 +11994,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {activeReading ? (
           <div
             style={{
-              maxWidth: typographyPreset.maxWidth,
+              maxWidth: activeHtmlUsesFullCanvas ? 'none' : documentMaxWidth,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
-              flex: contentMode === 'markdown' ? '1 1 auto' : '0 1 auto',
-              height: contentMode === 'markdown' ? '100%' : 'auto',
+              flex: contentMode === 'markdown' || activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
+              height: contentMode === 'markdown' || activeHtmlUsesFullCanvas ? '100%' : 'auto',
               minHeight: 0,
               overflow: contentMode === 'markdown' ? 'hidden' : 'visible',
               position: 'relative',
@@ -5587,6 +12030,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 aria-label="File title"
                 style={{
                   width: '100%',
+                  minWidth: 0,
                   flex: '0 0 auto',
                   margin: contentMode === 'markdown' ? '0 0 18px 0' : '0 0 22px 0',
                   padding: 0,
@@ -5594,7 +12038,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   outline: 'none',
                   backgroundColor: 'transparent',
                   color: theme.text,
-                  fontSize: contentMode === 'markdown' ? '26px' : '30px',
+                  fontSize: `${getLibrarianTitleFontSize(
+                    editingTitlePath === activeTitlePath ? titleDraft : activeReading.title,
+                    contentMode,
+                  )}px`,
                   lineHeight: 1.18,
                   fontWeight: 650,
                   fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
@@ -5603,7 +12050,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 }}
               />
             )}
-            {contentMode === 'markdown' ? (
+            {activeReading && (
+              <div
+                title={getReadingUpdatedTitle(activeReading)}
+                style={{
+                  flex: '0 0 auto',
+                  margin: contentMode === 'markdown' ? '-12px 0 14px 0' : '-16px 0 18px 0',
+                  fontSize: '10px',
+                  lineHeight: 1.2,
+                  color: theme.textSecondary,
+                  opacity: 0.52,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                  userSelect: 'none',
+                }}
+              >
+                {getReadingUpdatedByline(activeReading)}
+              </div>
+            )}
+            {contentMode === 'markdown' || activeIsSourceOnlyDocument ? (
               /* Markdown edit mode */
               <div
                 style={{
@@ -5626,6 +12090,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   <MarkdownCodeEditor
                     ref={markdownCodeEditorRef}
                     value={editContent}
+                    findQuery={fileFindOpen ? fileFindQuery : ''}
                     onChange={(next) => {
                       const normalizedNext = removeEmptyMarkdownCommentPlaceholders(next);
                       markdownEditUndoStackRef.current = [];
@@ -5639,13 +12104,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     onFocus={() => {
                       deactivateSidebarKeyboard();
                       commitTitleEditIfActive();
+                      handleCodexTerminalLauncherTargetSessionChange(null);
+                      markdownEditorFocusedRef.current = true;
                       window.librarianAPI?.setMarkdownEditorFocused(true);
                     }}
                     onBlur={() => {
+                      markdownEditorFocusedRef.current = false;
                       window.librarianAPI?.setMarkdownEditorFocused(false);
                       setMarkdownWikiLinkCompletion(null);
                     }}
-                    onSelectionChange={updateMarkdownCodeEditorWikiLinkCompletion}
+                    onSelectionChange={handleMarkdownCodeEditorSelectionChange}
                     onScroll={() => {
                       scheduleEditorSessionPersist();
                       updateMarkdownEditorFades(markdownCodeEditorRef.current);
@@ -5656,91 +12124,37 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     color={(documentTextStyle.color as string) ?? theme.text}
                     background="transparent"
                     caretColor={theme.accent}
+                    lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
-                    placeholder="Write your markdown here..."
+                    cursorStyle={renderedTextCursorStyle}
+                    blockCursorOpacity={renderedBlockCursorOpacity}
+                    placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
+                    documentPath={activeReading.path}
                     dataAttributes={{
-                      'data-ft-agent-context': 'markdown',
+                      'data-ft-quality-editor': 'markdown',
+                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
                       'data-ft-agent-file-path': activeReading.path,
                       'data-ft-agent-title': activeReading.title,
                     }}
                   />
                 </div>
-                {markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
+                {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
+                {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
+                {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
+                {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
+                {inlineDrawUsesMarkdownOverlay ? (
                   <div
-                    role="listbox"
-                    aria-label="Wiki link suggestions"
-                    onMouseDown={(e) => e.preventDefault()}
+                    data-ft-inline-draw-overlay="markdown"
                     style={{
                       position: 'absolute',
-                      top: `${markdownWikiLinkCompletion.top}px`,
-                      left: `${markdownWikiLinkCompletion.left}px`,
-                      width: '260px',
-                      maxHeight: '176px',
-                      overflowY: 'auto',
+                      inset: 0,
                       zIndex: 4,
-                      padding: '4px',
-                      borderRadius: '6px',
-                      backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
-                      border: `1px solid ${theme.border}`,
-                      boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
-                      backdropFilter: 'blur(10px)',
+                      backgroundColor: theme.bg,
                     }}
                   >
-                    {markdownWikiLinkSuggestions.map((suggestion, index) => {
-                      const selected = index === markdownWikiLinkSuggestionIndex;
-                      return (
-                        <button
-                          key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          onMouseEnter={() => setMarkdownWikiLinkSuggestionIndex(index)}
-                          onClick={() => applyMarkdownWikiLinkSuggestion(suggestion, markdownWikiLinkCompletion)}
-                          style={{
-                            display: 'block',
-                            width: '100%',
-                            border: 'none',
-                            borderRadius: '4px',
-                            padding: '6px 7px',
-                            textAlign: 'left',
-                            backgroundColor: selected
-                              ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
-                              : 'transparent',
-                            color: theme.text,
-                            cursor: 'pointer',
-                            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-                          }}
-                        >
-                          <span
-                            style={{
-                              display: 'block',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '12px',
-                              lineHeight: '16px',
-                            }}
-                          >
-                            {suggestion.title}
-                          </span>
-                          <span
-                            style={{
-                              display: 'block',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '10px',
-                              lineHeight: '13px',
-                              color: theme.textSecondary,
-                            }}
-                          >
-                            {suggestion.kind} - {suggestion.detail}
-                          </span>
-                        </button>
-                      );
-                    })}
+                    {inlineDrawSurface}
                   </div>
-                )}
+                ) : null}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -5793,465 +12207,162 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 )}
               </div>
             ) : (
-              /* View mode - markdown renderer */
+              /* Rendered mode - editor-owned markdown presentation */
               <>
-            {/* Field Theory icon - only in immersive mode */}
-            {isFullScreen && (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-                <img
-                  src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
-                  alt="Field Theory"
-                  style={{ height: '32px', width: 'auto', opacity: 0.6 }}
-                />
-              </div>
-            )}
-            {/* Divider - only in immersive mode */}
-            {isFullScreen && (
-              <hr style={{ border: 'none', height: '1px', backgroundColor: theme.border, margin: '0 0 20px 0' }} />
-            )}
-            {/* Metadata tags — small pill badges above content. Task state stays in the sidebar filename row. */}
-            {markdownDisplay && (markdownDisplay.meta.tags || markdownDisplay.meta.source_type) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
-                {(markdownDisplay.meta.tags ?? '')
-                  .replace(/^\[|\]$/g, '')
-                  .split(',')
-                  .map((t) => t.trim().toLowerCase())
-                  .filter(Boolean)
-                  .map((tag) => (
-                    <span
-                      key={tag}
-                      style={{
-                        fontSize: '10px',
-                        padding: '1px 6px',
-                        borderRadius: '8px',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        color: theme.textSecondary,
-                        fontFamily: 'system-ui, sans-serif',
-                      }}
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                {markdownDisplay.meta.source_type && (
-                  <span style={{
-                    fontSize: '10px',
-                    padding: '1px 6px',
-                    borderRadius: '8px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                    color: theme.textSecondary,
-                    fontFamily: 'system-ui, sans-serif',
-                    opacity: 0.7,
-                  }}>
-                    {markdownDisplay.meta.source_type}
-                  </span>
-                )}
-              </div>
-            )}
-            {/* Content - markdown renders the title. Click gesture opens source. */}
             <div
               ref={renderedContentRef}
               className="librarian-content"
-              onMouseDown={() => {
-                deactivateSidebarKeyboard();
-              }}
-              onMouseUp={() => {
-                if (RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) requestAnimationFrame(updateRenderedSelectionToolbar);
-              }}
-              onDoubleClick={() => {
-                if (RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) requestAnimationFrame(updateRenderedSelectionToolbar);
-              }}
+              data-ft-rendered-editor-root="true"
+              data-ft-rendered-editor-active={renderedEditingActive ? 'true' : 'false'}
+              data-ft-rendered-editor-debug={renderedEditorDebugEnabled ? 'true' : 'false'}
+              data-ft-rendered-editor-mode={contentMode}
+              data-ft-rendered-editor-path={activeReading?.path ?? undefined}
+              data-ft-html-layout={activeIsHtmlDocument ? activeHtmlLayout : undefined}
+              spellCheck
+              tabIndex={activeReading ? 0 : undefined}
+              onMouseDown={handleRenderedContentMouseDown}
               onClick={(e) => {
                 if (!activeReading) return;
+                if (!activeIsMarkdownDocument) return;
+                if (renderedEditingActiveRef.current) return;
                 const target = e.target instanceof Element ? e.target : null;
-                if (target?.closest('a')) return;
-                const behavior = getRenderedMarkdownClickBehavior(e, renderedEditClickMode);
-                if (!behavior) return;
-                const caret = getRenderedTextCaretFromPoint(e);
-                const selectionStart = caret
-                  ? resolveMarkdownCaretOffsetFromRenderedText(activeReading.content, caret.text, caret.offset)
-                  : activeReading.content.length;
-                if (selectionStart === null) return;
-                enterEditMode(selectionStart);
+                if (target?.closest('.cm-editor, .cm-content')) {
+                  recordRenderedEditorDebug('click-ignored', { reason: 'code-editor-target', tagName: target.tagName });
+                  return;
+                }
+                recordRenderedEditorDebug('click', {
+                  detail: e.detail,
+                  tagName: target?.tagName ?? null,
+                  metaKey: e.metaKey,
+                  ctrlKey: e.ctrlKey,
+                  altKey: e.altKey,
+                  shiftKey: e.shiftKey,
+                });
+                activateRenderedTextEditing();
               }}
-              onCopy={flashCopyPathCopied}
+              onKeyDown={(event) => {
+                if (renderedEditingActiveRef.current || !activeReading || !activeIsMarkdownDocument) return;
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                activateRenderedTextEditing();
+              }}
+              onCopy={() => flashCopyFeedback('Copied segment')}
               style={{
                 ...documentTextStyle,
                 position: 'relative',
                 outline: 'none',
                 userSelect: 'text',
-                cursor: activeReading ? 'text' : 'default',
+                cursor: activeReading && activeIsMarkdownDocument ? 'text' : 'default',
+                caretColor: theme.accent,
+                flex: activeHtmlUsesFullCanvas ? '1 1 auto' : undefined,
+                minHeight: activeHtmlUsesFullCanvas ? 0 : undefined,
+                display: activeHtmlUsesFullCanvas ? 'flex' : undefined,
+                flexDirection: activeHtmlUsesFullCanvas ? 'column' : undefined,
               }}
             >
-              <FieldTheoryProse
-                key={renderedDocumentVersionKey}
-                className={todoMarker === 'square' ? 'ft-prose-todo-square' : undefined}
-                color={documentTextStyle.color}
-                fontFamily={typographyPreset.fontFamily}
-                fontSize={textSizes[textSize].base}
-                h1Size={textSizes[textSize].h1}
-                h2Size={textSizes[textSize].h2}
-                h3Size={textSizes[textSize].h3}
-                headingFontFamily={typographyPreset.headingFontFamily}
-                lineHeight={documentTextStyle.lineHeight}
-                linkColor={theme.accent}
-                mutedColor={theme.textSecondary}
-                paragraphSpacing={documentParagraphSpacing}
-                remarkLineBreaks
-                surface={theme.isDark ? 'dark' : 'light'}
-                components={{
-                  p: ({ children, node }) => {
-                    const textContent = extractMarkdownText(node);
-                    const normalizedText = textContent.trim();
-                    const hasBraille = /[\u2800-\u28FF]/.test(textContent);
-                    const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
-                    const isPreservedBlankLine = textContent === PRESERVED_BLANK_MARKDOWN_LINE;
-
-                    if (hasBraille) {
-                      return (
-                        <p
-                          style={{
-                            marginBottom: '16px',
-                            marginTop: '8px',
-                            textAlign: 'center',
-                            fontFamily: fonts.mono,
-                            fontSize: '14px',
-                            lineHeight: 1.15,
-                            whiteSpace: 'pre',
-                            letterSpacing: 0,
-                          }}
-                        >
-                          {children}
-                        </p>
-                      );
-                    }
-
-                    if (isModelSignatureLine) {
-                      return null;
-                    }
-
-                    if (isPreservedBlankLine) {
-                      return (
-                        <p
-                          aria-hidden="true"
-                          style={{
-                            margin: 0,
-                            height: '0.3em',
-                            lineHeight: 0.3,
-                            overflow: 'hidden',
-                          }}
-                        >
-                          {children}
-                        </p>
-                      );
-                    }
-
-                    return (
-                      <p>{children}</p>
-                    );
-                  },
-                  li: ({ children, node }) => {
-                    const textContent = extractMarkdownText(node).trim();
-                    const isCarrotListItem = textContent.startsWith(CARROT_LIST_SENTINEL);
-                    const isTaskListItem = isRenderedTaskListItem(node);
-                    if (isTaskListItem) {
-                      const renderedLine = getRenderedMarkdownNodeStartLine(node);
-                      const taskLine = renderedLine === null ? undefined : sourceTaskLinesByRenderedLine.get(renderedLine);
-                      const renderedChecked = getRenderedTaskListItemChecked(node);
-                      const checked = renderedChecked ?? taskLine?.checked ?? false;
-                      const taskText = taskLine?.text ?? textContent;
-                      const animateCompletion = checked && animatingTaskTexts.has(taskText);
-                      const { checkbox, content } = splitTaskListItemChildren(children);
-                      const renderedCheckbox = (
-                        <input
-                          className="ft-rendered-task-checkbox"
-                          type="checkbox"
-                          checked={checked}
-                          disabled={false}
-                          readOnly={!taskLine}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            if (taskLine) toggleRenderedTask(taskLine.lineIndex, event.currentTarget.checked);
-                          }}
-                          onClick={(event) => event.stopPropagation()}
-                          style={{
-                            cursor: taskLine ? 'pointer' : 'default',
-                            margin: 0,
-                          }}
-                        />
-                      );
-                      return (
-                        <li
-                          className={[
-                            'ft-rendered-task-list-item',
-                            checked ? 'ft-rendered-task-list-item-done' : 'ft-rendered-task-list-item-open',
-                            animateCompletion ? 'ft-rendered-task-completed-live' : null,
-                          ].filter(Boolean).join(' ')}
-                          style={{
-                            margin: 'calc(var(--ft-prose-list-item-spacing) * 0.55) 0',
-                            listStyle: 'none',
-                            display: 'grid',
-                            gridTemplateColumns: '0.95em minmax(0, 1fr)',
-                            columnGap: '0.6em',
-                            alignItems: 'baseline',
-                          }}
-                        >
-                          <span
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (taskLine) toggleRenderedTask(taskLine.lineIndex, !checked);
-                            }}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: '1lh',
-                              cursor: taskLine ? 'pointer' : 'default',
-                            }}
-                          >
-                            {checkbox ? renderedCheckbox : null}
-                          </span>
-                          <span style={{ minWidth: 0 }}>
-                            {content}
-                          </span>
-                        </li>
-                      );
-                    }
-
-                    if (isCarrotListItem) {
-                      return (
-                        <li
-                          style={{
-                            marginBottom: '2px',
-                            listStyle: 'none',
-                            display: 'grid',
-                            gridTemplateColumns: 'auto minmax(0, 1fr)',
-                            columnGap: '8px',
-                            alignItems: 'baseline',
-                          }}
-                        >
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              color: theme.text,
-                              fontWeight: 700,
-                              lineHeight: 'inherit',
-                            }}
-                          >
-                            {CARROT_LIST_MARKER}
-                          </span>
-                          <div style={{ minWidth: 0 }}>
-                            {stripLeadingCarrotListSentinel(children)}
-                          </div>
-                        </li>
-                      );
-                    }
-
-                    return (
-                      <li
-                        style={{
-                          marginBottom: '0.25em',
-                        }}
-                      >
-                        {children}
-                      </li>
-                    );
-                  },
-                  a: ({ href, children }) => {
-                    const unresolved = isUnresolvedWikiHref(href);
-                    const openAnchorLink = (target: HTMLAnchorElement) => {
-                      // Markdown like `[categories/tool]()` renders an
-                      // <a> with an empty href — fall back to the link
-                      // text so these still resolve through the index.
-                      const effectiveHref = href && href.trim()
-                        ? href
-                        : (target.textContent?.trim() ?? '');
-                      const action = classifyLinkHref(effectiveHref, wikiIndex);
-                      openLinkAction(action);
-                    };
-                    return (
-                      <a
-                        href={href}
-                        style={{
-                          color: unresolved ? '#ef4444' : theme.accent,
-                          textDecoration: 'underline',
-                          textDecorationColor: unresolved ? '#ef4444' : `${theme.accent}66`,
-                          textUnderlineOffset: '2px',
-                          cursor: 'pointer',
-                        }}
-                        onMouseDown={(e) => {
-                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          renderedLinkMouseDownHandledRef.current = true;
-                          openAnchorLink(e.currentTarget);
-                        }}
-                        onClick={(e) => {
-                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (renderedLinkMouseDownHandledRef.current) {
-                            renderedLinkMouseDownHandledRef.current = false;
-                            return;
-                          }
-                          openAnchorLink(e.currentTarget);
-                        }}
-                      >
-                        {children}
-                      </a>
-                    );
-                  },
-                }}
-              >
-                {displayContent}
-              </FieldTheoryProse>
-              {linkedDocuments.length > 0 && (
-                <section
-                  aria-label="Linked"
+              {activeIsHtmlDocument && activeReadingPath ? (
+                <iframe
+                  title={activeReading.title}
+                  data-ft-html-preview="true"
+                  data-ft-html-layout={activeHtmlLayout}
+                  srcDoc={getHtmlPreviewSrcDoc(activeReadingContent ?? activeReading.content, activeReadingPath)}
+                  sandbox=""
                   style={{
-                    marginTop: '32px',
-                    paddingTop: '16px',
-                    borderTop: `1px solid ${theme.border}`,
+                    display: 'block',
+                    width: '100%',
+                    minHeight: '520px',
+                    height: activeHtmlUsesFullCanvas ? '100%' : '72vh',
+                    maxHeight: activeHtmlUsesFullCanvas ? undefined : '820px',
+                    flex: activeHtmlUsesFullCanvas ? '1 1 auto' : undefined,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '6px',
+                    backgroundColor: '#fff',
                   }}
-                >
-                  <div
-                    style={{
-                      marginBottom: '8px',
-                      fontSize: '12px',
-                      fontWeight: 650,
-                      color: theme.textSecondary,
-                      letterSpacing: 0,
+                />
+              ) : (
+                <>
+                  <MarkdownCodeEditor
+                    ref={renderedMarkdownEditorRef}
+                    presentation="rendered"
+                    value={displaySourceBody}
+                    findQuery={fileFindOpen ? fileFindQuery : ''}
+                    onChange={handleRenderedEditorChange}
+                    onKeyDown={handleRenderedEditorKeyDown}
+                    onMouseDown={handleRenderedEditorMouseDown}
+                    onPaste={handleRenderedEditorPaste}
+                    onImagePreview={handleRenderedImageAction}
+                    onFocus={() => {
+                      deactivateSidebarKeyboard();
+                      commitTitleEditIfActive();
+                      handleCodexTerminalLauncherTargetSessionChange(null);
+                      activateRenderedEditing();
+                      markdownEditorFocusedRef.current = true;
+                      window.librarianAPI?.setMarkdownEditorFocused(true);
+                      recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
                     }}
-                  >
-                    Linked
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {linkedDocuments.map((link) => (
-                      <button
-                        key={getWikiLinkTargetKey(link.target)}
-                        type="button"
-                        title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          openMarkdownLinkTarget(link.target);
-                        }}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '18px minmax(0, 1fr)',
-                          columnGap: '8px',
-                          alignItems: 'start',
-                          padding: '6px 0',
-                          border: 'none',
-                          backgroundColor: 'transparent',
-                          color: theme.text,
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          font: 'inherit',
-                        }}
-                      >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            marginTop: '1px',
-                            color: theme.textSecondary,
-                            fontSize: '13px',
-                            lineHeight: 1.2,
-                            textAlign: 'center',
-                          }}
-                        >
-                          {WIKI_LINK_DIRECTION_MARKER[link.direction]}
-                        </span>
-                        <span style={{ minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
-                            {link.title}
-                            <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
-                              {WIKI_LINK_TARGET_LABEL[link.target.kind]}
-                            </span>
-                          </span>
-                          {link.excerpt && (
-                            <span
-                              style={{
-                                display: 'block',
-                                marginTop: '2px',
-                                color: theme.textSecondary,
-                                fontSize: '12px',
-                                lineHeight: 1.35,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {link.excerpt}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                    onBlur={() => {
+                      markdownEditorFocusedRef.current = false;
+                      window.librarianAPI?.setMarkdownEditorFocused(false);
+                      clearRenderedEditingState('blur');
+                    }}
+                    onSelectionChange={handleRenderedEditorSelectionChange}
+                    fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
+                    fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
+                    lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
+                    color={(documentTextStyle.color as string) ?? theme.text}
+                    headingFontFamily={typographyPreset.headingFontFamily}
+                    h1Size={textSizes[textSize].h1}
+                    h2Size={textSizes[textSize].h2}
+                    h3Size={textSizes[textSize].h3}
+                    linkColor={theme.accent}
+                    mutedColor={theme.textSecondary}
+                    paragraphSpacing={documentParagraphSpacing}
+                    background="transparent"
+                    caretColor={theme.accent}
+                    lineNumbersMode={lineNumbersMode}
+                    blinkCursor={blinkTextCursor}
+                    cursorStyle={renderedTextCursorStyle}
+                    blockCursorOpacity={renderedBlockCursorOpacity}
+                    placeholder="Rendered text editor"
+                    documentPath={activeReading.path}
+                    dataAttributes={{
+                      'data-ft-rendered-editor-input': 'true',
+                      'data-ft-quality-editor': 'rendered',
+                      'data-ft-agent-context': 'markdown',
+                      'data-ft-agent-file-path': activeReading.path,
+                      'data-ft-agent-title': activeReading.title,
+                    }}
+                    spellCheck
+                    bottomRoomPx={contentBottomScrollSpace}
+                    style={{
+                      width: '100%',
+                      minHeight: '160px',
+                      height: 'auto',
+                    }}
+                  />
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
+                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
+                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
+                  {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
+                  <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
+                </>
+              )}
+              {contentBottomScrollSpace > 0 && (
+                <div
+                  aria-hidden="true"
+                  contentEditable={false}
+                  data-ft-rendered-bottom-scroll-space="library"
+                  onWheel={(event) => {
+                    if (!contentScrollRef.current) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    contentScrollRef.current.scrollBy({ top: event.deltaY, left: event.deltaX });
+                  }}
+                  style={{ height: `${contentBottomScrollSpace}px`, flexShrink: 0 }}
+                />
               )}
             </div>
-            {RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED && contentMode === 'rendered' && renderedSelectionToolbar && (
-              <div
-                role="toolbar"
-                aria-label="Rendered markdown formatting"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                style={{
-                  position: 'fixed',
-                  top: `${renderedSelectionToolbar.top}px`,
-                  left: `${renderedSelectionToolbar.left}px`,
-                  transform: 'translateX(-50%)',
-                  zIndex: 30,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '2px',
-                  padding: '4px',
-                  borderRadius: '6px',
-                  border: `1px solid ${theme.border}`,
-                  backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
-                  boxShadow: theme.isDark ? '0 10px 24px rgba(0,0,0,0.32)' : '0 10px 24px rgba(0,0,0,0.14)',
-                  backdropFilter: 'blur(12px)',
-                }}
-              >
-                {([
-                  ['bold', 'B', 'Bold'],
-                  ['italic', 'I', 'Italic'],
-                  ['code', '`', 'Inline code'],
-                  ['link', '[]', 'Link'],
-                  ['unordered-list', '-', 'Unordered list'],
-                ] as Array<[RenderedMarkdownFormatAction, string, string]>).map(([action, label, title]) => (
-                  <button
-                    key={action}
-                    type="button"
-                    title={title}
-                    aria-label={title}
-                    onClick={() => applyRenderedSelectionFormat(action)}
-                    style={{
-                      width: '24px',
-                      height: '22px',
-                      padding: 0,
-                      border: 'none',
-                      borderRadius: '4px',
-                      backgroundColor: 'transparent',
-                      color: theme.text,
-                      cursor: 'pointer',
-                      fontSize: action === 'bold' ? '12px' : '11px',
-                      fontWeight: action === 'bold' ? 700 : action === 'italic' ? 600 : 500,
-                      fontStyle: action === 'italic' ? 'italic' : 'normal',
-                      fontFamily: action === 'code' ? fonts.mono : 'system-ui, sans-serif',
-                      lineHeight: 1,
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
             {/* Footer - only in immersive mode */}
             {isFullScreen && (
               <>
@@ -6339,7 +12450,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             if (result) {
                               setShareStatus({ shared: true, slug: result.slug, url: result.url });
                               // Copy link to clipboard
-                              await navigator.clipboard.writeText(result.url);
+                              await writeTextToClipboard(result.url);
                               setLinkCopied(true);
                               setTimeout(() => setLinkCopied(false), 2000);
                             } else {
@@ -6384,6 +12495,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               </>
             )}
           </div>
+        ) : showWikiSelectedPageLoadingShell ? (
+          <div
+            aria-label="Loading selected file"
+            data-ft-librarian-document-loading="true"
+            style={{
+              width: '100%',
+              height: '100%',
+            }}
+          />
         ) : (
           <div
             style={{
@@ -6394,31 +12514,88 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               color: theme.textSecondary,
             }}
           >
-            Select a page
+            Select a file
           </div>
         )}
         </div>
         <div
           aria-hidden="true"
+          data-ft-reader-top-fade="true"
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
-            right: 0,
-            height: '30px',
+            right: `${LIBRARIAN_READER_SCROLLBAR_GUTTER_PX}px`,
+            height: `${readerTopFadeHeight}px`,
             pointerEvents: 'none',
-            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 28%, transparent 100%)`,
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} ${readerTopFadeSolidStop}%, transparent 100%)`,
             backdropFilter: topFadeActive ? 'blur(3px)' : 'none',
             WebkitBackdropFilter: topFadeActive ? 'blur(3px)' : 'none',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
-            maskImage: 'linear-gradient(to bottom, black 0%, black 45%, transparent 100%)',
+            WebkitMaskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
+            maskImage: `linear-gradient(to bottom, black 0%, black ${readerTopFadeMaskSolidStop}%, transparent 100%)`,
             opacity: topFadeActive ? 0.72 : 0,
             zIndex: 3,
             transition: 'opacity 0.12s ease, backdrop-filter 0.12s ease',
           }}
         />
         </div>
-        </Fragment>
+        {inlineGemmaDialog}
+        {selectionPastePopoverAvailable && terminalPastePopover && (
+          <button
+            type="button"
+            aria-label="Paste selection to terminal"
+            title="Paste selection to terminal (⌘⌥T)"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={() => void pasteTextToCodexTerminal(terminalPastePopover.text)}
+            style={{
+              position: 'fixed',
+              top: `${terminalPastePopover.top}px`,
+              left: `${terminalPastePopover.left}px`,
+              zIndex: 42,
+              width: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
+              height: `${TERMINAL_PASTE_POPOVER_SIZE_PX}px`,
+              padding: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: theme.isDark ? '#e5e7eb' : '#111827',
+              backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '7px',
+              boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.38)' : '0 8px 24px rgba(0,0,0,0.16)',
+              cursor: 'pointer',
+              // @ts-ignore - toolbar button should receive clicks in the frameless window.
+              WebkitAppRegion: 'no-drag',
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
+              <path d="m5.15 6.05 1.8 1.95-1.8 1.95M8.15 10.1h2.55" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+        </div>
+        )}
+        {!browserLibrarySurface && (
+          <CodexTerminalPanel
+            visible={effectiveCodexTerminalVisible}
+            visibleIntent={codexTerminalVisible}
+            pageContext={codexTerminalPageContext}
+            dockSideOverride={effectiveCodexTerminalDockSide !== codexTerminalDockSide ? effectiveCodexTerminalDockSide : undefined}
+            extendToViewportTop={focusChromeActive && effectiveCodexTerminalDockSide === 'right'}
+            focusRequestKey={codexTerminalFocusRequestKey}
+            layoutRefreshKey={focusChromeActive}
+            onDockSideChange={setCodexTerminalDockSide}
+            onFocusToggleShortcut={toggleTerminalEditorFocus}
+            onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
+            onTerminalFocusChange={setCodexTerminalFocused}
+            onResizeActiveChange={setCodexTerminalResizing}
+            onVisibilityToggleShortcut={toggleCodexTerminalPanel}
+            onVisibleChange={handleCodexTerminalVisibleChange}
+          />
         )}
       </div>
 
@@ -6486,29 +12663,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </div>
       )}
 
-      {copyPathCopied && (
-        <div
-          role="status"
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: '14px',
-            transform: 'translateX(-50%)',
-            padding: '4px 8px',
-            borderRadius: '5px',
-            fontSize: '11px',
-            color: theme.isDark ? '#d1fae5' : '#065f46',
-            backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
-            border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
-            pointerEvents: 'none',
-            zIndex: 6,
-          }}
-        >
-          Copied path
-        </div>
-      )}
-
       {deleteConfirmationDialog}
+
+      {renderedImagePreview && (
+        <ImagePreviewOverlay
+          src={renderedImagePreview.src}
+          alt={renderedImagePreview.alt}
+          label={renderedImagePreview.alt && renderedImagePreview.alt !== 'Image' ? renderedImagePreview.alt : null}
+          maxImageHeight="90vh"
+          onDismiss={() => setRenderedImagePreview(null)}
+        />
+      )}
 
       <AgentKickoffModal
         isOpen={agentKickoffOpen}

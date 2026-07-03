@@ -4,6 +4,7 @@ export type DynamicIslandTranscriptionState =
   | 'idle'
   | 'recording'
   | 'transcribing'
+  | 'completing'
   | 'showing-transcript'
   | 'improving';
 
@@ -48,7 +49,7 @@ export function getLeftModeDotPresentation(
   if (state === 'transcribing' || state === 'improving') {
     return PURPLE_DOT;
   }
-  if (state === 'showing-transcript') {
+  if (state === 'showing-transcript' || state === 'completing') {
     return GREEN_DOT;
   }
 

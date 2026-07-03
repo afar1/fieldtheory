@@ -8,9 +8,9 @@ type SoundId = 'windowOpen' | 'windowClose' | 'artifactDiscovery';
 
 // Map sound events to their file names
 const SOUND_FILES: Record<SoundId, string> = {
-  windowOpen: 'Click.mp3',
-  windowClose: 'MenuClose.mp3',
-  artifactDiscovery: 'ArtifactDiscovery.wav',
+  windowOpen: 'click.wav',
+  windowClose: 'menu-close.wav',
+  artifactDiscovery: 'artifact-discovery.wav',
 };
 
 class RendererSoundManager {

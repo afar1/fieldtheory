@@ -15,14 +15,14 @@ import {
 } from './transcriptionEngines';
 
 describe('transcriptionEngines utils', () => {
-  it('normalizes unsupported engines to whisper', () => {
+  it('normalizes unsupported engines to the default Parakeet engine', () => {
     expect(normalizeVisibleTranscriptionEngine('qwen')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
+    expect(normalizeVisibleTranscriptionEngine('whisper')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
     expect(normalizeVisibleTranscriptionEngine('mlx-whisper')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
     expect(normalizeVisibleTranscriptionEngine(undefined)).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
   });
 
   it('preserves visible engines', () => {
-    expect(normalizeVisibleTranscriptionEngine('whisper')).toBe('whisper');
     expect(normalizeVisibleTranscriptionEngine('parakeet')).toBe('parakeet');
     expect(normalizeVisibleTranscriptionEngine('parakeet-multilingual')).toBe('parakeet-multilingual');
   });
@@ -106,6 +106,12 @@ describe('transcriptionEngines utils', () => {
     )).toContain('Repair the model');
     expect(getVisibleParakeetRecoveryMessage('onnx-asr is not installed')).toContain(
       'Remove Parakeet and install it again'
+    );
+    expect(getVisibleParakeetRecoveryMessage('Python 3.10 or newer is required for Parakeet setup.')).toContain(
+      'Install a supported Python'
+    );
+    expect(getVisibleParakeetRecoveryMessage('Python was found, but it cannot create a virtual environment.')).toContain(
+      'Homebrew Python 3.12'
     );
   });
 });

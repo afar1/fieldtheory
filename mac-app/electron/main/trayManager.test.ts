@@ -1,0 +1,219 @@
+import { EventEmitter } from 'events';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const electronMock = vi.hoisted(() => {
+  const createdDataUrls: string[] = [];
+
+  class MockTray {
+    static instances: MockTray[] = [];
+
+    titles: string[] = [];
+    image: unknown = null;
+    tooltip = '';
+    contextMenu: unknown = null;
+    destroyed = false;
+
+    constructor(image: unknown) {
+      this.image = image;
+      MockTray.instances.push(this);
+    }
+
+    setToolTip(tooltip: string): void {
+      this.tooltip = tooltip;
+    }
+
+    setImage(image: unknown): void {
+      this.image = image;
+    }
+
+    setTitle(title: string): void {
+      this.titles.push(title);
+    }
+
+    setContextMenu(menu: unknown): void {
+      this.contextMenu = menu;
+    }
+
+    destroy(): void {
+      this.destroyed = true;
+    }
+  }
+
+  return {
+    MockTray,
+    Menu: {
+      buildFromTemplate: vi.fn((items: unknown[]) => items),
+    },
+    nativeImage: {
+      createFromPath: vi.fn(() => ({
+        isEmpty: () => false,
+      })),
+      createFromDataURL: vi.fn((dataUrl: string) => {
+        createdDataUrls.push(dataUrl);
+        return {
+          dataUrl,
+          isEmpty: () => false,
+          setTemplateImage: vi.fn(),
+        };
+      }),
+    },
+    createdDataUrls,
+    app: {
+      isPackaged: false,
+      getAppPath: vi.fn(() => process.cwd()),
+      quit: vi.fn(),
+    },
+    net: {
+      isOnline: vi.fn(() => true),
+    },
+  };
+});
+
+vi.mock('electron', () => ({
+  Tray: electronMock.MockTray,
+  Menu: electronMock.Menu,
+  nativeImage: electronMock.nativeImage,
+  app: electronMock.app,
+  net: electronMock.net,
+}));
+
+vi.mock('./logger', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+import { TrayManager } from './trayManager';
+import type { AudioState } from './types/audio';
+
+class FakeAudioManager extends EventEmitter {
+  state: AudioState = {
+    priorityMode: true,
+    priorityDeviceId: 'mac-mic',
+    userOverrideId: null,
+    defaultInputId: 'mac-mic',
+    devices: [
+      { id: 'mac-mic', name: 'MacBook Pro Microphone', isInput: true, isOutput: false },
+    ],
+  };
+
+  getState(): AudioState {
+    return this.state;
+  }
+
+  setPriorityDevice = vi.fn();
+  setPriorityMode = vi.fn();
+  clearUserOverride = vi.fn();
+}
+
+function createTrayManager(options: { checkForUpdates?: () => void } = {}): { manager: TrayManager; tray: InstanceType<typeof electronMock.MockTray> } {
+  const audioManager = new FakeAudioManager();
+  const preferencesManager = {
+    get: () => ({ onboardingComplete: true }),
+  };
+  const manager = new TrayManager(audioManager as any, undefined, preferencesManager as any);
+  manager.init(undefined, options.checkForUpdates);
+  const tray = electronMock.MockTray.instances[0];
+  return { manager, tray };
+}
+
+function getLatestRecordingSvg(): string {
+  const dataUrl = electronMock.createdDataUrls.at(-1);
+  if (!dataUrl) return '';
+  const encoded = dataUrl.split(',')[1] ?? '';
+  return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+describe('TrayManager recording waveform image', () => {
+  beforeEach(() => {
+    electronMock.MockTray.instances = [];
+    electronMock.createdDataUrls.length = 0;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('replaces the priority mic title with a compact centered waveform image while recording', () => {
+    const { manager, tray } = createTrayManager();
+
+    expect(tray.titles.at(-1)).toBe(':Mac');
+
+    manager.setRecordingActive(true);
+    expect(tray.titles.at(-1)).toBe('');
+    expect(getLatestRecordingSvg()).toContain('width="43" height="16"');
+    expect(getLatestRecordingSvg().match(/<rect /g)).toHaveLength(7);
+
+    manager.updateRecordingAudioLevel(0.05);
+    expect(tray.titles.at(-1)).toBe('');
+    expect(getLatestRecordingSvg()).toContain('x="41" y="3.5" width="2" height="9"');
+
+    manager.setRecordingActive(false);
+    expect(tray.titles.at(-1)).toBe(':Mac');
+  });
+
+  it('keeps unread document count visible beside the recording waveform', () => {
+    const { manager, tray } = createTrayManager();
+
+    manager.setTaggedDocsUnreadCount(2);
+    expect(tray.titles.at(-1)).toBe(':Mac •2');
+
+    manager.setRecordingActive(true);
+    expect(tray.titles.at(-1)).toBe(' •2');
+  });
+});
+
+describe('TrayManager update menu', () => {
+  beforeEach(() => {
+    electronMock.MockTray.instances = [];
+    vi.clearAllMocks();
+  });
+
+  it('omits the update item when updates are disabled', () => {
+    const { tray } = createTrayManager();
+    const items = tray.contextMenu as Array<{ label?: string }>;
+
+    expect(items.some((item) => item.label?.includes('Update'))).toBe(false);
+  });
+
+  it('shows the update item when a check callback is provided', () => {
+    const checkForUpdates = vi.fn();
+    const { tray } = createTrayManager({ checkForUpdates });
+    const items = tray.contextMenu as Array<{ label?: string; click?: () => void }>;
+    const item = items.find((candidate) => candidate.label === 'Check for Updates…');
+
+    expect(item).toBeDefined();
+    item?.click?.();
+    expect(checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows and toggles auto-improve when callbacks are registered', async () => {
+    const { manager, tray } = createTrayManager();
+    const setAutoImprove = vi.fn();
+    let enabled = true;
+
+    manager.setAutoImproveCallbacks({
+      get: () => enabled,
+      set: async (next) => {
+        enabled = next;
+        setAutoImprove(next);
+      },
+    });
+
+    const items = tray.contextMenu as Array<{
+      label?: string;
+      type?: string;
+      checked?: boolean;
+      click?: (item: { checked: boolean }) => void | Promise<void>;
+    }>;
+    const item = items.find((candidate) => candidate.label === 'Auto-Improve Transcripts');
+
+    expect(item).toMatchObject({ type: 'checkbox', checked: true });
+    await item?.click?.({ checked: false });
+    expect(setAutoImprove).toHaveBeenCalledWith(false);
+  });
+});

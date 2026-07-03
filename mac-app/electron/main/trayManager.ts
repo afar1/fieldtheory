@@ -1,12 +1,32 @@
 import { Tray, Menu, nativeImage, app, MenuItemConstructorOptions, net } from 'electron';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
 import type { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
+import { formatCompactPriorityMicName } from '../shared/audioDeviceLabels';
 
 const log = createLogger('Tray');
+const TRAY_ICON_WIDTH = 16;
+const TRAY_ICON_HEIGHT = 16;
+const TRAY_ICON_WAVEFORM_GAP = 4;
+// Keep this aligned with src/utils/audioWaveform.ts; electron main is built from electron/.
+const TRAY_WAVEFORM_BAR_COUNT = 7;
+const TRAY_WAVEFORM_BAR_WIDTH = 2;
+const TRAY_WAVEFORM_BAR_GAP = 1.5;
+const TRAY_WAVEFORM_MIN_HEIGHT = 2;
+const TRAY_WAVEFORM_MAX_HEIGHT = 14;
+const TRAY_WAVEFORM_WIDTH =
+  (TRAY_WAVEFORM_BAR_COUNT * TRAY_WAVEFORM_BAR_WIDTH)
+  + ((TRAY_WAVEFORM_BAR_COUNT - 1) * TRAY_WAVEFORM_BAR_GAP);
+const TRAY_RECORDING_IMAGE_WIDTH = Math.ceil(TRAY_ICON_WIDTH + TRAY_ICON_WAVEFORM_GAP + TRAY_WAVEFORM_WIDTH);
+
+function scaleTrayAudioLevel(rawLevel: number): number {
+  if (rawLevel <= 0) return 0;
+  return Math.min(1, Math.sqrt(rawLevel * 8));
+}
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
@@ -35,12 +55,18 @@ export class TrayManager {
   private takeScreenshotCallback: (() => void) | null = null;
   private takeFullScreenCallback: (() => void) | null = null;
   private takeActiveWindowCallback: (() => void) | null = null;
+  private getAutoImproveCallback: (() => boolean) | null = null;
+  private setAutoImproveCallback: ((enabled: boolean) => Promise<void> | void) | null = null;
   private openDevToolsCallback: (() => void) | null = null;
   private isLoggedInCallback: (() => boolean) | null = null;
   private historyHotkey: string = 'Option+Space';
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
   private taggedDocsUnreadCount: number = 0;
+  private recordingActive: boolean = false;
+  private recordingWaveformLevels: number[] = new Array(TRAY_WAVEFORM_BAR_COUNT).fill(0);
+  private recordingWaveformWriteIndex: number = 0;
+  private trayIconDataUrlByPath: Map<string, string> = new Map();
 
   constructor(audioManager: AudioManager, quotaManager?: QuotaManager, preferencesManager?: PreferencesManager) {
     this.audioManager = audioManager;
@@ -119,6 +145,36 @@ export class TrayManager {
     }
   }
 
+  setAutoImproveCallbacks(callbacks: {
+    get: () => boolean;
+    set: (enabled: boolean) => Promise<void> | void;
+  }): void {
+    this.getAutoImproveCallback = callbacks.get;
+    this.setAutoImproveCallback = callbacks.set;
+    this.refreshMenu();
+  }
+
+  setRecordingActive(active: boolean): void {
+    const nextActive = Boolean(active);
+    if (this.recordingActive === nextActive) return;
+    this.recordingActive = nextActive;
+    this.resetRecordingWaveform();
+    if (this.tray) {
+      this.updateTrayImage(this.audioManager.getState());
+      this.updateTrayTitle(this.audioManager.getState());
+    }
+  }
+
+  updateRecordingAudioLevel(level: number): void {
+    if (!this.recordingActive || !this.tray) return;
+    const normalizedLevel = Number.isFinite(level)
+      ? Math.max(0, Math.min(1, level))
+      : 0;
+    this.recordingWaveformLevels[this.recordingWaveformWriteIndex % TRAY_WAVEFORM_BAR_COUNT] = normalizedLevel;
+    this.recordingWaveformWriteIndex += 1;
+    this.updateTrayImage(this.audioManager.getState());
+  }
+
   /**
    * Initialize the tray icon and set up event listeners.
    */
@@ -181,38 +237,13 @@ export class TrayManager {
 
     const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
 
-    let iconState: 'disconnected' | 'connected' | 'active';
-    if (!priorityDeviceId) {
-      iconState = 'disconnected';
-    } else if (priorityMode && !userOverrideId) {
-      iconState = 'active';
-    } else {
-      iconState = 'connected';
-    }
-
-    const iconPath = this.getIconPath(iconState);
-    try {
-      const icon = nativeImage.createFromPath(iconPath);
-      if (!icon.isEmpty()) {
-        this.tray.setImage(icon);
-      }
-    } catch (error) {
-      log.error('Failed to load icon:', iconPath);
-    }
+    this.updateTrayImage(state);
 
     // --- Update tooltip and title ---
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
 
-    // Show abbreviated mic name next to tray icon when priority mic is set.
-    // Format: ":Air" or ":Blu" - first 3 letters, capitalized.
-    const unreadTitle = this.taggedDocsUnreadCount > 0 ? ` •${this.taggedDocsUnreadCount}` : '';
-    if (priorityDeviceId && priorityDevice) {
-      const abbrev = priorityDeviceName.slice(0, 3);
-      this.tray.setTitle(`:${abbrev}${unreadTitle}`);
-    } else {
-      this.tray.setTitle(unreadTitle.trimStart());
-    }
+    this.updateTrayTitle(state);
 
     let tooltip: string;
     if (!priorityDeviceId) {
@@ -236,6 +267,98 @@ export class TrayManager {
       const contextMenu = Menu.buildFromTemplate(fallbackMenuItems);
       this.tray.setContextMenu(contextMenu);
     }
+  }
+
+  private getIconState(state: AudioState): 'disconnected' | 'connected' | 'active' {
+    const { priorityMode, priorityDeviceId, userOverrideId } = state;
+    if (!priorityDeviceId) {
+      return 'disconnected';
+    }
+    if (priorityMode && !userOverrideId) {
+      return 'active';
+    }
+    return 'connected';
+  }
+
+  private updateTrayImage(state: AudioState): void {
+    if (!this.tray) return;
+
+    const iconPath = this.getIconPath(this.getIconState(state));
+    try {
+      const icon = this.recordingActive
+        ? this.createRecordingTrayImage(iconPath)
+        : nativeImage.createFromPath(iconPath);
+      if (!icon.isEmpty()) {
+        this.tray.setImage(icon);
+      }
+    } catch (error) {
+      log.error('Failed to load icon:', iconPath);
+    }
+  }
+
+  private updateTrayTitle(state: AudioState): void {
+    if (!this.tray) return;
+
+    const { priorityDeviceId, devices } = state;
+    const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
+    const unreadTitle = this.taggedDocsUnreadCount > 0 ? ` •${this.taggedDocsUnreadCount}` : '';
+
+    if (this.recordingActive) {
+      this.tray.setTitle(unreadTitle);
+      return;
+    }
+
+    if (priorityDeviceId && priorityDevice) {
+      const abbrev = formatCompactPriorityMicName(priorityDevice.name);
+      this.tray.setTitle(`:${abbrev}${unreadTitle}`);
+    } else {
+      this.tray.setTitle(unreadTitle.trimStart());
+    }
+  }
+
+  private resetRecordingWaveform(): void {
+    this.recordingWaveformLevels.fill(0);
+    this.recordingWaveformWriteIndex = 0;
+  }
+
+  private getOrderedRecordingWaveformLevels(): number[] {
+    const result: number[] = [];
+    const start = this.recordingWaveformWriteIndex;
+    for (let i = 0; i < TRAY_WAVEFORM_BAR_COUNT; i++) {
+      result.push(this.recordingWaveformLevels[(start + i) % TRAY_WAVEFORM_BAR_COUNT]);
+    }
+    return result;
+  }
+
+  private createRecordingTrayImage(iconPath: string): Electron.NativeImage {
+    const iconDataUrl = this.getTrayIconDataUrl(iconPath);
+    const waveformX = TRAY_ICON_WIDTH + TRAY_ICON_WAVEFORM_GAP;
+    const bars = this.getOrderedRecordingWaveformLevels().map((level, index) => {
+      const scaled = scaleTrayAudioLevel(level);
+      const height = Math.max(TRAY_WAVEFORM_MIN_HEIGHT, Math.round(scaled * TRAY_WAVEFORM_MAX_HEIGHT));
+      const x = waveformX + (index * (TRAY_WAVEFORM_BAR_WIDTH + TRAY_WAVEFORM_BAR_GAP));
+      const y = (TRAY_ICON_HEIGHT - height) / 2;
+      const opacity = 0.5 + (0.5 * scaled);
+      return `<rect x="${x}" y="${y}" width="${TRAY_WAVEFORM_BAR_WIDTH}" height="${height}" rx="1" opacity="${opacity.toFixed(3)}" />`;
+    }).join('');
+    const svg = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${TRAY_RECORDING_IMAGE_WIDTH}" height="${TRAY_ICON_HEIGHT}" viewBox="0 0 ${TRAY_RECORDING_IMAGE_WIDTH} ${TRAY_ICON_HEIGHT}">`,
+      `<image href="${iconDataUrl}" x="0" y="0" width="${TRAY_ICON_WIDTH}" height="${TRAY_ICON_HEIGHT}" />`,
+      `<g fill="black">${bars}</g>`,
+      '</svg>',
+    ].join('');
+    const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`);
+    image.setTemplateImage(true);
+    return image;
+  }
+
+  private getTrayIconDataUrl(iconPath: string): string {
+    const cached = this.trayIconDataUrlByPath.get(iconPath);
+    if (cached) return cached;
+
+    const dataUrl = `data:image/png;base64,${readFileSync(iconPath).toString('base64')}`;
+    this.trayIconDataUrlByPath.set(iconPath, dataUrl);
+    return dataUrl;
   }
 
   private stripAccelerators(items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -385,6 +508,18 @@ export class TrayManager {
       },
     });
 
+    if (this.getAutoImproveCallback && this.setAutoImproveCallback) {
+      items.push({
+        label: 'Auto-Improve Transcripts',
+        type: 'checkbox',
+        checked: this.getAutoImproveCallback(),
+        click: async (item) => {
+          await this.setAutoImproveCallback?.(item.checked);
+          this.refreshMenu();
+        },
+      });
+    }
+
     items.push({
       label: 'Take Screenshot',
       accelerator: this.screenshotHotkey,
@@ -438,17 +573,17 @@ export class TrayManager {
       });
     }
 
-    // Check network status at menu build time to show offline state.
-    const isOnline = net.isOnline();
-    items.push({
-      label: isOnline ? 'Check for Updates…' : 'Check for Updates (Offline)',
-      enabled: isOnline,
-      click: () => {
-        if (this.checkForUpdatesCallback) {
-          this.checkForUpdatesCallback();
-        }
-      },
-    });
+    if (this.checkForUpdatesCallback) {
+      // Check network status at menu build time to show offline state.
+      const isOnline = net.isOnline();
+      items.push({
+        label: isOnline ? 'Check for Updates…' : 'Check for Updates (Offline)',
+        enabled: isOnline,
+        click: () => {
+          this.checkForUpdatesCallback?.();
+        },
+      });
+    }
 
     items.push({
       label: 'Quit Field Theory',

@@ -13,6 +13,8 @@ import crypto from 'crypto';
 import { AuthManager } from './authManager';
 import { fieldTheoryDir, libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
+import { isSharedFilesPath, sharedFilesRoot } from './sharedFiles';
+import { writeTextFileAtomically } from './documentSaveGuard';
 
 const log = createLogger('LibrarySync');
 
@@ -139,6 +141,10 @@ function relativeMarkdownPath(rootDir: string, filePath: string): string | null 
   return relPath.split(path.sep).join('/');
 }
 
+export function shouldSkipPrivateLibrarySyncPath(filePath: string): boolean {
+  return isSharedFilesPath(filePath);
+}
+
 export function getLibrarySyncSourceRoots(): LibrarySyncSourceRoot[] {
   return [
     { dirPath: libraryDir(), sourcePrefix: '' },
@@ -190,6 +196,7 @@ function prefixedSourcePath(prefix: string, relPath: string): string {
 function walkMarkdownFiles(rootDir: string): string[] {
   const files: string[] = [];
   if (!fs.existsSync(rootDir)) return files;
+  const sharedRoot = sharedFilesRoot();
 
   function walk(currentDir: string): void {
     let entries: fs.Dirent[];
@@ -202,8 +209,10 @@ function walkMarkdownFiles(rootDir: string): string[] {
     for (const entry of entries) {
       const absPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
+        if (isSharedFilesPath(absPath) || absPath === sharedRoot) continue;
         walk(absPath);
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        if (shouldSkipPrivateLibrarySyncPath(absPath)) continue;
         files.push(absPath);
       }
     }
@@ -298,6 +307,13 @@ function moveFileToTrash(filePath: string): boolean {
 
   fs.renameSync(filePath, targetPath);
   return true;
+}
+
+function writeLibraryConflictCopy(filePath: string, content: string): string {
+  const parsed = path.parse(filePath);
+  const conflictPath = path.join(parsed.dir, `${parsed.name}.sync-conflict-${Date.now()}${parsed.ext}`);
+  fs.writeFileSync(conflictPath, content, 'utf-8');
+  return conflictPath;
 }
 
 export class LibrarySyncService {
@@ -683,14 +699,15 @@ export class LibrarySyncService {
         continue;
       }
 
+      let previousContent: string | null = null;
       if (fs.existsSync(targetPath)) {
         const stats = fs.statSync(targetPath);
         if (!stats.isFile()) {
           result.errors.push(`Skipped library path that is not a file: ${sourcePath}`);
           continue;
         }
-        const content = fs.readFileSync(targetPath, 'utf-8');
-        if (sha256(content) === remoteHash) {
+        previousContent = fs.readFileSync(targetPath, 'utf-8');
+        if (sha256(previousContent) === remoteHash) {
           result.skipped++;
           continue;
         }
@@ -701,7 +718,10 @@ export class LibrarySyncService {
       }
 
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(targetPath, row.content ?? '', 'utf-8');
+      if (previousContent !== null) {
+        writeLibraryConflictCopy(targetPath, previousContent);
+      }
+      writeTextFileAtomically(targetPath, row.content ?? '');
       result.downloaded++;
     }
   }

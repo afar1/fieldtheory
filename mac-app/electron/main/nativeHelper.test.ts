@@ -145,4 +145,152 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(stdin.write).not.toHaveBeenCalled();
   });
+
+  it('honors the requested frontmost window bounds timeout', async () => {
+    vi.useFakeTimers();
+    const { helper, sentCommands } = createHelperHarness();
+    const settled = vi.fn();
+
+    const boundsPromise = helper.getFrontmostWindowBounds(35).then(settled);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{ type: 'getFrontmostWindowBounds' }]);
+    await vi.advanceTimersByTimeAsync(34);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await boundsPromise;
+
+    expect(settled).toHaveBeenCalledWith(null);
+  });
+
+  it('passes native paste diagnostics back to command launcher callers', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const typePromise = helper.typeIntoApp('com.mitchellh.ghostty', '[pr.md]\n/commands/pr.md ', false);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.mitchellh.ghostty',
+      text: '[pr.md]\n/commands/pr.md ',
+      pressEnter: false,
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+      accessibilityTrusted: true,
+      targetFrontmost: true,
+      focusedTextInput: true,
+      pasteboardWritten: true,
+      eventTarget: 'pid',
+    });
+
+    await expect(typePromise).resolves.toEqual({
+      success: true,
+      error: undefined,
+      accessibilityTrusted: true,
+      targetFrontmost: true,
+      focusedTextInput: true,
+      pasteboardWritten: true,
+      eventTarget: 'pid',
+    });
+  });
+
+  it('passes command-enter submit mode to the native helper', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const typePromise = helper.typeIntoApp('com.mitchellh.ghostty', 'alpha beta', true, 'command-enter');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.mitchellh.ghostty',
+      text: 'alpha beta',
+      pressEnter: true,
+      submitMode: 'command-enter',
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+    });
+
+    await expect(typePromise).resolves.toMatchObject({ success: true });
+  });
+
+  it('passes target window bounds to the native helper when provided', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const targetWindowBounds = { x: 200, y: 160, width: 1200, height: 820 };
+
+    const typePromise = helper.typeIntoApp('com.openai.codex', '[release.md]\\n', false, undefined, targetWindowBounds);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.openai.codex',
+      text: '[release.md]\\n',
+      pressEnter: false,
+      targetWindowBounds,
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+    });
+
+    await expect(typePromise).resolves.toMatchObject({ success: true });
+  });
+
+  it('passes live typing segments to the native helper and returns insert diagnostics', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const insertPromise = helper.insertTextSegment('com.apple.TextEdit', 'hello');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'insertTextSegment',
+      bundleId: 'com.apple.TextEdit',
+      text: 'hello',
+    }]);
+
+    helper.handleMessage({
+      type: 'insertTextSegmentResult',
+      success: false,
+      reason: 'not-frontmost',
+      accessibilityTrusted: true,
+    });
+
+    await expect(insertPromise).resolves.toEqual({
+      success: false,
+      reason: 'not-frontmost',
+      accessibilityTrusted: true,
+    });
+  });
+
+  it('passes live typing submit commands to the native helper', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const submitPromise = helper.submitTextTarget('com.mitchellh.ghostty', 'command-enter');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'submitTextTarget',
+      bundleId: 'com.mitchellh.ghostty',
+      submitMode: 'command-enter',
+    }]);
+
+    helper.handleMessage({
+      type: 'submitTextTargetResult',
+      success: true,
+      accessibilityTrusted: true,
+    });
+
+    await expect(submitPromise).resolves.toEqual({
+      success: true,
+      reason: undefined,
+      accessibilityTrusted: true,
+    });
+  });
 });

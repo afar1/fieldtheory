@@ -1,0 +1,165 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import LocalModelSettings from '../LocalModelSettings';
+
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: {
+      text: '#111111',
+      textSecondary: '#666666',
+      border: '#d1d5db',
+      accent: '#0f766e',
+      success: '#16a34a',
+      warning: '#d97706',
+      info: '#2563eb',
+      selectedBg: '#f3f4f6',
+      surface1: '#ffffff',
+      surface2: '#f8fafc',
+      isDark: false,
+    },
+  }),
+}));
+
+const modelId = 'gemma-4-E4B-it-Q4_K_M';
+const twelveBModelId = 'gemma-4-12B-it-Q4_K_M';
+
+function makeModel() {
+  return {
+    name: 'Gemma 4 E4B Instruct Q4_K_M',
+    filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
+    sizeBytes: 5_335_289_824,
+    description: 'Offline local command model',
+    license: 'Apache-2.0',
+    sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF',
+    baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+    ollamaTag: 'gemma4:e4b',
+  };
+}
+
+function makeTwelveBModel() {
+  return {
+    name: 'Gemma 4 12B Instruct Q4_K_M',
+    filename: 'gemma-4-12B-it-Q4_K_M.gguf',
+    sizeBytes: 7_381_382_048,
+    description: 'Offline local command model',
+    license: 'Apache-2.0',
+    sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF',
+    baseModelUrl: 'https://huggingface.co/google/gemma-4-12B-it',
+    ollamaTag: 'gemma4:12b',
+  };
+}
+
+function makeHealth(status: 'ready' | 'missing' | 'corrupt', filename = 'gemma-4-E4B-it-Q4_K_M.gguf') {
+  return {
+    status,
+    modelPath: status === 'ready'
+      ? '/Users/afar/Library/Application Support/Atomic Chat/data/llamacpp/models/unsloth/gemma-4-E4B-it-Q4_K_M/model.gguf'
+      : `/Users/afar/Library/Application Support/Field Theory/models/${filename}`,
+    fileSizeBytes: status === 'ready' ? 4_977_164_416 : null,
+    expectedSizeBytes: filename.includes('12B') ? 7_381_382_048 : 5_335_289_824,
+    minValidSizeBytes: filename.includes('12B') ? 3_690_691_024 : 2_667_649_912,
+  };
+}
+
+describe('LocalModelSettings', () => {
+  const setLocalLLMSelected = vi.fn(async () => ({ success: true }));
+  const setUseLocalLLM = vi.fn(async () => ({ success: true }));
+  const downloadLocalLLM = vi.fn(async () => ({ success: true, reusedExisting: true }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (window as any).clipboardAPI = {
+      getLocalLLMModels: vi.fn(async () => ({ [modelId]: makeModel() })),
+      getLocalLLMSelected: vi.fn(async () => modelId),
+      getLocalLLMHealth: vi.fn(async () => ({ [modelId]: makeHealth('ready') })),
+      setLocalLLMSelected,
+      setUseLocalLLM,
+      downloadLocalLLM,
+    };
+  });
+
+  afterEach(() => {
+    delete (window as any).clipboardAPI;
+  });
+
+  it('finds an already-present local model instead of downloading it', async () => {
+    render(<LocalModelSettings />);
+
+    const button = await screen.findByRole('button', { name: 'Find Gemma' });
+    expect(screen.getByText('Ready')).toBeTruthy();
+    expect(screen.getByText(/Atomic Chat/)).toBeTruthy();
+
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+
+    expect(setLocalLLMSelected).toHaveBeenCalledWith(modelId);
+    expect(setUseLocalLLM).toHaveBeenCalledWith(true);
+    expect(downloadLocalLLM).not.toHaveBeenCalled();
+    expect(await screen.findByText('Found Gemma and enabled local commands.')).toBeTruthy();
+  });
+
+  it('does not download when Gemma is missing', async () => {
+    (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
+
+    render(<LocalModelSettings />);
+
+    const button = await screen.findByRole('button', { name: 'Find Gemma' });
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Gemma was not found yet/i)).toBeTruthy();
+    });
+    expect(downloadLocalLLM).not.toHaveBeenCalled();
+  });
+
+  it('shows copyable Ollama and Gemma 4 terminal steps that Field Theory can use', async () => {
+    (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
+
+    render(<LocalModelSettings />);
+
+    expect(await screen.findByText('Setup steps')).toBeTruthy();
+    expect(screen.getByText(/Step 1: install Ollama and pull Gemma 4 in Terminal/i)).toBeTruthy();
+    expect(screen.getByText(/brew install ollama llama\.cpp && ollama pull gemma4:e4b/i)).toBeTruthy();
+    expect(screen.getByText(/Step 2: put the Gemma 4 GGUF at ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
+    expect(screen.getByText(/curl -L --fail --continue-at - -o ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
+    expect(screen.getByText(/test -f "<paste-your-existing-gguf-path-here>" && ln -sf "<paste-your-existing-gguf-path-here>" ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(3);
+  });
+
+  it('shows 12B setup commands when the 12B model is selected', async () => {
+    (window as any).clipboardAPI.getLocalLLMModels.mockResolvedValue({
+      [modelId]: makeModel(),
+      [twelveBModelId]: makeTwelveBModel(),
+    });
+    (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({
+      [modelId]: makeHealth('missing'),
+      [twelveBModelId]: makeHealth('missing', 'gemma-4-12B-it-Q4_K_M.gguf'),
+    });
+
+    render(<LocalModelSettings />);
+
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: twelveBModelId } });
+
+    await waitFor(() => {
+      expect(setLocalLLMSelected).toHaveBeenCalledWith(twelveBModelId);
+    });
+    expect(screen.getByText(/brew install ollama llama\.cpp && ollama pull gemma4:12b/i)).toBeTruthy();
+    expect(screen.getAllByText(/~\/\.fieldtheory\/models\/gemma-4-12B-it-Q4_K_M\.gguf/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/https:\/\/huggingface\.co\/ggml-org\/gemma-4-12B-it-GGUF\/resolve\/main\/gemma-4-12B-it-Q4_K_M\.gguf/i)).toBeTruthy();
+  });
+
+  it('does not show the disabled meeting notes prompt settings', async () => {
+    render(<LocalModelSettings />);
+
+    expect(await screen.findByText('Setup steps')).toBeTruthy();
+    expect(screen.queryByText('Meeting notes')).toBeNull();
+    expect(screen.queryByLabelText('Meeting notes prompt')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull();
+  });
+});

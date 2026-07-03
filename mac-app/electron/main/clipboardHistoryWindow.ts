@@ -8,6 +8,8 @@ import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
 import { isDevServerConnectionRefused, loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { NativeHelper } from './nativeHelper';
+import { appendVisibilityTrace, captureVisibilityCaller, isVisibilityTraceEnabled } from './visibilityTrace';
+import { isExternalCommandTargetBundleId } from './commandLauncherTarget';
 
 const log = createLogger('ClipboardHistory');
 
@@ -24,6 +26,12 @@ type ClipboardContextMenuActions = {
   replaceMisspelling: (suggestion: string) => void;
   addWordToDictionary: (word: string) => void;
 };
+
+type ClipboardHistoryInitialViewMode = 'clipboard' | 'library';
+
+function clipboardHistoryPageForInitialView(initialViewMode: ClipboardHistoryInitialViewMode): string {
+  return `clipboard-history.html?initialView=${initialViewMode}`;
+}
 
 export function buildClipboardContextMenuTemplate(
   params: ClipboardContextMenuParams,
@@ -113,6 +121,10 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   );
 }
 
+function isExternalPasteTargetApp(bundleId: string, appName: string): boolean {
+  return isExternalCommandTargetBundleId(bundleId) && !isElectronApp(bundleId, appName);
+}
+
 /**
  * Represents a running application with its bundle ID and display name.
  */
@@ -134,6 +146,9 @@ export class ClipboardHistoryWindow {
   // The app that was active before we showed the clipboard history.
   // This is the default target for pasting.
   private previousApp: RunningApp | null = null;
+
+  // Last non-Field-Theory app seen by the native app switch monitor.
+  private lastExternalApp: RunningApp | null = null;
   
   // User-selected target app (if different from previousApp).
   private selectedTargetApp: RunningApp | null = null;
@@ -164,6 +179,7 @@ export class ClipboardHistoryWindow {
   // Callback for when window bounds change (for persistence).
   private onBoundsChanged: ((bounds: { x: number; y: number; width: number; height: number }) => void) | null = null;
   private onHidden: ((info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void) | null = null;
+  private onDidFinishLoad: (() => void) | null = null;
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
@@ -263,13 +279,23 @@ export class ClipboardHistoryWindow {
   }
 
   private sendRendererEvent(
-    channel: 'clipboard:showHistory' | 'clipboard:showTranscriptHistory' | 'clipboard:showSettings',
+    channel: 'clipboard:showHistory' | 'clipboard:showLibrary' | 'clipboard:showTranscriptHistory' | 'clipboard:showSettings',
   ): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
-    this.window.webContents.send(channel);
+    const send = () => {
+      if (!this.window || this.window.isDestroyed()) return;
+      this.window.webContents.send(channel);
+    };
+
+    if (typeof this.window.webContents.isLoadingMainFrame === 'function' && this.window.webContents.isLoadingMainFrame()) {
+      this.window.webContents.once('did-finish-load', send);
+      return;
+    }
+
+    send();
   }
 
   openScratchpad(payload: { relPath: string }): void {
@@ -304,21 +330,84 @@ export class ClipboardHistoryWindow {
     app.show();
   }
 
+  private getWindowFocusedForTrace(): boolean | null {
+    if (!this.window || this.window.isDestroyed()) {
+      return null;
+    }
+    const isFocused = (this.window as unknown as { isFocused?: () => boolean }).isFocused;
+    return typeof isFocused === 'function' ? isFocused.call(this.window) : null;
+  }
+
+  private getWindowTraceState(): Record<string, unknown> {
+    if (!this.window || this.window.isDestroyed()) {
+      return {
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        showing: this._isShowing,
+      };
+    }
+
+    const getBounds = (this.window as unknown as { getBounds?: () => Electron.Rectangle }).getBounds;
+    const getOpacity = (this.window as unknown as { getOpacity?: () => number }).getOpacity;
+    const isMinimized = (this.window as unknown as { isMinimized?: () => boolean }).isMinimized;
+
+    return {
+      hasWindow: true,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      minimized: typeof isMinimized === 'function' ? isMinimized.call(this.window) : null,
+      showing: this._isShowing,
+      bounds: typeof getBounds === 'function' ? getBounds.call(this.window) : null,
+      opacity: typeof getOpacity === 'function' ? getOpacity.call(this.window) : null,
+    };
+  }
+
+  private appendWindowTrace(event: string, data: Record<string, unknown> = {}): void {
+    if (!isVisibilityTraceEnabled()) return;
+    appendVisibilityTrace(event, {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      ...this.getWindowTraceState(),
+      ...data,
+    });
+  }
+
+  private scheduleWindowTrace(event: string, delayMs: number): void {
+    if (process.env.NODE_ENV === 'test') return;
+    if (!isVisibilityTraceEnabled()) return;
+    setTimeout(() => {
+      this.appendWindowTrace(event, { delayMs });
+    }, delayMs);
+  }
+
   private revealWindow(activateWindow: boolean, showInDock: boolean): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
+
+    appendVisibilityTrace('clipboard.reveal-window', {
+      activateWindow,
+      showInDock,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
 
     if (activateWindow) {
       this.window.show();
       this.window.moveTop();
       this.window.focus();
       this.activateApplicationForClipboardWindow(showInDock);
-      return;
+    } else {
+      this.window.showInactive();
+      this.window.moveTop();
     }
 
-    this.window.showInactive();
-    this.window.moveTop();
+    this.appendWindowTrace('clipboard.reveal-window.complete', {
+      activateWindow,
+      showInDock,
+    });
+    this.scheduleWindowTrace('clipboard.reveal-window.snapshot', 50);
+    this.scheduleWindowTrace('clipboard.reveal-window.snapshot', 250);
   }
 
   setNativeHelper(nativeHelper: Pick<NativeHelper, 'getFrontmostApp'> | null): void {
@@ -330,7 +419,7 @@ export class ClipboardHistoryWindow {
     const bundleId = frontmost?.bundleId ?? null;
     const name = frontmost?.name ?? null;
 
-    if (!bundleId || !name || isElectronApp(bundleId, name)) {
+    if (!bundleId || !name || !isExternalPasteTargetApp(bundleId, name)) {
       return null;
     }
 
@@ -338,22 +427,39 @@ export class ClipboardHistoryWindow {
   }
 
   private commitPreviousAppForFreshShow(frontmostApp: RunningApp | null): void {
-    this.previousApp = frontmostApp;
+    this.previousApp = frontmostApp ?? this.lastExternalApp;
     this.selectedTargetApp = null;
     this.sendTargetAppInfo();
   }
 
   private commitPreviousAppIfCaptured(frontmostApp: RunningApp | null): RunningApp | null {
-    if (!frontmostApp) {
+    const appToCommit = frontmostApp ?? this.lastExternalApp;
+    if (!appToCommit) {
       return null;
     }
 
     const isFirstCapture = this.previousApp === null;
-    this.previousApp = frontmostApp;
+    this.previousApp = appToCommit;
     if (isFirstCapture) {
       this.selectedTargetApp = null;
     }
+    this.sendTargetAppInfo();
     return this.previousApp;
+  }
+
+  rememberExternalApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
+    const bundleId = appInfo?.bundleId ?? null;
+    const name = appInfo?.name ?? null;
+    if (!bundleId || !name || !isExternalPasteTargetApp(bundleId, name)) {
+      return;
+    }
+
+    this.lastExternalApp = { bundleId, name };
+
+    if (this.shouldUseAppWindow() && this.isVisible()) {
+      this.previousApp = this.lastExternalApp;
+      this.sendTargetAppInfo();
+    }
   }
 
   private beginPreviousAppCapture(reason: string): void {
@@ -506,6 +612,13 @@ export class ClipboardHistoryWindow {
     this.immersiveDismissableOnBlur = dismissable;
   }
 
+  suppressBlurDismiss(durationMs: number): void {
+    this.blurDismissSuppressedUntil = Math.max(
+      this.blurDismissSuppressedUntil,
+      Date.now() + durationMs
+    );
+  }
+
   getCurrentSizeKey(): ClipboardHistorySizeKey {
     return this.currentSizeKey;
   }
@@ -527,33 +640,13 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     }
 
-    const previousSizeKey = this.currentSizeKey;
     this.currentSizeKey = normalizedKey;
     this.preferencesManager.save({ clipboardHistoryLastSizeKey: normalizedKey }).catch((err) => {
       log.error('Failed to save clipboard history size key:', err);
     });
 
-    // While immersive, don't change visible dims; the exit path reads the key.
-    if (this.isImmersiveMode) return;
-
-    if (!this.window || this.window.isDestroyed()) return;
-
-    // Ordinary non-Draw view switches should not resize the window. Draw is
-    // the one view that opts into a distinct size profile.
-    const drawInvolved = previousSizeKey === 'draw' || normalizedKey === 'draw';
-    if (!drawInvolved) return;
-
-    // Keep the window anchored at its current on-screen position when
-    // Draw enters/exits; only width/height should track the size profile.
-    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), normalizedKey);
-    const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[normalizedKey];
-    const current = this.window.getBounds();
-    this.setBoundsImmediately({
-      x: current.x,
-      y: current.y,
-      width: saved?.width ?? defaultDims.width,
-      height: saved?.height ?? defaultDims.height,
-    });
+    // View switches should not resize the window. The active key only decides
+    // where future user-driven bounds are persisted.
   }
 
   private resolveSavedBoundsForKey(key: ClipboardHistorySizeKey): Electron.Rectangle | null {
@@ -619,6 +712,7 @@ export class ClipboardHistoryWindow {
     skipSound: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     const cachedFrontmost = this.getCachedFrontmostExternalApp();
     if (cachedFrontmost) {
@@ -627,7 +721,23 @@ export class ClipboardHistoryWindow {
       this.commitPreviousAppForFreshShow(null);
       this.beginPreviousAppCapture('show');
     }
-    this.show(savedBounds, showSettingsMode, skipSound, transcriptHistoryMode, activateWindow);
+    this.show(savedBounds, showSettingsMode, skipSound, transcriptHistoryMode, activateWindow, initialViewMode);
+  }
+
+  showLibrary(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    skipSound: boolean = false,
+    activateWindow: boolean = true,
+  ): void {
+    this.show(savedBounds, false, skipSound, false, activateWindow, 'library');
+  }
+
+  capturePreviousAppAndShowLibrary(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    skipSound: boolean = false,
+    activateWindow: boolean = true,
+  ): void {
+    this.capturePreviousAppAndShow(savedBounds, false, skipSound, false, activateWindow, 'library');
   }
 
   private restoreWindowFocusabilitySoon(): void {
@@ -664,6 +774,7 @@ export class ClipboardHistoryWindow {
    * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
    * @param transcriptHistoryMode If true, renderer opens directly in transcript-only history mode
    * @param activateWindow If false, show the window without making Field Theory frontmost
+   * @param initialViewMode Which top-level view to show when the renderer opens
    */
   show(
     savedBounds?: { x: number; y: number; width: number; height: number },
@@ -671,11 +782,24 @@ export class ClipboardHistoryWindow {
     skipSound: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     this.logLifecycle(
       'show:begin',
-      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
+      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} initialViewMode=${initialViewMode} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
     );
+    appendVisibilityTrace('clipboard.show.begin', {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      hasWindow: Boolean(this.window && !this.window.isDestroyed()),
+      visible: this.isVisible(),
+      showing: this._isShowing,
+      showSettingsMode,
+      skipSound,
+      transcriptHistoryMode,
+      activateWindow,
+      initialViewMode,
+      savedBounds: savedBounds ?? null,
+    });
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
     const showInDock = this.shouldUseAppWindow();
@@ -710,11 +834,8 @@ export class ClipboardHistoryWindow {
         this.window.setAlwaysOnTop(true, 'screen-saver', 1);
       }
 
-      this.revealWindow(activateWindow, showInDock);
-      this.logLifecycle('show:existing-window-complete');
-
       // Notify renderer to reset search query.
-      this.sendRendererEvent('clipboard:showHistory');
+      this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
       if (transcriptHistoryMode) {
         this.sendRendererEvent('clipboard:showTranscriptHistory');
       }
@@ -722,6 +843,9 @@ export class ClipboardHistoryWindow {
         this.sendRendererEvent('clipboard:showSettings');
       }
       this.sendTargetAppInfo();
+
+      this.revealWindow(activateWindow, showInDock);
+      this.logLifecycle('show:existing-window-complete');
 
       // Fetch fresh app data in background.
       this.refreshAppDataInBackground();
@@ -735,7 +859,7 @@ export class ClipboardHistoryWindow {
     }
 
     // Create new window.
-    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode, activateWindow);
+    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode, activateWindow, initialViewMode);
     this.logLifecycle('show:created-window');
 
     // Fetch app data in background (don't await).
@@ -763,11 +887,14 @@ export class ClipboardHistoryWindow {
    * Call once at app startup after systems are initialized.
    * @param savedBounds Optional saved bounds for position/size
    */
-  preload(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+  preload(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
+  ): void {
     if (this.window && !this.window.isDestroyed()) {
       return; // Already preloaded
     }
-    this.createWindow(savedBounds, false, true);
+    this.createWindow(savedBounds, false, true, false, true, initialViewMode);
   }
 
   /**
@@ -777,6 +904,7 @@ export class ClipboardHistoryWindow {
    * @param savedBounds Optional saved bounds for position/size (absolute screen coords)
    * @param showSettingsMode If true, send settings mode event after content loads
    * @param preloadOnly If true, don't show window after load (for background preloading)
+   * @param initialViewMode Which top-level view to show after content loads
    */
   private createWindow(
     savedBounds?: { x: number; y: number; width: number; height: number },
@@ -784,6 +912,7 @@ export class ClipboardHistoryWindow {
     preloadOnly: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     // Calculate window position/size.
     // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
@@ -864,10 +993,22 @@ export class ClipboardHistoryWindow {
     }
 
     this.window.on('closed', () => {
+      this.appendWindowTrace('clipboard.window.closed');
       this.logLifecycle('window:closed');
       this.window = null;
       this._isShowing = false;
     });
+
+    const appendWindowEventTrace = (eventName: string) => {
+      this.appendWindowTrace(`clipboard.window.${eventName}`);
+    };
+    this.window.on('show', () => appendWindowEventTrace('show'));
+    this.window.on('hide', () => appendWindowEventTrace('hide'));
+    this.window.on('focus', () => appendWindowEventTrace('focus'));
+    this.window.on('blur', () => appendWindowEventTrace('blur'));
+    this.window.on('minimize', () => appendWindowEventTrace('minimize'));
+    this.window.on('restore', () => appendWindowEventTrace('restore'));
+    this.window.on('ready-to-show', () => appendWindowEventTrace('ready-to-show'));
 
     if (this.DEBUG_WINDOW_EVENTS) {
       const emit = (eventName: string) => this.logLifecycle(`window:${eventName}`);
@@ -940,15 +1081,15 @@ export class ClipboardHistoryWindow {
     // Show window only after content loads to avoid blank screen.
     // If preloadOnly, keep window hidden for instant later use.
     this.window.webContents.once('did-finish-load', () => {
+      this.onDidFinishLoad?.();
       if (preloadOnly) {
         // Preload complete - window stays hidden but ready for instant show()
         return;
       }
       if (this.window && !this.window.isDestroyed()) {
         this.prepareWindowForShow();
-        this.revealWindow(activateWindow, showInDock);
         // Notify renderer to reset search query.
-        this.sendRendererEvent('clipboard:showHistory');
+        this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
         if (transcriptHistoryMode) {
           this.sendRendererEvent('clipboard:showTranscriptHistory');
         }
@@ -958,19 +1099,21 @@ export class ClipboardHistoryWindow {
         }
         // Send target app info.
         this.sendTargetAppInfo();
+        this.revealWindow(activateWindow, showInDock);
       }
     });
 
     // Load clipboard history HTML.
     const startUrl = process.env.ELECTRON_START_URL;
+    const page = clipboardHistoryPageForInitialView(initialViewMode);
     if (startUrl) {
-      loadDevServerURLWithRetry(this.window, startUrl, 'clipboard-history.html', {
+      loadDevServerURLWithRetry(this.window, startUrl, page, {
         label: 'ClipboardHistory',
         logger: log,
       });
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'clipboard-history.html');
-      this.window.loadFile(htmlPath);
+      this.window.loadFile(htmlPath, { search: `?initialView=${initialViewMode}` });
 
       this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
         log.error('Failed to load:', errorCode, errorDescription, validatedURL);
@@ -997,13 +1140,83 @@ export class ClipboardHistoryWindow {
   }
 
   focusExistingWindow(): boolean {
-    if (!this.window || this.window.isDestroyed()) {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      appendVisibilityTrace('clipboard.focus-existing.skipped', {
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
       return false;
     }
 
+    appendVisibilityTrace('clipboard.focus-existing.begin', {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
     this._isShowing = true;
     this.revealWindow(true, this.shouldUseAppWindow());
     this.logLifecycle('focus-existing-window');
+    return true;
+  }
+
+  restoreExistingAppWindow(
+    reason: string = 'unspecified',
+    initialViewMode?: ClipboardHistoryInitialViewMode,
+  ): boolean {
+    if (!this.shouldUseAppWindow() || !this.window || this.window.isDestroyed()) {
+      appendVisibilityTrace('clipboard.restore-existing-app-window.skipped', {
+        reason,
+        initialViewMode: initialViewMode ?? null,
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
+      return false;
+    }
+
+    appendVisibilityTrace('clipboard.restore-existing-app-window.begin', {
+      reason,
+      initialViewMode: initialViewMode ?? null,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
+    this._isShowing = true;
+    if (initialViewMode) {
+      this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
+    }
+    this.revealWindow(true, true);
+    this.logLifecycle('restore-existing-app-window', `reason=${reason}`);
+    return true;
+  }
+
+  focusVisibleWindow(reason: string = 'unspecified'): boolean {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      appendVisibilityTrace('clipboard.focus-visible.skipped', {
+        reason,
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
+      return false;
+    }
+
+    appendVisibilityTrace('clipboard.focus-visible.begin', {
+      reason,
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
+    this._isShowing = true;
+    this.window.focus();
+    this.logLifecycle('focus-visible-window', `reason=${reason}`);
+    this.scheduleWindowTrace('clipboard.focus-visible.snapshot', 50);
     return true;
   }
 
@@ -1036,6 +1249,17 @@ export class ClipboardHistoryWindow {
    */
   hide(hideApp: boolean = true, reason: string = 'unspecified'): void {
     const wasVisible = this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
+    appendVisibilityTrace('clipboard.hide.begin', {
+      reason,
+      hideApp,
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      wasVisible,
+      showing: this._isShowing,
+      recording: this.isRecordingActive,
+      immersive: this.isImmersiveMode,
+      sketch: this.sketchModeActive,
+      caller: captureVisibilityCaller(),
+    });
     this.logLifecycle(
       'hide:begin',
       `reason=${reason} hideApp=${hideApp} recording=${this.isRecordingActive} immersive=${this.isImmersiveMode} sketch=${this.sketchModeActive}`
@@ -1092,13 +1316,18 @@ export class ClipboardHistoryWindow {
     const showInDock = this.shouldUseAppWindow();
 
     // Hide the whole app when callers want macOS to complete a native focus
-    // handoff. Keep the Dock icon visible in app-window mode.
+    // handoff. In app-window mode, hide only the window so Field Theory stays
+    // visible in the Dock and Cmd+Tab.
     if (hideApp) {
-      if (!showInDock && process.platform === 'darwin') {
-        app.dock.hide();
+      if (showInDock) {
+        this.logLifecycle('hide:window-hidden-app-visible');
+      } else {
+        if (process.platform === 'darwin') {
+          app.dock.hide();
+        }
+        app.hide();
+        this.logLifecycle('hide:app-hidden');
       }
-      app.hide();
-      this.logLifecycle('hide:app-hidden');
     } else {
       // Even when not hiding the whole app, ensure dock stays hidden.
       // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the
@@ -1111,13 +1340,19 @@ export class ClipboardHistoryWindow {
     if (this.onHidden) {
       this.onHidden({ reason, hideApp, wasVisible });
     }
+    appendVisibilityTrace('clipboard.hide.complete', {
+      reason,
+      hideApp,
+      wasVisible,
+      visible: this.isVisible(),
+      showing: this._isShowing,
+    });
     this.logLifecycle('hide:complete');
   }
 
   hideAfterPaste(reason: string): void {
     if (this.shouldUseAppWindow()) {
-      this.logLifecycle('hide-after-paste:skipped-app-mode', `reason=${reason}`);
-      return;
+      this.temporarilyDisableAppWindowFocus(`hide-after-paste:${reason}`);
     }
     this.hide(false, reason);
   }
@@ -1238,7 +1473,7 @@ export class ClipboardHistoryWindow {
 
     const targetApp = this.getTargetApp();
     this.window.webContents.send('clipboard:targetAppInfo', {
-      previousApp: this.previousApp,
+      previousApp: this.getPreviousApp(),
       targetApp,
       runningApps: this.runningApps,
     });
@@ -1264,6 +1499,10 @@ export class ClipboardHistoryWindow {
 
   setOnHidden(callback: (info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void): void {
     this.onHidden = callback;
+  }
+
+  setOnDidFinishLoad(callback: () => void): void {
+    this.onDidFinishLoad = callback;
   }
 
   /**
@@ -1417,10 +1656,8 @@ export class ClipboardHistoryWindow {
       this.blurDismissSuppressedUntil = Date.now() + 400;
     }
 
-    // Dock stays hidden - panel mode is the only mode now.
-    // Don't show dock when entering immersive mode.
-
-    // Only adjust alwaysOnTop in panel mode (not showInDock mode)
+    // Only adjust alwaysOnTop in panel mode. App-window mode already owns Dock
+    // visibility and normal window ordering.
     const showInDock = this.shouldUseAppWindow();
     if (!showInDock && this.window && !this.window.isDestroyed()) {
       if (immersive) {
@@ -1522,7 +1759,7 @@ export class ClipboardHistoryWindow {
       const { stdout } = await execFileAsync('osascript', ['-e', script]);
       const [bundleId, name] = stdout.trim().split('|');
 
-      if (bundleId && name && !isElectronApp(bundleId, name)) {
+      if (bundleId && name && isExternalPasteTargetApp(bundleId, name)) {
         return { bundleId, name };
       }
     } catch (error) {
@@ -1578,31 +1815,52 @@ export class ClipboardHistoryWindow {
    * If no previous app (e.g., Electron app was frontmost), use first running app as fallback.
    */
   getTargetApp(): RunningApp | null {
-    if (this.selectedTargetApp) {
+    if (this.selectedTargetApp && isExternalPasteTargetApp(this.selectedTargetApp.bundleId, this.selectedTargetApp.name)) {
       return this.selectedTargetApp;
     }
-    if (this.previousApp) {
+    if (this.previousApp && isExternalPasteTargetApp(this.previousApp.bundleId, this.previousApp.name)) {
       return this.previousApp;
     }
-    // Fallback: use first running app if available
-    if (this.runningApps.length > 0) {
-      return this.runningApps[0];
+    if (this.lastExternalApp && isExternalPasteTargetApp(this.lastExternalApp.bundleId, this.lastExternalApp.name)) {
+      return this.lastExternalApp;
     }
-    return null;
+    // Fallback: use first running app if available
+    return this.runningApps.find(app => isExternalPasteTargetApp(app.bundleId, app.name)) ?? null;
+  }
+
+  async getTargetAppForPaste(): Promise<RunningApp | null> {
+    let targetApp = this.getTargetApp();
+    if (targetApp?.bundleId) {
+      return targetApp;
+    }
+
+    const pendingCapture = this.previousAppCapturePromise;
+    if (pendingCapture) {
+      await pendingCapture;
+      targetApp = this.getTargetApp();
+    }
+
+    return targetApp;
   }
 
   /**
    * Get the previous app (the app that was active before showing clipboard history).
    */
   getPreviousApp(): RunningApp | null {
-    return this.previousApp;
+    if (this.previousApp && isExternalPasteTargetApp(this.previousApp.bundleId, this.previousApp.name)) {
+      return this.previousApp;
+    }
+    if (this.lastExternalApp && isExternalPasteTargetApp(this.lastExternalApp.bundleId, this.lastExternalApp.name)) {
+      return this.lastExternalApp;
+    }
+    return null;
   }
 
   /**
    * Set the target app for pasting.
    */
   setTargetApp(app: RunningApp | null): void {
-    this.selectedTargetApp = app;
+    this.selectedTargetApp = app && isExternalPasteTargetApp(app.bundleId, app.name) ? app : null;
   }
 
   /**
@@ -1639,18 +1897,21 @@ export class ClipboardHistoryWindow {
       const script = `
         set appList to ""
         tell application "System Events"
-          set visibleApps to every application process whose visible is true
-          repeat with appProc in visibleApps
-            set appBundleId to bundle identifier of appProc
-            set appName to name of appProc
-            if appBundleId is not missing value then
-              set appList to appList & appBundleId & "|" & appName & "\\n"
-            end if
+          repeat with appProc in application processes
+            try
+              if visible of appProc is true then
+                set appBundleId to bundle identifier of appProc
+                set appName to name of appProc
+                if appBundleId is not missing value then
+                  set appList to appList & appBundleId & "|" & appName & "\\n"
+                end if
+              end if
+            end try
           end repeat
         end tell
         return appList
       `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const { stdout } = await execFileAsync('osascript', ['-e', script]);
       
       const apps: RunningApp[] = [];
       const lines = stdout.trim().split('\n').filter(line => line.includes('|'));
@@ -1659,7 +1920,7 @@ export class ClipboardHistoryWindow {
         const [bundleId, name] = line.split('|');
         if (bundleId && name) {
           // Skip our own Electron app.
-          if (!isElectronApp(bundleId.trim(), name.trim())) {
+          if (isExternalPasteTargetApp(bundleId.trim(), name.trim())) {
             apps.push({ bundleId: bundleId.trim(), name: name.trim() });
           }
         }

@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import CommandsView from '../CommandsView';
+import CommandsView, { getCommandsContentBottomScrollSpace, getCommandsContentTopPadding } from '../CommandsView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -20,15 +20,50 @@ vi.mock('../../supabaseClient', () => ({
   supabase: null,
 }));
 
+describe('CommandsView layout helpers', () => {
+  it('clears the focus toolbar row when the toolbar overlays command content', () => {
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(28);
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(70);
+  });
+
+  it('keeps bottom room as rendered scroll space while focus chrome overlays the footer', () => {
+    expect(getCommandsContentBottomScrollSpace({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(44.4);
+    expect(getCommandsContentBottomScrollSpace({
+      isEditing: true,
+      focusChromeActive: false,
+    })).toBe(0);
+    expect(getCommandsContentBottomScrollSpace({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(44.4);
+    expect(getCommandsContentBottomScrollSpace({
+      isEditing: true,
+      focusChromeActive: true,
+    })).toBe(0);
+  });
+});
+
 describe('CommandsView command naming', () => {
   let insertMarkdownTextHandler: ((text: string) => void) | null = null;
+  let storage: Map<string, string>;
 
   beforeEach(() => {
     insertMarkdownTextHandler = null;
+    storage = new Map();
     const existingCommand = {
       name: 'existing',
       displayName: 'existing',
       filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
     };
 
     Object.defineProperty(window, 'commandsAPI', {
@@ -47,6 +82,7 @@ describe('CommandsView command naming', () => {
         })),
         saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
+        deleteCommand: vi.fn(async () => true),
         onCommandsChanged: vi.fn(() => () => {}),
         openFieldTheoryMarkdown: vi.fn(async () => ({ success: true })),
       },
@@ -56,12 +92,19 @@ describe('CommandsView command naming', () => {
       value: {
         getReadings: vi.fn(async () => []),
         getReading: vi.fn(async () => null),
+        setMarkdownEditorFocused: vi.fn(),
         onInsertMarkdownText: vi.fn((callback: (text: string) => void) => {
           insertMarkdownTextHandler = callback;
           return () => {
             insertMarkdownTextHandler = null;
           };
         }),
+      },
+    });
+    Object.defineProperty(window, 'libraryAPI', {
+      configurable: true,
+      value: {
+        getBacklinkRelationDocuments: vi.fn(async () => []),
       },
     });
     Object.defineProperty(window, 'wikiAPI', {
@@ -73,11 +116,23 @@ describe('CommandsView command naming', () => {
         onPageChanged: vi.fn(() => () => {}),
       },
     });
+    Object.defineProperty(window, 'fieldTheorySyncAPI', {
+      configurable: true,
+      value: {
+        getStatus: vi.fn(async () => ({ enabled: false })),
+        setLocalEnabled: vi.fn(async (enabled: boolean) => ({ enabled })),
+      },
+    });
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
-        getItem: vi.fn(() => null),
-        setItem: vi.fn(),
+        getItem: vi.fn((key: string) => storage.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage.set(key, value);
+        }),
+        removeItem: vi.fn((key: string) => {
+          storage.delete(key);
+        }),
       },
     });
     Object.defineProperty(window, 'alert', {
@@ -87,6 +142,7 @@ describe('CommandsView command naming', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -118,6 +174,45 @@ describe('CommandsView command naming', () => {
     expect(input.value).toBe('existing-two');
   });
 
+  it('clears command search when creating a new command', async () => {
+    window.commandsAPI!.createCommand = vi.fn(async () => ({
+      path: '/tmp/commands/fresh.md',
+      name: 'fresh',
+    }));
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      name: filePath.endsWith('fresh.md') ? 'fresh' : 'existing',
+      displayName: filePath.endsWith('fresh.md') ? 'fresh' : 'existing',
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('fresh.md')
+        ? '# fresh\n\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findAllByText('existing');
+    fireEvent.click(screen.getByTitle('Search'));
+    const searchInput = await screen.findByPlaceholderText('Search commands (/)') as HTMLInputElement;
+    fireEvent.change(searchInput, { target: { value: 'existing' } });
+
+    fireEvent.click(screen.getAllByTitle('Create new command')[0]);
+
+    expect(screen.queryByPlaceholderText('Search commands (/)')).toBeNull();
+    const input = await screen.findByPlaceholderText('command name...');
+    fireEvent.change(input, { target: { value: 'fresh' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.createCommand).toHaveBeenCalledWith(
+        '/tmp/commands',
+        'fresh',
+        '# fresh\n\n'
+      );
+    });
+    expect(await screen.findByText('fresh')).toBeTruthy();
+  });
+
   it('adds a watched directory from the sidebar context menu', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
@@ -131,17 +226,101 @@ describe('CommandsView command naming', () => {
     });
   });
 
+  it('hides shared commands in the main app', async () => {
+    window.fieldTheorySyncAPI!.getStatus = vi.fn(async () => ({
+      localEnabled: true,
+      authenticated: true,
+      serverEnforced: false,
+      enabled: true,
+      reason: 'enabled' as const,
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => []);
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Shared')).toBeNull();
+      expect(screen.queryByText('learn')).toBeNull();
+      expect(screen.queryByText('refactor')).toBeNull();
+      expect(screen.queryByText('review')).toBeNull();
+    });
+    expect(screen.getByText('Select a command')).toBeTruthy();
+  });
+
+  it('does not hydrate linked document bodies before a command is selected', async () => {
+    window.commandsAPI!.getCommands = vi.fn(async () => []);
+    window.commandsAPI!.getCommandByPath = vi.fn(async () => null);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath: 'scratchpad/linked-note',
+        absPath: '/tmp/wiki/linked-note.md',
+        name: 'linked-note',
+        title: 'Linked Note',
+        lastUpdated: 1,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath: 'scratchpad/linked-note',
+      absPath: '/tmp/wiki/linked-note.md',
+      name: 'linked-note',
+      title: 'Linked Note',
+      lastUpdated: 1,
+      content: 'Linked body',
+      documentVersion: { mtimeMs: 1, size: 11, sha256: 'linked-note' },
+    }));
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/artifact.md',
+      title: 'artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 1,
+      mtime: 1,
+    }]);
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/artifact.md',
+      title: 'artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 1,
+      mtime: 1,
+      content: 'Artifact body',
+      documentVersion: { mtimeMs: 1, size: 13, sha256: 'artifact' },
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Select a command');
+    await waitFor(() => {
+      expect(window.wikiAPI!.getTree).toHaveBeenCalled();
+      expect(window.librarianAPI!.getReadings).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(window.wikiAPI!.getPage).not.toHaveBeenCalled();
+    expect(window.librarianAPI!.getReading).not.toHaveBeenCalled();
+    expect(window.commandsAPI!.getCommandByPath).not.toHaveBeenCalled();
+  });
+
   it('keeps the launcher-provided command selected after async command loading', async () => {
     const commands = [
       {
         name: 'assess',
         displayName: 'assess',
         filePath: '/tmp/commands/assess.md',
+        lastModified: 0,
       },
       {
         name: 'refactor',
         displayName: 'refactor',
         filePath: '/tmp/commands/refactor.md',
+        lastModified: 0,
       },
     ];
     window.commandsAPI!.getCommands = vi.fn(async () => commands);
@@ -180,6 +359,91 @@ describe('CommandsView command naming', () => {
     expect(editor.value).toContain('Rendered selection text\n[[refactor]]');
   });
 
+  it('re-reports focused command editor state when the Browser helper reconnects', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    fireEvent.focus(editor);
+    await waitFor(() => {
+      expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+    });
+
+    vi.mocked(window.librarianAPI!.setMarkdownEditorFocused).mockClear();
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    expect(window.librarianAPI!.setMarkdownEditorFocused).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps active command source edits when the command list refreshes', async () => {
+    let commandsChanged: ((commands: Array<{
+      name: string;
+      displayName: string;
+      filePath: string;
+      lastModified: number;
+    }>) => void) | null = null;
+    window.commandsAPI!.onCommandsChanged = vi.fn((callback) => {
+      commandsChanged = callback;
+      return () => {};
+    });
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# existing\n\nlocal draft' } });
+
+    act(() => {
+      commandsChanged?.([{
+        name: 'existing',
+        displayName: 'existing',
+        filePath: '/tmp/commands/existing.md',
+        lastModified: 2,
+      }]);
+    });
+
+    expect(editor.value).toBe('# existing\n\nlocal draft');
+  });
+
+  it('updates mounted command display preferences when native renderer storage changes', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    const sidebar = document.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement;
+    expect(sidebar.style.width).toBe('180px');
+
+    act(() => {
+      storage.set('commands-sidebar-width', '260');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'commands-sidebar-width', value: '260' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(sidebar.style.width).toBe('260px');
+      expect(sidebar.style.minWidth).toBe('260px');
+    });
+
+    fireEvent.click(screen.getByTitle('Switch to Markdown source'));
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    expect(editor.style.fontSize).toBe('14px');
+
+    act(() => {
+      storage.set('commands-text-size', 'large');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'commands-text-size', value: 'large' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(editor.style.fontSize).toBe('16px');
+    });
+  });
+
   it('uses shared history navigation from the commands toolbar and bracket shortcuts', async () => {
     const onNavigateBack = vi.fn();
     const onNavigateForward = vi.fn();
@@ -203,20 +467,69 @@ describe('CommandsView command naming', () => {
     expect(onNavigateForward).toHaveBeenCalledTimes(2);
   });
 
+  it('places Show in Finder before the command breadcrumb', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const breadcrumb = await screen.findByText('commands / existing.md');
+    const folderButton = screen.getByLabelText('Show in Finder');
+
+    expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
+    expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
   it('uses a rendered/source toggle for internal commands', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
     await screen.findByText('Rendered selection text');
     expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+    expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
-    expect(await screen.findByPlaceholderText('Write your command markdown here...')).toBeTruthy();
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    expect(editor.style.paddingBottom).toBe('0px');
+    expect(editor.style.scrollPaddingBottom).toBe('22.2px');
+    expect(screen.queryByLabelText('Switch to Markdown source')).toBeNull();
+    expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
 
-    fireEvent.click(screen.getByLabelText('Rendered'));
+    fireEvent.click(screen.getByLabelText('Switch to rendered view'));
 
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+      expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+      expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
+    });
+  });
+
+  it('requires Command-click before rendered commands open source by default', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const renderedText = await screen.findByText('Rendered selection text');
+    fireEvent.click(renderedText);
+
+    expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+
+    fireEvent.click(renderedText, { metaKey: true });
+
+    expect(await screen.findByPlaceholderText('Write your command markdown here...')).toBeTruthy();
+  });
+
+  it('applies common markdown formatting shortcuts in source mode', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    const selectionStart = editor.value.indexOf('Rendered selection text');
+    const selectionEnd = selectionStart + 'Rendered selection text'.length;
+    editor.setSelectionRange(selectionStart, selectionEnd);
+    fireEvent.keyDown(editor, { key: 'b', metaKey: true });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement).value)
+        .toContain('**Rendered selection text**');
     });
   });
 
@@ -225,11 +538,13 @@ describe('CommandsView command naming', () => {
       name: 'existing',
       displayName: 'existing',
       filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
     };
     const reviewCommand = {
       name: 'review',
       displayName: 'review',
       filePath: '/tmp/commands/review.md',
+      lastModified: 0,
     };
     window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
     window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
@@ -246,15 +561,263 @@ describe('CommandsView command naming', () => {
     await screen.findByText('Rendered selection text');
 
     expect(await screen.findByText('Linked')).toBeTruthy();
+    const linkedSection = await screen.findByLabelText('Linked');
+    const bottomScrollSpace = screen.getByTestId('command-rendered-bottom-scroll-space');
+    expect(bottomScrollSpace.style.height).toBe('44.4px');
+    expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(await screen.findByTitle('Links back to this document')).toBeTruthy();
     expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
+  });
+
+  it('does not rebuild every linked command document when selection changes', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 0,
+    };
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nReview body\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(getCommandByPath.mock.calls.some(([path]) => path === reviewCommand.filePath)).toBe(true);
+    });
+    getCommandByPath.mockClear();
+
+    fireEvent.click(screen.getAllByText('review')[0]);
+
+    expect(await screen.findByText('Review body')).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getCommandByPath.mock.calls.map(([path]) => path)).toEqual([reviewCommand.filePath]);
+  });
+
+  it('uses indexed backlinks before delayed full relation hydration for selected commands', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 0,
+    };
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+    window.libraryAPI!.getBacklinkRelationDocuments = vi.fn(async () => []);
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(window.libraryAPI!.getBacklinkRelationDocuments).toHaveBeenCalledWith({
+        kind: 'command',
+        path: existingCommand.filePath,
+      });
+    });
+    getCommandByPath.mockClear();
+
+    fireEvent.click(screen.getAllByText('review')[0]);
+
+    expect(await screen.findByText('See [[existing]].')).toBeTruthy();
+    await waitFor(() => {
+      expect(window.libraryAPI!.getBacklinkRelationDocuments).toHaveBeenCalledWith({
+        kind: 'command',
+        path: reviewCommand.filePath,
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getCommandByPath.mock.calls.map(([path]) => path)).toEqual([reviewCommand.filePath]);
+  });
+
+  it('does not rebuild linked command documents for mtime-only command refreshes', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 0,
+    };
+    let commandsChangedHandler: ((commands: typeof existingCommand[]) => void) | null = null;
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+    window.commandsAPI!.onCommandsChanged = vi.fn((callback) => {
+      commandsChangedHandler = callback;
+      return () => {};
+    });
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(getCommandByPath.mock.calls.some(([path]) => path === reviewCommand.filePath)).toBe(true);
+    });
+    getCommandByPath.mockClear();
+
+    act(() => {
+      commandsChangedHandler?.([
+        { ...existingCommand, lastModified: 1 },
+        { ...reviewCommand, lastModified: 1 },
+      ]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getCommandByPath).not.toHaveBeenCalled();
+  });
+
+  it('reloads commands when the Browser helper event stream reconnects', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 1,
+    };
+    const getCommands = vi.fn()
+      .mockResolvedValueOnce([existingCommand])
+      .mockResolvedValueOnce([existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommands = getCommands;
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: filePath.endsWith('review.md') ? 1 : 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: filePath },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nReview content\n'
+        : '# existing\n\nExisting content\n',
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Existing content');
+    expect(screen.queryByText('review')).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await screen.findByText('review');
+    expect(getCommands).toHaveBeenCalledTimes(2);
+  });
+
+  it('reloads artifact link sources when the Browser helper event stream reconnects', async () => {
+    const getReadings = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        path: '/tmp/library/reconnect-artifact.md',
+        title: 'Reconnect Artifact',
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: 0,
+        mtime: 0,
+      }]);
+    window.librarianAPI!.getReadings = getReadings;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    expect(getReadings).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(getReadings).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('reloads wiki link sources when the Browser helper event stream reconnects', async () => {
+    const getTree = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        name: 'scratchpad',
+        files: [{
+          relPath: 'scratchpad/reconnect-wiki',
+          title: 'Reconnect Wiki',
+        }],
+      }]);
+    window.wikiAPI!.getTree = getTree;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    expect(getTree).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event('fieldtheory:browser-helper-event-stream-open'));
+    });
+
+    await waitFor(() => {
+      expect(getTree).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('autosaves markdown edits without toolbar save controls', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
     await screen.findByText('Rendered selection text');
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...');
     expect(screen.queryByText('Save')).toBeNull();
@@ -274,6 +837,39 @@ describe('CommandsView command naming', () => {
       expect(window.commandsAPI?.saveCommand).toHaveBeenCalledWith(
         '/tmp/commands/existing.md',
         '# existing\n\nChanged content\n'
+      );
+    });
+  });
+
+  it('restores the last deleted command with Command+Z', async () => {
+    window.commandsAPI!.createCommand = vi.fn(async () => ({ path: '/tmp/commands/existing.md', name: 'existing' }));
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const commandRows = await screen.findAllByText('existing');
+    fireEvent.contextMenu(commandRows[0], { clientX: 10, clientY: 20 });
+    fireEvent.click(await screen.findByText('Delete'));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete command?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.deleteCommand).toHaveBeenCalledWith('/tmp/commands/existing.md');
+    });
+
+    const editorLikeElement = document.createElement('div');
+    editorLikeElement.contentEditable = 'true';
+    document.body.appendChild(editorLikeElement);
+    editorLikeElement.focus();
+    fireEvent.keyDown(window, { key: 'z', metaKey: true });
+    expect(window.commandsAPI?.createCommand).not.toHaveBeenCalled();
+    editorLikeElement.remove();
+
+    fireEvent.keyDown(window, { key: 'z', metaKey: true });
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.createCommand).toHaveBeenCalledWith(
+        '/tmp/commands',
+        'existing.md',
+        '# existing\n\nRendered selection text\n'
       );
     });
   });
@@ -326,7 +922,7 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(onFocusChromeActiveChange.mock.calls.map(([active]) => active)).toEqual([true]);
     expect(screen.queryByText('commands / existing.md')).toBeNull();
@@ -340,7 +936,7 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -353,14 +949,14 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Exit immersive view'));
 
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -368,8 +964,95 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(2);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
+  });
+
+  it('uses the parent focus chrome state when switching into Commands', async () => {
+    const onFocusChromeActiveChange = vi.fn();
+    const onFocusChromeEnabledChange = vi.fn();
+    const { rerender } = render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await screen.findByText('Rendered selection text');
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, false, 0]);
+    });
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
+
+    rerender(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0.5}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, true, 0.5]);
+    });
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Exit immersive view'));
+    expect(onFocusChromeEnabledChange).toHaveBeenCalledWith(false);
+  });
+
+  it('temporarily reveals the collapsed sidebar only when the edge strip is clicked', async () => {
+    const { container } = render(<CommandsView onSwitchToClipboard={vi.fn()} sidebarCollapsed />);
+
+    await screen.findByText('Rendered selection text');
+
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLDivElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
+    ) as HTMLDivElement | null;
+    expect(getHoverStrip()).toBeTruthy();
+    expect(getHoverStrip()?.style.width).toBe('30px');
+    const sidebarPane = getSidebarPane();
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseMove(root, { clientX: 80 });
+    expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
+
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseMove(root, { clientX: 20 });
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.click(getHoverStrip()!);
+    expect(sidebarPane?.style.width).toBe('180px');
+
+    fireEvent.mouseLeave(getSidebarPane()!);
+    expect(sidebarPane?.style.width).toBe('180px');
+
+    fireEvent.mouseLeave(root);
+    expect(sidebarPane?.style.width).toBe('180px');
+
+    fireEvent.mouseDown(getSidebarPane()!);
+    expect(sidebarPane?.style.width).toBe('180px');
+
+    fireEvent.mouseDown(root);
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseMove(root, { clientX: 20 });
+    fireEvent.mouseMove(root, { clientX: 22 });
+    expect(sidebarPane?.style.width).toBe('0px');
   });
 });

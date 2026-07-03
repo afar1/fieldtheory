@@ -27,7 +27,16 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistoryBounds } from './preferences';
+import {
+  DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+  DEFAULT_MEETING_SUMMARY_PROMPT,
+  PreferencesManager,
+  normalizeClipboardHistorySizeKey,
+  normalizeLauncherRootSearchEnabledKinds,
+  pickSavedBoundsByKey,
+  resolveFieldTheoryWindowMode,
+  type ClipboardHistoryBounds,
+} from './preferences';
 
 const sampleBounds = (w: number): ClipboardHistoryBounds => ({
   width: w,
@@ -72,6 +81,17 @@ describe('pickSavedBoundsByKey', () => {
     expect(pickSavedBoundsByKey(null, 'library')).toBeUndefined();
     expect(pickSavedBoundsByKey({}, 'canvas')).toBeUndefined();
     expect(pickSavedBoundsByKey(undefined, 'fields')).toBeUndefined();
+  });
+});
+
+describe('normalizeLauncherRootSearchEnabledKinds', () => {
+  it('keeps launcher root search settings explicit and defaulted', () => {
+    expect(normalizeLauncherRootSearchEnabledKinds(undefined)).toEqual(DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS);
+    expect(normalizeLauncherRootSearchEnabledKinds({ file: false, contact: true })).toEqual({
+      ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+      file: false,
+      contact: true,
+    });
   });
 });
 
@@ -121,6 +141,23 @@ describe('PreferencesManager', () => {
     expect(saved.fieldTheoryWindowMode).toBe('app');
   });
 
+  it('defaults the local command model to Gemma 4 12B', async () => {
+    const manager = new PreferencesManager();
+    await manager.load();
+
+    expect(manager.getPreference('localLlmSelectedModel')).toBe('gemma-4-12B-it-Q4_K_M');
+  });
+
+  it('defaults live typing off and persists opt-in changes', async () => {
+    const manager = new PreferencesManager();
+    await manager.load();
+
+    expect(manager.getPreference('liveTypingEnabled')).toBe(false);
+
+    await manager.save({ liveTypingEnabled: true });
+    expect(manager.getPreference('liveTypingEnabled')).toBe(true);
+  });
+
   it('migrates legacy normal-window prefs into Field Theory app mode', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(
@@ -141,9 +178,32 @@ describe('PreferencesManager', () => {
     expect(loaded.fieldTheoryWindowMode).toBe('app');
     expect(loaded.showInDock).toBe(true);
     expect(loaded.clickAwayToDismiss).toBe(false);
+    expect(loaded.recordingIndicatorMode).toBe('floating');
   });
 
-  it('migrates legacy click-away prefs back into Field Theory panel mode', async () => {
+  it('migrates legacy click-away prefs into Field Theory app mode on load', async () => {
+    const prefsPath = path.join(tempDir, 'preferences.json');
+    await fs.writeFile(
+      prefsPath,
+      JSON.stringify(
+        {
+          clickAwayToDismiss: true,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.fieldTheoryWindowMode).toBe('app');
+    expect(loaded.showInDock).toBe(true);
+    expect(loaded.clickAwayToDismiss).toBe(false);
+  });
+
+  it('does not let a click-away-only save override explicit Field Theory app mode', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(
       prefsPath,
@@ -162,21 +222,38 @@ describe('PreferencesManager', () => {
     await preferences.save({ clickAwayToDismiss: true });
 
     const saved = JSON.parse(await fs.readFile(prefsPath, 'utf-8')) as Record<string, unknown>;
-    expect(saved.fieldTheoryWindowMode).toBe('panel');
-    expect(saved.showInDock).toBe(false);
+    expect(saved.fieldTheoryWindowMode).toBe('app');
+    expect(saved.showInDock).toBe(true);
     expect(saved.clickAwayToDismiss).toBe(true);
   });
 
-  it('keeps current panel mechanics as the default Field Theory window mode', async () => {
+  it('uses app mode as the default Field Theory window mode', async () => {
     const preferences = new PreferencesManager();
     const loaded = await preferences.load();
 
-    expect(loaded.fieldTheoryWindowMode).toBe('panel');
-    expect(loaded.showInDock).toBe(false);
-    expect(loaded.clickAwayToDismiss).toBe(true);
+    expect(loaded.fieldTheoryWindowMode).toBe('app');
+    expect(loaded.showInDock).toBe(true);
+    expect(loaded.clickAwayToDismiss).toBe(false);
   });
 
-  it('mirrors hotkeys to shared prefs and preserves them when signed out', async () => {
+  it('loads the default meeting summary prompt', async () => {
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.meetingSummaryPrompt).toBe(DEFAULT_MEETING_SUMMARY_PROMPT);
+    expect(loaded.meetingSummaryPrompt).toContain('stable speaker IDs if present');
+    expect(loaded.meetingSummaryPrompt).toContain('Do not renumber speakers');
+    expect(loaded.meetingSummaryPrompt).toContain('links, figures, and checkboxes');
+  });
+
+  it('resolves missing window-mode preferences to app mode even with legacy panel settings', () => {
+    expect(resolveFieldTheoryWindowMode({})).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ showInDock: false })).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ clickAwayToDismiss: true })).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ fieldTheoryWindowMode: 'panel', showInDock: true })).toBe('panel');
+  });
+
+  it('mirrors shared device prefs and preserves them when signed out', async () => {
     const sharedPrefsPath = path.join(tempDir, 'preferences.json');
     const userPrefsPath = path.join(tempDir, 'users', 'user-123', 'preferences.json');
     await fs.mkdir(path.dirname(userPrefsPath), { recursive: true });
@@ -215,7 +292,9 @@ describe('PreferencesManager', () => {
     expect(sharedPrefs.clipboardHistoryHotkey).toBe('Command+Option+Space');
     expect(sharedPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(sharedPrefs.transcriptionHotkey).toBe('Control+Space');
-    expect(sharedPrefs.showInDock).toBeUndefined();
+    expect(sharedPrefs.fieldTheoryWindowMode).toBe('app');
+    expect(sharedPrefs.showInDock).toBe(true);
+    expect(sharedPrefs.clickAwayToDismiss).toBe(false);
 
     loggedIn = false;
     await preferences.resetForSignedOutState();
@@ -224,11 +303,11 @@ describe('PreferencesManager', () => {
     expect(signedOutPrefs.clipboardHistoryHotkey).toBe('Command+Option+Space');
     expect(signedOutPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(signedOutPrefs.transcriptionHotkey).toBe('Control+Space');
-    expect(signedOutPrefs.showInDock).toBe(false);
+    expect(signedOutPrefs.showInDock).toBe(true);
 
     const reloadedSignedOutPrefs = await preferences.load();
     expect(reloadedSignedOutPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
-    expect(reloadedSignedOutPrefs.showInDock).toBe(false);
+    expect(reloadedSignedOutPrefs.showInDock).toBe(true);
   });
 
   it('mirrors null hotkey tombstones to shared prefs', async () => {

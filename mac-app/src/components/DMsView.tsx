@@ -140,6 +140,20 @@ function setCachedData<T>(key: string, data: T): void {
   }
 }
 
+function SkeletonItem({ width = '100%', height = '12px', isDark }: { width?: string; height?: string; isDark: boolean }) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+        borderRadius: '4px',
+        animation: 'pulse 1.5s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClipboard }: DMsViewProps) {
   const { theme } = useTheme();
 
@@ -297,6 +311,20 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
+
+  useEffect(() => {
+    const active = activeTab === 'feedback';
+    window.socialAPI?.setFeedbackRealtimeActive?.(active).catch(err => {
+      console.error('[DMsView] Failed to update feedback realtime state:', err);
+    });
+    return () => {
+      if (active) {
+        window.socialAPI?.setFeedbackRealtimeActive?.(false).catch(err => {
+          console.error('[DMsView] Failed to clear feedback realtime state:', err);
+        });
+      }
+    };
+  }, [activeTab]);
 
   // Load messages when conversation is selected.
   useEffect(() => {
@@ -580,6 +608,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
     if (!hasContent) return;
 
     setSending(true);
+    setError(null);
 
     // Store values before clearing for optimistic update
     const messageText = replyText.trim();
@@ -604,13 +633,13 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
           result = await window.socialAPI.sendTextDM(recipientId, messageText, selectedFeedback.id);
         }
 
-        // Clear input fields
-        setReplyText('');
-        setReplyImage(null);
-
-        // Optimistically add the new reply to the list without full page reload
         if (result) {
+          // Clear input fields and add the confirmed remote write without a full reload.
+          setReplyText('');
+          setReplyImage(null);
           setFeedbackReplies(prev => [...prev, result]);
+        } else {
+          setError('Failed to send reply. Please check your connection and try again.');
         }
       } else if (selectedConversation) {
         // Reply to DM.
@@ -625,17 +654,18 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
           result = await window.socialAPI.sendTextDM(selectedConversation, messageText);
         }
 
-        // Clear input fields
-        setReplyText('');
-        setReplyImage(null);
-
-        // Optimistically add the new message
         if (result) {
+          // Clear input fields and add the confirmed remote write without a full reload.
+          setReplyText('');
+          setReplyImage(null);
           setMessages(prev => [...prev, result]);
+        } else {
+          setError('Failed to send message. Please check your connection and try again.');
         }
       }
     } catch (error) {
       console.error('Failed to send reply:', error);
+      setError('Failed to send reply. Please check your connection and try again.');
       // On error, restore the text so user doesn't lose their message
       setReplyText(messageText);
       setReplyImage(messageImage);
@@ -682,21 +712,32 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
     if (!hasContent) return;
     
     setSending(true);
+    setError(null);
     try {
+      let result: SocialMessage | null = null;
       if (replyImage) {
         // Send image feedback with optional caption.
-        await window.socialAPI.submitImageFeedback(
+        result = await window.socialAPI.submitImageFeedback(
           replyImage.base64,
           replyText.trim() || undefined
         );
       } else {
         // Send text feedback.
-        await window.socialAPI.submitTextFeedback(replyText.trim());
+        result = await window.socialAPI.submitTextFeedback(replyText.trim());
+      }
+
+      if (!result) {
+        setError('Failed to send feedback. Please check your connection and try again.');
+        return;
       }
       
       setReplyText('');
       setReplyImage(null);
-      loadData(); // Refresh to show the new feedback in the list.
+      setFeedback(prev => [result, ...prev]);
+      setCachedData(FEEDBACK_CACHE_KEY, [result, ...feedback]);
+    } catch (error) {
+      console.error('Failed to send feedback:', error);
+      setError('Failed to send feedback. Please check your connection and try again.');
     } finally {
       setSending(false);
     }
@@ -783,19 +824,6 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
   // Render
   // ==========================================================================
 
-  // Loading skeleton component
-  const SkeletonItem = ({ width = '100%', height = '12px' }: { width?: string; height?: string }) => (
-    <div
-      style={{
-        width,
-        height,
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-        borderRadius: '4px',
-        animation: 'pulse 1.5s ease-in-out infinite',
-      }}
-    />
-  );
-
   if (loading) {
     return (
       <div style={{
@@ -807,8 +835,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
       }}>
         {/* Skeleton tabs */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-          <SkeletonItem width="100px" height="28px" />
-          <SkeletonItem width="100px" height="28px" />
+          <SkeletonItem width="100px" height="28px" isDark={theme.isDark} />
+          <SkeletonItem width="100px" height="28px" isDark={theme.isDark} />
         </div>
 
         <div style={{ flex: 1, display: 'flex', gap: '12px', overflow: 'hidden' }}>
@@ -817,9 +845,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
             {[1, 2, 3, 4].map((i) => (
               <div key={i} style={{ padding: '8px', marginBottom: '4px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
-                  <SkeletonItem width="120px" height="14px" />
+                  <SkeletonItem width="120px" height="14px" isDark={theme.isDark} />
                 </div>
-                <SkeletonItem width="160px" height="10px" />
+                <SkeletonItem width="160px" height="10px" isDark={theme.isDark} />
               </div>
             ))}
           </div>
@@ -827,7 +855,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
           {/* Skeleton content area */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <SkeletonItem width="200px" height="16px" />
+              <SkeletonItem width="200px" height="16px" isDark={theme.isDark} />
             </div>
           </div>
         </div>
@@ -1526,6 +1554,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
                     {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
+                {error && (
+                  <div style={{ color: theme.error, fontSize: '11px', marginTop: '8px', textAlign: 'right' }}>
+                    {error}
+                  </div>
+                )}
               </div>
             </>
           ) : activeTab === 'feedback' && selectedFeedback ? (
@@ -1880,6 +1913,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
                     {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
+                {error && (
+                  <div style={{ color: theme.error, fontSize: '11px', marginTop: '8px', textAlign: 'right' }}>
+                    {error}
+                  </div>
+                )}
               </div>
             </>
           ) : activeTab === 'feedback' ? (
@@ -2018,6 +2056,17 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
               </div>
 
                 {/* Email link outside card */}
+                {error && (
+                  <div style={{
+                    marginTop: '10px',
+                    fontSize: '11px',
+                    color: theme.error,
+                    textAlign: 'right',
+                  }}>
+                    {error}
+                  </div>
+                )}
+
                 <div style={{
                   marginTop: '12px',
                   fontSize: '11px',

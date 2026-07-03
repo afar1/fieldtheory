@@ -1,18 +1,33 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
-import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { createLogger } from './logger';
 import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
+import { loadGeneratedPublicRuntimeConfig } from './publicRuntimeConfig';
 import { NativeHelper } from './nativeHelper';
 import { isAlfredApp } from './alfredVisibility';
+import {
+  shouldHideFieldTheoryWindowsForAlfred,
+  shouldRestoreFieldTheoryFocusAfterFloatingRecording,
+  shouldShowClipboardWindowOnStartup,
+  shouldToggleCloseFieldTheoryFromDynamicIsland,
+} from './fieldTheoryWindowModePolicy';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
-import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistorySizeKey, type FieldTheoryWindowMode } from './preferences';
+import type { TranscriberManager } from './transcriberManager';
+import {
+  DEFAULT_MEETING_SUMMARY_PROMPT,
+  PreferencesManager,
+  normalizeClipboardHistorySizeKey,
+  normalizeLauncherRootSearchEnabledKinds,
+  pickSavedBoundsByKey,
+  resolveFieldTheoryWindowMode,
+  type ClipboardHistorySizeKey,
+  type FieldTheoryWindowMode,
+} from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -20,9 +35,31 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { BrowserHelperDocumentService } from './browserHelperDocumentService';
+import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHelperServer';
+import { BrowserPanelLauncherServer } from './browserPanelLauncherServer';
+import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelperState';
+import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
+import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
+import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
+import { isActiveLibraryFileContextAllowed } from './activeLibraryFileContextPolicy';
+import {
+  getBrowserLibraryMarkdownCommandTargetClientId,
+  getBrowserLibraryNativeFocusHandoff,
+  shouldPromoteBrowserLibraryClientContext,
+  shouldTargetBrowserLibraryNavigation,
+} from './browserLibraryActiveContext';
+import { buildBrowserLibraryUrl, buildBrowserPanelRedirectUrl } from './browserLibraryUrl';
+import {
+  LibraryDocumentWindowManager,
+  persistableLibraryDocumentWindowBounds,
+  type LibraryDocumentWindowTarget,
+} from './documentWindow';
+import { DocumentPresenceManager, type DocumentPresenceContext } from './documentPresence';
+import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
-import { AuthManager } from './authManager';
+import type { AuthManager } from './authManager';
 import { createUserDataManager, UserDataManager } from './userDataManager';
 import { SocialIPCChannels } from './types/social';
 import {
@@ -33,6 +70,9 @@ import {
 import {
   isParakeetEngine,
   TranscribeIPCChannels,
+  type AutoImproveContextFile,
+  type AutoImproveModelOptions,
+  type AutoImproveProvider,
   type TranscriptionEngine,
 } from './types/transcribe';
 import {
@@ -48,7 +88,7 @@ import {
   obscureHomePath,
   orderStackItemsForPaste,
 } from './clipboardManager';
-import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
+import { getHotkeyManager, HOTKEY_CONFIGS, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
   setSupabaseUrl as setEngineerSupabaseUrl,
 } from './promptEngineer';
@@ -59,6 +99,8 @@ import {
   DynamicIslandManager,
   DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
   type DynamicIslandGeometryTuning,
+  type FloatingIndicatorPosition,
+  type RecordingIndicatorMode,
 } from './dynamicIslandManager';
 import { AgentAttentionManager } from './agentAttentionManager';
 import {
@@ -70,43 +112,128 @@ import {
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
-import { QuotaManager } from './quotaManager';
+import { resolveFieldTheorySelectionText, shouldRejectFieldTheoryPathFallback } from './globalImproveSelection';
+import type { QuotaManager } from './quotaManager';
+import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
+import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
-import { CommandsManager, PortableCommand } from './commandsManager';
+import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
+import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
+import {
+  getTextImproveProviderStatus,
+  improveText,
+  normalizeAutoImproveContextFiles,
+  normalizeAutoImproveModelOptions,
+  sanitizeAutoImproveWritingPreferences,
+  type TextImproveMode,
+} from './textImproveService';
+import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
+import { MeetingManager, type MeetingSession } from './meetingManager';
+import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
+import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { parseSharedFileFrontmatter } from './sharedFiles';
+import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
+import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
+import { SharedTeamEntitlementService, type SharedTeamEntitlementState } from './sharedTeamEntitlementService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
-import { CommandsIPCChannels } from './types/commands';
-import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
+import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
+import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
+import {
+  CommandsIPCChannels,
+  type LauncherFileIconResult,
+  type LauncherFileSearchResult,
+  type LauncherSettings,
+  type LocalCommandRunMode,
+  type LocalCommandRunRequest,
+  type LocalCommandRunResult,
+  type LocalCommandSelectionInput,
+  type LocalCommandStatus,
+  type MaxwellCancelResult,
+  type MaxwellMemorySaveResult,
+  type MaxwellMemoryState,
+  type MaxwellRedoFailureReason,
+  type MaxwellRedoResult,
+  type MaxwellRunSummary,
+  type MaxwellUndoFailureReason,
+  type MaxwellUndoResult,
+} from './types/commands';
+import {
+  type DocumentSaveResult,
+  type DocumentVersion,
+  documentSaveConflictIfVersionChanged,
+  documentSaveResultForSharedConflict,
+  documentSaveResultForUpdatedFile,
+  readDocumentVersion,
+  writeTextFileWithConflictGuard,
+} from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { waitForTargetAppFrontmost } from './commandLauncherActivation';
+import {
+  type CommandLauncherFieldTheoryLaunchSurface,
+  isExternalCommandTargetBundleId,
+  isFieldTheoryCommandTargetBundleId,
+  resolveCommandLauncherInvocationTarget,
+} from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
+import { appendTranscriberTrace } from './transcriberTrace';
+import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
+import type { LibrarianManager, LibraryBacklinkRelationDocument, LibraryBacklinkTarget, LibraryChangeEvent, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiBacklinkRelationDocument, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
+import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
-import { libraryDir } from './fieldTheoryPaths';
+import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
+import {
+  autoUpdaterAllowsPrereleaseForBuildChannel,
+  autoUpdaterAuthTokenForBuildChannel,
+  autoUpdaterFeedOptionsForBuildChannel,
+  autoUpdaterGitHubCliPaths,
+  autoUpdaterReleaseRepoForBuildChannel,
+  normalizeGitHubToken,
+  resolveFieldTheoryBuildChannel,
+} from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
-import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import { setMarkdownArchivedState, stampMarkdownContentEditIfBodyChanged } from '../shared/markdownFrontmatter';
+import { resolveUpdaterStatusTransition, type UpdateStatus } from '../shared/updaterState';
 import {
   FIELD_THEORY_URL_SCHEME,
   fieldTheoryProtocolClientArgs,
   shouldRegisterFieldTheoryProtocol,
 } from './urlProtocolRegistration';
+import { browserLibraryTargetFromProtocolUrl } from './fieldTheoryProtocolTarget';
 import { RecentManager, type RecentEntry } from './recentManager';
-import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
-import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
-import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
-import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
-import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
+import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
+import {
+  getLocalImageCacheHeaders,
+  getLocalImageContentType,
+  isAllowedLocalImagePath,
+  localImagePathFromProtocolUrl,
+  shouldReturnLocalImageNotModified,
+} from './localImageProtocol';
+import { consolidateMarkdownAssetsForLibraryRoot, copyImageDataUrlForMarkdownDocument, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+  CommandClipboardRestoreCoordinator,
+  captureCommandClipboardPayload,
   captureClipboardSnapshot,
+  clipboardMatchesCommandPayload,
+  formatCommandFilePasteText,
+  resolveCommandFilePasteDelivery,
+  resolveCommandFilePasteMode,
+  shouldUseNativeCommandLauncherClipboardTextPaste,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
+  type ClipboardSnapshot,
+  type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
-import { MetricsManager, UserMetrics } from './metricsManager';
+import { MetricsManager } from './metricsManager';
+import { registerMetricsIpc } from './metricsIpc';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
@@ -114,6 +241,9 @@ import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WINDOW_COMMANDS } from './hotMicDefaults';
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
+import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { readCodexTerminalPasteText } from './codexTerminalClipboard';
+import { isAllowedExternalShellUrl, registerShellIpc } from './shellIpc';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -130,7 +260,105 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+const renderedEditorDebugLogPath = path.join(process.cwd(), '.logs', 'rendered-editor-debug.jsonl');
+const scrollDiagnosticsLogPath = path.join(process.cwd(), '.logs', 'scroll-diagnostics.jsonl');
 const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
+const STARTUP_PROFILE_ENABLED = ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_STARTUP_PROFILE ?? '').toLowerCase());
+const STARTUP_LAUNCHED_AT_MS = Number.parseFloat(process.env.FIELD_THEORY_STARTUP_LAUNCHED_AT_MS ?? '');
+const STARTUP_BENCH_EXIT_AFTER = process.env.FIELD_THEORY_STARTUP_BENCH_EXIT_AFTER?.trim() ?? '';
+const STARTUP_PROFILE_PATH = process.env.FIELD_THEORY_STARTUP_PROFILE_PATH?.trim() ?? '';
+const startupMarks: Array<{ stage: string; moduleMs: number; launchedMs: number | null }> = [];
+
+function writeStartupProfileLine(line: string): void {
+  process.stderr.write(`${line}\n`);
+  if (!STARTUP_PROFILE_PATH) return;
+  try {
+    fs.appendFileSync(STARTUP_PROFILE_PATH, `${line}\n`);
+  } catch {
+    // Profiling must never block app startup.
+  }
+}
+
+function startupMark(stage: string): void {
+  if (!STARTUP_PROFILE_ENABLED) return;
+  const now = Date.now();
+  const mark = {
+    stage,
+    moduleMs: now - BOOT_MARK,
+    launchedMs: Number.isFinite(STARTUP_LAUNCHED_AT_MS) ? now - STARTUP_LAUNCHED_AT_MS : null,
+  };
+  startupMarks.push(mark);
+  writeStartupProfileLine(`[StartupProfile] ${stage} moduleMs=${mark.moduleMs} launchedMs=${mark.launchedMs ?? 'n/a'}`);
+}
+
+function maybeExitStartupBenchmark(stage: string): void {
+  if (!STARTUP_PROFILE_ENABLED || STARTUP_BENCH_EXIT_AFTER !== stage) return;
+  writeStartupProfileLine(`[StartupProfile] summary ${JSON.stringify(startupMarks)}`);
+  setTimeout(() => {
+    app.quit();
+  }, 25);
+}
+
+function markStartupSurfaceShown(window: BrowserWindow | null, stage: string): void {
+  if (!window || window.isDestroyed()) return;
+  const markShown = () => {
+    startupMark(stage);
+    maybeExitStartupBenchmark(stage);
+  };
+  if (window.isVisible()) {
+    markShown();
+    return;
+  }
+  window.once('show', markShown);
+}
+
+function writeJsonlDiagnosticLog(filePath: string, entry: unknown): { ok: boolean; path: string; error?: string } {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(
+      filePath,
+      `${JSON.stringify({ receivedAt: Date.now(), entry })}\n`,
+      'utf-8',
+    );
+    return { ok: true, path: filePath };
+  } catch (error) {
+    return {
+      ok: false,
+      path: filePath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function clearJsonlDiagnosticLog(filePath: string): { ok: boolean; path: string; error?: string } {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '', 'utf-8');
+    return { ok: true, path: filePath };
+  } catch (error) {
+    return {
+      ok: false,
+      path: filePath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+  return writeJsonlDiagnosticLog(renderedEditorDebugLogPath, entry);
+}
+
+function clearRenderedEditorDebugLog(): { ok: boolean; path: string; error?: string } {
+  return clearJsonlDiagnosticLog(renderedEditorDebugLogPath);
+}
+
+function writeScrollDiagnosticsLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+  return writeJsonlDiagnosticLog(scrollDiagnosticsLogPath, entry);
+}
+
+function clearScrollDiagnosticsLog(): { ok: boolean; path: string; error?: string } {
+  return clearJsonlDiagnosticLog(scrollDiagnosticsLogPath);
+}
 
 function traceLibraryRename(stage: string, payload: Record<string, unknown>): void {
   if (!LIBRARY_RENAME_TRACE_ENABLED) return;
@@ -138,12 +366,14 @@ function traceLibraryRename(stage: string, payload: Record<string, unknown>): vo
 }
 
 const BOOT_MARK = Date.now();
+startupMark('module-loaded');
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
+const SHARED_FILES_SYNC_DEBOUNCE_MS = 1500;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
-const { exec, execFile: execFileCp } = require('child_process');
+const { exec, execFile: execFileCp, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFileCp);
 
@@ -152,6 +382,9 @@ type BookmarkBackgroundSyncResult =
   | { status: 'failed'; error: string };
 
 let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
+const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 3;
+const commandClipboardRestoreCoordinator = new CommandClipboardRestoreCoordinator();
+const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
 let bookmarkBackgroundSyncLastAttemptAt = 0;
 
 function findFieldTheoryCli(): string | null {
@@ -185,7 +418,7 @@ function fieldTheoryCliEnv(): NodeJS.ProcessEnv {
 
 async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResult> {
   if (!bookmarksManager) return { status: 'unavailable' };
-  if (bookmarkBackgroundSyncInFlight) return { status: 'already-running' };
+  if (bookmarkBackgroundSyncInFlight) return bookmarkBackgroundSyncInFlight;
 
   const now = Date.now();
   if (bookmarkBackgroundSyncLastAttemptAt > 0 && now - bookmarkBackgroundSyncLastAttemptAt < BOOKMARK_BACKGROUND_SYNC_STALE_MS) {
@@ -195,10 +428,10 @@ async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResu
   const cli = findFieldTheoryCli();
   if (!cli) return { status: 'missing-cli' };
 
-  bookmarkBackgroundSyncLastAttemptAt = now;
   bookmarkBackgroundSyncInFlight = (async () => {
     try {
       await execFileAsync(cli, ['sync', '--yes'], { env: fieldTheoryCliEnv(), maxBuffer: 10 * 1024 * 1024 });
+      bookmarkBackgroundSyncLastAttemptAt = Date.now();
       bookmarksManager?.reloadAndEmitChanged();
       return { status: 'synced' as const };
     } catch (error) {
@@ -227,12 +460,1178 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
   });
 }
 
+function createLauncherSessionId(): string {
+  return `launcher-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function elapsedMsSince(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+}
+
+const QUALITY_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-benchmark=';
+const QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-external-benchmark=';
+const QUALITY_BROWSER_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-browser-benchmark=';
+const QUALITY_COMMAND_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-command-benchmark=';
+const QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-launcher-benchmark=';
+const QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-launcher-normal-focus-benchmark=';
+const QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-immersive-benchmark=';
+const QUALITY_RECORDING_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-benchmark=';
+const QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-asr-benchmark=';
+const QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX = '--field-theory-run-quality-recording-asr-delivery-benchmark=';
+const QUALITY_BENCHMARK_SWITCH = 'field-theory-run-quality-benchmark';
+const QUALITY_EXTERNAL_BENCHMARK_SWITCH = 'field-theory-run-quality-external-benchmark';
+const QUALITY_BROWSER_BENCHMARK_SWITCH = 'field-theory-run-quality-browser-benchmark';
+const QUALITY_COMMAND_BENCHMARK_SWITCH = 'field-theory-run-quality-command-benchmark';
+const QUALITY_LAUNCHER_BENCHMARK_SWITCH = 'field-theory-run-quality-launcher-benchmark';
+const QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH = 'field-theory-run-quality-launcher-normal-focus-benchmark';
+const QUALITY_IMMERSIVE_BENCHMARK_SWITCH = 'field-theory-run-quality-immersive-benchmark';
+const QUALITY_RECORDING_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-benchmark';
+const QUALITY_RECORDING_ASR_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-asr-benchmark';
+const QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH = 'field-theory-run-quality-recording-asr-delivery-benchmark';
+
+function qualityBenchmarkIdFromArgv(argv: string[]): string | null {
+  const arg = argv.find(item => (
+    item.startsWith(QUALITY_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX)
+    || item.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX)
+  ));
+  let prefix = QUALITY_BENCHMARK_ARG_PREFIX;
+  if (arg?.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_BROWSER_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_COMMAND_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX;
+  } else if (arg?.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX)) {
+    prefix = QUALITY_RECORDING_BENCHMARK_ARG_PREFIX;
+  }
+  const id = arg?.slice(prefix.length).trim();
+  return id || null;
+}
+
+function shouldRunExternalQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_EXTERNAL_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunBrowserQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_BROWSER_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunCommandQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_COMMAND_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunLauncherQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_LAUNCHER_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunLauncherNormalQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_LAUNCHER_NORMAL_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunImmersiveQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_IMMERSIVE_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingAsrQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_ASR_BENCHMARK_ARG_PREFIX));
+}
+
+function shouldRunRecordingAsrDeliveryQualityBenchmark(argv: string[]): boolean {
+  return argv.some(item => item.startsWith(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_ARG_PREFIX));
+}
+
+function qualityBenchmarkIdFromCommandLine(): string | null {
+  return app.commandLine.getSwitchValue(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_RECORDING_ASR_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_RECORDING_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_IMMERSIVE_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_LAUNCHER_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_COMMAND_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_BROWSER_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_EXTERNAL_BENCHMARK_SWITCH)
+    || app.commandLine.getSwitchValue(QUALITY_BENCHMARK_SWITCH)
+    || qualityBenchmarkIdFromArgv(process.argv)
+    || null;
+}
+
+function qualityBenchmarkModeFromCommandLine(): 'controlled' | 'external' | 'browser' | 'command' | 'launcher' | 'launcher-normal' | 'immersive' | 'recording' | 'recording-asr' | 'recording-asr-delivery' {
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_ASR_DELIVERY_BENCHMARK_SWITCH) || shouldRunRecordingAsrDeliveryQualityBenchmark(process.argv)) return 'recording-asr-delivery';
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_ASR_BENCHMARK_SWITCH) || shouldRunRecordingAsrQualityBenchmark(process.argv)) return 'recording-asr';
+  if (app.commandLine.hasSwitch(QUALITY_RECORDING_BENCHMARK_SWITCH) || shouldRunRecordingQualityBenchmark(process.argv)) return 'recording';
+  if (app.commandLine.hasSwitch(QUALITY_IMMERSIVE_BENCHMARK_SWITCH) || shouldRunImmersiveQualityBenchmark(process.argv)) return 'immersive';
+  if (app.commandLine.hasSwitch(QUALITY_LAUNCHER_NORMAL_BENCHMARK_SWITCH) || shouldRunLauncherNormalQualityBenchmark(process.argv)) return 'launcher-normal';
+  if (app.commandLine.hasSwitch(QUALITY_LAUNCHER_BENCHMARK_SWITCH) || shouldRunLauncherQualityBenchmark(process.argv)) return 'launcher';
+  if (app.commandLine.hasSwitch(QUALITY_COMMAND_BENCHMARK_SWITCH) || shouldRunCommandQualityBenchmark(process.argv)) return 'command';
+  if (app.commandLine.hasSwitch(QUALITY_BROWSER_BENCHMARK_SWITCH) || shouldRunBrowserQualityBenchmark(process.argv)) return 'browser';
+  if (app.commandLine.hasSwitch(QUALITY_EXTERNAL_BENCHMARK_SWITCH) || shouldRunExternalQualityBenchmark(process.argv)) return 'external';
+  return 'controlled';
+}
+
+type QualityBenchmarkDeliveryResult = {
+  success: boolean;
+  elapsedMs: number;
+  deliveredLength: number;
+  error?: string;
+};
+
+async function waitForLauncherBenchmarkReady(
+  launcherWindow: CommandLauncherWindow,
+  traceContext: Record<string, unknown>,
+  eventName = 'launcher-interaction-benchmark-ready',
+): Promise<boolean> {
+  const startedAt = process.hrtime.bigint();
+  const inspectReadiness = `
+(() => {
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  return {
+    hasInput: Boolean(input),
+    ready: Boolean(window.__fieldTheoryLauncherBenchmarkReady),
+    documentReadyState: document.readyState,
+  };
+})()
+`;
+
+  let lastState: unknown = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    lastState = await launcherWindow.executeJavaScript<unknown>(inspectReadiness);
+    if (
+      typeof lastState === 'object'
+      && lastState !== null
+      && (lastState as { hasInput?: unknown }).hasInput === true
+      && (lastState as { ready?: unknown }).ready === true
+    ) {
+      appendCommandLauncherTrace(eventName, {
+        ...traceContext,
+        elapsedMs: elapsedMsSince(startedAt),
+        attempt,
+      });
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  appendCommandLauncherTrace(`${eventName}-timeout`, {
+    ...traceContext,
+    elapsedMs: elapsedMsSince(startedAt),
+    lastState,
+  });
+  return false;
+}
+
+async function runControlledBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+  let targetWindow: BrowserWindow | null = null;
+
+  try {
+    targetWindow = new BrowserWindow({
+      width: 320,
+      height: 120,
+      show: false,
+      skipTaskbar: true,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    await targetWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<textarea id="target" autofocus></textarea>')}`);
+    await targetWindow.webContents.executeJavaScript('document.getElementById("target").focus();', true);
+    clipboard.writeText(text);
+    targetWindow.webContents.paste();
+
+    let delivered = '';
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      delivered = await targetWindow.webContents.executeJavaScript('document.getElementById("target").value;', true);
+      if (delivered === text) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    return {
+      success: delivered === text,
+      elapsedMs,
+      deliveredLength: delivered.length,
+      error: delivered === text ? undefined : 'Controlled target did not receive expected text',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Controlled delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      const windowToDestroy = targetWindow;
+      setTimeout(() => {
+        if (!windowToDestroy.isDestroyed()) {
+          windowToDestroy.destroy();
+        }
+      }, 100);
+    }
+    appendCommandLauncherTrace('invoke-command-controlled-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function runExternalTextEditBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+
+  try {
+    clipboard.writeText(text);
+    const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  tell application "TextEdit"
+    activate
+    make new document with properties {text:""}
+  end tell
+  delay 0.5
+  tell application "System Events"
+    tell process "TextEdit"
+      set frontmost to true
+      keystroke "v" using command down
+    end tell
+  end tell
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText is expectedText or deliveredText is (expectedText & linefeed) then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    set deliveredText to text of front document
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+    const result = await execFileAsync('osascript', ['-e', script, text], { timeout: 5000 });
+    const delivered = result.stdout.replace(/\r?\n$/, '');
+    const normalizedDelivered = delivered === `${text}\n` ? text : delivered;
+    return {
+      success: normalizedDelivered === text,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: delivered.length,
+      error: normalizedDelivered === text ? undefined : 'TextEdit did not receive expected text',
+    };
+  } catch (error) {
+    try {
+      await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+    } catch {}
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'External delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    appendCommandLauncherTrace('invoke-command-external-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function runExternalSafariTextareaBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const clipboardSnapshot = clipboard.readText();
+  const startedAt = process.hrtime.bigint();
+  const pageHtml = [
+    '<!doctype html>',
+    '<meta charset="utf-8">',
+    '<title>Field Theory Quality Benchmark</title>',
+    '<textarea id="target" autofocus style="width:90vw;height:70vh;font:16px -apple-system;"></textarea>',
+    '<script>requestAnimationFrame(() => document.getElementById("target").focus());</script>',
+  ].join('');
+  const targetUrl = `data:text/html;charset=utf-8,${encodeURIComponent(pageHtml)}`;
+
+  try {
+    clipboard.writeText(text);
+    const setupStartedAt = process.hrtime.bigint();
+    const setupScript = `
+on run argv
+  set targetUrl to item 1 of argv
+  tell application "Safari"
+    activate
+    make new document with properties {URL:targetUrl}
+  end tell
+  delay 0.7
+  tell application "System Events"
+    tell process "Safari"
+      set frontmost to true
+    end tell
+  end tell
+end run`;
+    await execFileAsync('osascript', ['-e', setupScript, targetUrl], { timeout: 5000 });
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: 'open-safari-textarea',
+      elapsedMs: elapsedMsSince(setupStartedAt),
+    });
+
+    const deliveryStartedAt = process.hrtime.bigint();
+    const deliveryScript = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  tell application "System Events"
+    tell process "Safari"
+      set frontmost to true
+      keystroke "v" using command down
+    end tell
+  end tell
+  delay 0.1
+  repeat 40 times
+    tell application "System Events"
+      tell process "Safari"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.02
+        keystroke "c" using command down
+      end tell
+    end tell
+    delay 0.05
+    try
+      set deliveredText to the clipboard as text
+    on error
+      set deliveredText to ""
+    end try
+    if deliveredText is expectedText then exit repeat
+  end repeat
+  tell application "Safari"
+    try
+      close front window
+    end try
+  end tell
+  return deliveredText
+end run`;
+    const result = await execFileAsync('osascript', ['-e', deliveryScript, text], { timeout: 7000 });
+    const delivered = result.stdout.replace(/\r?\n$/, '');
+    return {
+      success: delivered === text,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: delivered.length,
+      error: delivered === text ? undefined : 'Safari textarea did not receive expected text',
+    };
+  } catch (error) {
+    try {
+      await execFileAsync('osascript', ['-e', 'tell application "Safari" to try\nclose front window\nend try'], { timeout: 1000 });
+    } catch {}
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Safari textarea delivery failed',
+    };
+  } finally {
+    try {
+      clipboard.writeText(clipboardSnapshot);
+    } catch {}
+    appendCommandLauncherTrace('invoke-command-browser-delivery-cleanup', {
+      ...traceContext,
+      clipboardRestored: true,
+    });
+  }
+}
+
+async function openTextEditBenchmarkDocument(): Promise<void> {
+  const script = `
+tell application "TextEdit"
+  activate
+  make new document with properties {text:""}
+end tell
+tell application "System Events"
+  repeat 40 times
+    if exists process "TextEdit" then
+      tell process "TextEdit"
+        set frontmost to true
+        if exists window 1 then exit repeat
+      end tell
+    end if
+    delay 0.05
+  end repeat
+end tell
+tell application "TextEdit"
+  activate
+end tell
+delay 0.1`;
+  await execFileAsync('osascript', ['-e', script], { timeout: 3000 });
+}
+
+async function activateTargetAppWithSystemEvents(targetApp: { bundleId: string; name: string }): Promise<void> {
+  const activateScript = `
+on run argv
+  set targetBundleId to item 1 of argv
+  set targetName to item 2 of argv
+  tell application id targetBundleId
+    activate
+  end tell
+  tell application "System Events"
+    if exists process targetName then
+      tell process targetName
+        set frontmost to true
+      end tell
+    end if
+  end tell
+end run`;
+  await execFileAsync('osascript', ['-e', activateScript, targetApp.bundleId, targetApp.name], { timeout: 3000 });
+}
+
+async function readAndCloseTextEditBenchmarkDocument(expectedText: string): Promise<{
+  success: boolean;
+  deliveredLength: number;
+  error?: string;
+}> {
+  const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText is expectedText or deliveredText is (expectedText & linefeed) then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+  const result = await execFileAsync('osascript', ['-e', script, expectedText], { timeout: 5000 });
+  const delivered = result.stdout.replace(/\r?\n$/, '');
+  const normalizedDelivered = delivered === `${expectedText}\n` ? expectedText : delivered;
+  return {
+    success: normalizedDelivered === expectedText,
+    deliveredLength: delivered.length,
+    error: normalizedDelivered === expectedText ? undefined : 'TextEdit did not receive expected command text',
+  };
+}
+
+async function readAndCloseTextEditCommandBenchmarkDocument(expectedText: string): Promise<{
+  success: boolean;
+  deliveredLength: number;
+  error?: string;
+}> {
+  const script = `
+on run argv
+  set expectedText to item 1 of argv
+  set deliveredText to ""
+  repeat 40 times
+    tell application "TextEdit"
+      set deliveredText to text of front document
+    end tell
+    if deliveredText contains expectedText then exit repeat
+    delay 0.05
+  end repeat
+  tell application "TextEdit"
+    close front document saving no
+  end tell
+  return deliveredText
+end run`;
+  const result = await execFileAsync('osascript', ['-e', script, expectedText], { timeout: 5000 });
+  const delivered = result.stdout.replace(/\r?\n$/, '');
+  return {
+    success: delivered.includes(expectedText),
+    deliveredLength: delivered.length,
+    error: delivered.includes(expectedText) ? undefined : 'TextEdit document did not contain expected command text',
+  };
+}
+
+async function runCommandTextEditBenchmarkDelivery(
+  traceContext: Record<string, unknown>,
+  text: string,
+): Promise<QualityBenchmarkDeliveryResult> {
+  const benchmarkStartedAt = process.hrtime.bigint();
+  let deliveryStartedAt = benchmarkStartedAt;
+  const commandName = 'quality-benchmark-command';
+  const commandPath = path.join(os.tmpdir(), `field-theory-quality-command-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
+  const targetApp = { bundleId: 'com.apple.TextEdit', name: 'TextEdit' };
+  let documentNeedsCleanup = false;
+
+  try {
+    fs.writeFileSync(commandPath, text, 'utf8');
+    const openDocumentStartedAt = process.hrtime.bigint();
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: 'open-textedit-document',
+      elapsedMs: elapsedMsSince(openDocumentStartedAt),
+    });
+
+    const pasteMode = resolveCommandFilePasteMode({ isTerminal: false, isIDE: false });
+    const commandText = formatCommandFilePasteText({
+      kind: 'command',
+      name: commandName,
+      filePath: commandPath,
+      mode: pasteMode,
+      markdownContent: text,
+    });
+    deliveryStartedAt = process.hrtime.bigint();
+
+    const pasteResult = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: boolean; error?: string }> => {
+      const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+      let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
+      try {
+        const clipboardStartedAt = process.hrtime.bigint();
+        clipboard.writeText(commandText);
+        clipboardManager?.syncClipboardHash();
+        launcherClipboardPayload = captureCommandClipboardPayload();
+        appendCommandLauncherTrace('invoke-command-clipboard-written', {
+          ...traceContext,
+          commandName,
+          format: 'text',
+          contentMode: pasteMode,
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          textReferenceTarget: false,
+          markdownContentTarget: true,
+          ...commandPayloadTrace(commandText),
+          textLength: commandText.length,
+          clipboard: readCommandPasteClipboardTrace(),
+        });
+        appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+          ...traceContext,
+          phase: 'clipboard-write',
+          elapsedMs: elapsedMsSince(clipboardStartedAt),
+        });
+
+        let pasted = false;
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal: false, isIDE: false });
+        const pasteStartedAt = process.hrtime.bigint();
+        if (pasteDelivery === 'native-helper') {
+          pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', traceContext);
+        } else {
+          appendCommandLauncherTrace('invoke-command-native-type-skipped', {
+            ...traceContext,
+            commandName,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+            delivery: pasteDelivery,
+          });
+        }
+        if (!pasted) {
+          appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+            ...traceContext,
+            commandName,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+          });
+        }
+        if (!pasted) {
+          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+            clipboardTrace: readCommandPasteClipboardTrace,
+            requireFocusedTextInput: true,
+            traceDetails: traceContext,
+          });
+        }
+        appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+          ...traceContext,
+          phase: pasted ? 'paste-delivery' : 'paste-delivery-failed',
+          strategy: pasteDelivery,
+          elapsedMs: elapsedMsSince(pasteStartedAt),
+        });
+        return pasted
+          ? { success: true }
+          : { success: false, error: 'Could not paste command text into TextEdit' };
+      } finally {
+        scheduleCommandClipboardRestore({
+          commandName,
+          commandPath,
+          restoreGeneration: clipboardRestore.generation,
+          restoreSnapshot: clipboardRestore.snapshot,
+          launcherClipboardPayload,
+        });
+      }
+    });
+
+    if (!pasteResult.success) {
+      return {
+        success: false,
+        elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+        deliveredLength: 0,
+        error: pasteResult.error,
+      };
+    }
+
+    const verifyStartedAt = process.hrtime.bigint();
+    const delivered = await readAndCloseTextEditCommandBenchmarkDocument(commandText);
+    appendCommandLauncherTrace('invoke-command-benchmark-phase', {
+      ...traceContext,
+      phase: delivered.success ? 'verify-textedit-delivery' : 'verify-textedit-delivery-failed',
+      elapsedMs: elapsedMsSince(verifyStartedAt),
+      deliveredLength: delivered.deliveredLength,
+    });
+    documentNeedsCleanup = false;
+    return {
+      success: delivered.success,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: delivered.deliveredLength,
+      error: delivered.error,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      elapsedMs: Number(process.hrtime.bigint() - deliveryStartedAt) / 1_000_000,
+      deliveredLength: 0,
+      error: error instanceof Error ? error.message : 'Command delivery benchmark failed',
+    };
+  } finally {
+    try {
+      fs.rmSync(commandPath, { force: true });
+    } catch {}
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runLauncherInteractionQualityBenchmark(
+  benchmarkId: string,
+  options: { focusProtection?: boolean } = {},
+): Promise<void> {
+  if (!commandLauncherWindow) {
+    appendCommandLauncherTrace('launcher-interaction-benchmark-error', {
+      benchmark: true,
+      benchmarkId,
+      error: 'Command launcher window unavailable',
+    });
+    return;
+  }
+
+  const launcherSessionId = `benchmark-${benchmarkId}`;
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId,
+    delivery: options.focusProtection === false ? 'launcher-interaction-normal' : 'launcher-interaction-focus-protected',
+    qualityScenario: options.focusProtection === false ? 'synthetic-launcher-normal-focus' : 'synthetic-launcher-focus-protected',
+  };
+  const query = 'quality benchmark';
+
+  appendCommandLauncherTrace('launcher-interaction-benchmark-start', traceContext);
+  const preloadReady = await waitForLauncherBenchmarkReady(
+    commandLauncherWindow,
+    traceContext,
+    'launcher-interaction-benchmark-preload-ready',
+  );
+  if (!preloadReady) return;
+  appendCommandLauncherTrace('hotkey-trigger', {
+    ...traceContext,
+    source: 'quality-benchmark',
+  });
+  await commandLauncherWindow.show({
+    launcherSessionId,
+    qualityScenario: String(traceContext.qualityScenario),
+    ...(options.focusProtection === false ? {} : { suppressBlurHideMs: 2500 }),
+  });
+  const ready = await waitForLauncherBenchmarkReady(commandLauncherWindow, traceContext);
+  if (!ready) return;
+  const setBenchmarkQuery = `
+(() => {
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  if (!input) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, ${JSON.stringify(query)});
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(query)} }));
+  return true;
+})()
+`;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const didSetQuery = await commandLauncherWindow.executeJavaScript<boolean>(setBenchmarkQuery);
+    if (didSetQuery) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await commandLauncherWindow.executeJavaScript<boolean>(setBenchmarkQuery);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  commandLauncherWindow.hide(true);
+  appendCommandLauncherTrace('launcher-interaction-benchmark-success', traceContext);
+}
+
+async function runImmersiveSurfaceQualityBenchmark(benchmarkId: string): Promise<void> {
+  const qualityScenario = 'renderer-driven-immersive-surface';
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId: `benchmark-${benchmarkId}`,
+    delivery: 'immersive-surface',
+    qualityScenario,
+  };
+  const startedAt = process.hrtime.bigint();
+  appendCommandLauncherTrace('immersive-surface-benchmark-start', traceContext);
+  try {
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+    }
+    const libraryBounds = restoreClipboardHistoryBounds('library');
+    clipboardHistoryWindow.showLibrary(libraryBounds, true, true);
+    const immersiveRelPath = process.env.FIELD_THEORY_QUALITY_IMMERSIVE_WIKI_REL_PATH?.trim();
+    if (immersiveRelPath) {
+      clipboardHistoryWindow.openScratchpad({ relPath: immersiveRelPath });
+    }
+    await new Promise(resolve => setTimeout(resolve, 600));
+    if (immersiveRelPath) {
+      clipboardHistoryWindow.openScratchpad({ relPath: immersiveRelPath });
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    const targetWindow = clipboardHistoryWindow.getWindow?.();
+    if (!targetWindow || targetWindow.isDestroyed()) {
+      throw new Error('Clipboard history BrowserWindow unavailable');
+    }
+    const librarySurfaceReady = await targetWindow.webContents.executeJavaScript(`
+new Promise((resolve) => {
+  const selectors = [
+    '[data-ft-rendered-editor-root="true"]',
+    '[data-ft-quality-editor="markdown"]',
+    '[data-ft-librarian-content-scroll="true"]',
+  ];
+  const hasSurface = () => selectors.some((selector) => document.querySelector(selector));
+  if (hasSurface()) {
+    resolve(true);
+    return;
+  }
+  const observer = new MutationObserver(() => {
+    if (!hasSurface()) return;
+    observer.disconnect();
+    window.clearTimeout(timeout);
+    resolve(true);
+  });
+  const timeout = window.setTimeout(() => {
+    observer.disconnect();
+    resolve(false);
+  }, 3500);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})
+`, true);
+    appendCommandLauncherTrace('immersive-surface-library-ready', {
+      ...traceContext,
+      librarySurfaceReady,
+    });
+    const result = await targetWindow.webContents.executeJavaScript(`
+(() => {
+  const api = window.ftDebugScroll;
+  if (!api?.recordRendererJourneyQualitySamples) {
+    return { ok: false, error: 'ftDebugScroll renderer journey helper unavailable' };
+  }
+  return Promise.resolve(api.recordRendererJourneyQualitySamples(${JSON.stringify(qualityScenario)}, ${JSON.stringify(benchmarkId)}))
+    .then((result) => {
+      const evidence = result?.evidence ?? {};
+      const journeyOk = Boolean(
+        evidence.librarySurfaceReady
+          && evidence.renderedScroll?.targetFound
+          && evidence.markdownScroll?.targetFound
+          && evidence.renderedInput?.targetFound
+          && evidence.markdownInput?.targetFound
+      );
+      return { ...result, ok: journeyOk, journeyOk };
+    });
+})()
+`, true);
+    const launcherWindow = commandLauncherWindow;
+    if (!launcherWindow) {
+      throw new Error('Command launcher window unavailable for immersive journey');
+    }
+    const launcherReady = await waitForLauncherBenchmarkReady(
+      launcherWindow,
+      traceContext,
+      'immersive-surface-launcher-preload-ready',
+    );
+    if (launcherReady) {
+      appendCommandLauncherTrace('hotkey-trigger', {
+        ...traceContext,
+        source: 'quality-benchmark',
+      });
+      await launcherWindow.show({
+        launcherSessionId: String(traceContext.launcherSessionId),
+        qualityScenario,
+        suppressBlurHideMs: 2500,
+      });
+      const ready = await waitForLauncherBenchmarkReady(launcherWindow, traceContext);
+      if (ready) {
+        const query = 'quality journey';
+        await launcherWindow.executeJavaScript<boolean>(`
+(() => {
+  const api = window.ftDebugScroll;
+  api?.enable?.();
+  api?.setQualityContext?.({
+    qualityScenario: ${JSON.stringify(qualityScenario)},
+    benchmarkId: ${JSON.stringify(benchmarkId)},
+    sampleOrigin: 'programmatic-dom-event',
+    journeyStep: 'launcher-type',
+  });
+  const input = document.querySelector('input[name="field-theory-command-launcher-query"]');
+  if (!input) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, ${JSON.stringify(query)});
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(query)} }));
+  window.setTimeout(() => api?.clearQualityContext?.(), 400);
+  return true;
+})()
+`);
+        await new Promise(resolve => setTimeout(resolve, 450));
+        launcherWindow.hide(true);
+      }
+    }
+    appendCommandLauncherTrace('immersive-surface-benchmark-success', {
+      ...traceContext,
+      elapsedMs: elapsedMsSince(startedAt),
+      result,
+    });
+  } catch (error) {
+    appendCommandLauncherTrace('immersive-surface-benchmark-error', {
+      ...traceContext,
+      elapsedMs: elapsedMsSince(startedAt),
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function runRecordingDeliveryQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-textedit',
+    qualityScenario: 'synthetic-recording-textedit',
+    source: 'quality-benchmark',
+  };
+  const text = `Field Theory recording benchmark ${benchmarkId}`;
+  let documentNeedsCleanup = false;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    appendTranscriberTrace('benchmark.start', traceContext);
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    await activateTargetAppWithSystemEvents({ bundleId: 'com.apple.TextEdit', name: 'TextEdit' });
+    const result = await transcriberManager.runRecordingDeliveryQualityBenchmark({
+      benchmarkId,
+      text,
+    });
+    const delivered = await readAndCloseTextEditCommandBenchmarkDocument(text);
+    documentNeedsCleanup = false;
+    if (result.success && delivered.success) {
+      appendTranscriberTrace('benchmark.delivery-success', {
+        ...traceContext,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        deliveredLength: delivered.deliveredLength,
+      });
+    } else {
+      appendTranscriberTrace('benchmark.delivery-error', {
+        ...traceContext,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        deliveredLength: delivered.deliveredLength,
+        error: result.error ?? delivered.error ?? 'Recording benchmark delivery failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.error', {
+      ...traceContext,
+      error,
+    });
+  } finally {
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runRecordingAsrQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-asr-fixture',
+    qualityScenario: 'fixture-audio',
+    source: 'quality-benchmark',
+  };
+  let audioCleanup: (() => void) | null = null;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.asr-error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    const preparedAudio = await prepareRecordingAsrBenchmarkAudio(benchmarkId);
+    audioCleanup = preparedAudio.cleanup;
+    const result = await transcriberManager.runRecordingAsrQualityBenchmark({
+      benchmarkId,
+      wavPath: preparedAudio.audioPath,
+    });
+    if (!result.success) {
+      appendTranscriberTrace('benchmark.asr-error', {
+        ...traceContext,
+        totalMs: result.totalMs,
+        wavBytes: result.wavBytes,
+        error: result.error ?? 'Recording ASR benchmark failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.asr-error', {
+      ...traceContext,
+      error: error instanceof Error ? error.message : 'Recording ASR benchmark failed',
+    });
+  } finally {
+    audioCleanup?.();
+  }
+}
+
+function getRecordingAsrBenchmarkFixturePath(): string {
+  const configuredFixturePath = process.env.FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO?.trim();
+  if (!configuredFixturePath) {
+    throw new Error('Set FIELD_THEORY_RECORDING_ASR_BENCHMARK_AUDIO to a local WAV fixture before running the recording ASR benchmark');
+  }
+  return path.resolve(configuredFixturePath);
+}
+
+async function prepareRecordingAsrBenchmarkAudio(benchmarkId: string): Promise<{ audioPath: string; cleanup: () => void }> {
+  const fixturePath = getRecordingAsrBenchmarkFixturePath();
+  const tempAudioPath = path.join(os.tmpdir(), `field-theory-recording-asr-${benchmarkId}.wav`);
+  try {
+    await execFileAsync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', fixturePath, '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le', tempAudioPath], { timeout: 10000 });
+  } catch {
+    await execFileAsync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@24000', fixturePath, tempAudioPath], { timeout: 10000 });
+  }
+  return {
+    audioPath: tempAudioPath,
+    cleanup: () => fs.rm(tempAudioPath, { force: true }, () => {}),
+  };
+}
+
+async function runRecordingAsrDeliveryQualityBenchmark(benchmarkId: string): Promise<void> {
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    delivery: 'recording-asr-textedit',
+    qualityScenario: 'fixture-audio-textedit',
+    source: 'quality-benchmark',
+  };
+  let audioCleanup: (() => void) | null = null;
+  let documentNeedsCleanup = false;
+
+  if (!transcriberManager) {
+    appendTranscriberTrace('benchmark.asr-delivery-error', {
+      ...traceContext,
+      error: 'Transcriber manager unavailable',
+    });
+    return;
+  }
+
+  try {
+    const preparedAudio = await prepareRecordingAsrBenchmarkAudio(benchmarkId);
+    audioCleanup = preparedAudio.cleanup;
+    appendTranscriberTrace('benchmark.asr-delivery-start', traceContext);
+    await openTextEditBenchmarkDocument();
+    documentNeedsCleanup = true;
+    const result = await transcriberManager.runRecordingAsrDeliveryQualityBenchmark({
+      benchmarkId,
+      wavPath: preparedAudio.audioPath,
+    });
+    const delivered = result.text
+      ? await readAndCloseTextEditCommandBenchmarkDocument(result.text)
+      : { success: false, deliveredLength: 0, error: 'No ASR transcript to verify' };
+    documentNeedsCleanup = false;
+    if (result.success && delivered.success) {
+      appendTranscriberTrace('benchmark.asr-delivery-success', {
+        ...traceContext,
+        asrMs: result.asrMs,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        textChars: result.textChars,
+        deliveredLength: delivered.deliveredLength,
+        wavBytes: result.wavBytes,
+      });
+    } else {
+      appendTranscriberTrace('benchmark.asr-delivery-error', {
+        ...traceContext,
+        asrMs: result.asrMs,
+        deliveryElapsedMs: result.pasteMs,
+        totalMs: result.totalMs,
+        textChars: result.textChars,
+        deliveredLength: delivered.deliveredLength,
+        wavBytes: result.wavBytes,
+        error: result.error ?? delivered.error ?? 'Recording ASR delivery benchmark failed',
+      });
+    }
+  } catch (error) {
+    appendTranscriberTrace('benchmark.asr-delivery-error', {
+      ...traceContext,
+      error: error instanceof Error ? error.message : 'Recording ASR delivery benchmark failed',
+    });
+  } finally {
+    audioCleanup?.();
+    if (documentNeedsCleanup) {
+      try {
+        await execFileAsync('osascript', ['-e', 'tell application "TextEdit" to if (count of documents) > 0 then close front document saving no'], { timeout: 1000 });
+      } catch {}
+    }
+  }
+}
+
+async function runCommandLauncherQualityBenchmark(benchmarkId: string, mode: 'controlled' | 'external' | 'browser' | 'command' = 'controlled'): Promise<void> {
+  const startedAt = process.hrtime.bigint();
+  const launcherSessionId = `benchmark-${benchmarkId}`;
+  const querySessionId = `${launcherSessionId}:query`;
+  const invocationId = `${launcherSessionId}:invocation`;
+  const deliveryMode = mode === 'command'
+    ? 'command-textedit'
+    : mode === 'external'
+      ? 'controlled-textedit'
+      : mode === 'browser'
+        ? 'controlled-safari-textarea'
+        : 'controlled-electron-textarea';
+  const traceContext = {
+    benchmark: true,
+    benchmarkId,
+    launcherSessionId,
+    querySessionId,
+    invocationId,
+    delivery: deliveryMode,
+    qualityScenario: mode === 'command'
+      ? 'synthetic-command-textedit'
+      : mode === 'external'
+        ? 'synthetic-external-textedit'
+        : mode === 'browser'
+          ? 'synthetic-browser-safari-textarea'
+          : 'synthetic-electron-textarea',
+  };
+  const benchmarkText = `field-theory-quality-benchmark:${benchmarkId}`;
+
+  appendCommandLauncherTrace('quality-benchmark-start', traceContext);
+  appendCommandLauncherTrace('renderer-invoke-item', {
+    ...traceContext,
+    item: {
+      id: 'quality-benchmark-command',
+      type: 'command',
+      displayName: 'Quality benchmark command',
+    },
+    fieldTheoryActive: false,
+    hasFieldTheoryTarget: false,
+  });
+  appendCommandLauncherTrace('invoke-command-start', {
+    ...traceContext,
+    commandName: 'quality-benchmark',
+    commandPath: null,
+    invocationTarget: mode === 'command'
+      ? 'benchmark-command-textedit-target'
+      : mode === 'external' ? 'benchmark-textedit-target' : mode === 'browser' ? 'benchmark-safari-textarea-target' : 'benchmark-controlled-target',
+  });
+  const delivery = mode === 'command'
+    ? await runCommandTextEditBenchmarkDelivery(traceContext, benchmarkText)
+    : mode === 'external'
+      ? await runExternalTextEditBenchmarkDelivery(traceContext, benchmarkText)
+      : mode === 'browser'
+        ? await runExternalSafariTextareaBenchmarkDelivery(traceContext, benchmarkText)
+        : await runControlledBenchmarkDelivery(traceContext, benchmarkText);
+  appendCommandLauncherTrace(delivery.success
+    ? 'invoke-command-benchmark-delivery-success'
+    : 'invoke-command-benchmark-delivery-error', {
+    ...traceContext,
+    mutatedUserState: false,
+    deliveredLength: delivery.deliveredLength,
+    expectedLength: benchmarkText.length,
+    deliveryElapsedMs: delivery.elapsedMs,
+    error: delivery.error ?? null,
+  });
+  appendCommandLauncherTrace('invoke-command-success', {
+    ...traceContext,
+    deliveryVerified: delivery.success,
+    commandName: 'quality-benchmark',
+    commandPath: null,
+    targetBundleId: null,
+    targetName: mode === 'external' || mode === 'command' ? 'TextEdit' : mode === 'browser' ? 'Safari' : null,
+    contentMode: mode === 'command'
+      ? 'benchmark-command-textedit-target'
+      : mode === 'external' ? 'benchmark-textedit-target' : mode === 'browser' ? 'benchmark-safari-textarea-target' : 'benchmark-controlled-target',
+    fallbackRan: false,
+    elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+  });
+}
+
+type CommandLauncherTargetApp = {
+  bundleId: string;
+  name: string;
+  windowBounds?: { x: number; y: number; width: number; height: number } | null;
+};
+
+function isCodexDesktopApp(bundleId: string | null | undefined): boolean {
+  return bundleId === 'com.openai.codex';
+}
+
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
-  targetApp: { bundleId: string; name: string } | null,
-  options: { beforePaste?: () => void | Promise<void> } = {},
+  targetApp: CommandLauncherTargetApp | null,
+  options: {
+    beforePaste?: () => void | Promise<void>;
+    clipboardTrace?: () => Record<string, unknown>;
+    requireFocusedTextInput?: boolean;
+    traceDetails?: Record<string, unknown>;
+  } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('activate-and-paste-start', {
+    ...options.traceDetails,
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
   });
@@ -244,21 +1643,49 @@ async function activateAndPaste(
       appendCommandLauncherTrace('activate-and-paste-invalid-bundle', { bundleId });
       return false;
     }
-    const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
-    await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    await activateTargetAppWithSystemEvents(targetApp);
     const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-after-activate', {
+      ...options.traceDetails,
       targetBundleId: bundleId,
       frontmostBundleId: afterActivate?.bundleId ?? null,
       frontmostName: afterActivate?.name ?? null,
     });
+    const targetFrontmost = await waitForCommandLauncherTargetAppFrontmost(targetApp, 'activate-and-paste');
+    if (!targetFrontmost) {
+      return false;
+    }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-hide', targetApp, {
+      targetFrontmost,
+    });
     await beforePaste?.();
     await new Promise(resolve => setTimeout(resolve, 40));
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-before-recheck', targetApp);
+    let targetFrontmostAfterHide = await waitForCommandLauncherTargetAppFrontmost(targetApp, 'activate-and-paste-after-hide');
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-lost-target', targetApp);
+      targetFrontmostAfterHide = await activateCommandLauncherTargetApp(targetApp, 'activate-and-paste-after-hide-reactivate');
+    }
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-reactivate-failed', targetApp);
+      return false;
+    }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-keystroke', targetApp, {
+      targetFrontmostAfterHide,
+    });
+    if (options.requireFocusedTextInput) {
+      const focusedTextInput = await checkCommandLauncherFocusedTextInput('activate-and-paste-focused-text-input', targetApp);
+      if (!focusedTextInput) {
+        return false;
+      }
+    }
     const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
+      ...options.traceDetails,
       targetBundleId: bundleId,
       frontmostBundleId: beforeKeystroke?.bundleId ?? null,
       frontmostName: beforeKeystroke?.name ?? null,
+      ...(options.clipboardTrace ? { clipboard: options.clipboardTrace() } : {}),
     });
     await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down'], { timeout: 3000 });
   } else {
@@ -267,6 +1694,7 @@ async function activateAndPaste(
   }
   const afterKeystroke = nativeHelper?.getFrontmostApp() ?? null;
   appendCommandLauncherTrace('activate-and-paste-success', {
+    ...options.traceDetails,
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
     frontmostBundleId: afterKeystroke?.bundleId ?? null,
@@ -275,26 +1703,574 @@ async function activateAndPaste(
   return true;
 }
 
-function activateAndPasteFromCommandLauncher(targetApp: { bundleId: string; name: string }): Promise<boolean> {
-  commandLauncherWindow?.suppressActivationForExternalInvocation();
+async function waitForCommandLauncherTargetAppFrontmost(
+  targetApp: CommandLauncherTargetApp,
+  tracePrefix: string,
+): Promise<boolean> {
+  if (!nativeHelper) {
+    appendCommandLauncherTrace(`${tracePrefix}-target-frontmost-unverified`, {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      reason: 'missing-native-helper',
+    });
+    return true;
+  }
+
+  return waitForTargetAppFrontmost({
+    targetApp,
+    getFrontmostApp: () => nativeHelper?.getFrontmostApp() ?? null,
+    tracePrefix,
+    appendTrace: appendCommandLauncherTrace,
+  });
+}
+
+function readCommandPasteClipboardTrace(): Record<string, unknown> {
+  try {
+    const text = clipboard.readText();
+    const trace: Record<string, unknown> = {
+      textLength: text.length,
+      availableFormats: clipboard.availableFormats(),
+    };
+    if (isCommandPayloadTraceEnabled()) {
+      trace.text = text;
+    }
+    return trace;
+  } catch (error) {
+    return { error };
+  }
+}
+
+function isCommandPayloadTraceEnabled(): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_COMMAND_PAYLOAD_TRACE ?? '').toLowerCase());
+}
+
+function appendCommandLauncherVisibilityTrace(
+  event: string,
+  targetApp: CommandLauncherTargetApp | null,
+  data: Record<string, unknown> = {},
+): void {
+  const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+  const details = {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+    frontmostBundleId: frontmostApp?.bundleId ?? null,
+    frontmostName: frontmostApp?.name ?? null,
+    commandLauncherVisible: commandLauncherWindow?.isVisible() ?? null,
+    commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+    commandLauncherExternalInvocationSuppressed: commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? null,
+    ...data,
+  };
+  appendCommandLauncherTrace(event, details);
+  appendVisibilityTrace(event, details);
+}
+
+async function checkCommandLauncherFocusedTextInput(
+  event: string,
+  targetApp: CommandLauncherTargetApp,
+  details: Record<string, unknown> = {},
+): Promise<boolean> {
+  const focusedTextInput = (await nativeHelper?.checkFocusedTextInput().catch(() => false)) ?? false;
+  appendCommandLauncherTrace(event, {
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    focusedTextInput,
+    ...details,
+  });
+  return focusedTextInput;
+}
+
+function commandPayloadTrace(text: string): Record<string, unknown> {
+  return isCommandPayloadTraceEnabled() ? { payload: text } : {};
+}
+
+function scheduleCommandClipboardRestore(input: {
+  commandName: string;
+  commandPath: string;
+  restoreGeneration: number;
+  restoreSnapshot: ClipboardSnapshot;
+  launcherClipboardPayload: CommandClipboardPayloadSnapshot | null;
+}): void {
+  const {
+    commandName,
+    commandPath,
+    restoreGeneration,
+    restoreSnapshot,
+    launcherClipboardPayload,
+  } = input;
+
+  void (async () => {
+    appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+      commandName,
+      commandPath,
+      delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+      generation: restoreGeneration,
+    });
+
+    await waitForCommandClipboardPasteRead();
+
+    if (commandClipboardRestoreCoordinator.canRestore(restoreGeneration)) {
+      try {
+        const clipboardStillHasLauncherPayload = launcherClipboardPayload
+          ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+          : false;
+        if (clipboardStillHasLauncherPayload) {
+          restoreClipboardSnapshot(restoreSnapshot);
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+            commandName,
+            commandPath,
+            generation: restoreGeneration,
+            reason: 'clipboard-still-launcher-payload',
+          });
+        } else {
+          appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+            commandName,
+            commandPath,
+            generation: restoreGeneration,
+            reason: launcherClipboardPayload ? 'clipboard-changed-after-launcher-paste' : 'missing-launcher-payload-snapshot',
+          });
+        }
+      } finally {
+        commandClipboardRestoreCoordinator.finish(restoreGeneration);
+      }
+    } else {
+      appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+        commandName,
+        commandPath,
+        generation: restoreGeneration,
+        reason: 'newer-command-invocation',
+      });
+    }
+  })().catch((error) => {
+    appendCommandLauncherTrace('invoke-command-clipboard-restore-error', {
+      commandName,
+      commandPath,
+      generation: restoreGeneration,
+      error,
+    });
+  });
+}
+
+function scheduleBrowserLibraryClipboardRestore(input: {
+  tracePrefix: string;
+  tracePayload: Record<string, unknown>;
+  restoreGeneration: number;
+  restoreSnapshot: ClipboardSnapshot;
+  launcherClipboardPayload: CommandClipboardPayloadSnapshot | null;
+}): void {
+  const {
+    tracePrefix,
+    tracePayload,
+    restoreGeneration,
+    restoreSnapshot,
+    launcherClipboardPayload,
+  } = input;
+
+  void (async () => {
+    appendCommandLauncherTrace(`${tracePrefix}-wait-before-clipboard-restore`, {
+      ...tracePayload,
+      delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+      generation: restoreGeneration,
+    });
+
+    await waitForCommandClipboardPasteRead();
+
+    if (commandClipboardRestoreCoordinator.canRestore(restoreGeneration)) {
+      try {
+        const clipboardStillHasLauncherPayload = launcherClipboardPayload
+          ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+          : false;
+        if (clipboardStillHasLauncherPayload) {
+          restoreClipboardSnapshot(restoreSnapshot);
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace(`${tracePrefix}-clipboard-restored`, {
+            ...tracePayload,
+            generation: restoreGeneration,
+            reason: 'clipboard-still-browser-library-payload',
+          });
+        } else {
+          appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-skipped`, {
+            ...tracePayload,
+            generation: restoreGeneration,
+            reason: launcherClipboardPayload ? 'clipboard-changed-after-browser-library-paste' : 'missing-browser-library-payload-snapshot',
+          });
+        }
+      } finally {
+        commandClipboardRestoreCoordinator.finish(restoreGeneration);
+      }
+    } else {
+      appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-skipped`, {
+        ...tracePayload,
+        generation: restoreGeneration,
+        reason: 'newer-command-invocation',
+      });
+      commandClipboardRestoreCoordinator.finish(restoreGeneration);
+    }
+  })().catch((error) => {
+    appendCommandLauncherTrace(`${tracePrefix}-clipboard-restore-error`, {
+      ...tracePayload,
+      generation: restoreGeneration,
+      error,
+    });
+    commandClipboardRestoreCoordinator.finish(restoreGeneration);
+  });
+}
+
+async function activateCommandLauncherTargetApp(
+  targetApp: CommandLauncherTargetApp,
+  tracePrefix: string,
+): Promise<boolean> {
+  const bundleId = targetApp.bundleId;
+  if (bundleId.includes('"') || bundleId.includes("'")) {
+    log.error('activateCommandLauncherTargetApp: invalid bundleId contains quotes:', bundleId);
+    appendCommandLauncherTrace(`${tracePrefix}-invalid-bundle`, { bundleId });
+    return false;
+  }
+  try {
+    await activateTargetAppWithSystemEvents(targetApp);
+    const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
+    appendCommandLauncherTrace(`${tracePrefix}-after-activate`, {
+      targetBundleId: bundleId,
+      targetName: targetApp.name,
+      frontmostBundleId: afterActivate?.bundleId ?? null,
+      frontmostName: afterActivate?.name ?? null,
+    });
+    return waitForCommandLauncherTargetAppFrontmost(targetApp, tracePrefix);
+  } catch (error) {
+    appendCommandLauncherTrace(`${tracePrefix}-activate-error`, {
+      targetBundleId: bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    return false;
+  }
+}
+
+function activateAndPasteFromCommandLauncher(
+  targetApp: CommandLauncherTargetApp,
+  options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean; traceDetails?: Record<string, unknown> } = {},
+): Promise<boolean> {
+  appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    ...options.traceDetails,
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    strategy: 'applescript',
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+  });
   return activateAndPaste(targetApp, {
     beforePaste: () => commandLauncherWindow?.hide(true),
+    clipboardTrace: options.clipboardTrace,
+    requireFocusedTextInput: options.requireFocusedTextInput,
+    traceDetails: options.traceDetails,
+  });
+}
+
+async function typeTextFromCommandLauncher(
+  targetApp: CommandLauncherTargetApp,
+  text: string,
+  tracePrefix: 'invoke-command' | 'invoke-handoff',
+  traceDetails: Record<string, unknown> = {},
+): Promise<boolean> {
+  const phaseStartedAt = process.hrtime.bigint();
+  if (!nativeHelper) {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-unavailable`, {
+      ...traceDetails,
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      reason: 'missing-native-helper',
+    });
+    return false;
+  }
+
+  // Keep the launcher visible until the external app is actually frontmost.
+  // Otherwise hiding it can expose the Field Theory library while macOS is
+  // still completing the app switch.
+  const activateStartedAt = process.hrtime.bigint();
+  const activated = await activateCommandLauncherTargetApp(targetApp, `${tracePrefix}-native-type`);
+  const activateMs = elapsedMsSince(activateStartedAt);
+  if (!activated) {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: 'activate-failed',
+      activateMs,
+      totalMs: elapsedMsSince(phaseStartedAt),
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+    });
+    return false;
+  }
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.before-hide`, targetApp, {
+    targetFrontmost: true,
+  });
+  const hideStartedAt = process.hrtime.bigint();
+  commandLauncherWindow?.hide(true);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const hideMs = elapsedMsSince(hideStartedAt);
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.after-hide-before-native-helper`, targetApp);
+
+  appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    ...traceDetails,
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    strategy: 'native-helper',
+    tracePrefix,
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
+  });
+  const frontmostBeforeType = nativeHelper.getFrontmostApp();
+  appendCommandLauncherTrace(`${tracePrefix}-native-type-start`, {
+    ...traceDetails,
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
+    textLength: text.length,
+    clipboard: readCommandPasteClipboardTrace(),
+    frontmostBundleId: frontmostBeforeType?.bundleId ?? null,
+    frontmostName: frontmostBeforeType?.name ?? null,
+  });
+
+  try {
+    const nativeStartedAt = process.hrtime.bigint();
+    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false, undefined, targetApp.windowBounds ?? null);
+    const nativeMs = elapsedMsSince(nativeStartedAt);
+    const frontmost = nativeHelper.getFrontmostApp();
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
+      ...traceDetails,
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      success: result.success,
+      error: result.error ?? null,
+      accessibilityTrusted: result.accessibilityTrusted ?? null,
+      targetFrontmost: result.targetFrontmost ?? null,
+      focusedTextInput: result.focusedTextInput ?? null,
+      pasteboardWritten: result.pasteboardWritten ?? null,
+      eventTarget: result.eventTarget ?? null,
+      frontmostBundleId: frontmost?.bundleId ?? null,
+      frontmostName: frontmost?.name ?? null,
+      clipboard: readCommandPasteClipboardTrace(),
+    });
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: result.success ? 'native-helper-success' : 'native-helper-failed',
+      activateMs,
+      hideMs,
+      nativeMs,
+      focusedTextInput: result.focusedTextInput ?? null,
+      totalMs: elapsedMsSince(phaseStartedAt),
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+    });
+    return result.success && result.focusedTextInput !== false;
+  } catch (error) {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-error`, {
+      ...traceDetails,
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-phase`, {
+      ...traceDetails,
+      phase: 'native-helper-error',
+      activateMs,
+      hideMs,
+      totalMs: elapsedMsSince(phaseStartedAt),
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    return false;
+  }
+}
+
+async function pasteTextIntoCodexInputFromBrowserLibrary(text: string): Promise<{ success: boolean; error?: string; delivery?: string }> {
+  const trimmed = text.trim();
+  if (!trimmed) return { success: false, error: 'No selected text' };
+  const targetApp = { bundleId: 'com.openai.codex', name: 'Codex' };
+  const traceDetails = {
+    source: 'browser-library-selection',
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    textLength: text.length,
+  };
+  appendCommandLauncherTrace('browser-library-codex-input-paste-start', traceDetails);
+
+  if (nativeHelper) {
+    const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+    let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
+    try {
+      const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+      if (result.pasteboardWritten) {
+        launcherClipboardPayload = captureCommandClipboardPayload();
+        scheduleBrowserLibraryClipboardRestore({
+          tracePrefix: 'browser-library-codex-input-native',
+          tracePayload: traceDetails,
+          restoreGeneration: clipboardRestore.generation,
+          restoreSnapshot: clipboardRestore.snapshot,
+          launcherClipboardPayload,
+        });
+      } else {
+        commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+      }
+      appendCommandLauncherTrace('browser-library-codex-input-native-result', {
+        ...traceDetails,
+        success: result.success,
+        error: result.error ?? null,
+        targetFrontmost: result.targetFrontmost ?? null,
+        focusedTextInput: result.focusedTextInput ?? null,
+        pasteboardWritten: result.pasteboardWritten ?? null,
+      });
+      if (result.success && result.focusedTextInput !== false) {
+        return { success: true, delivery: 'native-helper' };
+      }
+    } catch (error) {
+      commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+      appendCommandLauncherTrace('browser-library-codex-input-native-error', {
+        ...traceDetails,
+        error,
+      });
+    }
+  }
+
+  const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+  try {
+    clipboard.writeText(text);
+    clipboardManager?.syncClipboardHash();
+    const launcherClipboardPayload = captureCommandClipboardPayload();
+    const pasted = await activateAndPaste(targetApp, {
+      clipboardTrace: readCommandPasteClipboardTrace,
+      traceDetails,
+    });
+    scheduleBrowserLibraryClipboardRestore({
+      tracePrefix: 'browser-library-codex-input-fallback',
+      tracePayload: traceDetails,
+      restoreGeneration: clipboardRestore.generation,
+      restoreSnapshot: clipboardRestore.snapshot,
+      launcherClipboardPayload,
+    });
+    appendCommandLauncherTrace('browser-library-codex-input-clipboard-fallback', {
+      ...traceDetails,
+      pasted,
+      clipboard: readCommandPasteClipboardTrace(),
+    });
+    if (pasted) {
+      return { success: true, delivery: 'clipboard-paste' };
+    }
+    return {
+      success: true,
+      delivery: 'clipboard-focus',
+      error: 'Codex input was not focused; copied selection and activated Codex.',
+    };
+  } catch (error) {
+    commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+    appendCommandLauncherTrace('browser-library-codex-input-failed', {
+      ...traceDetails,
+      error,
+    });
+    return { success: false, error: error instanceof Error ? error.message : 'Could not paste into Codex input' };
+  }
+}
+
+async function runWithCommandLauncherExternalInvocation<T>(operation: () => Promise<T>): Promise<T> {
+  const token = commandLauncherWindow?.beginExternalInvocationSuppression() ?? null;
+  try {
+    return await operation();
+  } finally {
+    commandLauncherWindow?.endExternalInvocationSuppression(token);
+  }
+}
+
+function findRunningAppForBundleId(bundleId: string): { bundleId: string; name: string } | null {
+  const lowerBundleId = bundleId.toLowerCase();
+  const candidates = [
+    commandLauncherWindow?.getPreviousApp(),
+    getCommandLauncherTargetApp(),
+    clipboardHistoryWindow?.getTargetApp(),
+    ...(clipboardHistoryWindow?.getCachedRunningApps() ?? []),
+    nativeHelper?.getFrontmostApp(),
+  ];
+
+  for (const candidate of candidates) {
+    if (
+      candidate?.bundleId &&
+      candidate.name &&
+      candidate.bundleId.toLowerCase() === lowerBundleId &&
+      isExternalCommandTargetBundleId(candidate.bundleId)
+    ) {
+      return {
+        bundleId: candidate.bundleId,
+        name: candidate.name,
+      };
+    }
+  }
+
+  return isExternalCommandTargetBundleId(bundleId)
+    ? { bundleId, name: bundleId }
+    : null;
+}
+
+async function pasteClipboardFromCommandLauncher(
+  targetBundleId: string,
+  reason: string,
+  textContent?: string,
+): Promise<boolean> {
+  const targetApp = findRunningAppForBundleId(targetBundleId);
+  if (!targetApp) {
+    appendCommandLauncherTrace('command-launcher-clipboard-paste-no-target', {
+      reason,
+      targetBundleId,
+    });
+    return false;
+  }
+
+  return runWithCommandLauncherExternalInvocation(async () => {
+    clipboardHistoryWindow?.hideAfterPaste(reason);
+    if (shouldUseNativeCommandLauncherClipboardTextPaste({
+      commandLauncherPaste: true,
+      hasTextContent: Boolean(textContent),
+    })) {
+      const typed = await typeTextFromCommandLauncher(targetApp, textContent!, 'invoke-command');
+      if (typed) return true;
+      appendCommandLauncherTrace('command-launcher-clipboard-native-type-fallback', {
+        reason,
+        targetBundleId,
+        targetName: targetApp.name,
+        textLength: textContent!.length,
+      });
+    }
+    return activateAndPasteFromCommandLauncher(targetApp, {
+      clipboardTrace: readCommandPasteClipboardTrace,
+    });
   });
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
-  if (!bundleId) return false;
-  const lower = bundleId.toLowerCase();
-  return lower.includes('fieldtheory') || lower.includes('electron');
+  return isFieldTheoryCommandTargetBundleId(bundleId);
 }
 
 function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
   const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
   return Boolean(
-    librarianMarkdownEditorFocused &&
-    clipboardWindow &&
-    !clipboardWindow.isDestroyed() &&
-    clipboardWindow.isVisible()
+    (librarianMarkdownEditorFocused &&
+      clipboardWindow &&
+      !clipboardWindow.isDestroyed() &&
+      clipboardWindow.isVisible()) ||
+    (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId))
+  );
+}
+
+function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
+  const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  return Boolean(
+    activeLibraryFileContext &&
+    ((clipboardWindow &&
+      !clipboardWindow.isDestroyed() &&
+      clipboardWindow.isVisible()) ||
+      getActiveBrowserLibraryMarkdownCommandTargetClientId())
   );
 }
 
@@ -302,8 +2278,176 @@ function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasFocusedFieldTheoryMarkdownInsertionTarget()) {
     return false;
   }
+  if (browserLibraryMarkdownEditorFocused && browserHelperServer?.hasNativeEventClient(activeBrowserLibraryClientId)) {
+    return browserHelperServer.emitNativeEventToClient(activeBrowserLibraryClientId, { type: 'librarian:insertMarkdownText', text });
+  }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
+}
+
+function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
+  if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
+    return false;
+  }
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
+  if (targetBrowserClientId) {
+    return browserHelperServer?.emitNativeEventToClient(targetBrowserClientId, { type: 'librarian:insertMarkdownText', text }) ?? false;
+  }
+  clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+  return true;
+}
+
+function handleBrowserLibraryReplaceSelectedTextResult(result: { requestId?: string; success?: boolean }): void {
+  if (!result.requestId) return;
+  const pending = pendingBrowserLibraryReplaceSelectedText.get(result.requestId);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingBrowserLibraryReplaceSelectedText.delete(result.requestId);
+  pending.resolve(result.success === true);
+}
+
+function writeTextIntoFocusedCodexTerminal(text: string, sessionId = focusedCodexTerminalLauncherSessionId): boolean {
+  if (!text || !sessionId) return false;
+  const wrote = getCodexTerminalManager().writeInput(sessionId, text);
+  if (!wrote && sessionId === focusedCodexTerminalLauncherSessionId) {
+    focusedCodexTerminalLauncherSessionId = null;
+  }
+  return wrote;
+}
+
+async function submitTextIntoFocusedCodexTerminal(
+  text: string,
+  _submitMode: 'enter' | 'command-enter',
+  sessionId = focusedCodexTerminalLauncherSessionId,
+): Promise<boolean> {
+  if (!sessionId) return false;
+  const manager = getCodexTerminalManager();
+  if (text && !manager.writeInput(sessionId, text)) {
+    if (sessionId === focusedCodexTerminalLauncherSessionId) {
+      focusedCodexTerminalLauncherSessionId = null;
+    }
+    return false;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const submitted = manager.writeInput(sessionId, '\r');
+  if (!submitted && sessionId === focusedCodexTerminalLauncherSessionId) {
+    focusedCodexTerminalLauncherSessionId = null;
+  }
+  return submitted;
+}
+
+async function replaceSelectedTextInFieldTheoryMarkdown(input: {
+  expectedText: string;
+  replacementText: string;
+}): Promise<boolean> {
+  const targetBrowserClientId = getActiveBrowserLibraryMarkdownCommandTargetClientId();
+  if (
+    input.expectedText &&
+    input.replacementText &&
+    targetBrowserClientId
+  ) {
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingBrowserLibraryReplaceSelectedText.delete(requestId);
+        resolve(false);
+      }, 600);
+      pendingBrowserLibraryReplaceSelectedText.set(requestId, { resolve, timeout });
+      const sent = browserHelperServer?.emitNativeEventToClient(targetBrowserClientId, {
+        type: 'librarian:replaceSelectedMarkdownText',
+        request: {
+          requestId,
+          expectedText: input.expectedText,
+          replacementText: input.replacementText,
+        },
+      });
+      if (!sent) {
+        clearTimeout(timeout);
+        pendingBrowserLibraryReplaceSelectedText.delete(requestId);
+        resolve(false);
+      }
+    });
+  }
+
+  const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  if (
+    !input.expectedText ||
+    !input.replacementText ||
+    !clipboardWindow ||
+    clipboardWindow.isDestroyed() ||
+    !clipboardWindow.isVisible()
+  ) {
+    return false;
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      ipcMain.removeListener('librarian:replaceSelectedMarkdownTextResult', onResult);
+      resolve(false);
+    }, 600);
+    const onResult = (_event: IpcMainEvent, result: { requestId?: string; success?: boolean }) => {
+      if (result?.requestId !== requestId) return;
+      clearTimeout(timeout);
+      ipcMain.removeListener('librarian:replaceSelectedMarkdownTextResult', onResult);
+      resolve(result.success === true);
+    };
+    ipcMain.on('librarian:replaceSelectedMarkdownTextResult', onResult);
+    clipboardWindow.webContents.send('librarian:replaceSelectedMarkdownText', {
+      requestId,
+      expectedText: input.expectedText,
+      replacementText: input.replacementText,
+    });
+  });
+}
+
+export function formatFieldTheoryMarkdownImageDestination(filePath: string): string {
+  const expandedPath = filePath === '~' || filePath.startsWith('~/')
+    ? `${os.homedir()}${filePath.slice(1)}`
+    : filePath;
+  const url = /^file:\/\//i.test(expandedPath)
+    ? expandedPath
+    : `file://${expandedPath.split('/').map((part, index) => (
+      index === 0 ? '' : encodeURIComponent(part)
+    )).join('/')}`;
+  return `<${url.replace(/>/g, '%3E')}>`;
+}
+
+export async function buildFieldTheoryMarkdownClipboardPayload(
+  items: ClipboardItem[],
+  exportImageToCache: (item: ClipboardItem) => Promise<string | null>,
+): Promise<string> {
+  const textBlocks: string[] = [];
+  const imageBlocks: string[] = [];
+  let imageIndex = 1;
+
+  for (const item of items) {
+    const text = (item.useImprovedVersion && item.improvedContent)
+      ? item.improvedContent
+      : item.content;
+    if (text && (item.type === 'text' || item.type === 'transcript' || !item.imageData)) {
+      textBlocks.push(text.trimEnd());
+    }
+  }
+
+  for (const item of items) {
+    if (!item.imageData && item.type !== 'image' && item.type !== 'screenshot') continue;
+    const imagePath = await exportImageToCache(item);
+    if (!imagePath) {
+      imageBlocks.push(`> Image ${imageIndex} was unavailable when this note was created.`);
+      imageIndex += 1;
+      continue;
+    }
+    const alt = item.figureLabel
+      ? `figure ${item.figureLabel}`
+      : item.sourceAppName
+        ? `${item.sourceAppName} image`
+        : `Image ${imageIndex}`;
+    imageBlocks.push(`![${alt.replace(/\]/g, '\\]')}](${formatFieldTheoryMarkdownImageDestination(imagePath)})`);
+    imageIndex += 1;
+  }
+
+  return [...textBlocks, ...imageBlocks].filter(Boolean).join('\n\n');
 }
 
 function resolveClipboardFullScreenHotkeyPreference(prefs: {
@@ -317,7 +2461,6 @@ function resolveClipboardFullScreenHotkeyPreference(prefs: {
 
 function getLocalEnvPaths(): string[] {
   return [
-    '/Users/afar/dev/fieldtheory/.env.local',
     path.join(__dirname, '../../../.env.local'),
     path.join(__dirname, '../../.env.local'),
     path.join(process.cwd(), '.env.local'),
@@ -373,25 +2516,24 @@ function getOptionalEnvValue(key: string): string | undefined {
   return undefined;
 }
 
-// Load environment variables from .env.local for Supabase credentials.
-// In development, the file is in the mac-app directory.
-// In production, we use the bundled values or fall back to hardcoded ones.
-function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
-  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
-  const supabaseAnonKey = getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
+// Load environment variables for Supabase public config.
+// Source/dev builds must not silently fall back to production Cloud.
+function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string } {
+  const generatedConfig = loadGeneratedPublicRuntimeConfig();
+  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL')
+    ?? generatedConfig.supabaseUrl;
+  const supabasePublishableKey = getOptionalEnvValue('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY')
+    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY')
+    ?? generatedConfig.supabasePublishableKey;
 
-  if (supabaseUrl && supabaseAnonKey) {
+  if (supabaseUrl && supabasePublishableKey) {
     return {
       supabaseUrl,
-      supabaseAnonKey,
+      supabasePublishableKey,
     };
   }
 
-  // Production fallback - anon key is public by design, protected by RLS.
-  return {
-    supabaseUrl: 'https://cighxaroptskntwbrctl.supabase.co',
-    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNpZ2h4YXJvcHRza250d2JyY3RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwMDkxNDAsImV4cCI6MjA3OTU4NTE0MH0.fWy4cWCjjGin6b6DDbE43OXEpCLDtuIAIN6FGEepYdk',
-  };
+  return {};
 }
 
 // Register the ftmedia:// scheme as privileged so the renderer can load
@@ -402,25 +2544,84 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'ftlocalfile', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ]);
 
-// Pin userData paths explicitly so auth/session storage is stable across package-name changes.
-// This must happen before app.whenReady() and before any code calls app.getPath('userData').
-if (process.env.EXPERIMENTAL === 'true') {
-  const experimentalUserData = path.join(
-    os.homedir(),
-    'Library/Application Support/Field Theory Experimental'
-  );
-  app.setPath('userData', experimentalUserData);
-  app.setName('Field Theory Experimental');
-} else {
-  const productionUserData = path.join(app.getPath('appData'), 'fieldtheory-mac');
-  app.setPath('userData', productionUserData);
+function readPackagedBuildChannel(): string | undefined {
+  try {
+    const packageJsonPath = path.join(__dirname, '../../package.json');
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as { fieldTheoryBuildChannel?: unknown };
+    return typeof packageJson.fieldTheoryBuildChannel === 'string'
+      ? packageJson.fieldTheoryBuildChannel
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-// Configure autoUpdater for manual update flow.
-// allowPrerelease ensures users on prerelease builds (e.g., 0.1.29-maxwell) can update to stable releases (0.1.30).
-autoUpdater.autoDownload = false;
-autoUpdater.allowPrerelease = true;
-autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
+const fieldTheoryBuildChannel = resolveFieldTheoryBuildChannel({
+  env: process.env,
+  appName: app.getName(),
+  metadataChannel: readPackagedBuildChannel(),
+});
+const isExperimentalBuild = fieldTheoryBuildChannel === 'experimental';
+const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheoryBuildChannel);
+const isAutoUpdaterEnabled = autoUpdaterReleaseRepo !== null;
+let autoUpdaterInstance: import('electron-updater').AppUpdater | null = null;
+
+function resolveAutoUpdaterAuthHeader(): string | null {
+  const envToken = autoUpdaterAuthTokenForBuildChannel(fieldTheoryBuildChannel, process.env);
+  if (envToken) return envToken;
+
+  if (fieldTheoryBuildChannel !== 'experimental') return null;
+
+  for (const ghPath of autoUpdaterGitHubCliPaths(process.env)) {
+    try {
+      const ghToken = execFileSync(ghPath, ['auth', 'token'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+      });
+      return normalizeGitHubToken(ghToken);
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function formatAutoUpdaterErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (
+    fieldTheoryBuildChannel === 'experimental'
+    && /(401|403|404|not found|forbidden|unauthorized)/i.test(message)
+  ) {
+    return 'Experimental updates need maintainer GitHub access. Sign in with the GitHub CLI or set the maintainer-only experimental update token, then restart Field Theory Experimental.';
+  }
+  return message;
+}
+
+function getAutoUpdater(): import('electron-updater').AppUpdater {
+  if (!autoUpdaterInstance) {
+    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater');
+    autoUpdater.autoDownload = false;
+    autoUpdater.allowPrerelease = autoUpdaterAllowsPrereleaseForBuildChannel(fieldTheoryBuildChannel);
+    const autoUpdaterAuthToken = resolveAutoUpdaterAuthHeader();
+    const feedOptions = autoUpdaterFeedOptionsForBuildChannel(fieldTheoryBuildChannel, autoUpdaterAuthToken);
+    if (feedOptions) {
+      autoUpdater.setFeedURL(feedOptions);
+    }
+    autoUpdaterInstance = autoUpdater;
+  }
+  return autoUpdaterInstance;
+}
+
+// Pin userData paths explicitly so auth/session storage uses the branded app name.
+// This must happen before app.whenReady() and before any code calls app.getPath('userData').
+const startupBenchmarkUserData = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim();
+const productionUserData = startupBenchmarkUserData
+  ? path.resolve(startupBenchmarkUserData)
+  : path.join(app.getPath('appData'), 'Field Theory');
+app.setPath('userData', productionUserData);
+app.setName(isExperimentalBuild ? 'Field Theory Experimental' : 'Field Theory');
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -430,6 +2631,8 @@ let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
+let libraryDocumentWindowManager: LibraryDocumentWindowManager | null = null;
+let documentPresenceManager: DocumentPresenceManager | null = null;
 let authManager: AuthManager | null = null;
 let userDataManager: UserDataManager | null = null;
 let feedbackManager: FeedbackManager | null = null;
@@ -443,27 +2646,2161 @@ let quotaManager: QuotaManager | null = null;
 let accountStatusManager: AccountStatusManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let browserHelperServer: BrowserHelperServer | null = null;
+let browserPanelLauncherServer: BrowserPanelLauncherServer | null = null;
+let markdownAssetsConsolidated = false;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
+let bookmarksWatcherStarted = false;
 let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
+let localLlmManager: LocalLlmManager | null = null;
+let maxwellRunManager: MaxwellRunManager | null = null;
+let meetingManager: MeetingManager | null = null;
+let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
+let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
+let runNativeLocalCommand = async (_rawRequest: unknown): Promise<LocalCommandRunResult> => ({
+  success: false,
+  error: 'Field Theory command system is not ready',
+});
+
+function isDocumentVersionLike(value: unknown): value is DocumentVersion {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<DocumentVersion>;
+  return typeof candidate.mtimeMs === 'number'
+    && typeof candidate.size === 'number'
+    && typeof candidate.sha256 === 'string';
+}
+
+function documentVersionsEqual(left: DocumentVersion, right: DocumentVersion): boolean {
+  return left.mtimeMs === right.mtimeMs
+    && left.size === right.size
+    && left.sha256 === right.sha256;
+}
+
+function renameExternalLibraryFile(absPath: string, newName: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null {
+  try {
+    const canonical = fs.realpathSync(absPath);
+    if (!isLibraryTextDocumentPath(canonical)) return null;
+    const trimmed = newName.trim();
+    if (!trimmed) return null;
+    const extension = path.extname(canonical) || '.md';
+    const nextFileName = libraryTextDocumentFileNameFromUserInput(trimmed, extension);
+    if (!nextFileName) return null;
+    const nextPath = path.join(path.dirname(canonical), nextFileName);
+    if (nextPath === canonical) {
+      const content = fs.readFileSync(canonical, 'utf-8');
+      const stats = fs.statSync(canonical);
+      return {
+        path: canonical,
+        name: path.basename(canonical),
+        content,
+        mtime: Math.floor(stats.mtimeMs),
+        documentVersion: readDocumentVersion(canonical),
+      };
+    }
+    if (fs.existsSync(nextPath)) {
+      try {
+        if (fs.realpathSync(nextPath) !== fs.realpathSync(canonical)) return null;
+      } catch {
+        return null;
+      }
+    }
+    fs.renameSync(canonical, nextPath);
+    const content = fs.readFileSync(nextPath, 'utf-8');
+    const stats = fs.statSync(nextPath);
+    const title = stripMarkdownFileExtension(path.basename(nextPath));
+    const libraryRoot = librarianManager?.getLibraryRoots().find((root) => {
+      if (root.builtin) return false;
+      const relative = path.relative(root.path, canonical);
+      return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    });
+    if (libraryRoot && librarianManager) {
+      const detectedAt = Date.now();
+      const event: LibraryRenameEvent = {
+        rootPath: libraryRoot.path,
+        oldRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, canonical).split(path.sep).join('/')),
+        newRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, nextPath).split(path.sep).join('/')),
+        oldAbsPath: canonical,
+        newAbsPath: nextPath,
+        builtin: false,
+        source: 'external',
+        detectedAt,
+      };
+      traceLibraryRename('external-rename-record', {
+        oldAbsPath: canonical,
+        newAbsPath: nextPath,
+        oldRelPath: event.oldRelPath,
+        newRelPath: event.newRelPath,
+      });
+      librarianManager.recordLibraryRename(event);
+    }
+    librarianManager?.recordWatchedReadingRename(canonical, nextPath);
+    recentManager?.remove('external', canonical);
+    recentManager?.visit({ kind: 'external', path: nextPath, title, lastOpenedAt: Date.now() });
+    broadcastRecentChanged();
+    return {
+      path: nextPath,
+      name: path.basename(nextPath),
+      content,
+      mtime: Math.floor(stats.mtimeMs),
+      documentVersion: readDocumentVersion(nextPath),
+    };
+  } catch (error) {
+    log.error(`external:rename failed for ${absPath}:`, error);
+    return null;
+  }
+}
+
+async function shareLibrarianReading(filePath: string): Promise<{ slug: string; url: string } | null> {
+  if (!authManager?.isAuthenticated()) {
+    return null;
+  }
+
+  const reading = librarianManager?.getReading(filePath);
+  if (!reading) {
+    return null;
+  }
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) {
+    return null;
+  }
+
+  let authorName: string | null = null;
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', session.user.id)
+      .single();
+    if (profile?.first_name && profile?.last_name) {
+      authorName = `${profile.first_name} ${profile.last_name}`;
+    } else if (profile?.first_name) {
+      authorName = profile.first_name;
+    }
+  } catch {
+    // Ignore profile fetch errors.
+  }
+
+  const { data: existing } = await supabase
+    .from('shared_readings')
+    .select('slug, is_public')
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .single();
+
+  if (existing) {
+    if (!existing.is_public) {
+      await supabase
+        .from('shared_readings')
+        .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
+        .eq('source_path', filePath)
+        .eq('user_id', session.user.id);
+    }
+    return {
+      slug: existing.slug,
+      url: `https://librarian.fieldtheory.dev/${existing.slug}`,
+    };
+  }
+
+  const slugify = (text: string): string =>
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 50);
+
+  const baseSlug = slugify(reading.title);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const randomSuffix = crypto.randomBytes(3).toString('hex');
+    const slug = `${baseSlug}-${randomSuffix}`;
+
+    const { data, error } = await supabase
+      .from('shared_readings')
+      .insert({
+        user_id: session.user.id,
+        slug,
+        title: reading.title,
+        content: reading.content,
+        author_name: authorName,
+        source_path: filePath,
+        is_public: true,
+      })
+      .select('slug')
+      .single();
+
+    if (!error && data) {
+      metricsManager?.recordLibrarianArtifactShared();
+      return {
+        slug: data.slug,
+        url: `https://librarian.fieldtheory.dev/${data.slug}`,
+      };
+    }
+
+    if (error?.code === '23505') {
+      continue;
+    }
+
+    log.error('Librarian share failed:', error);
+    return null;
+  }
+
+  log.error('Librarian share failed: max retries exceeded');
+  return null;
+}
+
+async function unshareLibrarianReading(filePath: string): Promise<boolean> {
+  if (!authManager?.isAuthenticated()) return false;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return false;
+
+  const { error } = await supabase
+    .from('shared_readings')
+    .update({ is_public: false })
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id);
+
+  if (error) {
+    log.error('Librarian unshare failed:', error);
+    return false;
+  }
+
+  return true;
+}
+
+async function getLibrarianShareStatus(filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> {
+  if (!authManager?.isAuthenticated()) return null;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return null;
+
+  const { data, error } = await supabase
+    .from('shared_readings')
+    .select('slug, is_public')
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .single();
+
+  if (error || !data) {
+    return { shared: false };
+  }
+
+  if (!data.is_public) {
+    return { shared: false };
+  }
+
+  return {
+    shared: true,
+    slug: data.slug,
+    url: `https://librarian.fieldtheory.dev/${data.slug}`,
+  };
+}
+
+async function getCurrentUserCallsign(): Promise<string | null> {
+  if (!authManager?.isAuthenticated()) return null;
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return null;
+
+  try {
+    const { data } = await supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', session.user.id)
+      .single();
+    return typeof data?.callsign === 'string' && data.callsign.trim()
+      ? data.callsign.trim()
+      : authManager.getCallsign();
+  } catch {
+    return authManager.getCallsign();
+  }
+}
+
+async function updateSharedLibrarianReading(filePath: string, content: string, title: string): Promise<boolean> {
+  if (!authManager?.isAuthenticated()) return false;
+
+  const supabase = authManager.getSupabaseClient();
+  const session = authManager.getSession();
+  if (!supabase || !session?.user?.id) return false;
+
+  let authorName: string | null = null;
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', session.user.id)
+      .single();
+    if (profile?.first_name && profile?.last_name) {
+      authorName = `${profile.first_name} ${profile.last_name}`;
+    } else if (profile?.first_name) {
+      authorName = profile.first_name;
+    }
+  } catch {
+    // Ignore profile fetch errors.
+  }
+
+  const { error } = await supabase
+    .from('shared_readings')
+    .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .eq('is_public', true);
+
+  if (error) {
+    log.error('Librarian update shared reading failed:', error);
+    return false;
+  }
+
+  return true;
+}
+
+async function startBrowserHelperIfEnabled(): Promise<void> {
+  if (!librarianManager || browserHelperServer) return;
+
+  const manager = librarianManager;
+  const createFallbackDocumentService = () => new BrowserHelperDocumentService(manager.getLibraryRoots().map((root) => root.path));
+  const nativeWikiPage = (page: ReturnType<LibrarianManager['getWikiPage']>) => page
+    ? {
+      ...page,
+      rootPath: manager.getWikiRoot(),
+      documentKind: page.documentKind ?? 'markdown',
+    }
+    : null;
+  const browserLibraryDevServer = process.env.ELECTRON_START_URL?.replace(/\/$/, '') ?? null;
+  browserHelperServer = new BrowserHelperServer({
+    browserLibraryBaseUrl: browserLibraryDevServer,
+    service: {
+      getRoots: () => createFallbackDocumentService().getRoots(),
+      getLibraryRoots: () => manager.getLibraryRoots(),
+      addLibraryRoot: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const added = manager.addLibraryRoot(dirPath);
+        syncTaggedDocsRootsFromLibrary();
+        return added;
+      },
+      removeLibraryRoot: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        const removed = manager.removeLibraryRoot(dirPath);
+        syncTaggedDocsRootsFromLibrary();
+        return removed;
+      },
+      getWikiTree: () => manager.getWikiTree(),
+      getWikiPage: (relPath) => nativeWikiPage(manager.getWikiPage(relPath)),
+      findWikiPageByDocumentVersion: (version, previousRelPath) => manager.findWikiPageByDocumentVersion(version, previousRelPath),
+      saveWikiPage: (relPath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return manager.saveWikiPage(relPath, content, expectedVersion);
+      },
+      createWikiFile: (folderRelPath, fileName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return nativeWikiPage(manager.createWikiFile(folderRelPath, fileName));
+      },
+      createWikiFileWithDefaultTitle: (folderRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return nativeWikiPage(manager.createWikiFileWithDefaultTitle(folderRelPath));
+      },
+      createScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
+      openScratchpadDefault: () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = nativeWikiPage(manager.createScratchpadDefault());
+        recordRecentWikiPage(page);
+        return page;
+      },
+      createWikiDir: (dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.createWikiDir(dirRelPath);
+      },
+      deleteWikiPage: (relPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteWikiPage(relPath);
+      },
+      renameWikiPage: (relPath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return manager.renameWikiPage(relPath, newName);
+      },
+      createLibraryFile: (rootPath, folderRelPath, fileName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const page = manager.createLibraryFile(rootPath, folderRelPath, fileName);
+        return page ? { ...page, rootPath, documentKind: page.documentKind ?? 'markdown' } : null;
+      },
+      createLibraryDir: (rootPath, dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.createLibraryDir(rootPath, dirRelPath);
+      },
+      deleteLibraryDir: (rootPath, dirRelPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteLibraryDir(rootPath, dirRelPath);
+      },
+      moveLibraryItem: (rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return manager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
+      },
+      openExternal: (filePath) => createFallbackDocumentService().openExternal(filePath),
+      saveExternal: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return createFallbackDocumentService().saveExternal(filePath, content, expectedVersion);
+      },
+      findLibraryFileByDocumentVersion: (version, previousAbsPath) => {
+        const candidatePaths: string[] = [];
+        const collectFiles = (nodes: WikiNode[]) => {
+          for (const node of nodes) {
+            if (node.kind === 'file') {
+              candidatePaths.push(node.absPath);
+            } else {
+              collectFiles(node.children);
+            }
+          }
+        };
+        for (const root of manager.getLibraryRoots()) {
+          if (root.builtin) continue;
+          collectFiles(root.tree);
+        }
+        const previousDir = previousAbsPath ? path.dirname(previousAbsPath) : null;
+        const sortedPaths = previousDir
+          ? candidatePaths.sort((left, right) => {
+            const leftSameDir = path.dirname(left) === previousDir ? 0 : 1;
+            const rightSameDir = path.dirname(right) === previousDir ? 0 : 1;
+            return leftSameDir - rightSameDir;
+          })
+          : candidatePaths;
+        for (const candidatePath of sortedPaths) {
+          if (candidatePath === previousAbsPath) continue;
+          try {
+            const candidateVersion = readDocumentVersion(candidatePath);
+            if (!documentVersionsEqual(candidateVersion, version)) continue;
+            return createFallbackDocumentService().openExternal(candidatePath);
+          } catch {}
+        }
+        return null;
+      },
+      renameExternal: (filePath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        const renamed = renameExternalLibraryFile(filePath, newName);
+        return renamed;
+      },
+      deleteExternal: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return manager.deleteExternalLibraryFile(filePath);
+      },
+      getDocument: (ref) => createFallbackDocumentService().getDocument(ref),
+      saveDocument: (ref, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return createFallbackDocumentService().saveDocument(ref, content, expectedVersion);
+      },
+    },
+    staticDir: path.join(app.getAppPath(), 'dist'),
+    nativeBridge: {
+      getAuthSession: () => authManager?.getSessionState() ?? null,
+      getAuthCallsign: () => getCurrentUserCallsign(),
+      getMetrics: () => metricsManager?.getMetrics() ?? null,
+      fetchMetricsFromSupabase: () => metricsManager?.fetchFromSupabase() ?? false,
+      getQuotas: () => quotaManager?.getQuotas() ?? null,
+      getTheme: () => preferencesManager?.getPreference('darkMode') ?? false,
+      setTheme: (isDark) => setThemePreferenceAndBroadcast(isDark),
+      getHotkey: async (id) => {
+        const preferenceKeys: Record<string, string> = {
+          superPaste: 'superPasteHotkey',
+          commandLauncher: 'commandLauncherHotkey',
+          scratchpad: 'scratchpadHotkey',
+        };
+        const defaults: Record<string, string> = {
+          superPaste: 'Command+Shift+V',
+          commandLauncher: 'Command+Shift+K',
+          scratchpad: 'Control+Option+Command+Space',
+        };
+        const prefKey = preferenceKeys[id];
+        if (!prefKey) return null;
+        const prefs = await preferencesManager?.load();
+        return ((prefs as Record<string, unknown> | undefined)?.[prefKey] as string | undefined) || defaults[id] || null;
+      },
+      getHiddenFolders: () => librarianManager?.getHiddenDefaultFolders() ?? [],
+      setFolderHidden: (folderId, hidden) => librarianManager?.setDefaultFolderHidden(folderId, hidden) ?? [],
+      recordRecentWikiPage: (page) => {
+        recordRecentWikiPage(page as ReturnType<LibrarianManager['getWikiPage']>);
+      },
+      recordRecentCreatedLibraryPage: (page, rootPath) => {
+        recordRecentCreatedLibraryPage(page as ReturnType<LibrarianManager['getWikiPage']>, rootPath);
+      },
+      notifyWikiPageChanged: (event) => {
+        const changedEvent = event && typeof event === 'object'
+          ? { ...event as Record<string, unknown>, launcherDirectNotified: true }
+          : event;
+        commandLauncherWindow?.send('wiki:changed', event);
+        librarianManager?.emit('wiki:changed', changedEvent);
+        if (
+          event
+          && typeof event === 'object'
+          && (event as { type?: unknown }).type === 'file-deleted'
+          && activeLibraryFileContext?.type === 'wiki'
+          && typeof (event as { relPath?: unknown }).relPath === 'string'
+          && activeLibraryFileContext.relPath === (event as { relPath: string }).relPath
+        ) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
+        }
+      },
+      notifyWikiPageRenamed: (event) => {
+        browserHelperServer?.emitNativeEvent({ type: 'wiki:renamed', event });
+        commandLauncherWindow?.send('wiki:renamed', event);
+        if (
+          event
+          && typeof event === 'object'
+          && activeLibraryFileContext?.type === 'wiki'
+          && typeof (event as { oldRelPath?: unknown }).oldRelPath === 'string'
+          && typeof (event as { newRelPath?: unknown }).newRelPath === 'string'
+          && activeLibraryFileContext.relPath === (event as { oldRelPath: string }).oldRelPath
+        ) {
+          const rename = event as { newRelPath: string; newAbsPath?: unknown };
+          const nextFilePath = typeof rename.newAbsPath === 'string'
+            ? rename.newAbsPath
+            : path.resolve(activeLibraryFileContext.rootPath, `${rename.newRelPath}.md`);
+          activeLibraryFileContext = {
+            ...activeLibraryFileContext,
+            relPath: rename.newRelPath,
+            filePath: nextFilePath,
+            title: path.basename(rename.newRelPath),
+          };
+          emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath: rename.newRelPath }, { broadcastFallback: false });
+          clipboardHistoryWindow?.getWindow()?.webContents.send('wiki:openPage', rename.newRelPath);
+        }
+      },
+      notifyLibraryPageChanged: (event) => {
+        const changedEvent = event && typeof event === 'object'
+          ? { ...event as Record<string, unknown>, launcherDirectNotified: true }
+          : event;
+        const rootPath = changedEvent && typeof changedEvent === 'object' && typeof (changedEvent as { rootPath?: unknown }).rootPath === 'string'
+          ? (changedEvent as { rootPath: string }).rootPath
+          : undefined;
+        commandLauncherWindow?.send('library:changed', event);
+        librarianManager?.emit('library:changed', rootPath, changedEvent);
+      },
+      notifyLibraryItemRenamed: (event) => {
+        browserHelperServer?.emitNativeEvent({ type: 'library:renamed', event });
+        commandLauncherWindow?.send('library:renamed', event);
+        if (
+          event
+          && typeof event === 'object'
+          && activeLibraryFileContext?.type === 'external'
+          && typeof (event as { oldAbsPath?: unknown }).oldAbsPath === 'string'
+          && typeof (event as { newAbsPath?: unknown }).newAbsPath === 'string'
+          && activeLibraryFileContext.filePath === (event as { oldAbsPath: string }).oldAbsPath
+        ) {
+          const rename = event as { rootPath?: unknown; newRelPath?: unknown; newAbsPath: string };
+          activeLibraryFileContext = {
+            ...activeLibraryFileContext,
+            rootPath: typeof rename.rootPath === 'string' ? rename.rootPath : activeLibraryFileContext.rootPath,
+            relPath: typeof rename.newRelPath === 'string' ? rename.newRelPath : rename.newAbsPath,
+            filePath: rename.newAbsPath,
+            title: path.basename(rename.newAbsPath).replace(/\.(?:md|markdown|mdx|html?|css)$/i, ''),
+          };
+          emitBrowserLibraryNavigationEvent({ type: 'external:openPage', absPath: rename.newAbsPath }, { broadcastFallback: false });
+          clipboardHistoryWindow?.getWindow()?.webContents.send('external:openPage', rename.newAbsPath);
+        }
+      },
+      getReadings: () => librarianManager?.getReadings() ?? [],
+      getReading: (filePath) => librarianManager?.getReading(filePath) ?? null,
+      saveReading: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return librarianManager?.saveReading(filePath, content, isDocumentVersionLike(expectedVersion) ? expectedVersion : null) ?? { ok: false, reason: 'error' };
+      },
+      deleteReading: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.deleteReading(filePath) ?? false;
+      },
+      getShareStatus: (filePath) => getLibrarianShareStatus(filePath),
+      shareReading: (filePath) => shareLibrarianReading(filePath),
+      unshareReading: (filePath) => unshareLibrarianReading(filePath),
+      updateSharedReading: (filePath, content, title) => updateSharedLibrarianReading(filePath, content, title),
+      isLibrarianEnabled: () => librarianManager?.isEnabled() ?? false,
+      setLibrarianEnabled: (enabled) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.setEnabled(enabled) ?? false;
+      },
+      isLibrarianSetupComplete: () => librarianManager?.isSetupComplete() ?? inferCurrentLibrarianSetupComplete(),
+      setLibrarianSetupComplete: (complete) => {
+        librarianManager?.setSetupComplete(complete);
+      },
+      createWelcomeArtifact: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.createWelcomeArtifact(dirPath) ?? false;
+      },
+      getLibrarianWatchedDirs: () => librarianManager?.getWatchedDirs() ?? [],
+      addLibrarianWatchedDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return librarianManager?.addWatchedDir(dirPath) ?? null;
+      },
+      removeLibrarianWatchedDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return librarianManager?.removeWatchedDir(dirPath) ?? false;
+      },
+      browseLibrarianDirectory: async () => {
+        const result = await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+          title: 'Select a directory to watch for readings',
+        });
+        return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+      },
+      getDiscoveryFrequency: () => librarianManager?.getDiscoveryFrequency() ?? 'sometimes',
+      setDiscoveryFrequency: (frequency) => (
+        librarianManager && (frequency === 'often' || frequency === 'sometimes' || frequency === 'rarely')
+          ? librarianManager.setDiscoveryFrequency(frequency)
+          : false
+      ),
+      getUserExpertiseContext: () => librarianManager?.getUserExpertiseContext(),
+      setUserExpertiseContext: (context) => librarianManager?.setUserExpertiseContext(context) ?? false,
+      getClaudeCodeStatus: () => librarianManager?.getClaudeCodeStatus() ?? 'not-installed',
+      isStateEnforcedHookInstalled: () => librarianManager?.isStateEnforcedHookInstalled() ?? false,
+      installStateEnforcedHook: () => librarianManager?.installStateEnforcedHook() ?? false,
+      uninstallStateEnforcedHook: () => librarianManager?.uninstallStateEnforcedHook() ?? false,
+      isCursorHookInstalled: () => librarianManager?.isCursorHookInstalled() ?? false,
+      installCursorHook: () => librarianManager?.installCursorHook() ?? false,
+      uninstallCursorHook: () => librarianManager?.uninstallCursorHook() ?? false,
+      isCodexHookInstalled: () => librarianManager?.isCodexHookInstalled() ?? false,
+      installCodexHook: () => librarianManager?.installCodexHook() ?? false,
+      uninstallCodexHook: () => librarianManager?.uninstallCodexHook() ?? false,
+      pollLibrarianStatus: () => {
+        const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
+        const pendingPath = pendingAutoOpenReading;
+        pendingAutoOpenReading = null;
+        return {
+          pendingPath,
+          edits: status.edits,
+          threshold: status.threshold,
+          didReset: status.didReset,
+        };
+      },
+      muteForToday: () => librarianManager?.muteForToday() ?? false,
+      isMutedForToday: () => librarianManager?.isMutedForToday() ?? false,
+      unmute: () => librarianManager?.unmute() ?? false,
+      setBrowserLibraryImmersiveDismissable: (dismissable, clientId) => {
+        if (clientId) browserLibraryImmersiveDismissableByClientId.set(clientId, dismissable);
+        else browserLibraryImmersiveDismissable = dismissable;
+      },
+      setBrowserLibrarySizeKey: (key, clientId) => {
+        if (clientId) browserLibrarySizeKeyByClientId.set(clientId, key);
+        else browserLibrarySizeKey = key;
+      },
+      setMarkdownEditorFocused: (focused, clientId) => {
+        browserLibraryMarkdownEditorFocused = Boolean(focused);
+        if (browserLibraryMarkdownEditorFocused) {
+          activeBrowserLibraryClientId = clientId ?? null;
+          librarianMarkdownEditorFocused = false;
+          promoteBrowserLibraryClientContext(activeBrowserLibraryClientId);
+        } else if (!clientId || activeBrowserLibraryClientId === clientId) {
+          activeBrowserLibraryClientId = null;
+        }
+        if (!browserLibraryMarkdownEditorFocused && activeLibraryFileContextSourceId === browserLibraryWindowId(clientId)) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
+        }
+      },
+      replaceSelectedMarkdownTextResult: (result) => handleBrowserLibraryReplaceSelectedTextResult(result),
+      listRecent: () => recentManager?.list() ?? [],
+      visitRecent: (entry) => {
+        const next = recentManager?.visit(entry) ?? [];
+        broadcastRecentChanged();
+        return next;
+      },
+      removeRecent: (kind, entryPath) => {
+        const next = recentManager?.remove(kind, entryPath) ?? [];
+        broadcastRecentChanged();
+        return next;
+      },
+      listTaggedDocs: () => taggedDocsManager?.list() ?? [],
+      markTaggedDocRead: (ulid) => taggedDocsManager?.markRead(ulid) ?? null,
+      markAllTaggedDocsRead: () => taggedDocsManager?.markAllRead() ?? [],
+      rescanTaggedDocs: () => taggedDocsManager?.rescan() ?? [],
+      getSharedFilesAvailability: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+        return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
+      },
+      getSharedFileStatus: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
+        return sharedSyncService.getShareStatus(filePath);
+      },
+      getSharedFileAudience: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+        return sharedSyncService.getAudienceStatus(filePath);
+      },
+      getRiverTimeline: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getTimeline(query as RiverTimelineQuery);
+      },
+      getSharedFileDestinations: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getDestinations(query);
+      },
+      getRiverTargets: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverTargets(query);
+      },
+      setRiverDefaultDestinations: async (destinations) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+      },
+      getRiverSourcePreferences: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverSourcePreferences();
+      },
+      updateRiverSourcePreferences: async (preferences) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.updateRiverSourcePreferences(preferences as any);
+      },
+      shareSharedFile: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
+        const result = await sharedSyncService.shareFile(input as SharedFileShareInput);
+        if (result.shared) librarianManager?.emit('library:changed');
+        return result;
+      },
+      updateSharedFileAudience: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateAudience(input as SharedFileAudienceUpdateInput);
+        if (!result.error) librarianManager?.emit('library:changed');
+        return result;
+      },
+      unshareSharedFile: async (filePath) => {
+        if (!canWriteFieldTheoryContent()) return false;
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return false;
+        const result = await sharedSyncService.unshareFile(filePath);
+        if (result) librarianManager?.emit('library:changed');
+        return result;
+      },
+      syncSharedFiles: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+        const result = await sharedSyncService.syncOnce();
+        if (result.written > 0 || result.removed > 0 || result.created > 0) {
+          librarianManager?.emit('library:changed');
+        }
+        broadcastSharedFilePinsChanged();
+        return result;
+      },
+      updateSharedFileContent: async (sharedId, content, expectedRevision, documentPath) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
+        if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+        return result;
+      },
+      setActivePresence: async (sharedId) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.setActivePresence(sharedId);
+      },
+      getPinnedItemIds: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getPinnedSidebarItemIds();
+      },
+      setPinned: async (filePath, pinned) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
+        return sharedSyncService.setPinned(filePath, pinned);
+      },
+      getTeamEntitlement: async () => getSharedFeatureEntitlement(),
+      initializeCommands: async () => {
+        await commandsManager?.initialize();
+      },
+      getWatchedCommandDirs: () => commandsManager?.getWatchedDirs() ?? [],
+      addWatchedCommandDir: async (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return await commandsManager?.addWatchedDir(dirPath) ?? null;
+      },
+      removeWatchedCommandDir: (dirPath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return commandsManager?.removeWatchedDir(dirPath) ?? false;
+      },
+      getDefaultCommandDirectory: () => commandsManager?.getDefaultDirectory() ?? '',
+      createDefaultCommandDirectory: async () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return await commandsManager?.createDefaultDirectory() ?? null;
+      },
+      getCommands: () => commandsManager?.getCommands().map(cmd => ({
+        name: cmd.name,
+        displayName: cmd.displayName,
+        filePath: cmd.filePath,
+        lastModified: cmd.lastModified,
+      })) ?? [],
+      getCommandDirectory: () => commandsManager?.getDirectory() ?? null,
+      setCommandDirectory: async (directoryPath) => {
+        if (!commandsManager || !preferencesManager) {
+          return { success: false, error: 'Not initialized' };
+        }
+        try {
+          await commandsManager.setDirectory(typeof directoryPath === 'string' ? directoryPath : null);
+          await preferencesManager.save({ commandsDirectory: directoryPath || undefined });
+          return { success: true };
+        } catch (error) {
+          log.error('Failed to set Browser Library commands directory:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      getCommandDirectories: () => commandsManager?.getCommandDirectories() ?? [],
+      refreshCommands: async () => {
+        if (!commandsManager) return [];
+        await commandsManager.refresh();
+        return commandsManager.getCommands().map(cmd => ({
+          name: cmd.name,
+          displayName: cmd.displayName,
+          filePath: cmd.filePath,
+          lastModified: cmd.lastModified,
+        }));
+      },
+      getCommandContent: async (commandName) => {
+        if (!commandsManager || typeof commandName !== 'string') return null;
+        const command = commandsManager.getCommand(commandName);
+        if (!command) return null;
+        const loaded = await commandsManager.loadCommandContent(command);
+        return loaded ? { content: loaded.content, filePath: loaded.filePath } : null;
+      },
+      getCommandByPath: (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
+      getMarkdownPreview: (filePath) => loadMarkdownPreview(filePath),
+      saveCommand: (filePath, content, expectedVersion) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { ok: false, reason: 'blocked' };
+        }
+        return commandsManager?.saveCommand(filePath, content, isDocumentVersionLike(expectedVersion) ? expectedVersion : null) ?? { ok: false, reason: 'error' };
+      },
+      createCommand: (directoryPath, name, content) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return commandsManager?.createCommand(directoryPath, name, content) ?? null;
+      },
+      deleteCommand: (filePath) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return false;
+        }
+        return commandsManager?.deleteCommand(filePath) ?? false;
+      },
+      renameCommand: (oldFilePath, newName) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return commandsManager?.renameCommand(oldFilePath, newName) ?? null;
+      },
+      shareCommand: async (command) => {
+        refreshFieldTheorySyncServices();
+        if (!canUseFieldTheorySync()) return { error: fieldTheorySyncDisabledError() };
+        const supabase = authManager?.getSupabaseClient();
+        if (!supabase) return { error: 'Not authenticated' };
+        const session = await authManager?.getSession();
+        if (!session) return { error: 'Please log in to share commands' };
+        const commandInput = command as { name?: unknown; content?: unknown };
+        const { data, error } = await supabase
+          .from('popular_commands')
+          .insert({
+            name: typeof commandInput.name === 'string' ? commandInput.name : '',
+            content: typeof commandInput.content === 'string' ? commandInput.content : '',
+            copy_count: 0,
+            contributed_by: session.user?.id || null,
+          })
+          .select()
+          .single();
+        if (error) {
+          log.error('Failed to share command:', error);
+          return { error: error.message };
+        }
+        return { data };
+      },
+      unshareCommand: async (commandId) => {
+        refreshFieldTheorySyncServices();
+        if (!canUseFieldTheorySync()) return { error: fieldTheorySyncDisabledError() };
+        const supabase = authManager?.getSupabaseClient();
+        if (!supabase) return { error: 'Not authenticated' };
+        const { error } = await supabase
+          .from('popular_commands')
+          .delete()
+          .eq('id', commandId);
+        if (error) {
+          log.error('Failed to unshare command:', error);
+          return { error: error.message };
+        }
+        return { success: true };
+      },
+      runLocalCommand: (request) => runNativeLocalCommand(request),
+      listMaxwellRuns: (limit) => listNativeMaxwellRuns(limit),
+      getMaxwellMemory: () => getMaxwellMemoryState(),
+      saveMaxwellMemory: (request) => saveNativeMaxwellMemory(request),
+      cancelMaxwellRun: (runId) => cancelNativeMaxwellRun(runId),
+      undoMaxwellRun: (runId) => undoNativeMaxwellRun(runId),
+      redoMaxwellRun: (runId) => redoNativeMaxwellRun(runId),
+      archiveActiveLibraryFile: () => archiveActiveLibraryFileForLauncher(),
+      toggleActiveLibraryLineNumbers: () => toggleActiveLibraryLineNumbersForLauncher(),
+      getActiveMeeting: () => {
+        try {
+          return getMeetingManager().getActiveSession();
+        } catch {
+          return null;
+        }
+      },
+      startMeetingHere: async () => {
+        try {
+          return await getMeetingManager().startHere(activeLibraryFileContext ? { ...activeLibraryFileContext } : null);
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'Meeting action failed' };
+        }
+      },
+      stopMeeting: async () => {
+        try {
+          return await getMeetingManager().stopActiveMeeting();
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'Meeting action failed' };
+        }
+      },
+      getBookmarks: () => ensureBookmarksManager().getSnapshot(),
+      getBookmarkDataSource: () => {
+        const { bookmarkDataDir, canonicalBookmarkDataDir, legacyBookmarkDataDir } = require('./fieldTheoryPaths') as typeof import('./fieldTheoryPaths');
+        const dataDir = bookmarkDataDir();
+        return {
+          dataDir,
+          canonicalDataDir: canonicalBookmarkDataDir(),
+          legacyDataDir: legacyBookmarkDataDir(),
+          usingLegacyDataDir: dataDir === legacyBookmarkDataDir(),
+          bookmarksCachePath: path.join(dataDir, 'bookmarks.jsonl'),
+          mediaDir: path.join(dataDir, 'media'),
+          mediaManifestPath: path.join(dataDir, 'media-manifest.json'),
+        };
+      },
+      syncBookmarksIfStale: () => syncBookmarksFromCliIfStale(),
+      getBookmarkAuthors: () => {
+        const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        return buildBookmarkAuthorSummaries(ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      getAuthorBookmarks: (handle) => {
+        const { bookmarksForAuthor } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        return bookmarksForAuthor(handle, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      getTaxonomyBookmarks: (filePaths) => {
+        const { bookmarksForTaxonomyFiles } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+        return bookmarksForTaxonomyFiles(filePaths, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      searchBookmarks: (query) => {
+        const { searchBookmarks } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+        return searchBookmarks(query, ensureBookmarksManager().getSnapshot().bookmarks);
+      },
+      saveWebBookmarkUrl: async (url) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { success: false, error: 'Field Theory is read-only' };
+        }
+        if (!url.trim()) return { success: false, error: 'URL is required' };
+        try {
+          const result = await ensureBookmarksManager().saveWebBookmarkFromUrl(url);
+          return { success: true, ...result };
+        } catch (error) {
+          log.error('Error saving web bookmark from Browser Library:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      getActiveWebPageForBookmark: () => getActiveWebPageForBrowserLibraryBookmark('browser-library-get-active-web-page'),
+      saveActiveWebPageBookmark: async () => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { success: false, error: 'Field Theory is read-only' };
+        }
+        const activePage = await getActiveWebPageForBrowserLibraryBookmark('browser-library-save-active-web-page');
+        if (!activePage.success || !activePage.page) return activePage;
+        try {
+          const result = await ensureBookmarksManager().saveWebBookmarkFromUrl(activePage.page.url);
+          appendCommandLauncherTrace('browser-library-save-active-web-page-success', {
+            targetBundleId: activePage.page.bundleId,
+            targetName: activePage.page.appName,
+            url: activePage.page.url,
+            created: result.created,
+            markdownPath: result.markdownPath,
+          });
+          return { success: true, page: activePage.page, ...result };
+        } catch (error) {
+          log.error('Error saving active browser page from Browser Library:', error);
+          appendCommandLauncherTrace('browser-library-save-active-web-page-error', {
+            targetBundleId: activePage.page.bundleId,
+            targetName: activePage.page.appName,
+            error,
+          });
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      invokeBookmark: (id) => {
+        const { bookmarkById, formatBookmarkPost } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) return { success: false, error: 'Bookmark not found' };
+        return pasteBookmarkTextFromBrowserLibrary('browser-library-invoke-bookmark-post', { id }, formatBookmarkPost(bookmark));
+      },
+      sendBookmarkToCodex: (id) => {
+        const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+        const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) {
+          return { success: false, error: 'Bookmark not found' };
+        }
+        return pasteTextIntoCodexInputFromBrowserLibrary(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+      },
+      copyBookmarkForAgent: (id) => {
+        const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+        const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!bookmark) {
+          return { success: false, error: 'Bookmark not found' };
+        }
+        try {
+          clipboard.writeText(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+          clipboardManager?.syncClipboardHash();
+          return { success: true };
+        } catch (error) {
+          log.error('Error copying bookmark for agent:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      invokeBookmarkAuthorTimeline: (handle) => {
+        const { formatBookmarkAuthorTimeline } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+        const timeline = formatBookmarkAuthorTimeline(handle, ensureBookmarksManager().getSnapshot().bookmarks);
+        if (!timeline) return { success: false, error: 'No bookmarks found for author' };
+        return pasteBookmarkTextFromBrowserLibrary('browser-library-invoke-bookmark-author', { handle }, timeline);
+      },
+      getBookmarkMediaDirectory: () => {
+        const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        return bookmarkMediaDir();
+      },
+      getBookmarkMediaFilePath: (filename) => {
+        const { resolveBookmarkMediaFile } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+        return resolveBookmarkMediaFile(path.basename(filename));
+      },
+      getAppVersion: () => app.getVersion(),
+      isUpdaterEnabled: () => isAutoUpdaterEnabled,
+      getUpdaterStatus: () => pendingUpdateInfo,
+      checkForUpdates: () => checkForAppUpdates(),
+      downloadUpdate: () => downloadAppUpdate(),
+      installUpdate: () => installAppUpdate(),
+      dismissUpdate: () => dismissAppUpdate(),
+      openExternal: (href) => {
+        if (!isAllowedExternalShellUrl(href)) return false;
+        shell.openExternal(href);
+        return true;
+      },
+      showItemInFolder: (filePath) => {
+        shell.showItemInFolder(filePath);
+        return true;
+      },
+      setRepresentedFilename: (filePath, clientId) => {
+        if (clientId) {
+          browserLibraryRepresentedFilenameByClientId.set(clientId, filePath || '');
+        } else {
+          browserLibraryRepresentedFilename = filePath || '';
+        }
+      },
+      pasteIntoCodexInput: (text) => pasteTextIntoCodexInputFromBrowserLibrary(text),
+      openFieldTheoryMarkdownInNativeApp: (target) => openFieldTheoryMarkdownInNativeApp(target),
+      writeClipboardText: (text) => {
+        try {
+          clipboard.writeText(text);
+          clipboardManager?.syncClipboardHash();
+          return { success: true };
+        } catch (error) {
+          log.error('Error writing Browser Library clipboard text:', error);
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      },
+      getClipboardImagePath: () => clipboardManager?.exportCurrentClipboardImageToCache() ?? null,
+      savePastedImageFile: (file) => clipboardManager?.savePastedImageFileToCache(file as { name?: string | null; type?: string | null; data: Uint8Array }) ?? null,
+      pickFolder: async () => {
+        const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+        if (result.canceled) return null;
+        return result.filePaths[0] ?? null;
+      },
+      openDocumentWindow: (target) => {
+        if (!target || typeof target !== 'object') return { success: false, error: 'Invalid document target' };
+        const normalized = normalizeLibraryDocumentWindowTarget(target as Partial<LibraryDocumentWindowTarget>);
+        if (!normalized) return { success: false, error: 'Invalid document window target' };
+        getLibraryDocumentWindowManager().open(normalized);
+        return { success: true };
+      },
+      copyImageForDocument: (documentPath, imagePath, alt) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      copyImageDataUrlForDocument: (documentPath, dataUrl, alt) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return null;
+        }
+        return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      makeImagesPortable: (documentPath, content) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { content, copied: 0, rewritten: 0, missing: 0 };
+        }
+        return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      deleteUnusedCopiedImages: (documentPath, removedMarkdown, remainingContent) => {
+        if (!canWriteFieldTheoryContent()) {
+          blockWrite();
+          return { deleted: 0, skipped: 0, missing: 0 };
+        }
+        return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+      },
+      getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
+      startAgentKickoff: (args) => {
+        if (!agentKickoffManager) {
+          return {
+            ok: false,
+            runId: '',
+            error: 'Agent kickoff manager unavailable',
+          };
+        }
+        return agentKickoffManager.start(args as AgentKickoffArgs);
+      },
+      cancelAgentKickoff: (runId) => agentKickoffManager?.cancel(runId) ?? false,
+      getRendererStorage: () => getBrowserLibraryRendererStorage(),
+      setRendererStorage: (key, value) => setBrowserLibraryRendererStorage(key, value),
+      appendRenderedEditorDebug: (entry) => writeRenderedEditorDebugLog(entry),
+      clearRenderedEditorDebugLog: () => clearRenderedEditorDebugLog(),
+      getActiveLibraryFileContext: () => getActiveBrowserLibraryPanelContext() ?? activeLibraryFileContext,
+    },
+    reportCurrentDocument: (context, clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      if (!shouldAcceptActiveLibraryFileContext(context)) {
+        if (activeLibraryFileContextSourceId === windowId) {
+          activeLibraryFileContext = null;
+          activeLibraryFileContextSourceId = null;
+        }
+        getDocumentPresenceManager().clearWindow(windowId);
+        appendCommandLauncherTrace('active-library-context-rejected', {
+          source: clientId ? 'browser-helper' : 'browser-helper-legacy',
+          windowId,
+          filePath: context.filePath,
+          rootPath: context.rootPath,
+        });
+        return;
+      }
+      if (clientId) {
+        browserLibraryContextByClientId.set(clientId, context);
+        if (activeBrowserLibrarySurfaceClientId === clientId) {
+          promoteBrowserLibraryClientContext(clientId);
+        }
+      } else {
+        activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
+        activeLibraryFileContextSourceId = windowId;
+      }
+      getDocumentPresenceManager().setWindowDocument(windowId, context, true);
+    },
+    clearCurrentDocument: (clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      if (clientId) {
+        browserLibraryContextByClientId.delete(clientId);
+      }
+      if (activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      getDocumentPresenceManager().clearWindow(windowId);
+    },
+    setActiveClient: (clientId, surface) => {
+      if (!clientId) return;
+      activeBrowserLibrarySurfaceClientId = clientId;
+      if (surface) {
+        activeBrowserLibrarySurfaceKind = surface;
+      }
+      promoteBrowserLibraryClientContext(clientId);
+    },
+    clearActiveClient: (clientId) => {
+      if (!clientId || activeBrowserLibrarySurfaceClientId !== clientId) return;
+      activeBrowserLibrarySurfaceClientId = null;
+      activeBrowserLibrarySurfaceKind = null;
+    },
+    onClientDisconnected: (clientId) => {
+      const windowId = browserLibraryWindowId(clientId);
+      getDocumentPresenceManager().closeWindow(windowId);
+      if (clientId) {
+        browserLibraryContextByClientId.delete(clientId);
+        browserLibraryImmersiveDismissableByClientId.delete(clientId);
+        browserLibrarySizeKeyByClientId.delete(clientId);
+        browserLibraryRepresentedFilenameByClientId.delete(clientId);
+      }
+      if (activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (!clientId || activeBrowserLibrarySurfaceClientId === clientId) {
+        activeBrowserLibrarySurfaceClientId = null;
+        activeBrowserLibrarySurfaceKind = null;
+      }
+      if (!clientId || activeBrowserLibraryClientId === clientId) {
+        browserLibraryMarkdownEditorFocused = false;
+        activeBrowserLibraryClientId = null;
+      }
+    },
+  });
+  const address = await browserHelperServer.start();
+  const browserUrl = buildBrowserLibraryUrl({ address, devServer: browserLibraryDevServer });
+  let panelUrl = buildBrowserPanelRedirectUrl(address);
+  browserPanelLauncherServer = new BrowserPanelLauncherServer({
+    getBrowserHelperAddress: () => browserHelperServer?.address() ?? address,
+  });
+  try {
+    const launcherAddress = await browserPanelLauncherServer.start();
+    panelUrl = buildBrowserPanelRedirectUrl(address, launcherAddress);
+    log.info('Field Theory browser panel launcher listening at %s', panelUrl);
+  } catch (error) {
+    browserPanelLauncherServer = null;
+    log.warn('Field Theory browser panel launcher unavailable; using helper panel URL: %s', error);
+  }
+  writeBrowserHelperState({ address, browserUrl, panelUrl });
+  log.info('Field Theory browser helper listening at %s', browserUrl);
+}
 let librarySyncService: LibrarySyncService | null = null;
+let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+let sharedTeamService: SharedTeamService | null = null;
+let sharedSyncService: SharedSyncService | null = null;
+let sharedTeamEntitlementService: SharedTeamEntitlementService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
-let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
+let lastExternalCommandTargetApp: CommandLauncherTargetApp | null = null;
 type ActiveLibraryFileContext = {
   type: 'wiki' | 'external';
   rootPath: string;
   relPath: string;
   filePath: string;
   title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
 };
 let activeLibraryFileContext: ActiveLibraryFileContext | null = null;
+let activeLibraryFileContextSourceId: string | null = null;
+const browserLibraryContextByClientId = new Map<string, DocumentPresenceContext>();
+const documentPresenceWindows = new WeakSet<BrowserWindow>();
+
+function browserLibraryWindowId(clientId: string | null | undefined): string {
+  return clientId ? `browser-helper:${clientId}` : 'browser-helper';
+}
+
+function browserLibraryClientIdFromWindowId(windowId: string | null | undefined): string | null {
+  const prefix = 'browser-helper:';
+  return windowId?.startsWith(prefix) ? windowId.slice(prefix.length) : null;
+}
+
+function getActiveBrowserLibraryMarkdownCommandTargetClientId(): string | null {
+  const targetClientId = getBrowserLibraryMarkdownCommandTargetClientId({
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+  });
+  return targetClientId && browserHelperServer?.hasNativeEventClient(targetClientId) ? targetClientId : null;
+}
+
+function currentActiveLibraryContextRootPaths(): { libraryRootPaths: string[]; watchedDirPaths: string[] } {
+  return {
+    libraryRootPaths: librarianManager?.getLibraryRootPaths() ?? [],
+    watchedDirPaths: librarianManager?.getWatchedDirs().map((dir) => dir.path) ?? [],
+  };
+}
+
+function shouldAcceptActiveLibraryFileContext(context: ActiveLibraryFileContext | DocumentPresenceContext): boolean {
+  return isActiveLibraryFileContextAllowed({
+    context,
+    ...currentActiveLibraryContextRootPaths(),
+  });
+}
+
+function activeLibraryFileContextFromPresence(context: DocumentPresenceContext): ActiveLibraryFileContext {
+  const next: ActiveLibraryFileContext = {
+    type: context.type,
+    rootPath: context.rootPath,
+    relPath: context.relPath,
+    filePath: context.filePath,
+    title: context.title,
+  };
+  if (typeof context.selectionStart === 'number' && typeof context.selectionEnd === 'number') {
+    next.selectionStart = context.selectionStart;
+    next.selectionEnd = context.selectionEnd;
+    if (typeof context.selectionText === 'string') {
+      next.selectionText = context.selectionText;
+    }
+  }
+  return next;
+}
+
+function getActiveBrowserLibraryPanelContext(): ActiveLibraryFileContext | null {
+  if (activeBrowserLibrarySurfaceKind !== 'library' || !activeBrowserLibrarySurfaceClientId) return null;
+  const context = browserLibraryContextByClientId.get(activeBrowserLibrarySurfaceClientId);
+  if (!context || !shouldAcceptActiveLibraryFileContext(context)) return null;
+  return activeLibraryFileContextFromPresence(context);
+}
+
+function archiveActiveLibraryFileForLauncher(): { success: boolean; error?: string } {
+  if (!librarianManager) return { success: false, error: 'Library is not ready' };
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return { success: false, error: 'Field Theory is read-only' };
+  }
+  if (!activeLibraryFileContext) return { success: false, error: 'No current Library file to archive' };
+  if (!fs.existsSync(activeLibraryFileContext.filePath)) {
+    return { success: false, error: 'Current Library file no longer exists' };
+  }
+
+  try {
+    const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
+    const content = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+    const nextContent = setMarkdownArchivedState(content, true);
+    const result = activeLibraryFileContext.type === 'wiki'
+      ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, nextContent, expectedVersion)
+      : writeTextFileWithConflictGuard(activeLibraryFileContext.filePath, nextContent, expectedVersion);
+    if (!result.ok) return { success: false, error: `Archive failed: ${result.reason}` };
+    if (activeLibraryFileContext.type === 'external') {
+      librarianManager.emit('library:changed', activeLibraryFileContext.rootPath);
+    }
+    appendCommandLauncherTrace('archive-active-library-file-success', {
+      type: activeLibraryFileContext.type,
+      relPath: activeLibraryFileContext.relPath,
+      filePath: activeLibraryFileContext.filePath,
+    });
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Archive failed';
+    appendCommandLauncherTrace('archive-active-library-file-error', { error: message });
+    return { success: false, error: message };
+  }
+}
+
+function promoteBrowserLibraryClientContext(clientId: string | null | undefined): void {
+  if (!clientId) return;
+  if (!shouldPromoteBrowserLibraryClientContext({
+    nativeMarkdownEditorFocused: librarianMarkdownEditorFocused,
+    browserMarkdownEditorFocused: browserLibraryMarkdownEditorFocused,
+    activeBrowserMarkdownClientId: activeBrowserLibraryClientId,
+    candidateClientId: clientId,
+  })) return;
+  const context = browserLibraryContextByClientId.get(clientId);
+  if (!context) return;
+  activeLibraryFileContext = activeLibraryFileContextFromPresence(context);
+  activeLibraryFileContextSourceId = browserLibraryWindowId(clientId);
+}
+const BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET = new Set<string>(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS);
+let browserLibraryRendererStorageStore: BrowserLibraryRendererStorageStore | null = null;
+
+function getBrowserLibraryRendererStorageStore(): BrowserLibraryRendererStorageStore {
+  if (!browserLibraryRendererStorageStore) {
+    browserLibraryRendererStorageStore = new BrowserLibraryRendererStorageStore(
+      BrowserLibraryRendererStorageStore.defaultPath(app.getPath('userData')),
+    );
+  }
+  return browserLibraryRendererStorageStore;
+}
+
+async function getBrowserLibraryRendererStorage(): Promise<{ available: boolean; values: Record<string, string | null> }> {
+  const store = getBrowserLibraryRendererStorageStore();
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (webContents && !webContents.isDestroyed()) {
+    const values = await webContents.executeJavaScript(`
+      (() => {
+        const keys = ${JSON.stringify(BROWSER_LIBRARY_RENDERER_STORAGE_KEYS)};
+        const values = {};
+        for (const key of keys) values[key] = window.localStorage.getItem(key);
+        return values;
+      })()
+    `, true).catch(() => null);
+    if (values && typeof values === 'object') {
+      await store.merge(values as Record<string, string | null>);
+    }
+  }
+  return store.snapshot();
+}
+
+async function setBrowserLibraryRendererStorage(key: string, value: string | null): Promise<void> {
+  if (!BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) return;
+  const changed = await getBrowserLibraryRendererStorageStore().set(key, value);
+  if (!changed) return;
+  if (changed) broadcastBrowserLibraryRendererStorageChanged(key, value);
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  await applyBrowserLibraryRendererStorageToWebContents(webContents, { [key]: value });
+}
+
+async function applyBrowserLibraryRendererStorageToWebContents(
+  webContents: Electron.WebContents,
+  values: Record<string, string | null>,
+): Promise<void> {
+  if (webContents.isDestroyed()) return;
+  await webContents.executeJavaScript(`
+    (() => {
+      const values = ${JSON.stringify(values)};
+      for (const [key, value] of Object.entries(values)) {
+        if (value === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, value);
+        }
+        window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
+      }
+    })()
+  `, true).catch(() => {});
+}
+
+async function hydrateNativeRendererStorageFromBrowserLibraryStore(): Promise<void> {
+  const webContents = clipboardHistoryWindow?.getWindow()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  const snapshot = await getBrowserLibraryRendererStorageStore().snapshot();
+  await applyBrowserLibraryRendererStorageToWebContents(webContents, snapshot.values);
+}
+
+function broadcastBrowserLibraryRendererStorageChanged(key: string, value: string | null): void {
+  if (!BROWSER_LIBRARY_RENDERER_STORAGE_KEY_SET.has(key)) return;
+  browserHelperServer?.emitNativeEvent({ type: 'renderer-storage:changed', key, value });
+}
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+let browserLibraryMarkdownEditorFocused = false;
+let activeBrowserLibraryClientId: string | null = null;
+let activeBrowserLibrarySurfaceClientId: string | null = null;
+let activeBrowserLibrarySurfaceKind: 'library' | 'commands' | 'bookmarks' | 'ember' | null = null;
+let browserLibraryImmersiveDismissable = false;
+let browserLibrarySizeKey: ClipboardHistorySizeKey = 'library';
+let browserLibraryRepresentedFilename = '';
+const browserLibraryImmersiveDismissableByClientId = new Map<string, boolean>();
+const browserLibrarySizeKeyByClientId = new Map<string, ClipboardHistorySizeKey>();
+const browserLibraryRepresentedFilenameByClientId = new Map<string, string>();
+const pendingBrowserLibraryReplaceSelectedText = new Map<string, {
+  resolve: (success: boolean) => void;
+  timeout: NodeJS.Timeout;
+}>();
+let codexTerminalManager: CodexTerminalManager | null = null;
+let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
+let appQuitConfirmedWithLocalWork = false;
+let appQuitConfirmationOpen = false;
+let appQuitInProgress = false;
+let appQuitWatcherCleanupComplete = false;
+let appQuitWatcherCleanupInFlight: Promise<void> | null = null;
+let appMetadataIPCHandlersInstalled = false;
+let onboardingIPCHandlersInstalled = false;
+let transcribeIPCHandlersInstalled = false;
+let globalImproveInFlight = false;
+
+function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, options: { broadcastFallback?: boolean } = {}): boolean {
+  if (
+    shouldTargetBrowserLibraryNavigation({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused }) &&
+    activeBrowserLibrarySurfaceClientId &&
+    browserHelperServer?.hasNativeEventClient(activeBrowserLibrarySurfaceClientId)
+  ) {
+    browserHelperServer.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, event);
+    return true;
+  }
+  if (options.broadcastFallback !== false) {
+    browserHelperServer?.emitNativeEvent(event);
+  }
+  return false;
+}
+
+function emitBrowserLibraryLauncherTarget(target: unknown): boolean {
+  return emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target });
+}
+
+function toggleActiveLibraryLineNumbersForLauncher(): { success: boolean; error?: string } {
+  if (
+    activeLibraryFileContextSourceId?.startsWith('browser-helper:')
+    && emitBrowserLibraryNavigationEvent({ type: 'commands:toggleLineNumbersFromLauncher' }, { broadcastFallback: false })
+  ) {
+    commandLauncherWindow?.hide(true);
+    return { success: true };
+  }
+
+  const window = clipboardHistoryWindow?.getWindow();
+  if (!window || window.isDestroyed()) return { success: false, error: 'Field Theory window is not available' };
+  if (!clipboardHistoryWindow?.isVisible()) {
+    clipboardHistoryWindow?.showLibrary(restoreClipboardHistoryBounds('library'));
+  } else {
+    clipboardHistoryWindow.focusExistingWindow();
+  }
+  commandLauncherWindow?.hide(true);
+  browserHelperServer?.emitNativeEvent({ type: 'commands:toggleLineNumbersFromLauncher' });
+  window.webContents.send('commands:toggleLineNumbersFromLauncher');
+  return { success: true };
+}
+
+function openFieldTheoryMarkdownInNativeApp(rawTarget: unknown): { success: boolean; error?: string } {
+  const target = normalizeFieldTheoryMarkdownTarget(rawTarget);
+  appendCommandLauncherTrace('browser-library-open-field-theory-native-start', {
+    kind: target?.kind ?? null,
+    path: target?.path ?? null,
+    contentMode: target?.contentMode ?? null,
+  });
+  if (!target) return { success: false, error: 'Invalid markdown target' };
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
+
+  const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
+    ? clipboardHistoryWindow.getCurrentSizeKey()
+    : target.kind === 'clipboard'
+      ? 'fields'
+      : 'library';
+  if (clipboardHistoryWindow.isVisible()) {
+    suspendDynamicIslandFocusForClipboardHistory('browser-library-open-field-theory-native');
+    clipboardHistoryWindow.focusExistingWindow();
+  } else {
+    const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+    suspendDynamicIslandFocusForClipboardHistory('browser-library-open-field-theory-native');
+    if (target.kind === 'clipboard') {
+      clipboardHistoryWindow.show(boundsToUse);
+    } else {
+      clipboardHistoryWindow.showLibrary(boundsToUse);
+    }
+  }
+
+  clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+  appendCommandLauncherTrace('browser-library-open-field-theory-native-success', {
+    kind: target.kind,
+    path: target.path,
+    contentMode: target.contentMode ?? null,
+  });
+  return { success: true };
+}
+
+function ensureBookmarksManager(): BookmarksManager {
+  if (!bookmarksManager) {
+    const { BookmarksManager } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+    bookmarksManager = new BookmarksManager();
+  }
+  return bookmarksManager;
+}
+
+function ensureBookmarksWatcher(): void {
+  if (bookmarksWatcherStarted) return;
+  const manager = ensureBookmarksManager();
+  manager.startWatcher();
+  manager.on('bookmarks:changed', () => {
+    browserHelperServer?.emitNativeEvent({ type: 'bookmarks:changed' });
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
+    });
+  });
+  bookmarksWatcherStarted = true;
+}
+
+async function pasteBookmarkTextFromBrowserLibrary(
+  tracePrefix: string,
+  tracePayload: Record<string, unknown>,
+  text: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const targetApp = getCommandLauncherTargetApp();
+    appendCommandLauncherTrace(`${tracePrefix}-start`, {
+      ...tracePayload,
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
+      source: 'browser-library',
+    });
+
+    if (!targetApp) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-target`, { ...tracePayload, source: 'browser-library' });
+      return { success: false, error: 'No external target app available' };
+    }
+
+    await runWithCommandLauncherExternalInvocation(async () => {
+      clipboard.writeText(text);
+      clipboardManager?.syncClipboardHash();
+      await activateAndPasteFromCommandLauncher(targetApp);
+    });
+
+    appendCommandLauncherTrace(`${tracePrefix}-success`, {
+      ...tracePayload,
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      source: 'browser-library',
+    });
+    return { success: true };
+  } catch (error) {
+    log.error(`Error invoking ${tracePrefix} from Browser Library:`, error);
+    appendCommandLauncherTrace(`${tracePrefix}-error`, { ...tracePayload, source: 'browser-library', error });
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+async function getActiveWebPageForBrowserLibraryBookmark(tracePrefix: string) {
+  const targetApp = getCommandLauncherTargetApp();
+  appendCommandLauncherTrace(`${tracePrefix}-start`, {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+    source: 'browser-library',
+  });
+
+  if (!targetApp) {
+    appendCommandLauncherTrace(`${tracePrefix}-no-target`, { source: 'browser-library' });
+    return { success: false, error: 'No browser app was active before Field Theory opened' };
+  }
+
+  try {
+    const page = await getActiveBrowserPage(targetApp);
+    if (!page) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-page`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        source: 'browser-library',
+      });
+      return { success: false, error: `No active browser page found in ${targetApp.name}` };
+    }
+    appendCommandLauncherTrace(`${tracePrefix}-success`, {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      url: page.url,
+      source: 'browser-library',
+    });
+    return { success: true, page };
+  } catch (error) {
+    log.error(`Error resolving active browser page for ${tracePrefix}:`, error);
+    appendCommandLauncherTrace(`${tracePrefix}-error`, {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      source: 'browser-library',
+      error,
+    });
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+function cleanupFileWatchersBeforeQuit(): Promise<void> {
+  if (appQuitWatcherCleanupComplete) return Promise.resolve();
+  if (appQuitWatcherCleanupInFlight) return appQuitWatcherCleanupInFlight;
+
+  appQuitWatcherCleanupInFlight = (async () => {
+    await Promise.allSettled([
+      librarianManager?.destroy(),
+      taggedDocsManager?.destroy(),
+      bookmarksManager?.stopWatcher(),
+      documentPresenceManager?.flush(),
+    ]);
+    documentPresenceManager?.destroy();
+    librarianManager = null;
+    taggedDocsManager = null;
+    documentPresenceManager = null;
+    bookmarksWatcherStarted = false;
+    appQuitWatcherCleanupComplete = true;
+  })().finally(() => {
+    appQuitWatcherCleanupInFlight = null;
+  });
+
+  return appQuitWatcherCleanupInFlight;
+}
+
+async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
+  if (!userDataManager) {
+    userDataManager = createUserDataManager();
+    await userDataManager.restoreCurrentUser();
+    startupMark('user-data-restored');
+  }
+  return userDataManager;
+}
+
+function inferCurrentLibrarianSetupComplete(): boolean {
+  const settingsPath = userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath('librarian-settings.json')
+    : path.join(app.getPath('userData'), 'librarian-settings.json');
+  return inferLibrarianSetupComplete({ settingsPath, libraryPath: libraryDir() });
+}
+
+const LAUNCHER_FILE_ICON_CACHE_LIMIT = 512;
+const launcherFileIconCache = new Map<string, string | null>();
+
+function rememberLauncherFileIcon(filePath: string, iconDataUrl: string | null): void {
+  if (launcherFileIconCache.size >= LAUNCHER_FILE_ICON_CACHE_LIMIT) {
+    const oldestKey = launcherFileIconCache.keys().next().value;
+    if (oldestKey) launcherFileIconCache.delete(oldestKey);
+  }
+  launcherFileIconCache.set(filePath, iconDataUrl);
+}
+
+async function getLauncherFileIcon(filePath: string): Promise<LauncherFileIconResult> {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return { success: false, error: 'File path missing' };
+  }
+
+  const normalizedPath = path.normalize(filePath);
+  if (launcherFileIconCache.has(normalizedPath)) {
+    const iconDataUrl = launcherFileIconCache.get(normalizedPath);
+    return iconDataUrl ? { success: true, iconDataUrl } : { success: false, error: 'Icon unavailable' };
+  }
+
+  if (!fs.existsSync(normalizedPath)) {
+    rememberLauncherFileIcon(normalizedPath, null);
+    return { success: false, error: 'Icon target not found' };
+  }
+
+  try {
+    if (/\.app$/i.test(normalizedPath)) {
+      const { resolveLauncherAppIconPath } = require('./launcherApps') as typeof import('./launcherApps');
+      const appIconPath = resolveLauncherAppIconPath(normalizedPath);
+      if (appIconPath) {
+        const appIcon = nativeImage.createFromPath(appIconPath);
+        if (!appIcon.isEmpty()) {
+          const iconDataUrl = appIcon.resize({ width: 32, height: 32, quality: 'best' }).toDataURL();
+          rememberLauncherFileIcon(normalizedPath, iconDataUrl);
+          return { success: true, iconDataUrl };
+        }
+      }
+    }
+
+    const icon = await app.getFileIcon(normalizedPath, { size: 'small' });
+    if (icon.isEmpty()) {
+      rememberLauncherFileIcon(normalizedPath, null);
+      return { success: false, error: 'Icon unavailable' };
+    }
+    const iconDataUrl = icon.toDataURL();
+    rememberLauncherFileIcon(normalizedPath, iconDataUrl);
+    return { success: true, iconDataUrl };
+  } catch (error) {
+    rememberLauncherFileIcon(normalizedPath, null);
+    return { success: false, error: error instanceof Error ? error.message : 'Icon unavailable' };
+  }
+}
+
+function emitLocalCommandStatus(status: Omit<LocalCommandStatus, 'updatedAt'>): LocalCommandStatus {
+  const payload = { ...status, updatedAt: Date.now() };
+  browserHelperServer?.emitNativeEvent({ type: 'commands:localCommandStatus', status: payload });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(CommandsIPCChannels.LOCAL_COMMAND_STATUS, payload);
+    }
+  });
+  return payload;
+}
+
+function compactLocalCommandDetail(value: string | undefined, maxLength = 140): string | undefined {
+  const compacted = value?.replace(/\s+/g, ' ').trim();
+  if (!compacted) return undefined;
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength - 3)}...`
+    : compacted;
+}
+
+function summarizeLocalCommandChange(before: string, after: string): { changedLines: number; changedBytes: number; detail: string } {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  let changedLines = 0;
+  const maxLines = Math.max(beforeLines.length, afterLines.length);
+  for (let index = 0; index < maxLines; index += 1) {
+    if (beforeLines[index] !== afterLines[index]) {
+      changedLines += 1;
+    }
+  }
+  const changedBytes = Buffer.byteLength(after, 'utf8') - Buffer.byteLength(before, 'utf8');
+  const lineDetail = changedLines === 1 ? '1 line changed' : `${changedLines} lines changed`;
+  const byteDetail = changedBytes === 0 ? 'same size' : `${changedBytes > 0 ? '+' : ''}${changedBytes} bytes`;
+  return { changedLines, changedBytes, detail: `${lineDetail}, ${byteDetail}` };
+}
+
+function normalizeLocalCommandRequest(raw: unknown): LocalCommandRunRequest | null {
+  if (typeof raw === 'string') {
+    const commandName = raw.trim();
+    return commandName ? { commandName } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const request = raw as LocalCommandRunRequest;
+  const commandName = typeof request.commandName === 'string' ? request.commandName.trim() : undefined;
+  const customInstruction = typeof request.customInstruction === 'string' ? request.customInstruction.trim() : undefined;
+  const mode = request.mode === 'selection' ? 'selection' : 'document';
+  const selection = request.selection && typeof request.selection === 'object' ? request.selection : null;
+  if (!commandName && !customInstruction) return null;
+  return {
+    commandName,
+    customInstruction,
+    mode,
+    selection,
+    useMemory: request.useMemory !== false,
+  };
+}
+
+function resolveLocalCommandSelection(
+  selection: LocalCommandSelectionInput | null | undefined,
+  targetContent: string,
+): { ok: true; start: number; end: number; text: string } | { ok: false; error: string } {
+  if (!selection) return { ok: false, error: 'Select text to improve' };
+  if (typeof selection.start === 'number' && typeof selection.end === 'number') {
+    const rawStart = Math.min(selection.start, selection.end);
+    const rawEnd = Math.max(selection.start, selection.end);
+    const start = Math.max(0, Math.min(rawStart, targetContent.length));
+    const end = Math.max(start, Math.min(rawEnd, targetContent.length));
+    const text = targetContent.slice(start, end);
+    const expectedText = typeof selection.text === 'string' ? selection.text : '';
+    if (start === end || text.trim().length === 0) {
+      if (expectedText.trim().length > 0) return resolveLocalCommandSelection({ text: expectedText }, targetContent);
+      return { ok: false, error: 'Select text to improve' };
+    }
+    if (expectedText && text !== expectedText && text.trim() !== expectedText.trim()) {
+      return resolveLocalCommandSelection({ text: expectedText }, targetContent);
+    }
+    return { ok: true, start, end, text };
+  }
+
+  if (typeof selection.text !== 'string' || selection.text.trim().length === 0) {
+    return { ok: false, error: 'Select text to improve' };
+  }
+  const first = targetContent.indexOf(selection.text);
+  if (first < 0) return { ok: false, error: 'Selected text is not in the current document' };
+  const second = targetContent.indexOf(selection.text, first + selection.text.length);
+  if (second >= 0) {
+    return { ok: false, error: 'Selected text appears more than once. Use Markdown edit mode to improve the exact selection.' };
+  }
+  return { ok: true, start: first, end: first + selection.text.length, text: selection.text };
+}
+
+async function ensureLocalImproveCommand(): Promise<PortableCommand | null> {
+  if (!commandsManager) return null;
+  const existing = commandsManager.getCommand('improve');
+  if (existing) return existing;
+  const defaultDir = await commandsManager.createDefaultDirectory();
+  if (!defaultDir) return null;
+  const created = commandsManager.createCommand(defaultDir, 'improve', DEFAULT_IMPROVE_COMMAND_CONTENT);
+  return created ? commandsManager.getCommand(created.name) : commandsManager.getCommand('improve');
+}
+
+function getAutoImproveModelOptions(): AutoImproveModelOptions {
+  return normalizeAutoImproveModelOptions({
+    codexModel: preferencesManager?.getPreference('autoImproveCodexModel'),
+    codexEffort: preferencesManager?.getPreference('autoImproveCodexEffort'),
+    claudeModel: preferencesManager?.getPreference('autoImproveClaudeModel'),
+    claudeEffort: preferencesManager?.getPreference('autoImproveClaudeEffort'),
+  });
+}
+
+function getAutoImproveContextFiles(): AutoImproveContextFile[] {
+  return normalizeAutoImproveContextFiles(
+    preferencesManager?.getPreference('autoImproveContextFiles')
+  );
+}
+
+function getAutoImproveWritingPreferences(): string {
+  return sanitizeAutoImproveWritingPreferences(
+    preferencesManager?.getPreference('autoImproveWritingPreferences')
+  );
+}
+
+async function runLocalImproveCommand(input: {
+  text: string;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+  privateGuidance?: string;
+}): Promise<string | null> {
+  const command = await ensureLocalImproveCommand();
+  if (!command || !commandsManager) return null;
+  const loaded = await commandsManager.loadCommandContent(command);
+  if (!loaded) return null;
+
+  const localManager = getLocalLlmManager();
+  return localManager.runSelectionCommand({
+    commandName: loaded.name,
+    commandContent: `${loaded.content}${input.privateGuidance ?? ''}`,
+    targetTitle: input.title ?? (input.mode === 'transcript' ? 'Transcript' : 'Selected text'),
+    targetPath: input.targetPath ?? (input.mode === 'transcript' ? 'fieldtheory://transcript/auto-improve' : 'global-selection'),
+    targetContent: input.text,
+    selectedText: input.text,
+    memorySnapshot: input.memorySnapshot ?? null,
+  });
+}
+
+async function improveWithPreferredProvider(input: {
+  text: string;
+  provider: AutoImproveProvider;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+}): Promise<string | null> {
+  return improveText({
+    text: input.text,
+    provider: input.provider,
+    mode: input.mode,
+    title: input.title,
+    targetPath: input.targetPath,
+    writingPreferences: getAutoImproveWritingPreferences(),
+    contextFiles: getAutoImproveContextFiles(),
+    modelOptions: getAutoImproveModelOptions(),
+    runLocal: (localInput) => runLocalImproveCommand({
+      ...localInput,
+      memorySnapshot: input.memorySnapshot ?? null,
+    }),
+  });
+}
+
+async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targetApp: { bundleId: string; name: string } | null }> {
+  const target = nativeHelper?.getFrontmostApp() ?? null;
+  const targetApp = target?.bundleId
+    ? { bundleId: target.bundleId, name: target.name ?? target.bundleId }
+    : null;
+  const activeContext = getActiveBrowserLibraryPanelContext() ?? activeLibraryFileContext;
+  const fieldTheorySelectionText = resolveFieldTheorySelectionText({
+    targetApp,
+    activeContext,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  });
+  if (fieldTheorySelectionText !== null) {
+    return { text: fieldTheorySelectionText, targetApp };
+  }
+  const previousClipboardText = clipboard.readText();
+
+  try {
+    await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "c" using command down'], { timeout: 3000 });
+  } catch (error) {
+    log.warn('Global improve could not copy selected text:', error);
+    return { text: '', targetApp };
+  }
+  await new Promise(resolve => setTimeout(resolve, 80));
+  const copiedText = clipboard.readText().trim();
+  if (shouldRejectFieldTheoryPathFallback({
+    copiedText,
+    targetApp,
+    activeFilePath: activeContext?.filePath,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  })) {
+    clipboard.writeText(previousClipboardText);
+    clipboardManager?.syncClipboardHash();
+    return { text: '', targetApp };
+  }
+  return { text: copiedText, targetApp };
+}
+
+async function pasteTextToGlobalImproveTarget(text: string, targetApp: { bundleId: string; name: string } | null): Promise<boolean> {
+  if (!text) return false;
+  clipboard.writeText(text);
+  clipboardManager?.syncClipboardHash();
+  return activateAndPaste(targetApp, {
+    clipboardTrace: () => ({ textLength: clipboard.readText().length }),
+  });
+}
+
+async function runGlobalImproveSelection(): Promise<void> {
+  if (globalImproveInFlight) return;
+  globalImproveInFlight = true;
+  try {
+    const { text, targetApp } = await copySelectedTextFromFrontmostApp();
+    if (!text) {
+      cursorStatusManager?.showNoTargetError('Select text to improve');
+      return;
+    }
+
+    const provider = transcriberManager?.getAutoImproveProvider() ?? 'local';
+    const providerLabel = provider === 'local' ? 'locally' : `with ${provider === 'codex' ? 'Codex' : 'Claude'}`;
+
+    emitLocalCommandStatus({
+      status: 'running',
+      message: `Improving selected text ${providerLabel}...`,
+      commandName: 'improve',
+      mode: 'selection',
+      phase: 'generating',
+    });
+
+    const replacement = await improveWithPreferredProvider({
+      provider,
+      mode: 'selection',
+      text,
+      title: targetApp?.name ?? 'Selected text',
+      targetPath: targetApp?.bundleId ?? 'global-selection',
+      memorySnapshot: readMaxwellMemorySnapshot(true),
+    });
+    if (!replacement) {
+      cursorStatusManager?.showNoTargetError('Improve did not return replacement text');
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Improve did not return replacement text',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'No replacement text',
+      });
+      return;
+    }
+
+    const targetIsFieldTheory = isFieldTheoryBundleId(targetApp?.bundleId);
+    const pasted = targetIsFieldTheory
+      ? await replaceSelectedTextInFieldTheoryMarkdown({
+        expectedText: text,
+        replacementText: replacement,
+      })
+      : await pasteTextToGlobalImproveTarget(replacement, targetApp);
+    if (!pasted) {
+      if (targetIsFieldTheory) {
+        clipboard.writeText(replacement);
+        clipboardManager?.syncClipboardHash();
+      }
+      cursorStatusManager?.showNoTargetError('Improved text copied; paste failed');
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Improved text copied; paste failed',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'Paste failed',
+      });
+      return;
+    }
+
+    const changeSummary = summarizeLocalCommandChange(text, replacement);
+    await quotaManager?.updateUsage('portable_commands', 1);
+    metricsManager?.recordCommandExecuted();
+    emitLocalCommandStatus({
+      status: 'success',
+      message: 'Improved selected text',
+      detail: changeSummary.detail,
+      eventKind: 'file_change',
+      commandName: 'improve',
+      mode: 'selection',
+      phase: 'done',
+      changedLines: changeSummary.changedLines,
+      changedBytes: changeSummary.changedBytes,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Global improve failed';
+    log.error('Global improve failed:', error);
+    cursorStatusManager?.showNoTargetError(message);
+    emitLocalCommandStatus({
+      status: 'error',
+      message,
+      commandName: 'improve',
+      mode: 'selection',
+      error: message,
+    });
+  } finally {
+    globalImproveInFlight = false;
+  }
+}
 
 function broadcastTodosChanged(todos: Todo[]): void {
   BrowserWindow.getAllWindows().forEach(win => {
@@ -487,13 +4824,93 @@ function canUseFieldTheorySync(): boolean {
   return getFieldTheorySyncStatus().enabled;
 }
 
+function getSharedTeamEntitlementService(): SharedTeamEntitlementService | null {
+  if (!authManager) return null;
+  if (!sharedTeamEntitlementService) {
+    sharedTeamEntitlementService = new SharedTeamEntitlementService(authManager);
+  }
+  return sharedTeamEntitlementService;
+}
+
+function getSharedFeatureEntitlementSnapshot(): SharedTeamEntitlementState {
+  const service = getSharedTeamEntitlementService();
+  return service?.getCachedState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
+async function getSharedFeatureEntitlement(): Promise<SharedTeamEntitlementState> {
+  const service = getSharedTeamEntitlementService();
+  return service?.getState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
+function canUseSharedFeatures(): boolean {
+  return getSharedFeatureEntitlementSnapshot().allowed;
+}
+
 function fieldTheorySyncDisabledError(): string {
   const status = getFieldTheorySyncStatus();
   if (status.reason === 'not_authenticated') return 'Not authenticated';
   return 'Field Theory sync is not enabled for this user';
 }
 
+function sharedFeaturesDisabledError(): string {
+  const entitlement = getSharedFeatureEntitlementSnapshot();
+  if (entitlement.reason === 'not_authenticated') return 'Not authenticated';
+  if (entitlement.reason === 'not_entitled') return 'River is not enabled for this account';
+  return 'River is not available';
+}
+
+function sharedUnavailableAvailability(entitlement: SharedTeamEntitlementState) {
+  const availability = {
+    available: false,
+    canWrite: false,
+    hasTeamMembers: false,
+    reason: entitlement.reason ?? 'lookup_failed',
+  };
+  return entitlement.stale ? { ...availability, stale: true } : availability;
+}
+
+function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
+  availability: T,
+  entitlement: SharedTeamEntitlementState,
+): T {
+  return entitlement.stale && availability.stale !== true
+    ? { ...availability, stale: true }
+    : availability;
+}
+
 function refreshFieldTheorySyncServices(): void {
+  if (!canUseSharedFeatures()) {
+    clearPendingSharedFilesSync();
+    void sharedSyncService?.dispose();
+    sharedSyncService = null;
+    sharedTeamService = null;
+  } else {
+    if (!sharedTeamService && authManager) {
+      sharedTeamService = new SharedTeamService(authManager);
+    }
+    if (!sharedSyncService && authManager) {
+      sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
+      sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
+      sharedSyncService.on('pinsChanged', broadcastSharedFilePinsChanged);
+      sharedSyncService.on('cacheChanged', () => {
+        librarianManager?.emit('library:changed');
+      });
+    }
+    void sharedSyncService?.startRemoteChangeSync();
+  }
+
   if (!canUseFieldTheorySync()) {
     librarySyncService?.dispose();
     librarySyncService = null;
@@ -516,11 +4933,82 @@ function refreshFieldTheorySyncServices(): void {
   }
 }
 
+function clearPendingSharedFilesSync(): void {
+  if (!sharedFilesSyncTimeout) return;
+  clearTimeout(sharedFilesSyncTimeout);
+  sharedFilesSyncTimeout = null;
+}
+
 function scheduleLibrarySyncIfAllowed(): void {
   refreshFieldTheorySyncServices();
   if (canUseFieldTheorySync()) {
     librarySyncService?.scheduleSync();
   }
+  if (canUseSharedFeatures()) {
+    scheduleSharedFilesSyncAndBroadcastChanges();
+  }
+}
+
+function scheduleSharedFilesSyncAndBroadcastChanges(): void {
+  if (sharedFilesSyncTimeout) {
+    clearTimeout(sharedFilesSyncTimeout);
+  }
+  sharedFilesSyncTimeout = setTimeout(() => {
+    sharedFilesSyncTimeout = null;
+    void syncSharedFilesAndBroadcastChanges();
+  }, SHARED_FILES_SYNC_DEBOUNCE_MS);
+}
+
+async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
+  const entitlement = await getSharedFeatureEntitlement();
+  refreshFieldTheorySyncServices();
+  if (!entitlement.allowed || !sharedSyncService) return;
+  try {
+    const result = await sharedSyncService.syncOnce();
+    if (result.written > 0 || result.removed > 0 || result.created > 0) {
+      librarianManager?.emit('library:changed');
+    }
+    broadcastSharedFilePinsChanged();
+  } catch (err) {
+    log.warn('River sync failed:', err);
+  }
+}
+
+function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedFilePresenceUser[] }): void {
+  browserHelperServer?.emitNativeEvent({ type: 'sharedFiles:presenceChanged', payload });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('sharedFiles:presenceChanged', payload);
+    }
+  });
+}
+
+function broadcastSharedFilePinsChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'sharedFiles:pinsChanged' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('sharedFiles:pinsChanged');
+    }
+  });
+}
+
+function broadcastTeamChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'team:changed' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('team:changed');
+    }
+  });
+}
+
+async function afterTeamMutation(result: Promise<SharedTeamMutationResult>): Promise<SharedTeamMutationResult> {
+  const resolved = await result;
+  if (resolved.ok) {
+    broadcastTeamChanged();
+    refreshFieldTheorySyncServices();
+    void syncSharedFilesAndBroadcastChanges();
+  }
+  return resolved;
 }
 
 function canWriteFieldTheoryContent(): boolean {
@@ -536,8 +5024,525 @@ function blockWrite(reason: string = 'read_only'): { blocked: true; reason: stri
   return { blocked: true, reason };
 }
 
+function getLocalLlmManager(): LocalLlmManager {
+  if (!localLlmManager) {
+    localLlmManager = new LocalLlmManager();
+  }
+  const preferredModel = preferencesManager?.getPreference('localLlmSelectedModel');
+  if (isLocalLlmModelId(preferredModel) && localLlmManager.getSelectedModel() !== preferredModel) {
+    localLlmManager.setSelectedModel(preferredModel);
+  }
+  return localLlmManager;
+}
+
+function getMaxwellRunManager(): MaxwellRunManager {
+  if (!maxwellRunManager) {
+    maxwellRunManager = new MaxwellRunManager();
+  }
+  const dbPath = userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath('maxwell.db')
+    : path.join(app.getPath('userData'), 'maxwell.db');
+  maxwellRunManager.setDatabasePath(dbPath);
+  return maxwellRunManager;
+}
+
+function resolveDefaultCodexTerminalCwd(): string {
+  const cwd = process.cwd();
+  if (path.basename(cwd) === 'mac-app') {
+    const parent = path.dirname(cwd);
+    if (fs.existsSync(path.join(parent, '.git'))) return parent;
+  }
+  return fs.existsSync(cwd) ? cwd : os.homedir();
+}
+
+function getCodexTerminalManager(): CodexTerminalManager {
+  if (!codexTerminalManager) {
+    codexTerminalManager = new CodexTerminalManager({
+      defaultCwd: resolveDefaultCodexTerminalCwd(),
+    });
+  }
+  return codexTerminalManager;
+}
+
+function broadcastCodexTerminalSessions(manager = getCodexTerminalManager()): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(CodexTerminalIPCChannels.SESSIONS_CHANGED, manager.listSessions());
+    }
+  });
+}
+
+function getQuitBlockingActivities() {
+  return collectQuitBlockingActivities({
+    transcriptionStatus: transcriberManager?.getStatus() ?? 'idle',
+    hotMicActive: hotMicManager?.isActive ?? false,
+    localLlmActive: localLlmManager?.isRunning() ?? false,
+    agentRunCount: agentKickoffManager?.getInFlightCount() ?? 0,
+    codexTerminalSessions: codexTerminalManager?.listSessions() ?? [],
+  });
+}
+
+function broadcastMeetingStatus(status: MeetingSession): void {
+  browserHelperServer?.emitNativeEvent({ type: 'meetings:status', session: status });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('meetings:status', status);
+    }
+  });
+}
+
+function getMeetingManager(): MeetingManager {
+  if (meetingManager) return meetingManager;
+  if (!librarianManager || !transcriberManager) {
+    throw new Error('Field Theory meetings are not ready');
+  }
+
+  meetingManager = new MeetingManager({
+    librarian: librarianManager,
+    transcriber: transcriberManager,
+    localLlm: getLocalLlmManager(),
+    getMeetingSummaryPrompt: () => preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT,
+    getMaxwellRunManager,
+    readMemorySnapshot: () => readMaxwellMemorySnapshot(true),
+    canWrite: canWriteFieldTheoryContent,
+    onBlockedWrite: () => blockWrite(),
+  });
+  meetingManager.on('status', (status: MeetingSession) => {
+    if (status.status === 'idle') {
+      if (status.type === 'wiki' && status.relPath) {
+        recordRecentEntry({ kind: 'wiki', path: status.relPath, title: status.title, lastOpenedAt: Date.now() });
+      } else if (status.type === 'external') {
+        recordRecentExternalDocument(status.filePath, status.title);
+      }
+    }
+    broadcastMeetingStatus(status);
+  });
+  meetingManager.on('summary-progress', (event: LocalLlmProgressEvent & { filePath?: string; runId?: string }) => {
+    const isDone = event.phase === 'done';
+    const isError = event.kind === 'error' || event.phase === 'error';
+    emitLocalCommandStatus({
+      status: isDone ? 'success' : isError ? 'error' : 'running',
+      message: event.message,
+      detail: compactLocalCommandDetail(event.detail),
+      eventKind: event.kind,
+      commandName: 'summarize-meeting',
+      filePath: event.filePath,
+      mode: 'document',
+      runId: event.runId,
+      phase: event.phase ?? 'generating',
+      error: isError ? event.message : undefined,
+    });
+  });
+  return meetingManager;
+}
+
+const MAXWELL_MEMORY_MAX_CHARS = 12_000;
+
+function getMaxwellMemoryPath(): string {
+  return userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath(path.join('maxwell', 'memory.md'))
+    : path.join(app.getPath('userData'), 'maxwell', 'memory.md');
+}
+
+function isMaxwellMemoryEnabled(): boolean {
+  return preferencesManager?.getPreference('maxwellMemoryEnabled') !== false;
+}
+
+function getMaxwellMemoryState(): MaxwellMemoryState {
+  const memoryPath = getMaxwellMemoryPath();
+  try {
+    const stat = fs.existsSync(memoryPath) ? fs.statSync(memoryPath) : null;
+    const content = stat ? fs.readFileSync(memoryPath, 'utf8') : '';
+    return {
+      enabled: isMaxwellMemoryEnabled(),
+      content,
+      path: memoryPath,
+      updatedAt: stat?.mtimeMs ?? null,
+      maxChars: MAXWELL_MEMORY_MAX_CHARS,
+    };
+  } catch (error) {
+    log.warn('Could not read Maxwell memory:', error);
+    return {
+      enabled: isMaxwellMemoryEnabled(),
+      content: '',
+      path: memoryPath,
+      updatedAt: null,
+      maxChars: MAXWELL_MEMORY_MAX_CHARS,
+    };
+  }
+}
+
+function readMaxwellMemorySnapshot(useMemory = true): string | null {
+  if (!useMemory || !isMaxwellMemoryEnabled()) return null;
+  const memory = getMaxwellMemoryState().content.trim();
+  if (!memory) return null;
+  if (memory.length <= MAXWELL_MEMORY_MAX_CHARS) return memory;
+  return `${memory.slice(0, MAXWELL_MEMORY_MAX_CHARS).trimEnd()}\n\n[Maxwell memory truncated to ${MAXWELL_MEMORY_MAX_CHARS} characters for this run.]`;
+}
+
+function summarizeMaxwellRun(run: MaxwellRunRecord): MaxwellRunSummary {
+  return {
+    runId: run.runId,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    status: run.status,
+    commandName: run.commandName,
+    targetPath: run.targetPath,
+    targetRelPath: run.targetRelPath,
+    targetType: run.targetType,
+    mode: run.mode,
+    summary: run.summary,
+    errorMessage: run.errorMessage,
+    model: run.model,
+    harness: run.harness,
+    memoryUsed: !!run.memorySnapshot,
+    canUndo: run.status === 'success' && !!run.postVersion && run.postContent !== null,
+    canRedo: run.status === 'reverted' && !!run.revertVersion && run.postContent !== null,
+  };
+}
+
+function emitMaxwellUndoFailure(
+  reason: MaxwellUndoFailureReason,
+  error: string,
+  run?: MaxwellRunRecord | null,
+): MaxwellUndoResult {
+  emitLocalCommandStatus({
+    status: 'error',
+    message: error,
+    commandName: run?.commandName,
+    filePath: run?.targetPath,
+    mode: run?.mode,
+    runId: run?.runId,
+    error,
+  });
+  return {
+    success: false,
+    reason,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
+}
+
+function emitMaxwellRedoFailure(
+  reason: MaxwellRedoFailureReason,
+  error: string,
+  run?: MaxwellRunRecord | null,
+): MaxwellRedoResult {
+  emitLocalCommandStatus({
+    status: 'error',
+    message: error,
+    commandName: run?.commandName,
+    filePath: run?.targetPath,
+    mode: run?.mode,
+    runId: run?.runId,
+    error,
+  });
+  return {
+    success: false,
+    reason,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
+}
+
+function emitMaxwellCancelFailure(error: string, run?: MaxwellRunRecord | null): MaxwellCancelResult {
+  return {
+    success: false,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
+}
+
+function listNativeMaxwellRuns(rawLimit?: unknown): MaxwellRunSummary[] {
+  const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 20;
+  try {
+    return getMaxwellRunManager().listRuns(limit).map(summarizeMaxwellRun);
+  } catch (error) {
+    log.warn('Could not list Maxwell runs:', error);
+    return [];
+  }
+}
+
+async function saveNativeMaxwellMemory(rawRequest: unknown): Promise<MaxwellMemorySaveResult> {
+  if (!rawRequest || typeof rawRequest !== 'object') {
+    return { success: false, error: 'Invalid Maxwell memory request' };
+  }
+  const request = rawRequest as { enabled?: unknown; content?: unknown };
+  const content = typeof request.content === 'string' ? request.content : '';
+  const enabled = request.enabled !== false;
+  if (content.length > MAXWELL_MEMORY_MAX_CHARS) {
+    return {
+      success: false,
+      error: `Maxwell memory is too large (${content.length} characters, limit ${MAXWELL_MEMORY_MAX_CHARS}).`,
+      memory: getMaxwellMemoryState(),
+    };
+  }
+  try {
+    const memoryPath = getMaxwellMemoryPath();
+    fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
+    fs.writeFileSync(memoryPath, content, 'utf8');
+    await preferencesManager?.save({ maxwellMemoryEnabled: enabled });
+    return { success: true, memory: getMaxwellMemoryState() };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not save Maxwell memory';
+    log.warn('Could not save Maxwell memory:', error);
+    return { success: false, error: message, memory: getMaxwellMemoryState() };
+  }
+}
+
+function cancelNativeMaxwellRun(rawRunId: unknown): MaxwellCancelResult {
+  if (typeof rawRunId !== 'string' || !rawRunId.trim()) {
+    return emitMaxwellCancelFailure('Invalid Maxwell run id');
+  }
+  const runId = rawRunId.trim();
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellCancelFailure('Maxwell run not found');
+  }
+  if (activeMaxwellLocalRun?.runId !== runId) {
+    return emitMaxwellCancelFailure('Maxwell run is not active', run);
+  }
+  activeMaxwellLocalRun.cancelled = true;
+  getLocalLlmManager().stop();
+  const cancelled = manager.markError(runId, 'cancelled', 'Maxwell run cancelled') ?? run;
+  emitLocalCommandStatus({
+    status: 'notice',
+    message: 'Maxwell run cancelled',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'cancelled',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(cancelled),
+  };
+}
+
+function undoNativeMaxwellRun(rawRunId: unknown): MaxwellUndoResult {
+  if (!librarianManager) {
+    return emitMaxwellUndoFailure('not-ready', 'Field Theory library is not ready');
+  }
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return emitMaxwellUndoFailure('blocked', 'Field Theory is read-only');
+  }
+  const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+  if (!runId) {
+    return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+  }
+
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+  }
+
+  let currentVersion: DocumentVersion;
+  let currentContent: string;
+  try {
+    currentVersion = readDocumentVersion(run.targetPath);
+    currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+  } catch {
+    return emitMaxwellUndoFailure('not-found', 'Current document no longer exists', run);
+  }
+
+  const undo = manager.prepareUndo(runId, currentVersion, currentContent);
+  if (!undo.ok) {
+    const error = undo.reason === 'conflict'
+      ? 'Current document changed since Maxwell saved this result'
+      : 'This Maxwell run cannot be undone';
+    return emitMaxwellUndoFailure(undo.reason, error, undo.run ?? run);
+  }
+
+  const saveResult = undo.targetType === 'wiki'
+    ? undo.targetRelPath
+      ? librarianManager.saveWikiPage(undo.targetRelPath, undo.preContent, undo.expectedVersion)
+      : { ok: false as const, reason: 'not-found' as const }
+    : librarianManager.saveReading(undo.targetPath, undo.preContent, undo.expectedVersion);
+
+  if (!saveResult.ok) {
+    const error = saveResult.reason === 'conflict'
+      ? 'Current document changed while Maxwell was undoing this run'
+      : `Could not undo Maxwell run: ${saveResult.reason}`;
+    return emitMaxwellUndoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+  }
+
+  const reverted = manager.markReverted(runId, saveResult.version) ?? run;
+  emitLocalCommandStatus({
+    status: 'success',
+    message: `Undid ${run.commandName}`,
+    detail: 'Restored previous document version',
+    eventKind: 'file_change',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'done',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(reverted),
+    filePath: run.targetPath,
+    commandName: run.commandName,
+  };
+}
+
+function redoNativeMaxwellRun(rawRunId: unknown): MaxwellRedoResult {
+  if (!librarianManager) {
+    return emitMaxwellRedoFailure('not-ready', 'Field Theory library is not ready');
+  }
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return emitMaxwellRedoFailure('blocked', 'Field Theory is read-only');
+  }
+  const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+  if (!runId) {
+    return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+  }
+
+  const manager = getMaxwellRunManager();
+  const run = manager.getRun(runId);
+  if (!run) {
+    return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+  }
+
+  let currentVersion: DocumentVersion;
+  let currentContent: string;
+  try {
+    currentVersion = readDocumentVersion(run.targetPath);
+    currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+  } catch {
+    return emitMaxwellRedoFailure('not-found', 'Current document no longer exists', run);
+  }
+
+  const redo = manager.prepareRedo(runId, currentVersion, currentContent);
+  if (!redo.ok) {
+    const error = redo.reason === 'conflict'
+      ? 'Current document changed since Maxwell was undone'
+      : 'This Maxwell run cannot be redone';
+    return emitMaxwellRedoFailure(redo.reason, error, redo.run ?? run);
+  }
+
+  const saveResult = redo.targetType === 'wiki'
+    ? redo.targetRelPath
+      ? librarianManager.saveWikiPage(redo.targetRelPath, redo.postContent, redo.expectedVersion)
+      : { ok: false as const, reason: 'not-found' as const }
+    : librarianManager.saveReading(redo.targetPath, redo.postContent, redo.expectedVersion);
+
+  if (!saveResult.ok) {
+    const error = saveResult.reason === 'conflict'
+      ? 'Current document changed while Maxwell was redoing this run'
+      : `Could not redo Maxwell run: ${saveResult.reason}`;
+    return emitMaxwellRedoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+  }
+
+  const redone = manager.markRedone(runId, saveResult.version) ?? run;
+  emitLocalCommandStatus({
+    status: 'success',
+    message: `Redid ${run.commandName}`,
+    detail: 'Reapplied Maxwell result',
+    eventKind: 'file_change',
+    commandName: run.commandName,
+    filePath: run.targetPath,
+    mode: run.mode,
+    runId,
+    phase: 'done',
+  });
+  return {
+    success: true,
+    run: summarizeMaxwellRun(redone),
+    filePath: run.targetPath,
+    commandName: run.commandName,
+  };
+}
+
+function isActiveMaxwellRunCancelled(runId: string | undefined): boolean {
+  return !!runId && activeMaxwellLocalRun?.runId === runId && activeMaxwellLocalRun.cancelled;
+}
+
+function getLocalLlmSetupScriptPath(): string | null {
+  const candidates = [
+    path.join(process.resourcesPath ?? '', 'scripts', 'setup-gemma.sh'),
+    path.join(app.getAppPath(), 'scripts', 'setup-gemma.sh'),
+    path.join(process.cwd(), 'scripts', 'setup-gemma.sh'),
+  ].filter(Boolean);
+
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
+}
+
+async function installOrAccessLocalLlmModel(model: string): Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> {
+  const manager = getLocalLlmManager();
+  if (!isLocalLlmModelId(model)) {
+    return { success: false, error: 'Unsupported local model.' };
+  }
+
+  const selected = manager.setSelectedModel(model);
+  if (!selected.success) return selected;
+
+  const modelId = model as LocalLlmModelId;
+  const currentHealth = manager.getModelHealth(modelId);
+  if (currentHealth.status === 'ready') {
+    return {
+      success: true,
+      modelPath: currentHealth.modelPath,
+      reusedExisting: true,
+    };
+  }
+
+  if (localLlmInstallInFlight) return localLlmInstallInFlight;
+
+  localLlmInstallInFlight = (async () => {
+    try {
+      const setupScript = getLocalLlmSetupScriptPath();
+      if (!setupScript) {
+        return { success: false, error: 'Gemma setup script was not found.' };
+      }
+
+      const installPath = manager.getDefaultInstallPath(modelId);
+      fs.mkdirSync(path.dirname(installPath), { recursive: true });
+
+      const result = await execFileAsync('bash', [setupScript], {
+        cwd: app.getAppPath(),
+        timeout: 60 * 60 * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH ?? ''].filter(Boolean).join(':'),
+          FT_LOCAL_LLM_MODEL_PATH: installPath,
+          FT_GEMMA_MODEL_ID: modelId,
+          FT_GEMMA_REUSE_EXISTING: '1',
+        },
+      });
+      const health = manager.getModelHealth(modelId);
+      if (health.status === 'ready') {
+        const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+        return {
+          success: true,
+          modelPath: health.modelPath,
+          reusedExisting: /already present|linking|existing model/i.test(output),
+        };
+      }
+      return {
+        success: false,
+        error: `Gemma setup finished, but the model is still ${health.status}.`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gemma setup failed.';
+      log.error('Local Gemma setup failed:', error);
+      return { success: false, error: message };
+    } finally {
+      localLlmInstallInFlight = null;
+    }
+  })();
+
+  return localLlmInstallInFlight;
+}
+
 function openScratchpadDefaultFromHotkey(): WikiPage | null {
-  if (!librarianManager || !clipboardHistoryWindow) return null;
+  if (!librarianManager) return null;
   if (!canWriteFieldTheoryContent()) {
     blockWrite();
     return null;
@@ -549,17 +5554,104 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
 
   const page = librarianManager.createScratchpadDefault();
   if (!page) return null;
-  const boundsToUse = restoreClipboardHistoryBounds('library');
+  recordRecentWikiPage(page);
+  if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openScratchpad', relPath: page.relPath }, { broadcastFallback: false })) {
+    return page;
+  }
+  const existingClipboardHistoryWindow = clipboardHistoryWindow?.getWindow();
+  const hasExistingClipboardHistoryWindow = Boolean(
+    existingClipboardHistoryWindow && !existingClipboardHistoryWindow.isDestroyed()
+  );
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
+  const boundsToUse = hasExistingClipboardHistoryWindow ? undefined : restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
-  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   clipboardHistoryWindow.openScratchpad({
     relPath: page.relPath,
   });
   return page;
 }
 
+function broadcastRecentChanged(entries?: RecentEntry[]): void {
+  browserHelperServer?.emitNativeEvent({ type: 'recent:changed', entries });
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) w.webContents.send('recent:changed', entries);
+  });
+}
+
+function recordRecentEntry(entry: RecentEntry): void {
+  if (!recentManager) return;
+  recentManager.visit(entry);
+  broadcastRecentChanged();
+}
+
+function recordRecentWikiPage(page: Pick<WikiPage, 'relPath' | 'title'> | null): void {
+  if (!page) return;
+  recordRecentEntry({
+    kind: 'wiki',
+    path: page.relPath,
+    title: page.title,
+    lastOpenedAt: Date.now(),
+  });
+}
+
+function recordRecentExternalDocument(absPath: string | null | undefined, title: string | null | undefined): void {
+  if (!absPath || !isLibraryTextDocumentPath(absPath)) return;
+  let canonical = absPath;
+  try {
+    canonical = fs.realpathSync(absPath);
+  } catch {
+    // The file may have just been reported by a watcher; keep the given path.
+  }
+  recordRecentEntry({
+    kind: 'external',
+    path: canonical,
+    title: title?.trim() || stripMarkdownFileExtension(path.basename(canonical)),
+    lastOpenedAt: Date.now(),
+  });
+}
+
+function loadMarkdownPreview(filePath: string): { title: string; filePath: string; content: string } | null {
+  if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
+    return null;
+  }
+  try {
+    const canonicalPath = fs.realpathSync(filePath);
+    const stat = fs.statSync(canonicalPath);
+    if (!stat.isFile()) return null;
+
+    let content = fs.readFileSync(canonicalPath, 'utf-8');
+    if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
+      content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
+    }
+
+    return {
+      title: path.basename(canonicalPath),
+      filePath: canonicalPath,
+      content,
+    };
+  } catch (error) {
+    log.warn('Failed to load markdown preview:', error);
+    return null;
+  }
+}
+
+function recordRecentCreatedLibraryPage(page: WikiPage | null, rootPath: string): void {
+  if (!page) return;
+  const root = librarianManager?.getLibraryRoots().find((candidate) => (
+    path.resolve(candidate.path) === path.resolve(rootPath)
+  ));
+  if (root?.builtin) {
+    recordRecentWikiPage(page);
+    return;
+  }
+  recordRecentExternalDocument(page.absPath, page.title);
+}
+
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
-  if (!appInfo?.bundleId || !appInfo.name || isFieldTheoryBundleId(appInfo.bundleId)) {
+  if (!appInfo?.bundleId || !appInfo.name || !isExternalCommandTargetBundleId(appInfo.bundleId)) {
     return;
   }
 
@@ -569,31 +5661,121 @@ function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: st
   };
 }
 
-function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
-  const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
-  if (previousApp?.bundleId && !isFieldTheoryBundleId(previousApp.bundleId)) {
+function getFieldTheoryCommandLauncherLaunchSurface(): CommandLauncherFieldTheoryLaunchSurface {
+  if (focusedCodexTerminalLauncherSessionId) {
+    return { kind: 'terminal', sessionId: focusedCodexTerminalLauncherSessionId };
+  }
+  if (hasFocusedFieldTheoryMarkdownInsertionTarget() || hasActiveFieldTheoryMarkdownInsertionTarget()) {
+    return { kind: 'markdown' };
+  }
+  return { kind: 'none' };
+}
+
+function getCommandLauncherTargetApp(): CommandLauncherTargetApp | null {
+  const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
+  if (launchOrigin.kind === 'external-app' && isExternalCommandTargetBundleId(launchOrigin.app.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
-      source: 'previous-app',
-      previousBundleId: previousApp.bundleId,
-      previousName: previousApp.name,
+      source: 'launch-origin',
+      previousBundleId: launchOrigin.app.bundleId,
+      previousName: launchOrigin.app.name,
+      hasWindowBounds: Boolean(launchOrigin.app.windowBounds),
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
     });
-    return previousApp;
+    return launchOrigin.app;
   }
 
   appendCommandLauncherTrace('target-resolved', {
-    source: lastExternalCommandTargetApp ? 'last-external-app' : 'none',
-    previousBundleId: previousApp?.bundleId ?? null,
-    previousName: previousApp?.name ?? null,
+    source: launchOrigin.kind,
+    previousBundleId: null,
+    previousName: null,
     fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
     fallbackName: lastExternalCommandTargetApp?.name ?? null,
   });
-  return lastExternalCommandTargetApp;
+  return null;
+}
+
+function getCommandLauncherInvocationTarget(targetApp: CommandLauncherTargetApp | null) {
+  return resolveCommandLauncherInvocationTarget({
+    launchOrigin: commandLauncherWindow?.getLaunchOrigin() ?? null,
+    fieldTheoryActive: commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false,
+    hasFocusedFieldTheoryTerminal: Boolean(focusedCodexTerminalLauncherSessionId),
+    focusedFieldTheoryTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+    hasActiveFieldTheoryMarkdown: hasActiveFieldTheoryMarkdownInsertionTarget(),
+    hasExternalTargetApp: Boolean(targetApp),
+  });
+}
+
+let visibilityAppTraceInstalled = false;
+
+function getBrowserWindowVisibilitySnapshot(window: BrowserWindow): Record<string, unknown> {
+  if (window.isDestroyed()) {
+    return {
+      id: window.id,
+      destroyed: true,
+    };
+  }
+
+  return {
+    id: window.id,
+    title: window.getTitle(),
+    visible: window.isVisible(),
+    focused: window.isFocused(),
+    minimized: window.isMinimized(),
+    bounds: window.getBounds(),
+  };
+}
+
+function appendAppVisibilityTrace(event: string, data: Record<string, unknown> = {}): void {
+  if (!isVisibilityTraceEnabled()) return;
+  appendVisibilityTrace(event, {
+    hidden: process.platform === 'darwin' ? app.isHidden() : null,
+    focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+    mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    windows: BrowserWindow.getAllWindows().map(getBrowserWindowVisibilitySnapshot),
+    ...data,
+  });
+}
+
+function installAppVisibilityTrace(): void {
+  if (!isVisibilityTraceEnabled()) return;
+  if (visibilityAppTraceInstalled) return;
+  visibilityAppTraceInstalled = true;
+
+  app.on('activate', () => appendAppVisibilityTrace('app.activate'));
+  app.on('browser-window-focus', (_event, window) => {
+    appendAppVisibilityTrace('app.browser-window-focus', {
+      window: getBrowserWindowVisibilitySnapshot(window),
+    });
+  });
+  app.on('browser-window-blur', (_event, window) => {
+    appendAppVisibilityTrace('app.browser-window-blur', {
+      window: getBrowserWindowVisibilitySnapshot(window),
+    });
+  });
 }
 
 function hideFieldTheoryForAlfred(): void {
   commandLauncherWindow?.hide(true);
+
+  if (!shouldHideFieldTheoryWindowsForAlfred(getFieldTheoryWindowMode())) {
+    appendVisibilityTrace('main.alfred-hide.skipped-app-mode', {
+      mode: getFieldTheoryWindowMode(),
+      clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+      clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+      mainVisible: mainWindow && !mainWindow.isDestroyed() ? mainWindow.isVisible() : null,
+    });
+    return;
+  }
+
+  appendVisibilityTrace('main.alfred-hide.begin', {
+    mode: getFieldTheoryWindowMode(),
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    mainVisible: mainWindow && !mainWindow.isDestroyed() ? mainWindow.isVisible() : null,
+  });
 
   if (clipboardHistoryWindow?.isShowing() || clipboardHistoryWindow?.isVisible()) {
     clipboardHistoryWindow.hide(false, 'alfred-activated');
@@ -608,17 +5790,14 @@ function hideFieldTheoryForAlfred(): void {
 
 /**
  * Check if the configured transcription engine is ready.
- * For parakeet: checks parakeet installation.
- * For whisper (default): checks whisper model availability.
  */
 async function isTranscriptionEngineReady(): Promise<boolean> {
   if (!transcriberManager) return false;
-  const engine = preferencesManager?.get()?.transcriptionEngine;
+  const engine = transcriberManager.getConfiguredTranscriptionEngine();
   if (isParakeetEngine(engine)) {
     return transcriberManager.isParakeetInstalled();
   }
-  const modelManager = transcriberManager.getModelManager();
-  return modelManager ? modelManager.isModelAvailable() : false;
+  return false;
 }
 
 /**
@@ -700,6 +5879,14 @@ function broadcastInputMode(mode: InputMode): void {
   });
 }
 
+function broadcastHotMicHotkey(hotkey: string | null): void {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('hotmic:hotkeyChanged', hotkey);
+    }
+  });
+}
+
 async function applyInputMode(mode: InputMode): Promise<InputMode> {
   const normalized: InputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
   const shouldEnableHotMic = normalized === 'hot-mic';
@@ -711,6 +5898,10 @@ async function applyInputMode(mode: InputMode): Promise<InputMode> {
     }
   } else if (hotMicManager?.isActive) {
     hotMicManager.stop();
+  }
+
+  if (!shouldEnableHotMic && transcriberManager?.getRecordingSource() === 'system-audio') {
+    await transcriberManager.setRecordingSource('microphone');
   }
 
   broadcastInputMode(normalized);
@@ -802,6 +5993,66 @@ function getHotMicIslandGeometryFromPreferences(): DynamicIslandGeometryTuning {
   });
 }
 
+function normalizeRecordingIndicatorMode(value: unknown): RecordingIndicatorMode {
+  return value === 'notch' || value === 'floating' || value === 'auto' ? value : 'auto';
+}
+
+function normalizeFloatingIndicatorPosition(value: unknown): FloatingIndicatorPosition | null {
+  if (!value || typeof value !== 'object') return null;
+  const position = value as Partial<FloatingIndicatorPosition>;
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+  return {
+    x: Math.round(position.x as number),
+    y: Math.round(position.y as number),
+  };
+}
+
+function getRecordingIndicatorModeFromPreferences(): RecordingIndicatorMode {
+  return normalizeRecordingIndicatorMode(preferencesManager?.getPreference('recordingIndicatorMode'));
+}
+
+function getFloatingIndicatorPositionFromPreferences(): FloatingIndicatorPosition | null {
+  return normalizeFloatingIndicatorPosition(preferencesManager?.getPreference('floatingIndicatorPosition'));
+}
+
+function sameFloatingIndicatorPosition(
+  left: FloatingIndicatorPosition | null,
+  right: FloatingIndicatorPosition | null
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.x === right.x && left.y === right.y;
+}
+
+function applyFloatingIndicatorPositionFromPreferences(): FloatingIndicatorPosition | null {
+  const stored = getFloatingIndicatorPositionFromPreferences();
+  const applied = dynamicIslandManager?.setFloatingPosition(stored) ?? stored;
+  if (!sameFloatingIndicatorPosition(stored, applied)) {
+    void preferencesManager?.save({ floatingIndicatorPosition: applied });
+  }
+  return applied;
+}
+
+function applyDynamicIslandPreferencesFromPreferences(): void {
+  if (!dynamicIslandManager) return;
+  const hotMicEnabled = preferencesManager?.getPreference('hotMicEnabled') ?? false;
+  dynamicIslandManager.setInputMode(resolveInputModeFromHotMicEnabled(hotMicEnabled));
+  dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
+  dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
+  dynamicIslandManager.setStayOnLaptop(preferencesManager?.getPreference('hotMicIslandStayOnLaptop') ?? false);
+  dynamicIslandManager.setRecordingIndicatorMode(getRecordingIndicatorModeFromPreferences());
+  applyFloatingIndicatorPositionFromPreferences();
+  dynamicIslandManager.setAutoHide(preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false);
+}
+
+function enableDynamicIslandFromPreferences(): void {
+  if (!dynamicIslandManager) return;
+  applyDynamicIslandPreferencesFromPreferences();
+  if (clipboardManager) {
+    dynamicIslandManager.setClipboardManager(clipboardManager);
+  }
+  dynamicIslandManager.setEnabled(true);
+}
+
 async function saveAndApplyHotMicIslandGeometry(
   geometry: Partial<DynamicIslandGeometryTuning>
 ): Promise<DynamicIslandGeometryTuning> {
@@ -854,7 +6105,119 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 }
 
 // Track pending update state so windows can query it when they open.
-let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+type PendingUpdateStatus = Extract<UpdateStatus, 'available' | 'downloading' | 'ready' | 'installing'>;
+
+let pendingUpdateInfo: { status: PendingUpdateStatus; version: string } | null = null;
+let installFallbackTimer: NodeJS.Timeout | null = null;
+
+function clearInstallFallbackTimer(): void {
+  if (!installFallbackTimer) return;
+  clearTimeout(installFallbackTimer);
+  installFallbackTimer = null;
+}
+
+function shouldApplyUpdaterStatus(next: UpdateStatus): boolean {
+  const current = pendingUpdateInfo?.status ?? 'idle';
+  return resolveUpdaterStatusTransition(current, next) === next;
+}
+
+function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string, options: { force?: boolean } = {}): boolean {
+  if (!options.force && !shouldApplyUpdaterStatus(status)) return false;
+  pendingUpdateInfo = { status, version: version ?? pendingUpdateInfo?.version ?? '' };
+  return true;
+}
+
+function sendUpdateDownloaded(version: string): void {
+  browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version } });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:updateDownloaded', { version });
+    }
+  });
+}
+
+function sendUpdateNotAvailable(): void {
+  if (!shouldApplyUpdaterStatus('uptodate')) return;
+  browserHelperServer?.emitNativeEvent({ type: 'updater:updateNotAvailable' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:updateNotAvailable');
+    }
+  });
+}
+
+function sendUpdaterErrorMessage(message: string): void {
+  if (!shouldApplyUpdaterStatus('error')) return;
+  if (pendingUpdateInfo?.status === 'installing') {
+    pendingUpdateInfo = null;
+    clearInstallFallbackTimer();
+    appQuitConfirmedWithLocalWork = false;
+  }
+  browserHelperServer?.emitNativeEvent({ type: 'updater:error', error: message });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:error', message);
+    }
+  });
+}
+
+function reportAutoUpdaterError(context: string, err: unknown): void {
+  const message = formatAutoUpdaterErrorMessage(err);
+  log.error('%s: %s', context, message);
+  sendUpdaterErrorMessage(message);
+}
+
+function checkForAppUpdates(): unknown {
+  if (!isAutoUpdaterEnabled) return undefined;
+  if (app.isPackaged) {
+    return getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
+  }
+  sendUpdateNotAvailable();
+  return undefined;
+}
+
+function downloadAppUpdate(): unknown {
+  if (!isAutoUpdaterEnabled) return undefined;
+  return getAutoUpdater().downloadUpdate().catch((err) => reportAutoUpdaterError('Update download failed', err));
+}
+
+function installAppUpdate(): void {
+  if (!isAutoUpdaterEnabled) return;
+  if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
+  const version = pendingUpdateInfo?.version ?? '';
+  clearInstallFallbackTimer();
+  browserHelperServer?.emitNativeEvent({ type: 'updater:installing' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:installing');
+    }
+  });
+  installFallbackTimer = setTimeout(() => {
+    installFallbackTimer = null;
+    if (pendingUpdateInfo?.status !== 'installing') return;
+    appQuitConfirmedWithLocalWork = false;
+    log.warn('Update install did not quit the app; returning updater UI to ready state');
+    setPendingUpdateStatus('ready', version, { force: true });
+    sendUpdateDownloaded(version);
+  }, 15000);
+  setTimeout(() => {
+    void (async () => {
+      try {
+        appQuitConfirmedWithLocalWork = true;
+        await cleanupFileWatchersBeforeQuit();
+        getAutoUpdater().quitAndInstall(false, true);
+      } catch (err) {
+        appQuitConfirmedWithLocalWork = false;
+        reportAutoUpdaterError('Update install failed', err);
+      }
+    })();
+  }, 250);
+}
+
+function dismissAppUpdate(): void {
+  clearInstallFallbackTimer();
+  pendingUpdateInfo = null;
+}
 
 // Consolidated user state logging - single line showing auth/tier state
 function logUserState(_context: string) {
@@ -934,8 +6297,43 @@ async function collectProcessPerformanceSnapshot(): Promise<ProcessPerformanceSn
  * Runs once and creates a marker file to prevent re-running.
  */
 function migrateFromLegacyPaths(): void {
+  if (startupBenchmarkUserData) {
+    return;
+  }
   const newUserData = app.getPath('userData');
   const migrationMarker = path.join(newUserData, '.migration-v1-complete');
+
+  const copyFileIfMissing = (source: string, target: string): boolean => {
+    if (!fs.existsSync(source) || fs.existsSync(target)) return false;
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+      return true;
+    } catch (err) {
+      log.error(`Failed to copy ${path.basename(source)}: ${err}`);
+      return false;
+    }
+  };
+
+  const copySqliteSetIfMissing = (sourceDb: string, targetDb: string): boolean => {
+    if (!copyFileIfMissing(sourceDb, targetDb)) return false;
+    for (const suffix of ['-wal', '-shm']) {
+      copyFileIfMissing(`${sourceDb}${suffix}`, `${targetDb}${suffix}`);
+    }
+    return true;
+  };
+
+  const legacyCurrentUserCallsign = (legacyPath: string): string | null => {
+    try {
+      const currentUserPath = path.join(legacyPath, 'current-user.json');
+      const parsed = JSON.parse(fs.readFileSync(currentUserPath, 'utf8')) as { callsign?: unknown };
+      return typeof parsed.callsign === 'string' && parsed.callsign.trim().length > 0
+        ? parsed.callsign.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  };
 
   // Skip if already migrated
   if (fs.existsSync(migrationMarker)) {
@@ -944,11 +6342,13 @@ function migrateFromLegacyPaths(): void {
 
   const homeDir = app.getPath('home');
   const legacyPaths = [
+    path.join(homeDir, 'Library', 'Application Support', 'fieldtheory-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'littleai-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'Oscar'),
   ];
 
   let migrated = false;
+  fs.mkdirSync(newUserData, { recursive: true });
 
   for (const legacyPath of legacyPaths) {
     if (!fs.existsSync(legacyPath)) {
@@ -967,27 +6367,50 @@ function migrateFromLegacyPaths(): void {
       }
     }
 
-    // Migrate clipboard.db
-    const legacyDb = path.join(legacyPath, 'clipboard.db');
-    const newDb = path.join(newUserData, 'clipboard.db');
-    if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
-      try {
-        fs.copyFileSync(legacyDb, newDb);
-        migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy clipboard.db: ${err}`);
-      }
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'current-user.json'),
+      path.join(newUserData, 'current-user.json')
+    )) {
+      migrated = true;
     }
 
-    // Migrate preferences.json (for very old versions)
-    const legacyPrefs = path.join(legacyPath, 'preferences.json');
-    const newPrefs = path.join(newUserData, 'preferences.json');
-    if (fs.existsSync(legacyPrefs) && !fs.existsSync(newPrefs)) {
-      try {
-        fs.copyFileSync(legacyPrefs, newPrefs);
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'supabase-session.json'),
+      path.join(newUserData, 'supabase-session.json')
+    )) {
+      migrated = true;
+    }
+
+    const callsign = legacyCurrentUserCallsign(legacyPath);
+    const sourceDirs = callsign
+      ? [path.join(legacyPath, 'users', callsign), legacyPath]
+      : [legacyPath];
+    const filesToMigrate = [
+      'preferences.json',
+      'user-metrics.json',
+      'librarian-settings.json',
+      'librarian-index.json',
+      'commands-settings.json',
+      'recent.json',
+      'browser-library-renderer-storage.json',
+      'library-index.db',
+      'artifact-embeddings.db',
+      'tagged.db',
+      'maxwell.db',
+    ];
+
+    for (const sourceDir of sourceDirs) {
+      for (const file of filesToMigrate) {
+        if (copyFileIfMissing(path.join(sourceDir, file), path.join(newUserData, file))) {
+          migrated = true;
+        }
+      }
+
+      if (copySqliteSetIfMissing(
+        path.join(sourceDir, 'clipboard.db'),
+        path.join(newUserData, 'clipboard.db')
+      )) {
         migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy preferences.json: ${err}`);
       }
     }
   }
@@ -1023,6 +6446,9 @@ function registerHotkeysAfterOnboarding(): void {
 
   const prefs = preferencesManager.get();
   const hotkeys = clipboardManager.getHotkeys();
+  getHotkeyManager().register('globalImprove', HOTKEY_CONFIGS.globalImprove.defaultKey, () => {
+    void runGlobalImproveSelection();
+  });
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
@@ -1149,7 +6575,7 @@ function registerHotkeysAfterOnboarding(): void {
       })) {
         const imagePath = await clipboardManager.exportCurrentClipboardImageToCache();
         if (imagePath) {
-          clipboardWindow?.webContents.send('librarian:insertMarkdownText', imagePath);
+          clipboardWindow?.webContents.send('librarian:insertPlainMarkdownText', imagePath);
           return;
         }
         const text = clipboard.readText();
@@ -1336,12 +6762,14 @@ function registerHotkeysAfterOnboarding(): void {
     tracePath: getCommandLauncherTracePath(),
   });
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
+      const launcherSessionId = createLauncherSessionId();
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
       const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
       const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
       const fieldTheoryFocused = clipboardHistoryWindow?.getWindow()?.isFocused() ?? false;
 
       appendCommandLauncherTrace('hotkey-trigger', {
+        launcherSessionId,
         hotkey: commandLauncherHotkey,
         launcherVisible,
         launcherShowingOrVisible,
@@ -1351,13 +6779,13 @@ function registerHotkeysAfterOnboarding(): void {
 
       try {
         if (launcherVisible) {
-          appendCommandLauncherTrace('hotkey-hide-request');
+          appendCommandLauncherTrace('hotkey-hide-request', { launcherSessionId });
           commandLauncherWindow?.hide();
           return;
         }
 
         if (!commandLauncherWindow) {
-          appendCommandLauncherTrace('hotkey-show-missing-window');
+          appendCommandLauncherTrace('hotkey-show-missing-window', { launcherSessionId });
           return;
         }
 
@@ -1365,7 +6793,7 @@ function registerHotkeysAfterOnboarding(): void {
         // z-order conflicts. Keep it in place when Field Theory is the active
         // writing surface so launcher selection can navigate inside the app.
         if (immersiveMode && !fieldTheoryFocused) {
-          appendCommandLauncherTrace('hotkey-hide-immersive-window');
+          appendCommandLauncherTrace('hotkey-hide-immersive-window', { launcherSessionId });
           clipboardHistoryWindow?.hide();
         }
 
@@ -1377,17 +6805,19 @@ function registerHotkeysAfterOnboarding(): void {
           && (clipboardHistoryWindow?.temporarilyDisableAppWindowFocus('command-launcher-show') ?? false);
 
         appendCommandLauncherTrace('hotkey-show-request', {
+          launcherSessionId,
           anchor: anchorBounds ? 'field-theory-window' : 'frontmost-window',
           appWindowFocusSuppressed,
         });
-        await commandLauncherWindow.show({ anchorBounds });
+        await commandLauncherWindow.show({ anchorBounds, launcherSessionId });
         appendCommandLauncherTrace('hotkey-show-complete', {
+          launcherSessionId,
           launcherVisible: commandLauncherWindow.isVisible(),
           launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
         });
         metricsManager?.recordCommandLauncherUse();
       } catch (error) {
-        appendCommandLauncherTrace('hotkey-show-error', { error });
+        appendCommandLauncherTrace('hotkey-show-error', { launcherSessionId, error });
         log.error('Command launcher hotkey failed:', error);
       }
   });
@@ -1414,6 +6844,64 @@ function createOnboardingWindow(): OnboardingWindow {
     window.setPreferencesManager(preferencesManager);
   }
   return window;
+}
+
+function setupOnboardingIPCHandlersOnce(): void {
+  if (onboardingIPCHandlersInstalled) return;
+  setupOnboardingIPCHandlers();
+  onboardingIPCHandlersInstalled = true;
+}
+
+function setupTranscribeIPCHandlersOnce(): void {
+  if (transcribeIPCHandlersInstalled) return;
+  setupTranscribeIPCHandlers();
+  transcribeIPCHandlersInstalled = true;
+}
+
+function setupAppMetadataIPCHandlersOnce(): void {
+  if (appMetadataIPCHandlersInstalled) return;
+  ipcMain.on('app:getVersion', (event) => {
+    event.returnValue = app.getVersion();
+  });
+  ipcMain.on('updater:isEnabled', (event) => {
+    event.returnValue = isAutoUpdaterEnabled;
+  });
+  ipcMain.handle('updater:getStatus', () => {
+    return pendingUpdateInfo;
+  });
+  appMetadataIPCHandlersInstalled = true;
+}
+
+function showEarlyOnboardingIfNeeded(): boolean {
+  const prefs = preferencesManager?.get();
+  if (prefs?.onboardingComplete) return false;
+  if (userDataManager?.isLoggedIn()) return false;
+  setupOnboardingIPCHandlersOnce();
+  setupTranscribeIPCHandlersOnce();
+  onboardingWindow = onboardingWindow ?? createOnboardingWindow();
+  onboardingWindow.show(prefs?.onboardingStep ?? OnboardingStep.PERMISSIONS);
+  markStartupSurfaceShown(onboardingWindow.getWindow(), 'early-onboarding-window-shown');
+  startupMark('early-onboarding-show-called');
+  maybeExitStartupBenchmark('early-onboarding-show-called');
+  return true;
+}
+
+function showEarlyClipboardWindowIfNeeded(): boolean {
+  const prefs = preferencesManager?.get();
+  const openedAsLoginItem = wasOpenedAsLoginItem();
+  if (!shouldShowClipboardWindowOnStartup(prefs?.onboardingComplete, openedAsLoginItem)) {
+    return false;
+  }
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
+  const boundsToUse = restoreClipboardHistoryBounds('library');
+  suspendDynamicIslandFocusForClipboardHistory('early-startup-show');
+  clipboardHistoryWindow.showLibrary(boundsToUse);
+  markStartupSurfaceShown(clipboardHistoryWindow.getWindow(), 'early-clipboard-window-shown');
+  startupMark('early-clipboard-show-called');
+  maybeExitStartupBenchmark('early-clipboard-show-called');
+  return true;
 }
 
 /**
@@ -1753,6 +7241,7 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   // Wire up native helper for fast sound playback if available.
   if (nativeHelper) {
     window.setNativeHelper(nativeHelper);
+    window.rememberExternalApp(nativeHelper.getFrontmostApp());
     window.getSoundManager().setNativeHelper(nativeHelper);
   }
 
@@ -1783,8 +7272,81 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
     }, 150);
     dynamicIslandManager?.refreshWindowProperties(`clipboard-history:hidden:${reason}`);
   });
+  window.setOnDidFinishLoad(() => {
+    void hydrateNativeRendererStorageFromBrowserLibraryStore();
+  });
 
   return window;
+}
+
+function getLibraryDocumentWindowManager(): LibraryDocumentWindowManager {
+  if (!libraryDocumentWindowManager) {
+    libraryDocumentWindowManager = new LibraryDocumentWindowManager(
+      () => preferencesManager?.get().libraryDocumentWindowBounds,
+      (bounds) => {
+        preferencesManager?.save({
+          libraryDocumentWindowBounds: persistableLibraryDocumentWindowBounds(bounds),
+        }).catch((error) => {
+          log.error('Failed to save Library document window bounds:', error);
+        });
+      },
+    );
+  }
+  return libraryDocumentWindowManager;
+}
+
+function getDocumentPresenceManager(): DocumentPresenceManager {
+  if (!documentPresenceManager) {
+    documentPresenceManager = new DocumentPresenceManager();
+  }
+  return documentPresenceManager;
+}
+
+function registerDocumentPresenceWindow(win: BrowserWindow): void {
+  if (documentPresenceWindows.has(win)) return;
+  documentPresenceWindows.add(win);
+  const windowId = String(win.id);
+  win.on('focus', () => getDocumentPresenceManager().focusWindow(windowId));
+  win.on('closed', () => {
+    getDocumentPresenceManager().closeWindow(windowId);
+    if (activeLibraryFileContextSourceId === windowId) {
+      activeLibraryFileContext = null;
+      activeLibraryFileContextSourceId = null;
+    }
+  });
+}
+
+function normalizeLibraryDocumentWindowTarget(target: Partial<LibraryDocumentWindowTarget> | null | undefined): LibraryDocumentWindowTarget | null {
+  if (!target || typeof target.path !== 'string' || !target.path.trim()) return null;
+  const pathValue = target.path.trim();
+  const contentMode = target.contentMode === 'markdown' || target.contentMode === 'typedown' || target.contentMode === 'rendered'
+    ? target.contentMode
+    : undefined;
+  const sidebarCollapsed = target.sidebarCollapsed === true ? true : undefined;
+
+  if (target.kind === 'wiki') {
+    return librarianManager?.getWikiPage(pathValue)
+      ? { kind: 'wiki', path: pathValue, contentMode, sidebarCollapsed }
+      : null;
+  }
+
+  if (target.kind === 'artifact') {
+    return librarianManager?.getReading(pathValue)
+      ? { kind: 'artifact', path: pathValue, contentMode, sidebarCollapsed }
+      : null;
+  }
+
+  if (target.kind === 'external') {
+    try {
+      const canonical = fs.realpathSync(pathValue);
+      if (!isLibraryTextDocumentPath(canonical)) return null;
+      return { kind: 'external', path: canonical, contentMode, sidebarCollapsed };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function getFieldTheoryWindowMode(): FieldTheoryWindowMode {
@@ -1793,6 +7355,33 @@ function getFieldTheoryWindowMode(): FieldTheoryWindowMode {
 
 function shouldUseClipboardAppWindowMode(): boolean {
   return getFieldTheoryWindowMode() === 'app';
+}
+
+function wasOpenedAsLoginItem(): boolean {
+  if (process.platform !== 'darwin' || !app.isPackaged) return false;
+  try {
+    const settings = app.getLoginItemSettings();
+    return Boolean(settings.wasOpenedAtLogin || settings.wasOpenedAsHidden);
+  } catch {
+    return false;
+  }
+}
+
+function showClipboardHistoryOnStartup(): void {
+  const prefs = preferencesManager?.get();
+  const openedAsLoginItem = wasOpenedAsLoginItem();
+  if (!shouldShowClipboardWindowOnStartup(prefs?.onboardingComplete, openedAsLoginItem)) {
+    appendVisibilityTrace('app-startup.show-clipboard.skipped', {
+      reason: openedAsLoginItem ? 'login-item' : 'onboarding-incomplete',
+      onboardingComplete: prefs?.onboardingComplete ?? null,
+      openedAsLoginItem,
+    });
+    return;
+  }
+
+  appendVisibilityTrace('app-startup.show-clipboard.action', { action: 'show', initialViewMode: 'library' });
+  clipboardHistoryWindow?.suppressBlurDismiss(1500);
+  showClipboardHistoryOnActivate();
 }
 
 async function prepareClipboardWindowStyleTransition(): Promise<void> {
@@ -1883,13 +7472,26 @@ function showSettingsInClipboardWindow(): void {
 function showClipboardHistoryOnActivate(): void {
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
-  if (!prefs?.onboardingComplete) {
-    return;
-  }
-
-  // Don't show clipboard history if the command launcher is visible OR showing.
-  // Using isShowingOrVisible() closes the TOCTTOU race window during async show().
-  if (commandLauncherWindow?.isShowingOrVisible()) {
+  const commandLauncherExternalInvocationSuppressed =
+    commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? false;
+  const commandLauncherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
+  appendVisibilityTrace('app-activate.show-clipboard.request', {
+    mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+    initialViewMode: 'library',
+    onboardingComplete: prefs?.onboardingComplete ?? null,
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    commandLauncherShowingOrVisible,
+    commandLauncherExternalInvocationSuppressed,
+  });
+  const preflightSkipReason = getClipboardHistoryActivationPreflightSkipReason({
+    appQuitInProgress,
+    onboardingComplete: prefs?.onboardingComplete === true,
+    commandLauncherExternalInvocationSuppressed,
+    commandLauncherShowingOrVisible,
+  });
+  if (preflightSkipReason) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: preflightSkipReason });
     return;
   }
 
@@ -1900,32 +7502,43 @@ function showClipboardHistoryOnActivate(): void {
   // If clipboard history is already visible (e.g., immersive mode), don't call show().
   // Calling show() triggers moveTop() which would steal focus from other windows.
   if (clipboardHistoryWindow.isVisible()) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'already-visible' });
     return;
   }
 
-  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.focusExistingWindow()) {
+  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.restoreExistingAppWindow('app-activate', 'library')) {
+    appendVisibilityTrace('app-activate.show-clipboard.action', { action: 'restore-existing-app-window' });
     cursorStatusManager?.refreshWindowProperties();
     dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-app-activate');
     return;
   }
 
   // Show the clipboard window when app is activated (e.g., Dock icon click).
-  const boundsToUse = restoreClipboardHistoryBounds();
+  const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-app-activate');
-  clipboardHistoryWindow.show(boundsToUse);
+  appendVisibilityTrace('app-activate.show-clipboard.action', {
+    action: 'show',
+    initialViewMode: 'library',
+    bounds: boundsToUse,
+  });
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   // Re-assert transparent overlay properties after clipboard window show.
   cursorStatusManager?.refreshWindowProperties();
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
 
-/** Route an incoming markdown path to the library view. Called from `open-file`
+/** Route an incoming Field Theory document path to the library view. Called from `open-file`
  *  (macOS) and also deferred until the main window exists for cold starts. */
 function routeOpenMarkdown(inputPath: string): void {
   const resolved = resolveIncomingMarkdownPath(inputPath, librarianManager?.getWikiRoot() ?? null);
   if (!resolved) {
-    log.info(`open-file: ignoring non-markdown or unreadable path: ${inputPath}`);
+    log.info(`open-file: ignoring unsupported or unreadable path: ${inputPath}`);
     return;
   }
+  const browserHandled = resolved.kind === 'wiki'
+    ? emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath: resolved.relPath }, { broadcastFallback: false })
+    : emitBrowserLibraryNavigationEvent({ type: 'external:openPage', absPath: resolved.absPath }, { broadcastFallback: false });
+  if (browserHandled) return;
   if (!clipboardHistoryWindow) {
     log.info('open-file: main window not ready, queueing');
     pendingOpenMarkdownPath = inputPath;
@@ -1933,7 +7546,7 @@ function routeOpenMarkdown(inputPath: string): void {
   }
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-reading');
-  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   const webContents = clipboardHistoryWindow.getWindow()?.webContents;
   if (!webContents) return;
   if (resolved.kind === 'wiki') {
@@ -1951,6 +7564,15 @@ let pendingOpenMarkdownPath: string | null = null;
  * Set up all IPC handlers for audio-related communication.
  */
 function setupIPCHandlers(): void {
+  ipcMain.on('window:setWindowButtonVisibility', (event: IpcMainEvent, visible: boolean) => {
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!sourceWindow || sourceWindow.isDestroyed()) return;
+    const setWindowButtonVisibility = sourceWindow.setWindowButtonVisibility?.bind(sourceWindow);
+    if (typeof setWindowButtonVisibility === 'function') {
+      setWindowButtonVisibility(Boolean(visible));
+    }
+  });
+
   ipcMain.handle(AudioIPCChannels.GET_STATE, () => {
     if (!audioManager) {
       return {
@@ -2026,22 +7648,41 @@ function setupThemeIPCHandlers(): void {
 
   // Set theme preference and broadcast to all windows
   ipcMain.handle('theme:set', async (_event, isDark: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ darkMode: isDark });
-    }
-
-    // Broadcast to all windows
-    const allWindows = BrowserWindow.getAllWindows();
-    for (const win of allWindows) {
-      win.webContents.send('theme:changed', isDark);
-    }
+    await setThemePreferenceAndBroadcast(isDark);
   });
+}
+
+async function setThemePreferenceAndBroadcast(isDark: boolean): Promise<void> {
+  if (preferencesManager) {
+    await preferencesManager.save({ darkMode: isDark });
+  }
+
+  const allWindows = BrowserWindow.getAllWindows();
+  for (const win of allWindows) {
+    win.webContents.send('theme:changed', isDark);
+  }
+  browserHelperServer?.emitNativeEvent({ type: 'theme:changed', isDark });
+}
+
+/**
+ * Point the tagged-docs scanner/watcher at exactly the directories the user
+ * added to their library (left nav). Called whenever that set can change so we
+ * only ever scan/watch what the user is actually looking at — never whole
+ * cloud-storage trees.
+ */
+function syncTaggedDocsRootsFromLibrary(): void {
+  if (!taggedDocsManager) return;
+  taggedDocsManager.setRoots(librarianManager?.getLibraryRootPaths() ?? []);
 }
 
 /**
  * Set up IPC handlers for Librarian (reading collection) functionality.
  */
 function setupLibrarianIPCHandlers(): void {
+  const currentLibraryRootPaths = (): string[] => (
+    librarianManager?.getLibraryRoots().map((root) => root.path) ?? []
+  );
+
   // Get all readings (metadata only, for sidebar)
   ipcMain.handle('librarian:getReadings', (): ReadingMeta[] => {
     if (!librarianManager) {
@@ -2056,6 +7697,16 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     return librarianManager.getReading(filePath);
+  });
+
+  ipcMain.handle('librarian:traceNavigation', (_event, stage: string, payload: Record<string, unknown> = {}): void => {
+    log.info('[LibraryNavigationTrace] %s %j', stage, payload);
+    try {
+      const tracePath = path.join(app.getPath('userData'), 'librarian-navigation-trace.log');
+      fs.appendFileSync(tracePath, `${JSON.stringify({ timestamp: Date.now(), stage, payload })}\n`);
+    } catch (error) {
+      log.warn('[LibraryNavigationTrace] failed to append trace file:', error);
+    }
   });
 
   // Save reading content to disk
@@ -2150,7 +7801,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.addLibraryRoot(dirPath);
+    const added = librarianManager.addLibraryRoot(dirPath);
+    syncTaggedDocsRootsFromLibrary();
+    return added;
   });
 
   ipcMain.handle('library:removeRoot', (_event, dirPath: string): boolean => {
@@ -2159,7 +7812,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return false;
     }
-    return librarianManager.removeLibraryRoot(dirPath);
+    const removed = librarianManager.removeLibraryRoot(dirPath);
+    syncTaggedDocsRootsFromLibrary();
+    return removed;
   });
 
   ipcMain.handle('library:createFile', (_event, rootPath: string, folderRelPath: string, fileName: string): WikiPage | null => {
@@ -2168,7 +7823,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+    const page = librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+    recordRecentCreatedLibraryPage(page, rootPath);
+    return page;
   });
 
   ipcMain.handle('library:createDir', (_event, rootPath: string, dirRelPath: string): boolean => {
@@ -2189,11 +7846,23 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
   });
 
-  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): string | null => {
+  ipcMain.handle('library:moveItem', async (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> => {
     if (!librarianManager) return null;
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return null;
+    }
+    if (isMoveIntoRiver(kind, sourceRelPath, targetDirRelPath)) {
+      const entitlement = await getSharedFeatureEntitlement();
+      refreshFieldTheorySyncServices();
+      if (!entitlement.allowed || !sharedSyncService) return null;
+      return moveLibraryFileIntoRiver({
+        librarianManager,
+        sharedSyncService,
+        rootPath,
+        sourceRelPath,
+        targetRootPath,
+      });
     }
     return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
   });
@@ -2211,16 +7880,63 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiPage(relPath);
   });
 
+  ipcMain.handle('wiki:getBacklinkRelationDocuments', (_event, relPath: string): WikiBacklinkRelationDocument[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getWikiBacklinkRelationDocuments(relPath);
+  });
+
+  ipcMain.handle('library:getBacklinkRelationDocuments', async (_event, target: LibraryBacklinkTarget): Promise<LibraryBacklinkRelationDocument[]> => {
+    if (!librarianManager) return [];
+    return librarianManager.getLibraryBacklinkRelationDocuments(
+      target,
+      (filePath) => commandsManager?.getCommandByPath(filePath) ?? null,
+    );
+  });
+
   ipcMain.handle('wiki:findPageByDocumentVersion', (_event, version: DocumentVersion, previousRelPath?: string): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.findWikiPageByDocumentVersion(version, previousRelPath);
   });
 
-  ipcMain.handle('wiki:save', (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  async function saveSharedCacheFileIfNeeded(
+    filePath: string,
+    content: string,
+    expectedVersion?: DocumentVersion | null,
+  ): Promise<DocumentSaveResult | null> {
+    const currentContent = fs.readFileSync(filePath, 'utf-8');
+    const sharedMeta = parseSharedFileFrontmatter(currentContent);
+    if (!sharedMeta) return null;
+    const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
+    if (localConflict) return localConflict;
+
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: 'error' };
+
+    const result = await sharedSyncService.updateSharedContent(
+      sharedMeta.sharedId,
+      content,
+      sharedMeta.revision ?? 0,
+      filePath,
+    );
+    if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+    if (result.ok && result.cachePath) return documentSaveResultForUpdatedFile(result.cachePath);
+    if (result.error === 'Remote revision changed before this edit synced') {
+      return documentSaveResultForSharedConflict(result.remoteContent ?? currentContent, result.cachePath);
+    }
+    return { ok: false, reason: 'error' };
+  }
+
+  ipcMain.handle('wiki:save', async (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!librarianManager) return { ok: false, reason: 'error' };
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
+    }
+    const page = librarianManager.getWikiPage(relPath);
+    if (page) {
+      const sharedSave = await saveSharedCacheFileIfNeeded(page.absPath, content, expectedVersion);
+      if (sharedSave) return sharedSave;
     }
     return librarianManager.saveWikiPage(relPath, content, expectedVersion);
   });
@@ -2231,7 +7947,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createWikiFile(folderName, fileName);
+    const page = librarianManager.createWikiFile(folderName, fileName);
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:createFileWithDefaultTitle', (_event, folderName: string): WikiPage | null => {
@@ -2240,7 +7958,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createWikiFileWithDefaultTitle(folderName);
+    const page = librarianManager.createWikiFileWithDefaultTitle(folderName);
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
@@ -2258,7 +7978,9 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return librarianManager.createScratchpadDefault();
+    const page = librarianManager.createScratchpadDefault();
+    recordRecentWikiPage(page);
+    return page;
   });
 
   ipcMain.handle('wiki:openScratchpadDefault', (): WikiPage | null => {
@@ -2286,22 +8008,17 @@ function setupLibrarianIPCHandlers(): void {
   // Recent items (wiki + external). Returns the updated list so the renderer
   // can re-render without a second round-trip; also broadcasts `recent:changed`
   // so other windows/components (e.g. sidebar) drop stale entries immediately.
-  const broadcastRecentChanged = () => {
-    BrowserWindow.getAllWindows().forEach((w) => {
-      if (!w.isDestroyed()) w.webContents.send('recent:changed');
-    });
-  };
   ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
   ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] => {
     const next = recentManager?.visit(entry) ?? [];
-    broadcastRecentChanged();
+    broadcastRecentChanged(next);
     return next;
   });
   ipcMain.handle(
     'recent:remove',
     (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] => {
       const next = recentManager?.remove(kind, entryPath) ?? [];
-      broadcastRecentChanged();
+      broadcastRecentChanged(next);
       return next;
     },
   );
@@ -2314,7 +8031,7 @@ function setupLibrarianIPCHandlers(): void {
     (_event, absPath: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const content = fs.readFileSync(canonical, 'utf-8');
         const stats = fs.statSync(canonical);
         return {
@@ -2331,19 +8048,57 @@ function setupLibrarianIPCHandlers(): void {
     },
   );
 
-  ipcMain.handle('external:save', (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+  ipcMain.handle('external:save', async (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return { ok: false, reason: 'blocked' };
     }
     try {
       const canonical = fs.realpathSync(absPath);
-      if (!isAllowedMarkdownExt(canonical)) return { ok: false, reason: 'not-found' };
-      return writeTextFileWithConflictGuard(canonical, content, expectedVersion);
+      if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
+      const sharedSave = await saveSharedCacheFileIfNeeded(canonical, content, expectedVersion);
+      if (sharedSave) return sharedSave;
+      const previousContent = fs.readFileSync(canonical, 'utf-8');
+      const nextContent = isAllowedMarkdownExt(canonical)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      return writeTextFileWithConflictGuard(canonical, nextContent, expectedVersion);
     } catch (error) {
       log.error(`external:save failed for ${absPath}:`, error);
       return { ok: false, reason: 'error' };
     }
+  });
+
+  ipcMain.handle('markdownImages:copyImageForDocument', (_event, documentPath: string, imagePath: string, alt?: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
+    return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: currentLibraryRootPaths() });
+  });
+
+  ipcMain.handle('markdownImages:copyImageDataUrlForDocument', (_event, documentPath: string, dataUrl: string, alt?: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
+    return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: currentLibraryRootPaths() });
+  });
+
+  ipcMain.handle('markdownImages:makeImagesPortable', (_event, documentPath: string, content: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { content, copied: 0, rewritten: 0, missing: 0 };
+    }
+    return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: currentLibraryRootPaths() });
+  });
+
+  ipcMain.handle('markdownImages:deleteUnusedCopiedImages', (_event, documentPath: string, removedMarkdown: string, remainingContent: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { deleted: 0, skipped: 0, missing: 0 };
+    }
+    return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: currentLibraryRootPaths() });
   });
 
   ipcMain.handle(
@@ -2410,14 +8165,11 @@ function setupLibrarianIPCHandlers(): void {
       }
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const trimmed = newName.trim();
         if (!trimmed) return null;
-        const lower = trimmed.toLowerCase();
         const extension = path.extname(canonical) || '.md';
-        const nextFileName = lower.endsWith('.md') || lower.endsWith('.markdown')
-          ? markdownFileNameFromUserInput(trimmed)
-          : markdownFileNameFromUserInput(`${trimmed}${extension}`);
+        const nextFileName = libraryTextDocumentFileNameFromUserInput(trimmed, extension);
         if (!nextFileName) return null;
         const nextPath = path.join(path.dirname(canonical), nextFileName);
         if (nextPath === canonical) {
@@ -2485,19 +8237,36 @@ function setupLibrarianIPCHandlers(): void {
     },
   );
 
+  ipcMain.handle('external:delete', async (_event, absPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
+    return librarianManager.deleteExternalLibraryFile(absPath);
+  });
+
   if (librarianManager) {
     librarianManager.startWikiWatcher();
-    librarianManager.on('wiki:changed', () => {
+    librarianManager.on('wiki:changed', (event?: LibraryChangeEvent) => {
       scheduleLibrarySyncIfAllowed();
+      const launcherDirectNotified = event && typeof event === 'object'
+        && (event as LibraryChangeEvent & { launcherDirectNotified?: unknown }).launcherDirectNotified === true;
       traceLibraryRename('broadcast-wiki-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+        changeType: event?.type ?? null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:changed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
-          w.webContents.send('wiki:changed');
-          w.webContents.send('library:changed');
+          w.webContents.send('wiki:changed', event);
+          w.webContents.send('library:changed', event);
         }
       });
+      if (!launcherDirectNotified) {
+        commandLauncherWindow?.send('wiki:changed', event);
+        commandLauncherWindow?.send('library:changed', event);
+      }
     });
     librarianManager.on('wiki:renamed', (event: LibraryRenameEvent) => {
       scheduleLibrarySyncIfAllowed();
@@ -2508,21 +8277,30 @@ function setupLibrarianIPCHandlers(): void {
         newRelPath: event.newRelPath,
         ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:renamed', event });
+      browserHelperServer?.emitNativeEvent({ type: 'library:renamed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
           w.webContents.send('wiki:renamed', event);
           w.webContents.send('library:renamed', event);
         }
       });
+      commandLauncherWindow?.send('wiki:renamed', event);
+      commandLauncherWindow?.send('library:renamed', event);
     });
-    librarianManager.on('library:changed', () => {
+    librarianManager.on('library:changed', (_rootPath?: string, event?: LibraryChangeEvent) => {
       scheduleLibrarySyncIfAllowed();
+      const launcherDirectNotified = event && typeof event === 'object'
+        && (event as LibraryChangeEvent & { launcherDirectNotified?: unknown }).launcherDirectNotified === true;
       traceLibraryRename('broadcast-library-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+        changeType: event?.type ?? null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'library:changed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('library:changed');
+        if (!w.isDestroyed()) w.webContents.send('library:changed', event);
       });
+      if (!launcherDirectNotified) commandLauncherWindow?.send('library:changed', event);
     });
     librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
       scheduleLibrarySyncIfAllowed();
@@ -2533,9 +8311,11 @@ function setupLibrarianIPCHandlers(): void {
         newRelPath: event.newRelPath,
         ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
       });
+      browserHelperServer?.emitNativeEvent({ type: 'library:renamed', event });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:renamed', event);
       });
+      commandLauncherWindow?.send('library:renamed', event);
     });
     // Auto-prune recent when a wiki page is trashed so stale entries drop
     // from the sidebar even if the caller didn't explicitly call recent:remove.
@@ -2544,6 +8324,7 @@ function setupLibrarianIPCHandlers(): void {
         recentManager.remove('wiki', relPath);
         broadcastRecentChanged();
       }
+      browserHelperServer?.emitNativeEvent({ type: 'wiki:deleted', relPath });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('wiki:deleted', relPath);
       });
@@ -2551,15 +8332,14 @@ function setupLibrarianIPCHandlers(): void {
   }
 
   ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
-    if (!bookmarksManager) return { bookmarks: [], folders: [], xLastSyncedAt: null };
-    return bookmarksManager.getSnapshot();
+    return ensureBookmarksManager().getSnapshot();
   });
 
   ipcMain.handle('bookmarks:syncIfStale', () => syncBookmarksFromCliIfStale());
 
   ipcMain.handle('bookmarks:getAuthors', () => {
-    if (!bookmarksManager) return [];
-    return buildBookmarkAuthorSummaries(bookmarksManager.getSnapshot().bookmarks);
+    const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    return buildBookmarkAuthorSummaries(ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   const pasteBookmarkTextFromLauncher = async (
@@ -2581,9 +8361,11 @@ function setupLibrarianIPCHandlers(): void {
         return { success: false, error: 'No external target app available' };
       }
 
-      clipboard.writeText(text);
-      clipboardManager?.syncClipboardHash();
-      await activateAndPasteFromCommandLauncher(targetApp);
+      await runWithCommandLauncherExternalInvocation(async () => {
+        clipboard.writeText(text);
+        clipboardManager?.syncClipboardHash();
+        await activateAndPasteFromCommandLauncher(targetApp);
+      });
 
       appendCommandLauncherTrace(`${tracePrefix}-success`, {
         ...tracePayload,
@@ -2599,19 +8381,20 @@ function setupLibrarianIPCHandlers(): void {
   };
 
   ipcMain.handle('bookmarks:getAuthorBookmarks', (_event, handle: string) => {
-    if (!bookmarksManager) return [];
-    return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
+    const { bookmarksForAuthor } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    return bookmarksForAuthor(handle, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:getTaxonomyBookmarks', (_event, filePaths: string[]) => {
-    if (!bookmarksManager) return [];
     if (!Array.isArray(filePaths)) return [];
-    return bookmarksForTaxonomyFiles(filePaths, bookmarksManager.getSnapshot().bookmarks);
+    const { bookmarksForTaxonomyFiles } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+    return bookmarksForTaxonomyFiles(filePaths, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:search', (_event, query: string) => {
-    if (!bookmarksManager || typeof query !== 'string') return [];
-    return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
+    if (typeof query !== 'string') return [];
+    const { searchBookmarks } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
+    return searchBookmarks(query, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:saveWebUrl', async (_event, url: string) => {
@@ -2619,15 +8402,13 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { success: false, error: 'Field Theory is read-only' };
     }
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
+    const manager = ensureBookmarksManager();
     if (typeof url !== 'string' || !url.trim()) {
       return { success: false, error: 'URL is required' };
     }
 
     try {
-      const result = await bookmarksManager.saveWebBookmarkFromUrl(url);
+      const result = await manager.saveWebBookmarkFromUrl(url);
       return { success: true, ...result };
     } catch (error) {
       log.error('Error saving web bookmark:', error);
@@ -2680,9 +8461,7 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { success: false, error: 'Field Theory is read-only' };
     }
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
+    const manager = ensureBookmarksManager();
 
     const activePage = await getActiveWebPageForLauncher('save-active-web-page');
     if (!activePage.success || !activePage.page) {
@@ -2691,7 +8470,7 @@ function setupLibrarianIPCHandlers(): void {
 
     try {
       const { page } = activePage;
-      const result = await bookmarksManager.saveWebBookmarkFromUrl(page.url);
+      const result = await manager.saveWebBookmarkFromUrl(page.url);
       appendCommandLauncherTrace('save-active-web-page-success', {
         targetBundleId: page.bundleId,
         targetName: page.appName,
@@ -2712,11 +8491,8 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
-    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    const { bookmarkById, formatBookmarkPost } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
     }
@@ -2725,11 +8501,10 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:copyForAgent', async (_event, id: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
-    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+    const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+    const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
     }
@@ -2745,11 +8520,8 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:invokeAuthorTimeline', async (_event, handle: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
-    const timeline = formatBookmarkAuthorTimeline(handle, bookmarksManager.getSnapshot().bookmarks);
+    const { formatBookmarkAuthorTimeline } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    const timeline = formatBookmarkAuthorTimeline(handle, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!timeline) {
       return { success: false, error: 'No bookmarks found for author' };
     }
@@ -2757,14 +8529,7 @@ function setupLibrarianIPCHandlers(): void {
     return pasteBookmarkTextFromLauncher('invoke-bookmark-author', { handle }, timeline);
   });
 
-  if (bookmarksManager) {
-    bookmarksManager.startWatcher();
-    bookmarksManager.on('bookmarks:changed', () => {
-      BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
-      });
-    });
-  }
+  ensureBookmarksWatcher();
 
   // Get all watched directories
   ipcMain.handle('librarian:getWatchedDirs', (): WatchedDir[] => {
@@ -2814,6 +8579,27 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.on('librarian:setMarkdownEditorFocused', (_event, focused: boolean) => {
     librarianMarkdownEditorFocused = Boolean(focused);
+    const handoff = getBrowserLibraryNativeFocusHandoff(librarianMarkdownEditorFocused);
+    if (handoff.clearBrowserMarkdownEditorOwner) {
+      browserLibraryMarkdownEditorFocused = false;
+      activeBrowserLibraryClientId = null;
+    }
+    if (handoff.clearBrowserNavigationOwner) {
+      activeBrowserLibrarySurfaceClientId = null;
+      activeBrowserLibrarySurfaceKind = null;
+    } else if (handoff.promoteBrowserNavigationOwner && activeBrowserLibrarySurfaceClientId) {
+      promoteBrowserLibraryClientContext(activeBrowserLibrarySurfaceClientId);
+    }
+  });
+
+  ipcMain.on('browser-library:get-renderer-storage-sync', (event) => {
+    event.returnValue = getBrowserLibraryRendererStorageStore().snapshotSync();
+  });
+
+  ipcMain.on('browser-library:renderer-storage-changed', (_event, payload: { key?: unknown; value?: unknown }) => {
+    const key = typeof payload?.key === 'string' ? payload.key : '';
+    const value = typeof payload?.value === 'string' ? payload.value : null;
+    void setBrowserLibraryRendererStorage(key, value);
   });
 
   // ===========================================================================
@@ -2836,7 +8622,7 @@ function setupLibrarianIPCHandlers(): void {
 
   // Check if setup wizard is complete
   ipcMain.handle('librarian:isSetupComplete', (): boolean => {
-    return librarianManager?.isSetupComplete() ?? false;
+    return librarianManager?.isSetupComplete() ?? inferCurrentLibrarianSetupComplete();
   });
 
   // Mark setup wizard as complete
@@ -3044,7 +8830,7 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('librarian:getConfigPaths', (): { claudeMd: string; librarianCommand: string } => {
     return {
       claudeMd: path.join(os.homedir(), '.claude', 'CLAUDE.md'),
-      librarianCommand: path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md'),
+      librarianCommand: path.join(commandsDir(), 'librarian.md'),
     };
   });
 
@@ -3233,206 +9019,225 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
+  // Shared/River Files
+  // ===========================================================================
+
+  ipcMain.handle('sharedFiles:getAvailability', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+    return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
+  });
+
+  ipcMain.handle('sharedFiles:getStatus', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
+    return sharedSyncService.getShareStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getAudience', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+    return sharedSyncService.getAudienceStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getTimeline', async (_event, query: RiverTimelineQuery) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getTimeline(query);
+  });
+
+  ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getDestinations(query);
+  });
+
+  ipcMain.handle('sharedFiles:getTargets', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverTargets(query);
+  });
+
+  ipcMain.handle('sharedFiles:setDefaultDestinations', async (_event, destinations: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+  });
+
+  ipcMain.handle('sharedFiles:getSourcePreferences', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverSourcePreferences();
+  });
+
+  ipcMain.handle('sharedFiles:updateSourcePreferences', async (_event, preferences: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.updateRiverSourcePreferences(preferences as any);
+  });
+
+  ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
+    const result = await sharedSyncService.shareFile(input);
+    if (result.shared) librarianManager?.emit('library:changed');
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:updateAudience', async (_event, input: SharedFileAudienceUpdateInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+    const result = await sharedSyncService.updateAudience(input);
+    if (!result.error) librarianManager?.emit('library:changed');
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:unshare', async (_event, filePath: string): Promise<boolean> => {
+    if (!canWriteFieldTheoryContent()) return false;
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return false;
+    const result = await sharedSyncService.unshareFile(filePath);
+    if (result) librarianManager?.emit('library:changed');
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:sync', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+    const result = await sharedSyncService.syncOnce();
+    if (result.written > 0 || result.removed > 0 || result.created > 0) {
+      librarianManager?.emit('library:changed');
+    }
+    broadcastSharedFilePinsChanged();
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
+    if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
+    return result;
+  });
+
+  ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.setActivePresence(sharedId);
+  });
+
+  ipcMain.handle('sharedFiles:getPinnedItemIds', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getPinnedSidebarItemIds();
+  });
+
+  ipcMain.handle('sharedFiles:setPinned', async (_event, filePath: string, pinned: boolean) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
+    return sharedSyncService.setPinned(filePath, pinned);
+  });
+
+  // ===========================================================================
+  // Team Membership
+  // ===========================================================================
+
+  ipcMain.handle('team:getEntitlement', async () => getSharedFeatureEntitlement());
+
+  ipcMain.handle('team:getState', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedTeamService) {
+      return {
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: entitlement.reason ?? 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      };
+    }
+    return sharedTeamService.getTeamState();
+  });
+
+  ipcMain.handle('team:inviteMember', async (_event, email: string): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return afterTeamMutation(sharedTeamService.inviteMember(email));
+  });
+
+  ipcMain.handle('team:respondToInvite', async (_event, contactId: string, accept: boolean): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return afterTeamMutation(sharedTeamService.respondToInvite(contactId, accept));
+  });
+
+  ipcMain.handle('team:removeMember', async (_event, contactId: string): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return afterTeamMutation(sharedTeamService.removeMember(contactId));
+  });
+
+  ipcMain.handle('team:leaveTeam', async (): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return afterTeamMutation(sharedTeamService.leaveTeam());
+  });
+
+  // ===========================================================================
   // Public Sharing
   // ===========================================================================
 
   // Share a reading publicly
   ipcMain.handle('librarian:shareReading', async (_event, filePath: string): Promise<{ slug: string; url: string } | null> => {
-    if (!authManager?.isAuthenticated()) {
-      return null;
-    }
-
-    const reading = librarianManager?.getReading(filePath);
-    if (!reading) {
-      return null;
-    }
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) {
-      return null;
-    }
-
-    // Get author name from profile (first + last for "First L." format)
-    let authorName: string | null = null;
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('first_name, last_name')
-        .eq('id', session.user.id)
-        .single();
-      if (profile?.first_name && profile?.last_name) {
-        authorName = `${profile.first_name} ${profile.last_name}`;
-      } else if (profile?.first_name) {
-        authorName = profile.first_name;
-      }
-    } catch {
-      // Ignore profile fetch errors
-    }
-
-    // Check if this reading was previously shared (re-sharing)
-    const { data: existing } = await supabase
-      .from('shared_readings')
-      .select('slug, is_public')
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .single();
-
-    if (existing) {
-      // Re-enable existing share
-      if (!existing.is_public) {
-        await supabase
-          .from('shared_readings')
-          .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
-          .eq('source_path', filePath)
-          .eq('user_id', session.user.id);
-      }
-      return {
-        slug: existing.slug,
-        url: `https://librarian.fieldtheory.dev/${existing.slug}`,
-      };
-    }
-
-    // Generate slug: title-abc123
-    const slugify = (text: string): string =>
-      text
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 50);
-
-    const baseSlug = slugify(reading.title);
-
-    // Try up to 3 times with different random suffixes
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const randomSuffix = crypto.randomBytes(3).toString('hex');
-      const slug = `${baseSlug}-${randomSuffix}`;
-
-      const { data, error } = await supabase
-        .from('shared_readings')
-        .insert({
-          user_id: session.user.id,
-          slug,
-          title: reading.title,
-          content: reading.content,
-          author_name: authorName,
-          source_path: filePath,
-          is_public: true,
-        })
-        .select('slug')
-        .single();
-
-      if (!error && data) {
-        metricsManager?.recordLibrarianArtifactShared();
-        return {
-          slug: data.slug,
-          url: `https://librarian.fieldtheory.dev/${data.slug}`,
-        };
-      }
-
-      // If unique constraint violation, try again with new suffix
-      if (error?.code === '23505') {
-        continue;
-      }
-
-      log.error('Librarian share failed:', error);
-      return null;
-    }
-
-    log.error('Librarian share failed: max retries exceeded');
-    return null;
+    return shareLibrarianReading(filePath);
   });
 
   // Unshare a reading (soft delete)
   ipcMain.handle('librarian:unshareReading', async (_event, filePath: string): Promise<boolean> => {
-    if (!authManager?.isAuthenticated()) return false;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return false;
-
-    const { error } = await supabase
-      .from('shared_readings')
-      .update({ is_public: false })
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id);
-
-    if (error) {
-      log.error('Librarian unshare failed:', error);
-      return false;
-    }
-
-    return true;
+    return unshareLibrarianReading(filePath);
   });
 
   // Check if a reading is shared
   ipcMain.handle('librarian:getShareStatus', async (_event, filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> => {
-    if (!authManager?.isAuthenticated()) return null;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return null;
-
-    const { data, error } = await supabase
-      .from('shared_readings')
-      .select('slug, is_public')
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .single();
-
-    if (error || !data) {
-      return { shared: false };
-    }
-
-    if (!data.is_public) {
-      return { shared: false };
-    }
-
-    return {
-      shared: true,
-      slug: data.slug,
-      url: `https://librarian.fieldtheory.dev/${data.slug}`,
-    };
+    return getLibrarianShareStatus(filePath);
   });
 
   // Update a shared reading's content
   ipcMain.handle('librarian:updateSharedReading', async (_event, filePath: string, content: string, title: string): Promise<boolean> => {
-    if (!authManager?.isAuthenticated()) return false;
-
-    const supabase = authManager.getSupabaseClient();
-    const session = authManager.getSession();
-    if (!supabase || !session?.user?.id) return false;
-
-    // Get author name from profile
-    let authorName: string | null = null;
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('first_name, last_name')
-        .eq('id', session.user.id)
-        .single();
-      if (profile?.first_name && profile?.last_name) {
-        authorName = `${profile.first_name} ${profile.last_name}`;
-      } else if (profile?.first_name) {
-        authorName = profile.first_name;
-      }
-    } catch {
-      // Ignore profile fetch errors
-    }
-
-    const { error } = await supabase
-      .from('shared_readings')
-      .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
-      .eq('source_path', filePath)
-      .eq('user_id', session.user.id)
-      .eq('is_public', true);
-
-    if (error) {
-      log.error('Librarian update shared reading failed:', error);
-      return false;
-    }
-
-    return true;
+    return updateSharedLibrarianReading(filePath, content, title);
   });
 
   // Mute librarian for today
@@ -3478,7 +9283,10 @@ function setupLibrarianIPCHandlers(): void {
 
   // Get figures directory path for permissions
   ipcMain.handle('claude:getFiguresPath', (): string => {
-    return path.join(app.getPath('userData'), 'figures');
+    return clipboardManager?.getFiguresPath()
+      ?? (userDataManager?.isLoggedIn()
+        ? userDataManager.getUserDataPath('figures')
+        : path.join(app.getPath('userData'), 'figures'));
   });
 
   // Get available permission profiles
@@ -3566,73 +9374,87 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.uninstallCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
   });
 
-  // ===========================================================================
-  // Metrics IPC handlers - User-visible usage stats
-  // "The metrics you see are the metrics we see."
-  // ===========================================================================
-
-  // Get current metrics for display in Settings
-  ipcMain.handle('metrics:getMetrics', (): UserMetrics => {
-    return metricsManager?.getMetrics() ?? {
-      transcriptions: 0,
-      words_transcribed: 0,
-      words_improved: 0,
-      priority_mic_minutes: 0,
-      verbal_commands: 0,
-      command_launcher_uses: 0,
-      clipboard_items: 0,
-      pastes_used: 0,
-      stacks_created: 0,
-      autostacks_created: 0,
-      stacks_pasted: 0,
-      items_added_to_context: 0,
-      sketches_created: 0,
-      screenshots_taken: 0,
-      librarian_artifacts_created: 0,
-      librarian_artifacts_shared: 0,
-      commands_executed: 0,
-      commands_contributed: 0,
-      feedback_given: 0,
-    };
+  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }) => {
+    const manager = getCodexTerminalManager();
+    const session = manager.createSession(input);
+    broadcastCodexTerminalSessions(manager);
+    return session;
   });
 
-  // Get metrics with sync status
-  ipcMain.handle('metrics:getMetricsWithStatus', (): { metrics: UserMetrics; lastSyncedAt: string | null; pendingSync: boolean } => {
-    return metricsManager?.getMetricsWithStatus() ?? {
-      metrics: {
-        transcriptions: 0,
-        words_transcribed: 0,
-        words_improved: 0,
-        priority_mic_minutes: 0,
-        verbal_commands: 0,
-        command_launcher_uses: 0,
-        clipboard_items: 0,
-        pastes_used: 0,
-        stacks_created: 0,
-        autostacks_created: 0,
-        stacks_pasted: 0,
-        items_added_to_context: 0,
-        sketches_created: 0,
-        screenshots_taken: 0,
-        librarian_artifacts_created: 0,
-        librarian_artifacts_shared: 0,
-        commands_executed: 0,
-        commands_contributed: 0,
-        feedback_given: 0,
-      },
-      lastSyncedAt: null,
-      pendingSync: false,
-    };
+  ipcMain.handle(CodexTerminalIPCChannels.LIST, () => {
+    return getCodexTerminalManager().listSessions();
   });
 
-  // Force sync to Supabase
-  ipcMain.handle('metrics:syncToSupabase', async (): Promise<boolean> => {
-    return metricsManager?.syncToSupabase() ?? false;
+  ipcMain.handle(CodexTerminalIPCChannels.LIST_HISTORY, (_event, input?: { query?: string; limit?: number }) => {
+    return getCodexTerminalManager().listHistory(input);
   });
 
-  // Fetch from Supabase (merge with local)
-  ipcMain.handle('metrics:fetchFromSupabase', async (): Promise<boolean> => {
-    return metricsManager?.fetchFromSupabase() ?? false;
+  ipcMain.handle(CodexTerminalIPCChannels.READ_HISTORY_PREVIEW, (_event, filePath: string, input?: { maxBytes?: number }) => {
+    return getCodexTerminalManager().readHistoryPreview(filePath, input);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.GET_BUFFER, (_event, id: string): string | null => {
+    return getCodexTerminalManager().getBuffer(id);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.INPUT, (_event, id: string, data: string): boolean => {
+    return getCodexTerminalManager().writeInput(id, data);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.SET_LAUNCHER_TARGET_SESSION, (_event, id: string | null): boolean => {
+    focusedCodexTerminalLauncherSessionId = typeof id === 'string' && id.trim() ? id : null;
+    return true;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.RESIZE, (_event, id: string, cols: number, rows: number): boolean => {
+    return getCodexTerminalManager().resize(id, cols, rows);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.KILL, (_event, id: string): boolean => {
+    const manager = getCodexTerminalManager();
+    const didKill = manager.kill(id);
+    if (didKill) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return didKill;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.RENAME, (_event, id: string, title: string): boolean => {
+    const manager = getCodexTerminalManager();
+    const didRename = manager.rename(id, title);
+    if (didRename) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return didRename;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.READ_CLIPBOARD_TEXT, (): string => {
+    return clipboard.readText();
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.READ_TERMINAL_PASTE_TEXT, async (): Promise<string> => {
+    return readCodexTerminalPasteText({
+      clipboard,
+      imageExporter: clipboardManager,
+    });
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.WRITE_CLIPBOARD_TEXT, (_event, text: string): boolean => {
+    clipboard.writeText(text);
+    return true;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.ATTACH_PAGE_CONTEXT, (_event, id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }) => {
+    const manager = getCodexTerminalManager();
+    const result = manager.attachPageContext(id, context, options);
+    if (result.ok) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return result;
+  });
+
+  registerMetricsIpc({
+    getMetricsManager: () => metricsManager,
   });
 }
 
@@ -3662,7 +9484,12 @@ function setupSquaresIPCHandlers(): void {
   ipcMain.handle(
     SquaresIPCChannels.EXECUTE_ACTION,
     async (_event, action: SquaresAction, source?: SquaresActionSource) => {
-      return squaresManager?.executeAction(action, { source }) ?? false;
+      const includeFieldTheoryWindows = source === 'command-launcher'
+        && (commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false);
+      return squaresManager?.executeAction(action, {
+        source,
+        includeFieldTheoryWindows,
+      }) ?? false;
     }
   );
 
@@ -3903,7 +9730,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_MODEL_DOWNLOAD_STATUS, async () => {
     if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
+      return {};
     }
     const modelManager = transcriberManager.getModelManager();
     return modelManager.getDownloadStatus();
@@ -4014,20 +9841,97 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
-    return false;
+    return transcriberManager?.getAutoImprove() ?? false;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async () => {
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
     if (!transcriberManager) return;
-    await transcriberManager.setAutoImprove(false);
+    await transcriberManager.setAutoImprove(enabled);
+    trayManager?.refreshMenu();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER, () => {
+    return transcriberManager?.getAutoImproveProvider() ?? 'local';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, async (_event, provider: AutoImproveProvider) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveProvider(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, async (_event, provider: AutoImproveProvider) => {
+    return getTextImproveProviderStatus(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS, () => {
+    return getAutoImproveModelOptions();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, async (_event, options: Partial<AutoImproveModelOptions>) => {
+    const normalized = normalizeAutoImproveModelOptions({
+      ...getAutoImproveModelOptions(),
+      ...(options ?? {}),
+    });
+    await preferencesManager?.save({
+      autoImproveCodexModel: normalized.codexModel,
+      autoImproveCodexEffort: normalized.codexEffort,
+      autoImproveClaudeModel: normalized.claudeModel,
+      autoImproveClaudeEffort: normalized.claudeEffort,
+    });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES, () => {
+    return getAutoImproveWritingPreferences();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, async (_event, writingPreferences: string) => {
+    const sanitized = sanitizeAutoImproveWritingPreferences(writingPreferences);
+    await preferencesManager?.save({ autoImproveWritingPreferences: sanitized });
+    return sanitized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES, () => {
+    return getAutoImproveContextFiles();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, async (_event, files: AutoImproveContextFile[]) => {
+    const normalized = normalizeAutoImproveContextFiles(files);
+    await preferencesManager?.save({ autoImproveContextFiles: normalized });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose Auto-Improve Context Files',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return getAutoImproveContextFiles();
+    const next = normalizeAutoImproveContextFiles([
+      ...getAutoImproveContextFiles(),
+      ...result.filePaths.map((filePath) => ({ path: filePath, enabled: true })),
+    ]);
+    await preferencesManager?.save({ autoImproveContextFiles: next });
+    return next;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_LIVE_TYPING, () => {
+    return transcriberManager?.getLiveTyping() ?? false;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_LIVE_TYPING, async (_event, enabled: boolean) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setLiveTyping(enabled);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
-    return 0;
+    return transcriberManager?.getAutoImproveMinWords() ?? 70;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async () => {
-    return;
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async (_event, minWords: number) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveMinWords(minWords);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS, () => {
@@ -4050,16 +9954,17 @@ function setupTranscribeIPCHandlers(): void {
   ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
     return transcriberManager?.getConfiguredTranscriptionEngine()
       ?? preferencesManager?.getPreference('transcriptionEngine')
-      ?? 'whisper';
+      ?? 'parakeet';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
-    log.info('Transcription engine set: %s', engine);
+    const nextEngine = isParakeetEngine(engine) ? engine : 'parakeet';
+    log.info('Transcription engine set: %s', nextEngine);
     await preferencesManager.save({
-      transcriptionEngine: engine,
+      transcriptionEngine: nextEngine,
       hotMicTranscriptionEngine: 'default',
     });
     await transcriberManager?.restartTranscriptionRuntime();
@@ -4104,33 +10009,11 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED, async () => {
-    if (!transcriberManager) {
-      return false;
-    }
-    return transcriberManager.isMlxWhisperInstalled();
+    return false;
   });
 
   ipcMain.handle(TranscribeIPCChannels.SETUP_MLX_WHISPER, async () => {
-    const macAppRoot = path.resolve(__dirname, '../..');
-    const scriptPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'scripts', 'setup-mlx-whisper.sh')
-      : path.join(macAppRoot, 'scripts', 'setup-mlx-whisper.sh');
-    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
-
-    if (!fs.existsSync(scriptPath)) {
-      return { success: false, error: `MLX Whisper setup script not found at: ${scriptPath}` };
-    }
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
-        if (error) {
-          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
-          resolve({ success: false, error: details });
-        } else {
-          resolve({ success: true });
-        }
-      });
-    });
+    return { success: false, error: 'MLX Whisper is no longer supported. Use Parakeet instead.' };
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_PARAKEET_INSTALLED, async () => {
@@ -4260,6 +10143,13 @@ function setupClipboardIPCHandlers(): void {
       return null;
     }
     return clipboardManager.exportCurrentClipboardImageToCache();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SAVE_PASTED_IMAGE_FILE, async (_event, file: { name?: string | null; type?: string | null; data: Uint8Array }): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    return clipboardManager.savePastedImageFileToCache(file);
   });
 
   ipcMain.handle(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, async (_event, id: number): Promise<string | null> => {
@@ -4416,7 +10306,7 @@ function setupClipboardIPCHandlers(): void {
       // Determine the target bundle ID for terminal detection
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -4431,6 +10321,7 @@ function setupClipboardIPCHandlers(): void {
 
       // Check if target needs file paths instead of image buffers.
       const shouldPasteImageAsPath = isTerminalApp(effectiveBundleId) || isIDEWithTerminal(effectiveBundleId);
+      let commandLauncherTextContent: string | undefined;
 
       // Put content on clipboard first.
       // Use optimized hash methods to avoid expensive clipboard reads after write.
@@ -4466,6 +10357,7 @@ function setupClipboardIPCHandlers(): void {
         }
 
         clipboard.writeText(textContent);
+        commandLauncherTextContent = textContent;
         // Set hash directly from the text we just wrote (avoids clipboard read)
         clipboardManager.setClipboardHashFromText(textContent);
       } else if (item.imageData) {
@@ -4480,6 +10372,7 @@ function setupClipboardIPCHandlers(): void {
               : `\`${shortPath}\``;
             const figureRefWithSpace = `${figureRef} `;
             clipboard.writeText(figureRefWithSpace);
+            commandLauncherTextContent = figureRefWithSpace;
             // Set hash from exact clipboard payload to avoid self-capture churn.
             clipboardManager.setClipboardHashFromText(figureRefWithSpace);
           } else {
@@ -4499,22 +10392,35 @@ function setupClipboardIPCHandlers(): void {
         }
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-item');
-      }
+      const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
 
-      // If a specific target app was provided, activate it and paste there.
-      // Otherwise, use the default behavior (paste to previous app).
-      if (targetBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(targetBundleId);
-      } else if (effectiveBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+      if (useCommandLauncherPaste && targetBundleId) {
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-item-command-launcher', commandLauncherTextContent);
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+        }
       } else {
-        // Last-resort paste when no known target app is available.
-        try {
-          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
-        } catch { /* Silently fail if paste times out */ }
+        if (commandLauncherWindow?.isShowingOrVisible()) {
+          commandLauncherWindow.hide(false);
+        }
+
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-item');
+        }
+
+        // If a specific target app was provided, activate it and paste there.
+        // Otherwise, use the default behavior (paste to previous app).
+        if (targetBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(targetBundleId);
+        } else if (effectiveBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+        } else {
+          // Last-resort paste when no known target app is available.
+          try {
+            await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+          } catch { /* Silently fail if paste times out */ }
+        }
       }
 
       // Record paste metric
@@ -4579,13 +10485,30 @@ function setupClipboardIPCHandlers(): void {
       // Use explicit target from renderer if provided, otherwise fall back to window state.
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-stack');
+      const commandLauncherPasteTarget = targetBundleId && commandLauncherWindow?.isShowingOrVisible()
+        ? findRunningAppForBundleId(targetBundleId)
+        : null;
+      if (commandLauncherPasteTarget) {
+        const targetReady = await runWithCommandLauncherExternalInvocation(async () => {
+          const activated = await activateCommandLauncherTargetApp(commandLauncherPasteTarget, 'paste-stack-command-launcher');
+          if (!activated) return false;
+          commandLauncherWindow?.hide(true);
+          clipboardHistoryWindow?.hideAfterPaste('paste-stack-command-launcher');
+          return true;
+        });
+        if (!targetReady) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+          return;
+        }
+      } else {
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-stack');
+        }
       }
       
       const { nativeImage } = require('electron');
@@ -4616,7 +10539,7 @@ function setupClipboardIPCHandlers(): void {
 
       const orderedItems = orderStackItemsForPaste(items, frontmostBundleId);
 
-      if (frontmostBundleId && clipboardHistoryWindow && !isFinder(frontmostBundleId)) {
+      if (frontmostBundleId && clipboardHistoryWindow && !commandLauncherPasteTarget && !isFinder(frontmostBundleId)) {
         await clipboardHistoryWindow.activateApp(frontmostBundleId);
         // Give macOS a short moment to settle focus before synthetic paste events.
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -4749,7 +10672,7 @@ function setupClipboardIPCHandlers(): void {
       
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -4761,22 +10684,31 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-text');
-      }
-      
-      // If a specific target app was provided, activate it and paste there
-      if (targetBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(targetBundleId);
-      } else if (effectiveBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+      const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
+
+      if (useCommandLauncherPaste && targetBundleId) {
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-text-command-launcher', text);
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+        }
       } else {
-        // Last-resort paste when no known target app is available.
-        // Use timeout to prevent hang if target app is unresponsive.
-        try {
-          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
-        } catch { /* Silently fail if paste times out */ }
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-text');
+        }
+
+        // If a specific target app was provided, activate it and paste there
+        if (targetBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(targetBundleId);
+        } else if (effectiveBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+        } else {
+          // Last-resort paste when no known target app is available.
+          // Use timeout to prevent hang if target app is unresponsive.
+          try {
+            await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+          } catch { /* Silently fail if paste times out */ }
+        }
       }
     } catch (error) {
       log.error('pasteText error:', error);
@@ -4840,7 +10772,14 @@ function setupClipboardIPCHandlers(): void {
     return clipboardHistoryWindow.pasteToApp(bundleId);
   });
 
-  ipcMain.on('clipboard:closeWindow', async () => {
+  ipcMain.on('clipboard:closeWindow', async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const mainClipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+    if (senderWindow && senderWindow !== mainClipboardWindow) {
+      senderWindow.close();
+      return;
+    }
+
     // Avoid app.hide() here: that compositor path can destabilize transparent
     // overlay corners. Hide only the window, then explicitly restore focus.
     if (clipboardHistoryWindow) {
@@ -4896,6 +10835,13 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.on('clipboard-history:setSizeKey', (_event, key: string) => {
     if (!isClipboardHistorySizeKey(key)) return;
     clipboardHistoryWindow?.setSizeKey(key);
+  });
+
+  ipcMain.handle('library:openDocumentWindow', (_event, target: Partial<LibraryDocumentWindowTarget>): { success: boolean; error?: string } => {
+    const normalized = normalizeLibraryDocumentWindowTarget(target);
+    if (!normalized) return { success: false, error: 'Invalid document window target' };
+    getLibraryDocumentWindowManager().open(normalized);
+    return { success: true };
   });
 
   // Stack operations for prompt stacking feature
@@ -4999,6 +10945,84 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // Local LLM model management for offline command execution.
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS, async () => {
+    return getLocalLlmManager().getAvailableModels();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS, async () => {
+    return getLocalLlmManager().getDownloadStatus();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_HEALTH, async () => {
+    return getLocalLlmManager().getModelHealthMap();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED, async () => {
+    return getLocalLlmManager().getSelectedModel();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, async (_event, model: string) => {
+    const manager = getLocalLlmManager();
+    const selected = manager.setSelectedModel(model);
+    if (selected.success) {
+      await preferencesManager?.save({ localLlmSelectedModel: model });
+    }
+    return selected;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, async (_event, model: string) => {
+    return installOrAccessLocalLlmModel(model);
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.DELETE_LOCAL_LLM, async () => {
+    return {
+      success: false,
+      error: 'Bundled local models are removed by deleting the model file from resources/models.',
+    };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_USE_LOCAL_LLM, async () => {
+    return true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_USE_LOCAL_LLM, async (_event, useLocal: boolean) => {
+    return useLocal
+      ? { success: true }
+      : { success: false, error: 'Offline commands require the local model.' };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_MEETING_SUMMARY_PROMPT, async () => {
+    return preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SAVE_MEETING_SUMMARY_PROMPT, async (_event, prompt: string) => {
+    if (!preferencesManager) {
+      return { success: false, error: 'Preferences manager not initialized.' };
+    }
+
+    if (typeof prompt !== 'string') {
+      return { success: false, error: 'Meeting notes prompt must be text.' };
+    }
+
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      return { success: false, error: 'Meeting notes prompt cannot be empty.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: prompt });
+    return { success: true, prompt };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.RESET_MEETING_SUMMARY_PROMPT, async () => {
+    if (!preferencesManager) {
+      return { success: false, prompt: DEFAULT_MEETING_SUMMARY_PROMPT, error: 'Preferences manager not initialized.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT });
+    return { success: true, prompt: DEFAULT_MEETING_SUMMARY_PROMPT };
+  });
+
   // =========================================================================
   // Improved Content Management - Save/clear improved versions of transcriptions
   // =========================================================================
@@ -5056,6 +11080,8 @@ function setupClipboardIPCHandlers(): void {
 
   // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
+    clearBrowserHelperState();
+
     // Unregister all hotkeys via HotkeyManager
     const hotkeyManager = getHotkeyManager();
     hotkeyManager.unregisterAll();
@@ -5063,14 +11089,14 @@ function setupClipboardIPCHandlers(): void {
     // Unregister Squares window management hotkeys.
     squaresManager?.unregisterHotkeys();
 
-    // Clean up LibrarianManager (stop file watchers, close database)
-    librarianManager?.destroy();
-
-    // Clean up TaggedDocsManager (stop file watcher, close database)
-    taggedDocsManager?.destroy();
-
     // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
+
+    // Stop any local agent kickoff subprocesses.
+    agentKickoffManager?.destroy();
+
+    // Clean up embedded Codex terminals.
+    codexTerminalManager?.destroy();
 
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
@@ -5085,53 +11111,28 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // Mobile Sync IPC Handlers - Sync iOS transcriptions to clipboard history
+  // Mobile Sync IPC Handlers - disabled for public release.
   // =========================================================================
 
-  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
-    if (!authManager) {
-      return false;
-    }
-    await authManager.setSession(accessToken, refreshToken);
-    return true;
+  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async () => {
+    return false;
   });
 
   ipcMain.handle(ClipboardIPCChannels.CLEAR_SYNC_SESSION, async () => {
-    if (authManager) {
-      authManager.clearSession();
-    }
     return true;
   });
 
-  // Get session from main process for recovery when renderer localStorage is cleared.
-  // This allows the renderer to recover auth state without re-login.
   ipcMain.handle(ClipboardIPCChannels.GET_SYNC_SESSION, async () => {
-    if (!authManager) {
-      return null;
-    }
-    const session = authManager.getSession();
-    if (!session) {
-      return null;
-    }
-    // Only return tokens if session is not expired.
-    const now = Math.floor(Date.now() / 1000);
-    if (session.expires_at && session.expires_at <= now) {
-      return null;
-    }
-    return {
-      accessToken: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresAt: session.expires_at,
-      user: session.user ? {
-        id: session.user.id,
-        email: session.user.email,
-      } : null,
-    };
+    return null;
   });
 
   // =========================================================================
   // Password Authentication IPC Handlers
   // =========================================================================
+
+  ipcMain.handle('auth:isConfigured', () => {
+    return Boolean(authManager?.getSupabaseClient());
+  });
 
   ipcMain.handle('auth:signUp', async (_event, email: string, password: string) => {
     if (!authManager) {
@@ -5144,7 +11145,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.signInWithPassword(email, password);
+    const result = await authManager.signInWithPassword(email, password);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:prepareForNewLogin', async () => {
@@ -5169,7 +11174,10 @@ function setupClipboardIPCHandlers(): void {
       await quotaManager.reload();
     }
 
-    return result;
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
@@ -5197,7 +11205,11 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.setSessionFromUrl(accessToken, refreshToken);
+    const result = await authManager.setSessionFromUrl(accessToken, refreshToken);
+    return {
+      ...result,
+      session: result.session ? authManager.getSessionState() : null,
+    };
   });
 
   ipcMain.handle('auth:signOut', async () => {
@@ -5324,41 +11336,14 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return null;
     }
-    return authManager.getSession();
+    return authManager.getSessionState();
   });
 
   ipcMain.handle('auth:isSuperAdmin', (): boolean => {
     return authManager?.isSuperAdmin() ?? false;
   });
 
-  // Open external URL in default browser (for Stripe checkout, etc).
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
-    if (!allowed.test(url)) {
-      log.warn('shell:openExternal blocked non-http URL: %s', url);
-      return;
-    }
-    await shell.openExternal(url);
-  });
-
-  // Reveal file in Finder (macOS).
-  ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
-    try {
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
-        await shell.openPath(fullPath);
-        return;
-      }
-    } catch {
-      // Fall through to the existing reveal behavior.
-    }
-    shell.showItemInFolder(fullPath);
-  });
-
-  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
-  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    win?.setRepresentedFilename(fullPath || '');
-  });
+  registerShellIpc();
 
   ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
     return launchAgentImproveInTerminal(request);
@@ -5715,7 +11700,7 @@ function setupClipboardIPCHandlers(): void {
   // Show in Dock - legacy API; maps onto Field Theory window behavior.
   ipcMain.handle('clipboard:getShowInDock', async () => {
     if (!preferencesManager) {
-      return false;
+      return true;
     }
     return shouldUseClipboardAppWindowMode();
   });
@@ -5742,9 +11727,9 @@ function setupClipboardIPCHandlers(): void {
   // Click-away dismissal - controls whether the panel hides when another app gets focus.
   ipcMain.handle('clipboard:getClickAwayToDismiss', async () => {
     if (!preferencesManager) {
-      return true;
+      return false;
     }
-    return preferencesManager.getPreference('clickAwayToDismiss') ?? true;
+    return preferencesManager.getPreference('clickAwayToDismiss') ?? false;
   });
 
   ipcMain.handle('clipboard:setClickAwayToDismiss', async (_event, enabled: boolean) => {
@@ -5795,7 +11780,7 @@ function setupClipboardIPCHandlers(): void {
     if (process.platform === 'darwin' && app.isPackaged) {
       app.setLoginItemSettings({
         openAtLogin: enabled,
-        openAsHidden: true, // Start in background (menu bar app)
+        openAsHidden: true, // Keep login-item launches quiet; direct launches show the window.
       });
 
       // Verify the setting was applied
@@ -5942,94 +11927,9 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  // =========================================================================
-  // Quota IPC Handlers - Local usage tracking
-  // QuotaManager handles session checking internally via setSessionChecker().
-  // =========================================================================
-
-  ipcMain.handle('quota:getQuotas', async () => {
-    if (!quotaManager) {
-      return null;
-    }
-    return quotaManager.getQuotas();
-  });
-
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => {
-    if (!quotaManager) {
-      return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
-    }
-    // Map old feature names to new database column names.
-    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'portable_commands'> = {
-      priorityMic: 'priority_mic_seconds',
-      autoStack: 'auto_stack_sessions',
-      textImprove: 'text_improve_words',
-      portableCommands: 'portable_commands',
-    };
-    const dbFeature = featureMap[feature];
-    return quotaManager.getFeatureStatus(dbFeature);
-  });
-
-  ipcMain.handle('quota:getFormattedUsage', async () => {
-    if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', portableCommands: 'Unlimited' };
-    }
-    return {
-      priorityMic: quotaManager.formatPriorityMicUsage(),
-      autoStack: quotaManager.formatAutoStackUsage(),
-      textImprove: quotaManager.formatTextImproveUsage(),
-      portableCommands: quotaManager.formatPortableCommandsUsage(),
-    };
-  });
-
-  ipcMain.handle('quota:getResetDate', async () => {
-    // Quotas now reset on calendar month boundary (1st of each month).
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  });
-
-  ipcMain.handle('quota:getDaysUntilReset', async () => {
-    if (!quotaManager) {
-      return 0;
-    }
-    return quotaManager.getDaysUntilReset();
-  });
-
-  ipcMain.handle('quota:getLimits', async () => {
-    if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, portableCommands: Infinity };
-    }
-    const raw = quotaManager.getLimits();
-    // Transform keys from snake_case to camelCase and convert seconds to minutes.
-    return {
-      priorityMicMinutes: raw.priority_mic_seconds === Infinity ? Infinity : Math.floor(raw.priority_mic_seconds / 60),
-      autoStackSessions: raw.auto_stack_sessions,
-      textImprovementWords: raw.text_improve_words,
-      portableCommands: raw.portable_commands,
-    };
-  });
-
-  ipcMain.handle('quota:refreshTier', async () => {
-    // Sync usage and tier from server. Tier is included in get-usage response.
-    if (!quotaManager) {
-      return { tier: 'free', error: 'Not initialized' };
-    }
-
-    try {
-      await quotaManager.syncFromServer();
-      const tier = quotaManager.getCachedTier();
-
-      // Broadcast tier change to all windows.
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('tier:changed', tier);
-        }
-      });
-
-      return { tier, error: null };
-    } catch (err) {
-      log.error('Error refreshing tier:', err);
-      return { tier: quotaManager.getCachedTier(), error: String(err) };
-    }
+  registerQuotaIpc({
+    getQuotaManager: () => quotaManager,
+    logError: (message, error) => log.error(message, error),
   });
 
   // =========================================================================
@@ -6050,6 +11950,22 @@ function setupClipboardIPCHandlers(): void {
     const report = await diagnosticsCollector.collect();
     return diagnosticsCollector.formatAsMarkdown(report);
   });
+
+  ipcMain.handle('diagnostics:appendRenderedEditorDebug', (_event, entry: unknown) => {
+    return writeRenderedEditorDebugLog(entry);
+  });
+
+  ipcMain.handle('diagnostics:appendScrollDiagnostics', (_event, entry: unknown) => {
+    return writeScrollDiagnosticsLog(entry);
+  });
+
+  ipcMain.handle('diagnostics:getRenderedEditorDebugLogPath', () => renderedEditorDebugLogPath);
+
+  ipcMain.handle('diagnostics:clearRenderedEditorDebugLog', () => clearRenderedEditorDebugLog());
+
+  ipcMain.handle('diagnostics:getScrollDiagnosticsLogPath', () => scrollDiagnosticsLogPath);
+
+  ipcMain.handle('diagnostics:clearScrollDiagnosticsLog', () => clearScrollDiagnosticsLog());
 
   // =========================================================================
   // Commands IPC Handlers - Portable commands management
@@ -6104,7 +12020,15 @@ function setupClipboardIPCHandlers(): void {
       name: cmd.name,
       displayName: cmd.displayName,
       filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
     }));
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_COMMAND_DIRECTORIES, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    return commandsManager.getCommandDirectories();
   });
 
   ipcMain.handle(CommandsIPCChannels.REFRESH_COMMANDS, async () => {
@@ -6116,7 +12040,46 @@ function setupClipboardIPCHandlers(): void {
       name: cmd.name,
       displayName: cmd.displayName,
       filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
     }));
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_FILE_ICON, async (_event, filePath: string): Promise<LauncherFileIconResult> => {
+    return getLauncherFileIcon(filePath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SEARCH_LAUNCHER_FILES, async (_event, query: string): Promise<LauncherFileSearchResult> => {
+    const { searchLauncherFiles } = require('./launcherFiles') as typeof import('./launcherFiles');
+    return searchLauncherFiles(query);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.OPEN_LAUNCHER_FILE, async (_event, filePath: string): Promise<{ success: boolean; error?: string }> => {
+    const { openLauncherFile } = require('./launcherFiles') as typeof import('./launcherFiles');
+    return openLauncherFile(filePath, {
+      openPath: (resolvedPath) => shell.openPath(resolvedPath),
+    });
+  });
+
+  ipcMain.handle(CommandsIPCChannels.WARM_LAUNCHER_FILE_INDEX, async (): Promise<{ started: boolean }> => {
+    const { warmLauncherFileIndex } = require('./launcherFiles') as typeof import('./launcherFiles');
+    void warmLauncherFileIndex();
+    return { started: true };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_SETTINGS, async (): Promise<LauncherSettings> => {
+    return {
+      rootSearchEnabledKinds: normalizeLauncherRootSearchEnabledKinds(
+        preferencesManager?.getPreference('launcherRootSearchEnabledKinds'),
+      ),
+    };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SET_LAUNCHER_SETTINGS, async (_event, settings: LauncherSettings): Promise<LauncherSettings> => {
+    const rootSearchEnabledKinds = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds);
+    if (preferencesManager) {
+      await preferencesManager.save({ launcherRootSearchEnabledKinds: rootSearchEnabledKinds });
+    }
+    return { rootSearchEnabledKinds };
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_COMMAND_CONTENT, async (_event, commandName: string) => {
@@ -6135,28 +12098,7 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, async (_event, filePath: string) => {
-    if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
-      return null;
-    }
-    try {
-      const canonicalPath = fs.realpathSync(filePath);
-      const stat = fs.statSync(canonicalPath);
-      if (!stat.isFile()) return null;
-
-      let content = fs.readFileSync(canonicalPath, 'utf-8');
-      if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
-        content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
-      }
-
-      return {
-        title: path.basename(canonicalPath),
-        filePath: canonicalPath,
-        content,
-      };
-    } catch (error) {
-      log.warn('Failed to load markdown preview:', error);
-      return null;
-    }
+    return loadMarkdownPreview(filePath);
   });
 
   // =========================================================================
@@ -6360,124 +12302,745 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
-  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
-    const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext: boolean; targetApp: { bundleId: string; name: string } | null }> => {
+    const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
+    const fieldTheoryActive = launchOrigin.kind === 'field-theory';
+    const launchOriginSurface = launchOrigin.kind === 'field-theory' ? launchOrigin.surface.kind : null;
     const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
     const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+    const targetApp = getCommandLauncherTargetApp();
+    const hasActiveLibraryFileContext = launchOriginSurface === 'markdown' && Boolean(activeLibraryFileContext?.filePath);
     appendCommandLauncherTrace('launcher-context', {
       fieldTheoryActive,
+      launchOriginKind: launchOrigin.kind,
+      launchOriginSurface,
       previousBundleId: previousApp?.bundleId ?? null,
       previousName: previousApp?.name ?? null,
       frontmostBundleId: frontmostApp?.bundleId ?? null,
       frontmostName: frontmostApp?.name ?? null,
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
+      integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+      launchOriginTerminalSessionId: launchOrigin.kind === 'field-theory' && launchOrigin.surface.kind === 'terminal' ? launchOrigin.surface.sessionId : null,
+      hasActiveLibraryFileContext,
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
     });
-    return { fieldTheoryActive };
+    return { fieldTheoryActive, hasActiveLibraryFileContext, targetApp };
   });
 
   ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
     return activeLibraryFileContext;
   });
 
-  ipcMain.handle('commands:setActiveLibraryFileContext', (_event, context: ActiveLibraryFileContext | null): boolean => {
+  ipcMain.handle('commands:setActiveLibraryFileContext', (event, context: ActiveLibraryFileContext | null): boolean => {
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (sourceWindow) registerDocumentPresenceWindow(sourceWindow);
+    const windowId = sourceWindow ? String(sourceWindow.id) : null;
+
     if (context === null) {
-      activeLibraryFileContext = null;
+      if (!windowId || activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (windowId) getDocumentPresenceManager().clearWindow(windowId);
       return true;
     }
     if (
       (context.type !== 'wiki' && context.type !== 'external') ||
-      !context.rootPath ||
-      !context.relPath ||
+      typeof context.rootPath !== 'string' ||
+      typeof context.relPath !== 'string' ||
+      typeof context.filePath !== 'string' ||
       !context.filePath ||
+      typeof context.title !== 'string' ||
       !context.title
     ) {
       return false;
     }
-    activeLibraryFileContext = {
+    const nextContext: ActiveLibraryFileContext = {
       type: context.type,
       rootPath: context.rootPath,
       relPath: context.relPath,
       filePath: context.filePath,
       title: context.title,
+      ...(typeof context.selectionStart === 'number' && typeof context.selectionEnd === 'number'
+        ? {
+            selectionStart: context.selectionStart,
+            selectionEnd: context.selectionEnd,
+            ...(typeof context.selectionText === 'string' ? { selectionText: context.selectionText } : {}),
+          }
+        : {}),
     };
+    if (!shouldAcceptActiveLibraryFileContext(nextContext)) {
+      if (!windowId || activeLibraryFileContextSourceId === windowId) {
+        activeLibraryFileContext = null;
+        activeLibraryFileContextSourceId = null;
+      }
+      if (windowId) getDocumentPresenceManager().clearWindow(windowId);
+      appendCommandLauncherTrace('active-library-context-rejected', {
+        source: 'native-window',
+        windowId,
+        filePath: nextContext.filePath,
+        rootPath: nextContext.rootPath,
+      });
+      return false;
+    }
+    activeLibraryFileContext = nextContext;
+    activeLibraryFileContextSourceId = windowId;
+    if (windowId) {
+      getDocumentPresenceManager().setWindowDocument(windowId, activeLibraryFileContext, sourceWindow?.isFocused() ?? false);
+    }
     return true;
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' }) => {
-    if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
+  ipcMain.handle('commands:archiveActiveLibraryFile', (): { success: boolean; error?: string } => (
+    archiveActiveLibraryFileForLauncher()
+  ));
+
+  ipcMain.handle('commands:toggleActiveLibraryLineNumbers', (): { success: boolean; error?: string } => {
+    return toggleActiveLibraryLineNumbersForLauncher();
+  });
+
+  runNativeLocalCommand = async (rawRequest: unknown): Promise<LocalCommandRunResult> => {
+    if (!commandsManager || !librarianManager) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Field Theory command system is not ready',
+        error: 'Field Theory command system is not ready',
+      });
+      return { success: false, error: 'Field Theory command system is not ready' };
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Field Theory is read-only',
+        error: 'Field Theory is read-only',
+      });
+      return { success: false, error: 'Field Theory is read-only' };
+    }
+    const request = normalizeLocalCommandRequest(rawRequest);
+    if (!request) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Invalid local command',
+        error: 'Invalid local command',
+      });
+      return { success: false, error: 'Invalid command' };
+    }
+    const mode: LocalCommandRunMode = request.mode ?? 'document';
+    const customInstruction = request.customInstruction?.trim();
+    const requestedCommandName = request.commandName?.trim();
+    const statusCommandName = customInstruction ? 'local' : requestedCommandName;
+    if (!activeLibraryFileContext) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'No current Field Theory document',
+        commandName: statusCommandName,
+        mode,
+        error: 'No current Field Theory document',
+      });
+      return { success: false, error: 'No current Field Theory document' };
+    }
+    if (!fs.existsSync(activeLibraryFileContext.filePath)) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Current document no longer exists',
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        error: 'Current document no longer exists',
+      });
+      return { success: false, error: 'Current document no longer exists' };
+    }
+
+    const command = customInstruction
+      ? null
+      : requestedCommandName?.toLowerCase() === 'improve'
+        ? await ensureLocalImproveCommand()
+        : requestedCommandName
+          ? commandsManager.getCommand(requestedCommandName)
+          : null;
+    if (!customInstruction && !command) {
+      const error = 'Command not found';
+      emitLocalCommandStatus({
+        status: 'error',
+        message: requestedCommandName ? `Command not found: ${requestedCommandName}` : error,
+        commandName: requestedCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        error,
+      });
+      return { success: false, error };
+    }
+
+    let maxwellRuns: MaxwellRunManager | null = null;
+    let maxwellRunId: string | undefined;
+    const updateMaxwellRun = (
+      action: string,
+      update: (manager: MaxwellRunManager, runId: string) => void,
+    ): void => {
+      if (!maxwellRuns || !maxwellRunId) return;
+      try {
+        update(maxwellRuns, maxwellRunId);
+      } catch (error) {
+        log.warn(`Could not ${action}:`, error);
+      }
+    };
+
+    let selectionStatusFields = (): { selectionStart?: number; selectionEnd?: number } => ({});
+    try {
+      emitLocalCommandStatus({
+        status: 'running',
+        message: customInstruction
+          ? 'Preparing local instruction...'
+          : `Loading ${command!.displayName || command!.name}...`,
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        phase: 'loading',
+      });
+      const loaded = customInstruction
+        ? { name: 'local', content: customInstruction, filePath: null as string | null }
+        : await commandsManager.loadCommandContent(command!);
+      if (!loaded) {
+        const error = 'Command file could not be loaded';
+        emitLocalCommandStatus({
+          status: 'error',
+          message: error,
+          commandName: statusCommandName,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          error,
+        });
+        return { success: false, error };
+      }
+
+      const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
+      const targetContent = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+      const memorySnapshot = readMaxwellMemorySnapshot(request.useMemory !== false);
+      let resolvedSelection: { start: number; end: number; text: string } | null = null;
+      if (mode === 'selection') {
+        const selection = resolveLocalCommandSelection(request.selection, targetContent);
+        if (!selection.ok) {
+          emitLocalCommandStatus({
+            status: 'error',
+            message: selection.error,
+            commandName: loaded.name,
+            filePath: activeLibraryFileContext.filePath,
+            mode,
+            error: selection.error,
+          });
+          return { success: false, error: selection.error, commandName: loaded.name, mode };
+        }
+        resolvedSelection = selection;
+      }
+      selectionStatusFields = () => resolvedSelection
+        ? { selectionStart: resolvedSelection.start, selectionEnd: resolvedSelection.end }
+        : {};
+
+      const localManager = getLocalLlmManager();
+      const maxwellStartedAt = Date.now();
+      try {
+        maxwellRuns = getMaxwellRunManager();
+        const run = maxwellRuns.createPendingRun({
+          commandName: loaded.name,
+          commandPath: loaded.filePath,
+          commandContent: loaded.content,
+          targetPath: activeLibraryFileContext.filePath,
+          targetRelPath: activeLibraryFileContext.type === 'wiki' ? activeLibraryFileContext.relPath : null,
+          targetType: activeLibraryFileContext.type === 'wiki' ? 'wiki' : 'reading',
+          mode,
+          preContent: targetContent,
+          preVersion: expectedVersion,
+          model: localManager.getSelectedModel(),
+          harness: localManager.getHarness(),
+          memorySnapshot,
+        });
+        maxwellRunId = run.runId;
+        activeMaxwellLocalRun = { runId: run.runId, cancelled: false };
+      } catch (error) {
+        log.warn('Could not create Maxwell run row:', error);
+      }
+      appendCommandLauncherTrace('run-local-command-start', {
+        commandName: loaded.name,
+        commandPath: loaded.filePath,
+        targetType: activeLibraryFileContext.type,
+        targetPath: activeLibraryFileContext.filePath,
+        mode,
+        memoryUsed: !!memorySnapshot,
+        maxwellRunId: maxwellRunId ?? null,
+      });
+      const targetFilePath = activeLibraryFileContext.filePath;
+      const emitHarnessProgress = (event: LocalLlmProgressEvent) => {
+        updateMaxwellRun('append Maxwell progress event', (manager, runId) => {
+          manager.appendProgressEvent(runId, event);
+        });
+        emitLocalCommandStatus({
+          status: 'running',
+          message: event.message,
+          detail: compactLocalCommandDetail(event.detail),
+          eventKind: event.kind,
+          commandName: loaded.name,
+          filePath: targetFilePath,
+          mode,
+          runId: maxwellRunId,
+          phase: event.phase ?? 'generating',
+          ...selectionStatusFields(),
+        });
+      };
+
+      emitLocalCommandStatus({
+        status: 'running',
+        message: mode === 'selection'
+          ? `Improving selected text locally...`
+          : `Running ${customInstruction ? 'local instruction' : loaded.name} locally...`,
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        runId: maxwellRunId,
+        phase: 'generating',
+        ...selectionStatusFields(),
+      });
+
+      let replacement: string;
+      if (mode === 'selection') {
+        const selection = resolvedSelection!;
+        const selectedReplacement = await localManager.runSelectionCommand({
+          commandName: loaded.name,
+          commandContent: loaded.content,
+          targetTitle: activeLibraryFileContext.title,
+          targetPath: activeLibraryFileContext.filePath,
+          targetContent,
+          selectedText: selection.text,
+          memorySnapshot,
+        }, {
+          onProgress: emitHarnessProgress,
+        });
+        replacement = `${targetContent.slice(0, selection.start)}${selectedReplacement}${targetContent.slice(selection.end)}`;
+      } else {
+        replacement = await localManager.runReplacementCommand({
+          commandName: loaded.name,
+          commandContent: loaded.content,
+          targetTitle: activeLibraryFileContext.title,
+          targetPath: activeLibraryFileContext.filePath,
+          targetContent,
+          memorySnapshot,
+        }, {
+          onProgress: emitHarnessProgress,
+        });
+      }
+      if (isActiveMaxwellRunCancelled(maxwellRunId)) {
+        emitLocalCommandStatus({
+          status: 'notice',
+          message: 'Maxwell run cancelled',
+          commandName: loaded.name,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          runId: maxwellRunId,
+          phase: 'cancelled',
+          ...selectionStatusFields(),
+        });
+        return { success: false, error: 'Maxwell run cancelled', commandName: loaded.name, mode, runId: maxwellRunId };
+      }
+      updateMaxwellRun('mark Maxwell run generated', (manager, runId) => {
+        manager.markGenerated(runId, replacement, {
+          generationMs: Date.now() - maxwellStartedAt,
+        });
+      });
+
+      const changeSummary = summarizeLocalCommandChange(targetContent, replacement);
+      emitLocalCommandStatus({
+        status: 'running',
+        message: mode === 'selection' ? 'Saving improved text...' : 'Saving local command result...',
+        detail: changeSummary.detail,
+        eventKind: 'file_change',
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        runId: maxwellRunId,
+        phase: 'saving',
+        changedLines: changeSummary.changedLines,
+        changedBytes: changeSummary.changedBytes,
+        ...selectionStatusFields(),
+      });
+
+      const saveResult = activeLibraryFileContext.type === 'wiki'
+        ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, replacement, expectedVersion)
+        : librarianManager.saveReading(activeLibraryFileContext.filePath, replacement, expectedVersion);
+
+      if (!saveResult.ok) {
+        const error = saveResult.reason === 'conflict'
+          ? 'Current document changed while the local command was running'
+          : `Could not save local command result: ${saveResult.reason}`;
+        appendCommandLauncherTrace('run-local-command-save-error', {
+          commandName: loaded.name,
+          targetPath: activeLibraryFileContext.filePath,
+          reason: saveResult.reason,
+          maxwellRunId: maxwellRunId ?? null,
+        });
+        updateMaxwellRun('mark Maxwell save failure', (manager, runId) => {
+          if (saveResult.reason === 'conflict') {
+            manager.markSaveConflict(runId, {
+              generatedContent: replacement,
+              errorMessage: error,
+            });
+          } else {
+            manager.markError(runId, 'save_error', error);
+          }
+        });
+        emitLocalCommandStatus({
+          status: 'error',
+          message: error,
+          commandName: loaded.name,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          runId: maxwellRunId,
+          error,
+          ...selectionStatusFields(),
+        });
+        return { success: false, error, commandName: loaded.name, mode, runId: maxwellRunId };
+      }
+
+      appendCommandLauncherTrace('run-local-command-success', {
+        commandName: loaded.name,
+        commandPath: loaded.filePath,
+        targetPath: activeLibraryFileContext.filePath,
+        mode,
+        maxwellRunId: maxwellRunId ?? null,
+      });
+      updateMaxwellRun('mark Maxwell run success', (manager, runId) => {
+        manager.markSuccess(runId, {
+          generatedContent: replacement,
+          postContent: replacement,
+          postVersion: saveResult.version,
+          summary: changeSummary.detail,
+          timings: { totalMs: Date.now() - maxwellStartedAt },
+        });
+      });
+      await quotaManager?.updateUsage('portable_commands', 1);
+      metricsManager?.recordCommandExecuted();
+      emitLocalCommandStatus({
+        status: 'success',
+        message: mode === 'selection'
+          ? 'Improved selected text'
+          : `Ran ${customInstruction ? 'local instruction' : loaded.name} locally`,
+        detail: changeSummary.detail,
+        eventKind: 'file_change',
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        runId: maxwellRunId,
+        phase: 'done',
+        changedLines: changeSummary.changedLines,
+        changedBytes: changeSummary.changedBytes,
+        ...selectionStatusFields(),
+      });
+      return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode, runId: maxwellRunId };
+    } catch (error) {
+      log.error('Error running local command:', error);
+      const message = error instanceof Error ? error.message : 'Local command failed';
+      if (isActiveMaxwellRunCancelled(maxwellRunId)) {
+        emitLocalCommandStatus({
+          status: 'notice',
+          message: 'Maxwell run cancelled',
+          commandName: statusCommandName,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          runId: maxwellRunId,
+          phase: 'cancelled',
+          ...selectionStatusFields(),
+        });
+        return { success: false, error: 'Maxwell run cancelled', commandName: statusCommandName, mode, runId: maxwellRunId };
+      }
+      updateMaxwellRun('mark Maxwell generation failure', (manager, runId) => {
+        manager.markError(runId, 'generation_error', message);
+      });
+      appendCommandLauncherTrace('run-local-command-error', { commandName: statusCommandName, mode, error, maxwellRunId: maxwellRunId ?? null });
+      emitLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        runId: maxwellRunId,
+        error: message,
+        ...selectionStatusFields(),
+      });
+      return { success: false, error: message, commandName: statusCommandName, mode, runId: maxwellRunId };
+    } finally {
+      if (maxwellRunId && activeMaxwellLocalRun?.runId === maxwellRunId) {
+        activeMaxwellLocalRun = null;
+      }
+    }
+  };
+
+  ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {
+    return runNativeLocalCommand(rawRequest);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION, async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await runGlobalImproveSelection();
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Improve selected text failed';
+      return { success: false, error: message };
+    }
+  });
+
+  ipcMain.handle(CommandsIPCChannels.LIST_MAXWELL_RUNS, (_event, rawLimit?: unknown): MaxwellRunSummary[] => {
+    return listNativeMaxwellRuns(rawLimit);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_MAXWELL_MEMORY, (): MaxwellMemoryState => {
+    return getMaxwellMemoryState();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SAVE_MAXWELL_MEMORY, async (_event, rawRequest: unknown): Promise<MaxwellMemorySaveResult> => {
+    return saveNativeMaxwellMemory(rawRequest);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.CANCEL_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellCancelResult => {
+    return cancelNativeMaxwellRun(rawRunId);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.UNDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellUndoResult => {
+    return undoNativeMaxwellRun(rawRunId);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.REDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellRedoResult => {
+    return redoNativeMaxwellRun(rawRunId);
+  });
+
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, rawTarget: { kind?: unknown; path?: unknown; contentMode?: 'rendered' | 'markdown' | 'typedown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
+    const target = normalizeFieldTheoryMarkdownTarget(rawTarget);
+    appendCommandLauncherTrace('open-field-theory-markdown-start', {
+      kind: rawTarget?.kind ?? null,
+      path: rawTarget?.path ?? null,
+      contentMode: rawTarget?.contentMode ?? null,
+    });
+    if (!target) {
+      appendCommandLauncherTrace('open-field-theory-markdown-error', {
+        reason: 'invalid-target',
+        kind: rawTarget?.kind ?? null,
+        path: rawTarget?.path ?? null,
+      });
       return { success: false, error: 'Invalid markdown target' };
     }
+    if (
+      target.kind !== 'clipboard' &&
+      emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target }, { broadcastFallback: false })
+    ) {
+      commandLauncherWindow?.hide(true);
+      appendCommandLauncherTrace('open-field-theory-markdown-success', {
+        kind: target.kind,
+        path: target.path,
+        contentMode: target.contentMode ?? null,
+        target: 'browser-library',
+      });
+      return { success: true };
+    }
     if (!clipboardHistoryWindow) {
+      appendCommandLauncherTrace('open-field-theory-markdown-error', {
+        reason: 'missing-field-theory-window',
+        kind: target.kind,
+        path: target.path,
+      });
       return { success: false, error: 'Field Theory window not available' };
     }
 
-    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' || target.kind === 'commands' || target.kind === 'clipboard' ? 'fields' : 'library';
+    const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
+      ? clipboardHistoryWindow.getCurrentSizeKey()
+      : target.kind === 'clipboard'
+        ? 'fields'
+        : 'library';
     if (clipboardHistoryWindow.isVisible()) {
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
       clipboardHistoryWindow.focusExistingWindow();
     } else {
       const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
-      clipboardHistoryWindow.show(boundsToUse);
+      if (target.kind === 'clipboard') {
+        clipboardHistoryWindow.show(boundsToUse);
+      } else {
+        clipboardHistoryWindow.showLibrary(boundsToUse);
+      }
     }
 
     commandLauncherWindow?.hide(true);
+    emitBrowserLibraryLauncherTarget(target);
     clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+    appendCommandLauncherTrace('open-field-theory-markdown-success', {
+      kind: target.kind,
+      path: target.path,
+      contentMode: target.contentMode ?? null,
+    });
     return { success: true };
   });
 
   ipcMain.handle('commands:insertMarkdownText', async (_event, text: string) => {
-    if (!clipboardHistoryWindow || !text) {
+    if (!text) {
       return { success: false, error: 'No markdown editor target' };
     }
     commandLauncherWindow?.hide(true);
-    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
-    return { success: true };
+    return insertTextIntoActiveFieldTheoryMarkdown(text)
+      ? { success: true }
+      : { success: false, error: 'No markdown editor target' };
+  });
+
+  ipcMain.handle('commands:insertClipboardItemsAsMarkdown', async (_event, ids: number[]) => {
+    if (!clipboardManager) {
+      return { success: false, error: 'No markdown editor target' };
+    }
+    const manager = clipboardManager;
+    const items = ids
+      .map((id) => manager.getItem(id))
+      .filter((item): item is ClipboardItem => Boolean(item));
+    if (items.length === 0) {
+      return { success: false, error: 'Clipboard item not found' };
+    }
+    const payload = await buildFieldTheoryMarkdownClipboardPayload(
+      items,
+      (item) => manager.exportImageToCache(item),
+    );
+    if (!payload) {
+      return { success: false, error: 'Clipboard item has no insertable content' };
+    }
+    commandLauncherWindow?.hide(true);
+    return insertTextIntoActiveFieldTheoryMarkdown(payload)
+      ? { success: true }
+      : { success: false, error: 'No markdown editor target' };
   });
 
   // Handle handoff invocation from command launcher (same behavior as commands).
   ipcMain.handle('commands:invokeHandoff', async (_event, filePath: string) => {
-    const plist = require('plist');
-
     if (!commandsManager || !fs.existsSync(filePath)) {
       return { success: false, error: 'Handoff not found' };
     }
 
     try {
       const targetApp = getCommandLauncherTargetApp();
+      const invocationTarget = getCommandLauncherInvocationTarget(targetApp);
       appendCommandLauncherTrace('invoke-handoff-start', {
         filePath,
         targetBundleId: targetApp?.bundleId ?? null,
         targetName: targetApp?.name ?? null,
+        integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+        invocationTarget: invocationTarget.kind,
       });
-      if (!targetApp) {
+      const fileName = path.basename(filePath);
+      if (invocationTarget.kind === 'field-theory-terminal') {
+        const handoffText = formatCommandFilePasteText({
+          kind: 'handoff',
+          fileName,
+          filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (writeTextIntoFocusedCodexTerminal(handoffText, invocationTarget.sessionId)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-handoff-integrated-terminal-success', {
+            filePath,
+            sessionId: invocationTarget.sessionId,
+            textLength: handoffText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-handoff-integrated-terminal-failed', { filePath });
+      }
+      if (invocationTarget.kind === 'field-theory-markdown') {
+        const handoffText = formatCommandFilePasteText({
+          kind: 'handoff',
+          fileName,
+          filePath,
+          mode: 'wiki-link',
+          markdownContent: '',
+        });
+        if (insertTextIntoActiveFieldTheoryMarkdown(handoffText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-handoff-field-theory-markdown-success', {
+            filePath,
+            textLength: handoffText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-handoff-field-theory-markdown-failed', { filePath });
+      }
+      if (invocationTarget.kind !== 'external-app' || !targetApp) {
         commandLauncherWindow?.hide(true);
         appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
         return { success: false, error: 'No external target app available' };
       }
-      const isTerminal = isTerminalApp(targetApp.bundleId);
-      const isIDE = isIDEWithTerminal(targetApp.bundleId);
-      const fileName = path.basename(filePath);
 
-      if (isTerminal || isIDE) {
-        clipboard.writeText(`${fileName}\n${filePath} `);
-        clipboardManager?.syncClipboardHash();
-      } else {
-        const plistData = plist.build([filePath]);
-        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-        clipboardManager?.syncClipboardHash();
-      }
+      return await runWithCommandLauncherExternalInvocation(async () => {
+        const isTerminal = isTerminalApp(targetApp.bundleId);
+        const isIDE = isIDEWithTerminal(targetApp.bundleId);
+        const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
+        const pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
+        const handoffText = formatCommandFilePasteText({
+          kind: 'handoff',
+          fileName,
+          filePath,
+          mode: pasteMode,
+          markdownContent: pasteMode === 'markdown-content' ? fs.readFileSync(filePath, 'utf-8') : '',
+        });
 
-      await activateAndPasteFromCommandLauncher(targetApp);
-      appendCommandLauncherTrace('invoke-handoff-success', {
-        filePath,
-        targetBundleId: targetApp.bundleId,
-        targetName: targetApp.name,
-        terminal: isTerminal,
-        IDE: isIDE,
+        clipboard.writeText(handoffText);
+        clipboardManager?.syncClipboardHash();
+        appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
+          format: 'text',
+          contentMode: pasteMode,
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          filePath,
+          textReferenceTarget: pasteMode === 'text-reference',
+          markdownContentTarget: pasteMode === 'markdown-content',
+          ...commandPayloadTrace(handoffText),
+          textLength: handoffText.length,
+          clipboard: readCommandPasteClipboardTrace(),
+        });
+
+        let pasted = false;
+        let fallbackRan = false;
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
+        if (pasteDelivery === 'native-helper') {
+          pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+          if (!pasted) {
+            cursorStatusManager?.showNoTargetError('Portable command paste failed');
+            return { success: false, error: 'Could not paste into target app' };
+          }
+        } else {
+          appendCommandLauncherTrace('invoke-handoff-native-type-skipped', {
+            filePath,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+            delivery: pasteDelivery,
+          });
+        }
+        if (!pasted) {
+          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+            clipboardTrace: readCommandPasteClipboardTrace,
+            requireFocusedTextInput: true,
+          });
+        }
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Portable command paste failed');
+          return { success: false, error: 'Could not paste into target app' };
+        }
+
+        appendCommandLauncherTrace('invoke-handoff-success', {
+          filePath,
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          terminal: isTerminal,
+          IDE: isIDE,
+          contentMode: pasteMode,
+          fallbackRan,
+        });
+        return { success: true };
       });
-      return { success: true };
     } catch (error) {
       log.error('Error invoking handoff:', error);
       appendCommandLauncherTrace('invoke-handoff-error', { filePath, error });
@@ -6487,12 +13050,11 @@ function setupClipboardIPCHandlers(): void {
 
   // Handle direct command invocation from command launcher (Cmd+Shift+K).
   // Gets the command, determines if target is terminal, and pastes appropriately.
-  ipcMain.handle('commands:invoke', async (_event, commandName: string) => {
-    const plist = require('plist');
-
+  ipcMain.handle('commands:invoke', async (_event, commandName: string, traceContext?: Record<string, unknown>) => {
     if (!commandsManager) {
       return { success: false, error: 'Not initialized' };
     }
+    const invocationTrace = traceContext && typeof traceContext === 'object' ? traceContext : {};
 
     const command = commandsManager.getCommand(commandName);
     if (!command) {
@@ -6502,14 +13064,69 @@ function setupClipboardIPCHandlers(): void {
 
     try {
       const targetApp = getCommandLauncherTargetApp();
+      const invocationTarget = getCommandLauncherInvocationTarget(targetApp);
       appendCommandLauncherTrace('invoke-command-start', {
+        ...invocationTrace,
         commandName,
         commandPath: command.filePath,
         targetBundleId: targetApp?.bundleId ?? null,
         targetName: targetApp?.name ?? null,
+        integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+        launchOriginTerminalSessionId: invocationTarget.kind === 'field-theory-terminal' ? invocationTarget.sessionId : null,
+        invocationTarget: invocationTarget.kind,
       });
-      if (!targetApp) {
+      if (invocationTarget.kind === 'field-theory-terminal') {
+        const commandText = formatCommandFilePasteText({
+          kind: 'command',
+          name: command.name,
+          filePath: command.filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (writeTextIntoFocusedCodexTerminal(commandText, invocationTarget.sessionId)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-command-integrated-terminal-success', {
+            ...invocationTrace,
+            commandName,
+            commandPath: command.filePath,
+            sessionId: invocationTarget.sessionId,
+            textLength: commandText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-command-integrated-terminal-failed', {
+          ...invocationTrace,
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
+      if (invocationTarget.kind === 'field-theory-markdown') {
+        const commandText = formatCommandFilePasteText({
+          kind: 'command',
+          name: command.name,
+          filePath: command.filePath,
+          mode: 'wiki-link',
+          markdownContent: '',
+        });
+        if (insertTextIntoActiveFieldTheoryMarkdown(commandText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-command-field-theory-markdown-success', {
+            ...invocationTrace,
+            commandName,
+            commandPath: command.filePath,
+            textLength: commandText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-command-field-theory-markdown-failed', {
+          ...invocationTrace,
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
+      if (invocationTarget.kind !== 'external-app' || !targetApp) {
         appendCommandLauncherTrace('invoke-command-no-target', {
+          ...invocationTrace,
           commandName,
           commandPath: command.filePath,
         });
@@ -6518,63 +13135,93 @@ function setupClipboardIPCHandlers(): void {
       }
       const isTerminal = isTerminalApp(targetApp.bundleId);
       const isIDE = isIDEWithTerminal(targetApp.bundleId);
+      const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
-      const clipboardSnapshot = captureClipboardSnapshot();
-      try {
-        if (isTerminal || isIDE) {
-          const commandReferenceText = `[${command.name}.md]\n${command.filePath} `;
-          clipboard.writeText(commandReferenceText);
+      let pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
+      let fallbackRan = false;
+      const invocationFailure = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: false; error: string } | null> => {
+        const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+        let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
+        try {
+          pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
+          const commandText = formatCommandFilePasteText({
+            kind: 'command',
+            name: command.name,
+            filePath: command.filePath,
+            mode: pasteMode,
+            markdownContent: pasteMode === 'markdown-content' ? fs.readFileSync(command.filePath, 'utf-8') : '',
+          });
+
+          clipboard.writeText(commandText);
           clipboardManager?.syncClipboardHash();
+          launcherClipboardPayload = captureCommandClipboardPayload();
           appendCommandLauncherTrace('invoke-command-clipboard-written', {
+            ...invocationTrace,
             commandName,
             format: 'text',
-            textLength: commandReferenceText.length,
+            contentMode: pasteMode,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            textReferenceTarget: pasteMode === 'text-reference',
+            markdownContentTarget: pasteMode === 'markdown-content',
+            ...commandPayloadTrace(commandText),
+            textLength: commandText.length,
+            clipboard: readCommandPasteClipboardTrace(),
           });
-        } else {
-          const fileUrl = pathToFileURL(command.filePath).toString();
-          const plistData = plist.build([command.filePath]);
-          clipboard.writeText(command.filePath);
-          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-          clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
-          clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
-          clipboardManager?.syncClipboardHash();
-          appendCommandLauncherTrace('invoke-command-clipboard-written', {
-            commandName,
-            format: 'file-list+file-url+text',
-            filePath: command.filePath,
-            fileUrl,
-            availableFormats: clipboard.availableFormats(),
-          });
-        }
 
-        const pasted = await activateAndPasteFromCommandLauncher(targetApp);
-        if (!pasted) {
-          cursorStatusManager?.showNoTargetError('Portable command paste failed');
-          return { success: false, error: 'Could not paste into target app' };
+          let pasted = false;
+          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
+          if (pasteDelivery === 'native-helper') {
+            pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', invocationTrace);
+            if (!pasted) {
+              cursorStatusManager?.showNoTargetError('Portable command paste failed');
+              return { success: false, error: 'Could not paste into target app' };
+            }
+          } else {
+            appendCommandLauncherTrace('invoke-command-native-type-skipped', {
+              ...invocationTrace,
+              commandName,
+              targetBundleId: targetApp.bundleId,
+              targetName: targetApp.name,
+              contentMode: pasteMode,
+              delivery: pasteDelivery,
+            });
+          }
+          if (!pasted) {
+            pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+              clipboardTrace: readCommandPasteClipboardTrace,
+              requireFocusedTextInput: true,
+              traceDetails: invocationTrace,
+            });
+          }
+          if (!pasted) {
+            cursorStatusManager?.showNoTargetError('Portable command paste failed');
+            return { success: false, error: 'Could not paste into target app' };
+          }
+        } finally {
+          scheduleCommandClipboardRestore({
+            commandName,
+            commandPath: command.filePath,
+            restoreGeneration: clipboardRestore.generation,
+            restoreSnapshot: clipboardRestore.snapshot,
+            launcherClipboardPayload,
+          });
         }
-      } finally {
-        appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
-          commandName,
-          commandPath: command.filePath,
-          delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
-        });
-        await waitForCommandClipboardPasteRead();
-        restoreClipboardSnapshot(clipboardSnapshot);
-        clipboardManager?.syncClipboardHash();
-        appendCommandLauncherTrace('invoke-command-clipboard-restored', {
-          commandName,
-          commandPath: command.filePath,
-        });
-      }
+        return null;
+      });
+      if (invocationFailure) return invocationFailure;
       appendCommandLauncherTrace('invoke-command-success', {
+        ...invocationTrace,
         commandName,
         commandPath: command.filePath,
         targetBundleId: targetApp.bundleId,
         targetName: targetApp.name,
         terminal: isTerminal,
         IDE: isIDE,
+        contentMode: pasteMode,
+        fallbackRan,
       });
 
       await quotaManager?.updateUsage('portable_commands', 1);
@@ -6582,7 +13229,7 @@ function setupClipboardIPCHandlers(): void {
       return { success: true };
     } catch (error) {
       log.error('Error invoking command:', error);
-      appendCommandLauncherTrace('invoke-command-error', { commandName, commandPath: command.filePath, error });
+      appendCommandLauncherTrace('invoke-command-error', { ...invocationTrace, commandName, commandPath: command.filePath, error });
       cursorStatusManager?.showNoTargetError('Portable command paste failed');
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
@@ -6649,6 +13296,21 @@ function setupClipboardIPCHandlers(): void {
   // =========================================================================
   // Feedback IPC Handlers
   // =========================================================================
+
+  // Feedback-only mode still mounts the shared social view, which asks for the
+  // legacy DM/contact surfaces during initial load. Keep those paths inert.
+  ipcMain.handle(SocialIPCChannels.SEND_DM, async () => null);
+  ipcMain.handle(SocialIPCChannels.GET_CONVERSATIONS, async () => []);
+  ipcMain.handle(SocialIPCChannels.GET_DMS_WITH_USER, async () => []);
+  ipcMain.handle(SocialIPCChannels.HAS_UNREAD, async () => false);
+  ipcMain.handle(SocialIPCChannels.GET_CONTACTS, async () => []);
+  ipcMain.handle(SocialIPCChannels.ADD_FRIEND, async () => ({ success: false, error: 'DM contacts are not enabled.' }));
+  ipcMain.handle(SocialIPCChannels.SEARCH_CONTACTS, async () => []);
+  ipcMain.handle(SocialIPCChannels.GET_PENDING_INVITES, async () => []);
+  ipcMain.handle(SocialIPCChannels.RESPOND_TO_INVITE, async () => false);
+  ipcMain.handle(SocialIPCChannels.REMOVE_FRIEND, async () => false);
+  ipcMain.handle(SocialIPCChannels.GET_HOT_MIC, async () => false);
+  ipcMain.handle(SocialIPCChannels.SET_HOT_MIC, async () => false);
 
   // Send a text reply to feedback.
   ipcMain.handle(SocialIPCChannels.SEND_TEXT_DM, async (_event, recipientUserId: string, text: string, parentMessageId?: string) => {
@@ -6768,6 +13430,15 @@ function setupClipboardIPCHandlers(): void {
     return await feedbackManager.getActivityLog(feedbackId);
   });
 
+  // Keep realtime feedback delivery scoped to active feedback sessions.
+  ipcMain.handle(SocialIPCChannels.SET_FEEDBACK_REALTIME_ACTIVE, async (_event, active: boolean) => {
+    if (!feedbackManager) {
+      return false;
+    }
+    feedbackManager.setFeedbackRealtimeActive(active);
+    return true;
+  });
+
   // Check if current user is admin.
   ipcMain.handle(SocialIPCChannels.IS_ADMIN, async () => {
     if (!feedbackManager) {
@@ -6776,27 +13447,25 @@ function setupClipboardIPCHandlers(): void {
     return await feedbackManager.isCurrentUserAdmin();
   });
 
-  ipcMain.handle('account:getStatus', async () => {
-    return accountStatusManager?.getStatus() ?? { state: 'checking', capabilityMode: 'writable' };
+  registerAccountIpc({
+    getAccountStatusManager: () => accountStatusManager,
   });
 
-  ipcMain.handle('account:checkNow', async () => {
-    if (!accountStatusManager) {
-      return { state: 'checking', capabilityMode: 'writable' };
-    }
-    return accountStatusManager.checkNow();
+  registerFieldTheorySyncIpc({
+    getStatus: getFieldTheorySyncStatus,
+    setLocalEnabled: async (enabled: boolean) => {
+      if (preferencesManager) {
+        await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled });
+        refreshFieldTheorySyncServices();
+      }
+    },
   });
+}
 
-  ipcMain.handle('fieldTheorySync:getStatus', async () => {
-    return getFieldTheorySyncStatus();
-  });
-
-  ipcMain.handle('fieldTheorySync:setLocalEnabled', async (_event, enabled: boolean) => {
-    if (preferencesManager) {
-      await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled === true });
-      refreshFieldTheorySyncServices();
-    }
-    return getFieldTheorySyncStatus();
+function setupMeetingsIPCHandlers(): void {
+  registerMeetingsIpc({
+    getMeetingManager,
+    getActiveFileContext: () => activeLibraryFileContext ? { ...activeLibraryFileContext } : null,
   });
 }
 
@@ -6877,7 +13546,7 @@ function setupOnboardingIPCHandlers(): void {
   // Mark onboarding as complete.
   ipcMain.handle(OnboardingIPCChannels.COMPLETE_ONBOARDING, async () => {
     if (!preferencesManager) return false;
-    await preferencesManager.save({ onboardingComplete: true });
+    await preferencesManager.save({ onboardingComplete: true, onboardingStep: undefined });
 
     // Register hotkeys now that onboarding is complete
     registerHotkeysAfterOnboarding();
@@ -6895,10 +13564,33 @@ function setupOnboardingIPCHandlers(): void {
     return true;
   });
 
+  // Complete onboarding for local-only use. This intentionally does not touch
+  // Supabase/auth state; account-backed features can prompt separately.
+  ipcMain.handle(OnboardingIPCChannels.COMPLETE_LOCAL_SETUP, async () => {
+    if (!preferencesManager) return false;
+    await preferencesManager.save({
+      onboardingComplete: true,
+      onboardingStep: undefined,
+      localSetupComplete: true,
+    });
+
+    registerHotkeysAfterOnboarding();
+
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+
+    if (onboardingWindow) {
+      onboardingWindow.close();
+    }
+    showClipboardHistoryOnActivate();
+    return true;
+  });
+
   // Skip onboarding (set up later).
   ipcMain.handle(OnboardingIPCChannels.SKIP_ONBOARDING, async () => {
     if (!preferencesManager) return false;
-    await preferencesManager.save({ onboardingComplete: true });
+    await preferencesManager.save({ onboardingComplete: true, onboardingStep: undefined });
 
     // Register hotkeys now that onboarding is complete
     registerHotkeysAfterOnboarding();
@@ -7025,6 +13717,37 @@ async function checkPermissions(): Promise<{ accessibilityGranted: boolean }> {
   }
 }
 
+function isClipboardHistoryWindowFocused(): boolean {
+  const window = clipboardHistoryWindow?.getWindow();
+  return Boolean(window && !window.isDestroyed() && window.isFocused());
+}
+
+function restoreClipboardHistoryFocusAfterFloatingRecording(): void {
+  [120, 260].forEach((delayMs) => setTimeout(() => {
+    const window = clipboardHistoryWindow?.getWindow();
+    const shouldRestore = getFieldTheoryWindowMode() === 'app'
+      && dynamicIslandManager?.getResolvedRecordingIndicatorMode() === 'floating'
+      && transcriberManager?.getStatus() === 'recording'
+      && Boolean(window && !window.isDestroyed() && window.isVisible())
+      && !Boolean(window && !window.isDestroyed() && window.isFocused());
+
+    appendVisibilityTrace('main.floating-recording-focus-restore.check', {
+      delayMs,
+      shouldRestore,
+      mode: getFieldTheoryWindowMode(),
+      resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+      transcriberStatus: transcriberManager?.getStatus() ?? null,
+      clipboardVisible: window && !window.isDestroyed() ? window.isVisible() : null,
+      clipboardFocused: window && !window.isDestroyed() ? window.isFocused() : null,
+    });
+
+    if (!shouldRestore) return;
+
+    appendVisibilityTrace('main.floating-recording-focus-restore.action');
+    clipboardHistoryWindow?.focusVisibleWindow('floating-recording-focus-restore');
+  }, delayMs));
+}
+
 /**
  * Broadcast transcription events to all renderer windows.
  */
@@ -7032,6 +13755,26 @@ function broadcastTranscribeEvents(): void {
   if (!transcriberManager) return;
 
   transcriberManager.on('statusChanged', (status) => {
+    const clipboardFocused = isClipboardHistoryWindowFocused();
+    const shouldRestoreFocusAfterFloatingRecording = shouldRestoreFieldTheoryFocusAfterFloatingRecording(
+      preferencesManager ? getFieldTheoryWindowMode() : null,
+      dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+      status,
+      clipboardHistoryWindow?.isVisible() ?? false,
+      clipboardFocused,
+    );
+    appendVisibilityTrace('transcriber.status-changed', {
+      status,
+      mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+      recordingIndicatorMode: preferencesManager?.getPreference('recordingIndicatorMode') ?? null,
+      clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+      clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+      clipboardFocused,
+      restoreFocusAfterFloatingRecording: shouldRestoreFocusAfterFloatingRecording,
+      dynamicIslandState: dynamicIslandManager?.getState() ?? null,
+      resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+    });
+
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(TranscribeIPCChannels.STATUS_CHANGED, status);
@@ -7041,6 +13784,7 @@ function broadcastTranscribeEvents(): void {
     // Update clipboard history window's recording state
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
+    trayManager?.setRecordingActive(status === 'recording');
 
     // Update dynamic island with recording state transitions.
     if (dynamicIslandManager) {
@@ -7048,6 +13792,9 @@ function broadcastTranscribeEvents(): void {
         dynamicIslandManager.setState('silentStacking');
       } else if (status === 'recording') {
         dynamicIslandManager.setState('recording');
+        if (shouldRestoreFocusAfterFloatingRecording) {
+          restoreClipboardHistoryFocusAfterFloatingRecording();
+        }
       } else if (status === 'transcribing') {
         dynamicIslandManager.setState('transcribing');
       } else if (status === 'idle') {
@@ -7072,6 +13819,13 @@ function broadcastTranscribeEvents(): void {
   // The left pill displays "Recording" / "Transcribing" status instead.
   // Hot Mic still uses the drawer via its own path.
 
+  transcriberManager.on('paste-starting', async () => {
+    const delayMs = dynamicIslandManager?.prepareForPaste() ?? 0;
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  });
+
   transcriberManager.on('result', (text) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -7080,10 +13834,14 @@ function broadcastTranscribeEvents(): void {
     });
     // Send final transcript to the dynamic island for display.
     dynamicIslandManager?.sendTranscript(text, true);
+  });
 
-    // Record transcription metrics
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-    metricsManager?.recordTranscription(wordCount);
+  transcriberManager.on('transcriptRecorded', (data: { wordCount: number }) => {
+    metricsManager?.recordTranscription(data.wordCount);
+  });
+
+  transcriberManager.on('transcriptImproved', (data: { wordCount: number }) => {
+    metricsManager?.recordWordsImproved(data.wordCount);
   });
 
   transcriberManager.on('verbalCommand', () => {
@@ -7141,6 +13899,7 @@ function broadcastTranscribeEvents(): void {
   // Forward standard recording audio levels to the Dynamic Island for waveform.
   transcriberManager.on('audioLevel', (level: number) => {
     dynamicIslandManager?.updateStandardAudioLevel(level);
+    trayManager?.updateRecordingAudioLevel(level);
   });
 
   // Track if quota just exhausted - skip paste-success to preserve temporary status.
@@ -7163,7 +13922,7 @@ function broadcastTranscribeEvents(): void {
   
   // Confirmation state events for cursor status widget
   transcriberManager.on('confirmation-show', () => {
-    return;
+    dynamicIslandManager?.showEscapeHint();
   });
   
   transcriberManager.on('confirmation-hide', () => {
@@ -7239,6 +13998,25 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper.on('frontmostAppChanged', (appInfo) => {
     rememberCommandTargetApp(appInfo);
+    clipboardHistoryWindow?.rememberExternalApp(appInfo);
+    if (
+      commandLauncherWindow?.isShowingOrVisible() &&
+      appInfo?.bundleId &&
+      isExternalCommandTargetBundleId(appInfo.bundleId)
+    ) {
+      const launchOrigin = commandLauncherWindow.getLaunchOrigin();
+      const sameAsLaunchOrigin = launchOrigin.kind === 'external-app' &&
+        launchOrigin.app.bundleId === appInfo.bundleId;
+      if (!sameAsLaunchOrigin) {
+        appendCommandLauncherTrace('frontmost-app-changed-dismiss-launcher', {
+          bundleId: appInfo.bundleId,
+          name: appInfo.name ?? null,
+          launchOriginKind: launchOrigin.kind,
+          launchOriginBundleId: launchOrigin.kind === 'external-app' ? launchOrigin.app.bundleId : null,
+        });
+        commandLauncherWindow.hide(true);
+      }
+    }
     if (isAlfredApp(appInfo)) {
       hideFieldTheoryForAlfred();
     }
@@ -7559,18 +14337,37 @@ async function initTranscriberSystem(): Promise<void> {
   // Hotkeys will be registered after checking onboarding status (see below in app.whenReady).
 
   // Initialize quota manager (will be configured after auth is ready).
+  const { QuotaManager } = require('./quotaManager') as typeof import('./quotaManager');
   quotaManager = new QuotaManager();
   accountStatusManager = new AccountStatusManager();
 
   // Initialize librarian manager for watching markdown reading files.
+  const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
   librarianManager = new LibrarianManager();
+  if (!markdownAssetsConsolidated) {
+    markdownAssetsConsolidated = true;
+    setImmediate(() => {
+      if (!librarianManager || !canWriteFieldTheoryContent()) return;
+      let changed = false;
+      for (const root of librarianManager.getLibraryRoots()) {
+        const result = consolidateMarkdownAssetsForLibraryRoot(root.path);
+        if (result.filesRewritten > 0 || result.deleted > 0 || result.oldFoldersRemoved > 0) changed = true;
+        if (result.errors.length > 0) log.warn('Markdown asset consolidation had errors for %s: %j', root.path, result.errors);
+      }
+      if (changed) librarianManager.emit('library:changed');
+    });
+  }
   recentManager = new RecentManager();
+  void startBrowserHelperIfEnabled().catch((error) => {
+    log.warn('Failed to start Field Theory browser helper: %s', error instanceof Error ? error.message : String(error));
+  });
 
   // Initialize bookmarks manager for reading synced X bookmarks.
-  bookmarksManager = new BookmarksManager();
+  ensureBookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
+    recordRecentExternalDocument(reading.path, reading.title);
 
     // Record librarian artifact created metric
     metricsManager?.recordLibrarianArtifactCreated();
@@ -7584,6 +14381,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingAdded', reading);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingAdded', reading });
 
     // Check if muted for today - halts interruption even if existing sessions create artifacts
     const isMuted = librarianManager!.isMutedForToday();
@@ -7591,12 +14389,27 @@ async function initTranscriberSystem(): Promise<void> {
       return;
     }
 
+    const browserReadingEvent: BrowserHelperNativeEvent = activeBrowserLibrarySurfaceKind === 'library'
+      ? { type: 'librarian:showNewReading', readingPath: reading.path }
+      : { type: 'librarian:newReadingAvailable', readingPath: reading.path };
+    const sentToActiveBrowserLibrary = Boolean(
+      activeBrowserLibrarySurfaceClientId &&
+      browserHelperServer?.emitNativeEventToClient(activeBrowserLibrarySurfaceClientId, browserReadingEvent)
+    );
+
     // If the Field Theory window is already open, the user may be typing,
     // reading, searching, or managing another surface. Save and index the
     // artifact, but do not take over the current view.
     if (clipboardHistoryWindow?.isVisible()) {
       clipboardHistoryWindow.getWindow()?.webContents.send('librarian:newReadingAvailable', reading.path);
+      if (!sentToActiveBrowserLibrary) {
+        browserHelperServer?.emitNativeEvent({ type: 'librarian:newReadingAvailable', readingPath: reading.path });
+      }
       clipboardHistoryWindow.playArtifactDiscoverySound();
+      return;
+    }
+
+    if (sentToActiveBrowserLibrary) {
       return;
     }
 
@@ -7610,7 +14423,7 @@ async function initTranscriberSystem(): Promise<void> {
 
       const boundsToUse = restoreClipboardHistoryBounds('library');
       suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
-      clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
+      clipboardHistoryWindow.showLibrary(boundsToUse, true, shouldStealFocus);
       // Showing/focusing clipboard history can corrupt transparent overlay backing
       // on some macOS compositor paths — reinforce window properties.
       cursorStatusManager?.refreshWindowProperties();
@@ -7636,6 +14449,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingUpdated', reading);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingUpdated', reading });
   });
 
   librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
@@ -7650,6 +14464,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingRenamed', event);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingRenamed', event });
   });
 
   // Broadcast reading-removed events to all windows
@@ -7659,6 +14474,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('librarian:readingRemoved', filePath);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'librarian:readingRemoved', filePath });
   });
 
   // Connect quota manager to tray for menu bar display
@@ -7681,6 +14497,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('tier:changed', tier);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'quota:tierChanged', tier: tier as 'free' | 'pro' });
   });
 
   // Broadcast trial-state changes (pro / trial / expired) to all windows.
@@ -7705,6 +14522,7 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('quota:changed', formatted);
       }
     });
+    browserHelperServer?.emitNativeEvent({ type: 'quota:changed', data: formatted });
   });
 
   // Initialize cursor status indicator BEFORE transcriberManager so it can be passed in.
@@ -7714,16 +14532,12 @@ async function initTranscriberSystem(): Promise<void> {
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
 
-  // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
+  // Initialize the recording indicator after applying saved placement preferences.
   dynamicIslandManager = new DynamicIslandManager();
-  const hotMicEnabledOnLaunch = preferencesManager.getPreference('hotMicEnabled') ?? false;
-  dynamicIslandManager.setEnabled(true);
-  dynamicIslandManager.setInputMode(resolveInputModeFromHotMicEnabled(hotMicEnabledOnLaunch));
-  dynamicIslandManager.setClipboardManager(clipboardManager);
-  dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
-  dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
-  dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
-  dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
+  dynamicIslandManager.setEnabled(false);
+  dynamicIslandManager.on('floating-position-changed', (position: FloatingIndicatorPosition) => {
+    void preferencesManager?.save({ floatingIndicatorPosition: position });
+  });
 
   // Hook installer must exist before the attention manager so the manager's
   // tool filter can be seeded from install status (and re-synced on toggle).
@@ -7763,11 +14577,13 @@ async function initTranscriberSystem(): Promise<void> {
   // footer to the file. Progress events stream to whichever window invoked it.
   agentKickoffManager = new AgentKickoffManager();
   agentKickoffManager.on('progress', (event: AgentKickoffProgressEvent) => {
+    browserHelperServer?.emitNativeEvent({ type: 'agent:kickoffProgress', event });
     BrowserWindow.getAllWindows().forEach((w) => {
       if (!w.isDestroyed()) w.webContents.send('agent:kickoffProgress', event);
     });
   });
   agentKickoffManager.on('status', (event: AgentKickoffStatusEvent) => {
+    browserHelperServer?.emitNativeEvent({ type: 'agent:kickoffStatus', event });
     BrowserWindow.getAllWindows().forEach((w) => {
       if (!w.isDestroyed()) w.webContents.send('agent:kickoffStatus', event);
     });
@@ -7817,12 +14633,50 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Now create transcriberManager with cursorStatusManager.
   log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
+  const { TranscriberManager } = require('./transcriberManager') as typeof import('./transcriberManager');
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
+  transcriberManager.setTranscriptImproveRunner(({ text, provider }) => improveWithPreferredProvider({
+    text,
+    provider,
+    mode: 'transcript',
+    title: 'Transcript',
+    targetPath: 'fieldtheory://transcript/auto-improve',
+  }));
+  trayManager?.setAutoImproveCallbacks({
+    get: () => transcriberManager?.getAutoImprove() ?? false,
+    set: async (enabled: boolean) => {
+      await transcriberManager?.setAutoImprove(enabled);
+      trayManager?.refreshMenu();
+    },
+  });
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
   });
+  transcriberManager.setFieldTheoryTerminalInsertionTarget({
+    isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+    insertText: writeTextIntoFocusedCodexTerminal,
+    submitText: submitTextIntoFocusedCodexTerminal,
+  });
+  transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
+    const result = await getMeetingManager().stopActiveMeeting();
+    if (!result.success) {
+      const message = result.error ?? result.summaryError ?? 'Could not stop meeting';
+      log.warn('Could not stop meeting from transcription hotkey: %s', message);
+      emitLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: 'stop-meeting',
+        mode: 'document',
+        error: message,
+      });
+    }
+  });
+  transcriberManager.setBeforeRecordingToggleHandler(() => {
+    commandLauncherWindow?.hide(true);
+  });
   await transcriberManager.init();
+  startupMark('transcriber-manager-init-complete');
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();
 
@@ -7847,10 +14701,17 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize Hot Mic manager for continuous voice input.
   if (nativeHelper && preferencesManager) {
     const soundMgr = transcriberManager.getSoundManager();
-    hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
+    hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr, {
+      startHttpServer: !qualityBenchmarkIdFromCommandLine(),
+    });
     hotMicManager.setFieldTheoryMarkdownInsertionTarget({
       isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
       insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+    });
+    hotMicManager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+      insertText: writeTextIntoFocusedCodexTerminal,
+      submitText: submitTextIntoFocusedCodexTerminal,
     });
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setMetricsWordsRecorder((wordCount: number) => {
@@ -7870,10 +14731,12 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager.on('cancel-session', () => {
         // Cancel whichever recording mode is active and collapse the tray.
         const transcriberStatus = transcriberManager?.getStatus();
-        if (transcriberStatus === 'silentStacking') {
-          transcriberManager?.cancelSilentStacking();
-        } else if (transcriberStatus === 'recording') {
-          transcriberManager?.toggleRecording();
+        if (
+          transcriberStatus === 'silentStacking'
+          || transcriberStatus === 'recording'
+          || transcriberStatus === 'transcribing'
+        ) {
+          void transcriberManager?.cancelActiveSession();
         } else if (transcriberStatus === 'idle' && transcriberManager && transcriberManager.getStackLength() > 0) {
           transcriberManager.clearStack();
           // Explicitly reset DI state and stack count so both pills collapse.
@@ -7891,10 +14754,32 @@ async function initTranscriberSystem(): Promise<void> {
         if (!clipboardHistoryWindow) {
           clipboardHistoryWindow = initClipboardHistoryWindow();
         }
-        if (clipboardHistoryWindow.isShowing()) {
-          await clipboardHistoryWindow.hideAndRestorePreviousApp('dynamic-island-toggle-history-window');
+        appendVisibilityTrace('dynamic-island.open-field-theory.received', {
+          mode: getFieldTheoryWindowMode(),
+          toggleCloseAllowed: shouldToggleCloseFieldTheoryFromDynamicIsland(getFieldTheoryWindowMode()),
+          clipboardVisible: clipboardHistoryWindow.isVisible(),
+          clipboardShowing: clipboardHistoryWindow.isShowing(),
+          lastHideReason: clipboardHistoryLastHideReason,
+          lastHideAgeMs: clipboardHistoryLastHideAt > 0 ? Date.now() - clipboardHistoryLastHideAt : null,
+          dynamicIslandState: dynamicIslandManager?.getState() ?? null,
+          resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+        });
+        if (clipboardHistoryWindow.isVisible()) {
+          if (shouldToggleCloseFieldTheoryFromDynamicIsland(getFieldTheoryWindowMode())) {
+            appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+              action: 'toggle-close',
+              reason: 'visible-panel-mode',
+            });
+            await clipboardHistoryWindow.hideAndRestorePreviousApp('dynamic-island-toggle-history-window');
+          } else {
+            appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+              action: 'focus-visible-app-window',
+              reason: 'visible-app-mode',
+            });
+            clipboardHistoryWindow.focusExistingWindow();
+          }
           cursorStatusManager?.refreshWindowProperties();
-          dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-open-field-theory');
+          dynamicIslandManager?.refreshWindowProperties('clipboard-history:open-field-theory-visible');
           return;
         }
 
@@ -7904,13 +14789,21 @@ async function initTranscriberSystem(): Promise<void> {
           clipboardHistoryLastHideReason === 'window-blur-handler' &&
           Date.now() - clipboardHistoryLastHideAt <= DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS
         ) {
+          appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+            action: 'suppress-reopen-after-blur-hide',
+            lastHideAgeMs: Date.now() - clipboardHistoryLastHideAt,
+          });
           return;
         }
 
+        appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+          action: 'show-app-window',
+          reason: 'not-visible',
+        });
         clipboardHistoryWindow.playOpenSound();
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
-        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
+        clipboardHistoryWindow.capturePreviousAppAndShowLibrary(boundsToUse, true);
         // Opening clipboard history while recording can affect overlay transparency;
         // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
@@ -7990,6 +14883,7 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
     diagnosticsCollector.setTranscriberManager(transcriberManager);
   }
+  diagnosticsCollector.setHotMicRuntimeStatusGetter(getHotMicRuntimeStatusSnapshot);
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
   }
@@ -8016,7 +14910,14 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Initialize commands manager for portable commands feature.
-  commandsManager = new CommandsManager();
+  commandsManager = new CommandsManager({
+    indexCommandContent: (filePath, content) => {
+      librarianManager?.recordLibraryIndexLinkHits(filePath, content);
+    },
+    removeCommandIndex: (filePath) => {
+      librarianManager?.removeLibraryIndexPath(filePath);
+    },
+  });
 
   // Wire up commands manager to transcriber and hot mic for command detection.
   if (transcriberManager) {
@@ -8048,6 +14949,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize multi-directory watching from settings file.
   await commandsManager.initialize();
+  startupMark('commands-manager-initialize-complete');
 
   // Migrate legacy single-directory setting to multi-directory system.
   // If user has a commandsDirectory set but watchedDirs is empty, add it to watchedDirs.
@@ -8065,18 +14967,22 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Broadcast commands changes to all windows.
   commandsManager.on('commandsChanged', (commands: PortableCommand[]) => {
+    const commandInfos = commands.map((cmd: PortableCommand) => ({
+      name: cmd.name,
+      displayName: cmd.displayName,
+      filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
+    }));
+    browserHelperServer?.emitNativeEvent({ type: 'commands:changed', commands: commandInfos });
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
-        window.webContents.send(CommandsIPCChannels.COMMANDS_CHANGED, commands.map((cmd: PortableCommand) => ({
-          name: cmd.name,
-          displayName: cmd.displayName,
-          filePath: cmd.filePath,
-        })));
+        window.webContents.send(CommandsIPCChannels.COMMANDS_CHANGED, commandInfos);
       }
     });
   });
   
   commandsManager.on('directoryChanged', (directoryPath) => {
+    browserHelperServer?.emitNativeEvent({ type: 'commands:directoryChanged', directoryPath });
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(CommandsIPCChannels.DIRECTORY_CHANGED, directoryPath);
@@ -8088,8 +14994,38 @@ async function initTranscriberSystem(): Promise<void> {
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined, {
     getInitialDarkMode: () => preferencesManager?.getPreference('darkMode') ?? false,
+    getFieldTheoryLaunchSurface: getFieldTheoryCommandLauncherLaunchSurface,
+  });
+  appendCommandLauncherTrace('command-launcher-main-ready', {
+    pasteTraceVersion: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    mainProcessStartedAt: MAIN_PROCESS_STARTED_AT,
+    pid: process.pid,
+    nativeHelperAvailable: Boolean(nativeHelper),
+    payloadTraceEnabled: isCommandPayloadTraceEnabled(),
   });
   commandLauncherWindow.preload();
+  startupMark('command-launcher-preload-called');
+  const startupQualityBenchmarkId = qualityBenchmarkIdFromCommandLine();
+  if (startupQualityBenchmarkId) {
+    const startupQualityBenchmarkMode = qualityBenchmarkModeFromCommandLine();
+    setTimeout(() => {
+      const benchmark = startupQualityBenchmarkMode === 'launcher'
+        ? runLauncherInteractionQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'launcher-normal'
+        ? runLauncherInteractionQualityBenchmark(startupQualityBenchmarkId, { focusProtection: false })
+        : startupQualityBenchmarkMode === 'immersive'
+        ? runImmersiveSurfaceQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording-asr-delivery'
+        ? runRecordingAsrDeliveryQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording-asr'
+        ? runRecordingAsrQualityBenchmark(startupQualityBenchmarkId)
+        : startupQualityBenchmarkMode === 'recording'
+        ? runRecordingDeliveryQualityBenchmark(startupQualityBenchmarkId)
+        : runCommandLauncherQualityBenchmark(startupQualityBenchmarkId, startupQualityBenchmarkMode);
+      void benchmark
+        .finally(() => setTimeout(() => app.exit(0), 50));
+    }, 250);
+  }
 
   // Skip auto-paste only when draw canvas is actively visible
   transcriberManager.setSketchModeChecker(() => {
@@ -8103,8 +15039,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Create UserDataManager for per-user data isolation.
   // Restore last known user from current-user.json so per-user paths work
   // immediately — no need to wait for auth to resolve.
-  userDataManager = createUserDataManager();
-  await userDataManager.restoreCurrentUser();
+  userDataManager = await ensureUserDataManagerRestored();
 
   // Set UserDataManager on managers BEFORE authManager.init().
   // authManager.init() may emit 'userChanged' during session restoration,
@@ -8116,12 +15051,14 @@ async function initTranscriberSystem(): Promise<void> {
   if (clipboardManager) {
     clipboardManager.setUserDataManager(userDataManager);
   }
+  enableDynamicIslandFromPreferences();
   if (librarianManager) {
     librarianManager.setUserDataManager(userDataManager);
     if (userDataManager.isLoggedIn()) {
       await librarianManager.reinitializeForUser();
     }
   }
+  startupMark('librarian-user-data-ready');
   if (commandsManager) {
     commandsManager.setUserDataManager(userDataManager);
     // Reload per-user commands immediately if user was restored from disk.
@@ -8129,9 +15066,11 @@ async function initTranscriberSystem(): Promise<void> {
       await commandsManager.reinitializeForUser();
     }
   }
+  startupMark('commands-user-data-ready');
   if (recentManager) {
     recentManager.setUserDataManager(userDataManager);
   }
+  const { AuthManager } = require('./authManager') as typeof import('./authManager');
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
@@ -8143,6 +15082,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   taggedDocsManager.on('updated', (docs: TaggedDoc[]) => {
     trayManager?.setTaggedDocsUnreadCount(docs.filter((doc) => doc.unread).length);
+    browserHelperServer?.emitNativeEvent({ type: 'taggedDocs:updated', docs });
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
         win.webContents.send(TaggedDocsIPCChannels.UPDATED, docs);
@@ -8151,6 +15091,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   taggedDocsManager.on('scanProgress', (progress: TaggedDocsScanProgress) => {
+    browserHelperServer?.emitNativeEvent({ type: 'taggedDocs:scanProgress', progress });
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
         win.webContents.send(TaggedDocsIPCChannels.SCAN_PROGRESS, progress);
@@ -8165,6 +15106,7 @@ async function initTranscriberSystem(): Promise<void> {
     metricsManager.setUserDataManager(userDataManager);
   }
   await metricsManager.init();
+  startupMark('metrics-manager-init-complete');
 
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
@@ -8195,12 +15137,7 @@ async function initTranscriberSystem(): Promise<void> {
       }
 
       // Re-apply per-user Dynamic Island tuning after preferences reload.
-      dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
-      dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
-      dynamicIslandManager?.setStayOnLaptop(prefs.hotMicIslandStayOnLaptop ?? false);
-      dynamicIslandManager?.setAutoHide(prefs.hotMicIslandAutoHide ?? false);
-      dynamicIslandManager?.setEnabled(true);
-      dynamicIslandManager?.setInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
+      enableDynamicIslandFromPreferences();
       broadcastInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
       await gazeTrackingManager?.reloadFromPreferences();
       await gazeDebugOverlayManager?.reloadFromPreferences();
@@ -8229,6 +15166,7 @@ async function initTranscriberSystem(): Promise<void> {
     refreshFieldTheorySyncServices();
     if (taggedDocsManager && userDataManager) {
       taggedDocsManager.setDatabasePath(userDataManager.getUserDataPath('tagged.db'));
+      syncTaggedDocsRootsFromLibrary();
       void taggedDocsManager.rescan();
     }
     // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)
@@ -8268,12 +15206,16 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Listen for session changes (login/logout, token refresh)
   authManager.on('sessionChanged', async (session) => {
+    if (!authManager) return;
+    const sessionState = authManager.getSessionState();
     logUserState(session ? 'login' : 'logout');
     taggedDocsManager?.setIdentity(session?.user?.email ?? null);
 
+    browserHelperServer?.emitNativeEvent({ type: 'auth:sessionChanged', session: sessionState });
+
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
-        win.webContents.send('session-changed', session);
+        win.webContents.send('session-changed', sessionState);
       }
     });
 
@@ -8298,8 +15240,14 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  // Now safe to init AuthManager - handlers are registered
-  await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+  // Now safe to init AuthManager - handlers are registered. Keep this off the
+  // cold-start critical path; returning users can open local surfaces while the
+  // SDK restores or refreshes the server session.
+  void authManager.init(envVars.supabaseUrl, envVars.supabasePublishableKey)
+    .then(() => startupMark('auth-manager-init-complete'))
+    .catch((error) => {
+      log.warn('Auth initialization failed during background startup:', error);
+    });
 
   // Handle system wake from sleep - check if token needs refresh.
   // Timers may not have fired while sleeping, so we check on wake.
@@ -8327,8 +15275,7 @@ async function initTranscriberSystem(): Promise<void> {
       clearTimeout(wakeOverlayRefreshTimeout);
       wakeOverlayRefreshTimeout = null;
     }
-    transcriberManager?.stopMlxWhisperServer();
-    void transcriberManager?.stopWhisperServer();
+    transcriberManager?.stopParakeetServer();
   });
 
   powerMonitor.on('resume', () => {
@@ -8382,8 +15329,8 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize quota manager with Supabase credentials and session getter.
   // Server is the single source of truth for usage data.
-  if (quotaManager && envVars.supabaseUrl && envVars.supabaseAnonKey) {
-    quotaManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey, () => {
+  if (quotaManager && envVars.supabaseUrl && envVars.supabasePublishableKey) {
+    quotaManager.init(envVars.supabaseUrl, envVars.supabasePublishableKey, () => {
       const session = authManager?.getSession();
       if (!session) return null;
       return {
@@ -8424,6 +15371,13 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize feedback manager for user feedback to admin.
   feedbackManager = new FeedbackManager(authManager, clipboardManager);
+  feedbackManager.on('messageReceived', (message) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
+      }
+    });
+  });
 
   // Field Theory cloud sync is internal-only and disabled unless the hidden
   // local setting is on. Add a Supabase allowlist before enabling it outside dev.
@@ -8475,8 +15429,10 @@ async function initClipboardCallbacks(): Promise<void> {
   });
 }
 
-// Prevent multiple instances of the app.
-const gotTheLock = app.requestSingleInstanceLock();
+// Prevent multiple instances of the app. Dev quality probes can opt into an
+// isolated parallel instance so instrumentation does not disturb the real app.
+const allowParallelDevInstance = !app.isPackaged && ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_ALLOW_PARALLEL_INSTANCE ?? '').toLowerCase());
+const gotTheLock = allowParallelDevInstance || app.requestSingleInstanceLock();
 
 // Register fieldtheory:// URL protocol for deep linking.
 // Development and experimental builds only register when explicitly opted in.
@@ -8508,6 +15464,23 @@ if (shouldRegisterFieldTheoryProtocol({
 async function handleProtocolUrl(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
+    const browserLibraryTarget = browserLibraryTargetFromProtocolUrl(parsed);
+    if (browserLibraryTarget) {
+      if (emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target: browserLibraryTarget }, { broadcastFallback: false })) {
+        return;
+      }
+      if (clipboardHistoryWindow) {
+        const sizeKey: ClipboardHistorySizeKey = browserLibraryTarget.kind === 'bookmarks'
+          ? clipboardHistoryWindow.getCurrentSizeKey()
+          : 'library';
+        const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+        suspendDynamicIslandFocusForClipboardHistory('protocol-open-browser-library-target');
+        clipboardHistoryWindow.showLibrary(boundsToUse);
+        emitBrowserLibraryLauncherTarget(browserLibraryTarget);
+        clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', browserLibraryTarget);
+        return;
+      }
+    }
 
     // Hot Mic URL handlers
     if (parsed.host === 'hotmic') {
@@ -8531,13 +15504,21 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const relPath = resolved?.kind === 'wiki'
         ? resolved.relPath
         : path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+      if (emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath }, { broadcastFallback: false })) {
+        if (immersive) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+        }
+        return;
+      }
 
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
-        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.showLibrary(boundsToUse);
+        emitBrowserLibraryNavigationEvent({ type: 'wiki:openPage', relPath });
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
         if (immersive) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -8559,7 +15540,14 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (librarianManager) {
         const reading = librarianManager.getReading(decodedPath);
         if (reading) {
+          if (emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path }, { broadcastFallback: false })) {
+            if (fullscreen) {
+              emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true }, { broadcastFallback: false });
+            }
+            return;
+          }
           // Send the reading path to the renderer to display it
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:showReading', readingPath: reading.path });
           clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
         }
       }
@@ -8568,9 +15556,10 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
-        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.showLibrary(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {
+          emitBrowserLibraryNavigationEvent({ type: 'librarian:setFullscreen', fullscreen: true });
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
         }
       }
@@ -8596,10 +15585,41 @@ if (!gotTheLock) {
   });
 
   app.on('second-instance', (_event, argv) => {
+    const benchmarkId = qualityBenchmarkIdFromArgv(argv);
+    if (benchmarkId) {
+      if (shouldRunLauncherQualityBenchmark(argv)) {
+        void runLauncherInteractionQualityBenchmark(benchmarkId);
+      } else if (shouldRunLauncherNormalQualityBenchmark(argv)) {
+        void runLauncherInteractionQualityBenchmark(benchmarkId, { focusProtection: false });
+      } else if (shouldRunImmersiveQualityBenchmark(argv)) {
+        void runImmersiveSurfaceQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingAsrDeliveryQualityBenchmark(argv)) {
+        void runRecordingAsrDeliveryQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingAsrQualityBenchmark(argv)) {
+        void runRecordingAsrQualityBenchmark(benchmarkId);
+      } else if (shouldRunRecordingQualityBenchmark(argv)) {
+        void runRecordingDeliveryQualityBenchmark(benchmarkId);
+      } else {
+        void runCommandLauncherQualityBenchmark(
+          benchmarkId,
+          shouldRunCommandQualityBenchmark(argv)
+            ? 'command'
+            : shouldRunBrowserQualityBenchmark(argv) ? 'browser' : shouldRunExternalQualityBenchmark(argv) ? 'external' : 'controlled',
+        );
+      }
+      return;
+    }
+
     // Handle URL from second instance (Windows/Linux)
     const url = argv.find(arg => arg.startsWith('fieldtheory://'));
     if (url) {
       handleProtocolUrl(url);
+      return;
+    }
+
+    const markdownPath = argv.find(arg => /\.(?:md|markdown|mdx)$/i.test(arg) && !arg.startsWith('-'));
+    if (markdownPath) {
+      routeOpenMarkdown(markdownPath);
       return;
     }
 
@@ -8613,14 +15633,18 @@ if (!gotTheLock) {
     showClipboardHistoryOnActivate();
   });
 
+  installAppVisibilityTrace();
+
   app.whenReady().then(async () => {
+    startupMark('app-when-ready');
     log.info('App ready');
 
     // ftmedia://media/<filename> → the bookmark media folder.
-    // basename() strips any path traversal attempts from the URL.
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
-      return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
+      const { resolveBookmarkMediaFile } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+      const filePath = resolveBookmarkMediaFile(filename);
+      return filePath ? net.fetch(pathToFileURL(filePath).toString()) : new Response('', { status: 404 });
     });
 
     protocol.handle('ftlocalfile', async (req) => {
@@ -8630,10 +15654,21 @@ if (!gotTheLock) {
         return new Response('', { status: 404 });
       }
       try {
+        const stat = await fs.promises.stat(filePath);
+        const cacheHeaders = getLocalImageCacheHeaders(stat);
+        if (shouldReturnLocalImageNotModified(stat, {
+          ifNoneMatch: req.headers.get('if-none-match'),
+          ifModifiedSince: req.headers.get('if-modified-since'),
+        })) {
+          return new Response(null, { status: 304, headers: cacheHeaders });
+        }
         const image = await fs.promises.readFile(filePath);
         log.debug('ftlocalfile served image: %s (%d bytes)', obscureHomePath(filePath), image.byteLength);
         return new Response(image, {
-          headers: { 'Content-Type': getLocalImageContentType(filePath) },
+          headers: {
+            'Content-Type': getLocalImageContentType(filePath),
+            ...cacheHeaders,
+          },
         });
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
@@ -8644,6 +15679,16 @@ if (!gotTheLock) {
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
+    const restoredUserDataManager = await ensureUserDataManagerRestored();
+
+    if (!preferencesManager) {
+      preferencesManager = new PreferencesManager();
+    }
+    preferencesManager.setUserDataManager(restoredUserDataManager);
+    await preferencesManager.load();
+    startupMark('startup-preferences-loaded');
+    setupAppMetadataIPCHandlersOnce();
+    showEarlyOnboardingIfNeeded();
 
     setupIPCHandlers();
     setupThemeIPCHandlers();
@@ -8651,10 +15696,13 @@ if (!gotTheLock) {
     setupTaggedDocsIPCHandlers();
     setupSquaresIPCHandlers();
     setupGazeIPCHandlers();
-    setupTranscribeIPCHandlers();
+    setupTranscribeIPCHandlersOnce();
     setupClipboardIPCHandlers();
-    setupOnboardingIPCHandlers();
+    setupMeetingsIPCHandlers();
+    setupOnboardingIPCHandlersOnce();
     setupDisplayListeners();
+    startupMark('ipc-and-display-handlers-ready');
+    showEarlyClipboardWindowIfNeeded();
 
     // Hot Mic IPC handlers
     ipcMain.handle('hotmic:getStatus', () => {
@@ -8806,6 +15854,36 @@ if (!gotTheLock) {
       return value;
     });
 
+    ipcMain.handle('hotmic:getRecordingIndicatorMode', () => {
+      return dynamicIslandManager?.getRecordingIndicatorMode() ?? getRecordingIndicatorModeFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setRecordingIndicatorMode', async (_event, mode: RecordingIndicatorMode) => {
+      const next = normalizeRecordingIndicatorMode(mode);
+      if (preferencesManager) {
+        await preferencesManager.save({ recordingIndicatorMode: next });
+      }
+      dynamicIslandManager?.setRecordingIndicatorMode(next);
+      return next;
+    });
+
+    ipcMain.handle('hotmic:getResolvedRecordingIndicatorMode', () => {
+      return dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? 'floating';
+    });
+
+    ipcMain.handle('hotmic:getFloatingIndicatorPosition', () => {
+      return dynamicIslandManager?.getFloatingPosition() ?? getFloatingIndicatorPositionFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setFloatingIndicatorPosition', async (_event, position: FloatingIndicatorPosition | null) => {
+      const next = normalizeFloatingIndicatorPosition(position);
+      const applied = dynamicIslandManager?.setFloatingPosition(next) ?? next;
+      if (preferencesManager) {
+        await preferencesManager.save({ floatingIndicatorPosition: applied });
+      }
+      return applied;
+    });
+
     ipcMain.handle('hotmic:getIslandAutoHide', () => {
       return dynamicIslandManager?.getAutoHideEnabled() ?? preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
     });
@@ -8828,13 +15906,26 @@ if (!gotTheLock) {
       return word;
     });
 
+    ipcMain.handle('hotmic:getCommandEnterWords', () => {
+      return preferencesManager?.getPreference('hotMicCommandEnterWords') ?? HOT_MIC_DEFAULTS.commandEnterPhrases;
+    });
+
+    ipcMain.handle('hotmic:setCommandEnterWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicCommandEnterWords: words });
+      return words;
+    });
+
     ipcMain.handle('hotmic:getHotkey', () => {
-      return hotMicManager?.getHotkey() ?? null;
+      return hotMicManager?.getHotkey() ?? preferencesManager?.getPreference('hotMicHotkey') ?? null;
     });
 
     ipcMain.handle('hotmic:setHotkey', async (_event, hotkey: string | null) => {
       if (!hotMicManager) return false;
-      return hotMicManager.setHotkey(hotkey);
+      const success = await hotMicManager.setHotkey(hotkey);
+      if (success) {
+        broadcastHotMicHotkey(hotMicManager.getHotkey());
+      }
+      return success;
     });
 
     ipcMain.handle('hotmic:getPasteWords', () => {
@@ -9073,6 +16164,7 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:resetCommandDefaults', async () => {
       const resetPayload: Record<string, unknown> = {
         hotMicSubmitWord: HOT_MIC_DEFAULTS.submitPhrases,
+        hotMicCommandEnterWords: HOT_MIC_DEFAULTS.commandEnterPhrases,
         hotMicPasteWords: HOT_MIC_DEFAULTS.pastePhrases,
         hotMicCancelWords: HOT_MIC_DEFAULTS.cancelPhrases,
         hotMicScrapWords: HOT_MIC_DEFAULTS.scrapPhrases,
@@ -9289,22 +16381,31 @@ if (!gotTheLock) {
       });
     }
 
-    // Manual update check function for tray menu.
-    function checkForUpdatesManual(): void {
-      autoUpdater.checkForUpdates().catch((err) => {
-        log.error('Update check failed:', err);
-      });
-    }
+    const checkForUpdatesManual = isAutoUpdaterEnabled
+      ? () => {
+        getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
+      }
+      : undefined;
 
+    startupMark('init-audio-start');
     await initAudioSystem(checkForUpdatesManual);
+    startupMark('init-audio-complete');
+    startupMark('init-transcriber-start');
     await initTranscriberSystem();
+    startupMark('init-transcriber-complete');
+    startupMark('init-clipboard-callbacks-start');
     await initClipboardCallbacks();
+    startupMark('init-clipboard-callbacks-complete');
 
     // Preload clipboard history window for instant first open.
     // Always preload - even before onboarding completes, user may trigger hotkey.
-    clipboardHistoryWindow = initClipboardHistoryWindow();
-    const boundsToUse = restoreClipboardHistoryBounds();
-    clipboardHistoryWindow.preload(boundsToUse);
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.preload(boundsToUse, 'library');
+    }
+    startupMark('clipboard-window-preload-called');
+    maybeExitStartupBenchmark('clipboard-window-preload-called');
 
     // If the app cold-started via `open-file`, the pending path was queued
     // before the window existed. Flush it once the renderer finishes loading
@@ -9333,7 +16434,7 @@ if (!gotTheLock) {
     }
 
     // Apply Dock visibility setting.
-    // Default is panel mode (hidden from Dock). This is a WIP feature.
+    // Default is app-window mode, with Dock/Cmd+Tab presence.
     if (process.platform === 'darwin') {
       const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
@@ -9352,8 +16453,8 @@ if (!gotTheLock) {
       });
     }
 
-    // Check for updates on startup and periodically (production only).
-    {
+    if (isAutoUpdaterEnabled) {
+      const autoUpdater = getAutoUpdater();
       // Initial check after 5s delay to not block UI.
       setTimeout(() => {
         autoUpdater.checkForUpdates();
@@ -9363,111 +16464,85 @@ if (!gotTheLock) {
       setInterval(() => {
         autoUpdater.checkForUpdates();
       }, 30 * 60 * 1000);
+
+      // Auto-updater event handlers - send to renderer for in-app notification UI.
+      autoUpdater.on('checking-for-update', () => {
+        if (!shouldApplyUpdaterStatus('checking')) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:checkingForUpdate' });
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:checkingForUpdate');
+          }
+        });
+      });
+
+      autoUpdater.on('update-available', (info) => {
+        if (!setPendingUpdateStatus('available', info.version)) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:updateAvailable', info: { version: info.version } });
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:updateAvailable', { version: info.version });
+          }
+        });
+      });
+
+      autoUpdater.on('update-not-available', (_info) => {
+        sendUpdateNotAvailable();
+      });
+
+      autoUpdater.on('error', (err) => {
+        log.error('Updater error:', err);
+        sendUpdaterErrorMessage(formatAutoUpdaterErrorMessage(err));
+      });
+
+      autoUpdater.on('download-progress', (progress) => {
+        const percent = Math.round(progress.percent);
+        if (pendingUpdateInfo && !setPendingUpdateStatus('downloading')) return;
+        browserHelperServer?.emitNativeEvent({ type: 'updater:downloadProgress', percent });
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:downloadProgress', percent);
+          }
+        });
+      });
+
+      autoUpdater.on('update-downloaded', (info) => {
+        if (!setPendingUpdateStatus('ready', info.version)) return;
+        sendUpdateDownloaded(info.version);
+      });
     }
 
-    // Auto-updater event handlers - send to renderer for in-app notification UI.
-    autoUpdater.on('checking-for-update', () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:checkingForUpdate');
-        }
-      });
-    });
-
-    autoUpdater.on('update-available', (info) => {
-      pendingUpdateInfo = { status: 'available', version: info.version };
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateAvailable', { version: info.version });
-        }
-      });
-    });
-
-    autoUpdater.on('update-not-available', (_info) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateNotAvailable');
-        }
-      });
-    });
-
-    autoUpdater.on('error', (err) => {
-      log.error('Updater error:', err);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:error', err.message);
-        }
-      });
-    });
-
-    autoUpdater.on('download-progress', (progress) => {
-      const percent = Math.round(progress.percent);
-      if (pendingUpdateInfo) {
-        pendingUpdateInfo.status = 'downloading';
-      }
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:downloadProgress', percent);
-        }
-      });
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      pendingUpdateInfo = { status: 'ready', version: info.version };
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateDownloaded', { version: info.version });
-        }
-      });
-    });
-
-    // App version (sync for immediate access).
-    ipcMain.on('app:getVersion', (event) => {
-      event.returnValue = app.getVersion();
-    });
+    setupAppMetadataIPCHandlersOnce();
 
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
-      if (app.isPackaged) {
-        autoUpdater.checkForUpdates();
-      } else {
-        // In dev mode, simulate "up to date" response
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (!window.isDestroyed()) {
-            window.webContents.send('updater:updateNotAvailable');
-          }
-        });
-      }
+      return checkForAppUpdates();
     });
 
     ipcMain.handle('updater:downloadUpdate', () => {
-      autoUpdater.downloadUpdate();
+      return downloadAppUpdate();
     });
 
     ipcMain.handle('updater:installUpdate', () => {
-      autoUpdater.quitAndInstall();
+      return installAppUpdate();
     });
 
     ipcMain.handle('updater:dismissUpdate', () => {
-      // Clear pending update state so notification doesn't reappear.
-      pendingUpdateInfo = null;
-    });
-
-    ipcMain.handle('updater:getStatus', () => {
-      // Return current update state so windows can query it on open.
-      return pendingUpdateInfo;
+      return dismissAppUpdate();
     });
 
     // Check permissions on startup and notify main window
     const permissions = await checkPermissions();
+    startupMark('permissions-checked');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.once('did-finish-load', () => {
         mainWindow?.webContents.send('permissions-status', permissions);
       });
     }
     
-    // Permission and model check at startup - always verify all requirements are met.
-    // If any permission is missing or model not downloaded, show onboarding regardless of previous completion state.
+    // Permission and model check at startup.
+    // Returning users with saved local setup should still load their current app
+    // surface; experimental builds can have fresh macOS permission state.
     const prefs = preferencesManager?.get();
     const micStatus = systemPreferences.getMediaAccessStatus('microphone');
     const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
@@ -9475,27 +16550,49 @@ if (!gotTheLock) {
 
     // Check if the configured transcription engine is ready
     const modelDownloaded = await isTranscriptionEngineReady();
+    startupMark('transcription-engine-ready-checked');
 
     // Check if user is authenticated. A returning user with a stored local
     // session can use offline/local features while token refresh catches up.
     const isAuthenticated = authManager?.isAuthenticated() ?? false;
-    const canUseLocalAccount = isAuthenticated || (authManager?.hasEverBeenAuthenticated() ?? false);
+    const canUseLocalAccount =
+      isAuthenticated ||
+      (authManager?.hasEverBeenAuthenticated() ?? false) ||
+      (userDataManager?.isLoggedIn() ?? false) ||
+      prefs?.localSetupComplete === true;
 
-    // All three permissions, model download, and a known local account are
-    // required for full local app functionality.
-    const isFullyReady =
+    const hasAllPermissions =
       micStatus === 'granted' &&
       accessibilityStatus &&
-      screenStatus === 'granted' &&
-      modelDownloaded &&
-      canUseLocalAccount;
+      screenStatus === 'granted';
+    const startupReadiness = resolveStartupReadiness({
+      onboardingComplete: prefs?.onboardingComplete === true,
+      hasAllPermissions,
+      modelReady: modelDownloaded,
+      canUseLocalAccount,
+    });
 
-    if (isFullyReady) {
-      // All requirements met - mark onboarding complete and allow app access
-      if (!prefs?.onboardingComplete) {
-        await preferencesManager?.save({ onboardingComplete: true });
+    if (startupReadiness.showApp) {
+      // All requirements met, or this is a returning local user. Mark only
+      // fully ready users complete so incomplete onboarding is preserved for
+      // genuinely new users.
+      if (!prefs?.onboardingComplete || prefs?.onboardingStep !== undefined) {
+        if (startupReadiness.fullyReady) {
+          await preferencesManager?.save({ onboardingComplete: true, onboardingStep: undefined });
+        }
       }
-      registerHotkeysAfterOnboarding();
+      if (onboardingWindow) {
+        onboardingWindow.close();
+        onboardingWindow = null;
+      }
+      if (hasAllPermissions) {
+        registerHotkeysAfterOnboarding();
+      } else {
+        getHotkeyManager().unregisterAll();
+      }
+      showClipboardHistoryOnStartup();
+      startupMark('startup-decision-complete');
+      maybeExitStartupBenchmark('startup-decision-complete');
     } else {
       // Missing requirements - force onboarding flow
 
@@ -9513,11 +16610,6 @@ if (!gotTheLock) {
 
       // Determine the correct starting step based on what's missing
       // If only auth is missing (all permissions + model OK), start at account phase (step 2)
-      const hasAllPermissions =
-        micStatus === 'granted' &&
-        accessibilityStatus &&
-        screenStatus === 'granted';
-
       const hasAllPermissionsAndModel = hasAllPermissions && modelDownloaded;
 
       let startStep: number;
@@ -9533,6 +16625,8 @@ if (!gotTheLock) {
       }
 
       onboardingWindow.show(startStep);
+      startupMark('startup-decision-complete');
+      maybeExitStartupBenchmark('startup-decision-complete');
       // Hotkeys will be registered when onboarding completes (see onboarding:complete handler)
     }
 
@@ -9553,10 +16647,21 @@ if (!gotTheLock) {
 
       const hasAllPermissions = mic === 'granted' && accessibility && screen === 'granted';
 
-      // Check if permissions are revoked
+      const canUseLocalAccountNow =
+        authenticated ||
+        hasEverAuthenticated ||
+        (userDataManager?.isLoggedIn() ?? false) ||
+        currentPrefs.localSetupComplete === true;
+
+      // Check if permissions are revoked. Returning users keep the app surface;
+      // permission-dependent features can prompt from inside the app.
       if (!hasAllPermissions) {
         // Unregister all hotkeys - they shouldn't work without permissions
         getHotkeyManager().unregisterAll();
+
+        if (canUseLocalAccountNow) {
+          return;
+        }
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
@@ -9583,7 +16688,11 @@ if (!gotTheLock) {
       // IMPORTANT: Only force onboarding for truly new users who have never authenticated.
       // Existing users who temporarily lose auth (network issues, token expired) should
       // continue using local features. AuthManager will retry token refresh automatically.
-      if (!authenticated && !hasEverAuthenticated) {
+      if (shouldForceAccountOnboarding({
+        authenticated,
+        hasEverAuthenticated,
+        canUseLocalAccount: canUseLocalAccountNow,
+      })) {
         // Unregister all hotkeys - app requires login for new users
         getHotkeyManager().unregisterAll();
 
@@ -9624,8 +16733,59 @@ if (!gotTheLock) {
     }
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    appQuitInProgress = true;
+    const blockingActivities = getQuitBlockingActivities();
+    if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
+      event.preventDefault();
+      if (appQuitConfirmationOpen) return;
+      appQuitConfirmationOpen = true;
+
+      const options = {
+        type: 'warning' as const,
+        buttons: ['Quit and Stop Them', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        title: 'Quit Field Theory?',
+        message: 'Field Theory is still running local work.',
+        detail: formatQuitBlockingActivityDetail(blockingActivities),
+      };
+      const parent = BrowserWindow.getFocusedWindow()
+        ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+      const prompt = parent
+        ? dialog.showMessageBox(parent, options)
+        : dialog.showMessageBox(options);
+
+      void prompt.then(({ response }) => {
+        appQuitConfirmationOpen = false;
+        if (response === 0) {
+          appQuitConfirmedWithLocalWork = true;
+          app.quit();
+        } else {
+          appQuitInProgress = false;
+        }
+      }).catch((error) => {
+        appQuitConfirmationOpen = false;
+        appQuitInProgress = false;
+        log.warn('Quit confirmation failed: %s', error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+
     log.info('App quitting, cleaning up...');
+
+    if (!appQuitWatcherCleanupComplete) {
+      event.preventDefault();
+      void cleanupFileWatchersBeforeQuit().then(() => {
+        app.quit();
+      }).catch((error) => {
+        log.warn('File watcher cleanup before quit failed: %s', error instanceof Error ? error.message : String(error));
+        appQuitWatcherCleanupComplete = true;
+        app.quit();
+      });
+      return;
+    }
 
     if (feedbackManager) {
       feedbackManager.destroy();
@@ -9665,13 +16825,22 @@ if (!gotTheLock) {
       clipboardManager.destroy();
     }
 
+    agentKickoffManager?.destroy();
+
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.destroy();
     }
 
+    libraryDocumentWindowManager?.destroy();
+
     librarySyncService?.dispose();
+    clearPendingSharedFilesSync();
+    void sharedSyncService?.dispose();
+    void browserHelperServer?.stop();
+    browserHelperServer = null;
     commandSyncService?.destroy();
     todoStore?.destroy();
+    localLlmManager?.stop();
 
     // Sync metrics before quitting (fire-and-forget, don't block quit)
     if (metricsManager) {

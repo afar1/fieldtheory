@@ -562,6 +562,13 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [overDropId, setOverDropId] = useState<string | null>(null);
 
+  const openSketchForSharedItem = useCallback(async (item: SharedClipboardItem) => {
+    if (!onOpenSketch || !(item.imageUrl || item.imageData)) return;
+    const url = await getCachedImageUrl(item.imageUrl, item.imageData, item.id);
+    if (!url) return;
+    onOpenSketch(url, item.imageWidth || 800, item.imageHeight || 600);
+  }, [onOpenSketch]);
+
   // Search state.
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -588,7 +595,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
   // Image hover and preview state.
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
   type PreviewContent =
-    | { type: 'image'; url: string; width: number; height: number }
+    | { type: 'image'; url: string; width: number; height: number; item?: SharedClipboardItem }
     | { type: 'text'; content: string };
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
@@ -605,6 +612,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
           url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
           width: item.imageWidth || 0,
           height: item.imageHeight || 0,
+          item,
         });
       }
     }
@@ -635,6 +643,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
           url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
           width: item.imageWidth || 0,
           height: item.imageHeight || 0,
+          item,
         };
       } else if (item.content) {
         return { type: 'text', content: item.content };
@@ -647,6 +656,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
           url: imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`,
           width: imageItem.imageWidth || 0,
           height: imageItem.imageHeight || 0,
+          item: imageItem,
         };
       } else {
         const combinedText = combineStackText(row.items);
@@ -1427,6 +1437,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
               url: hoveredItem.imageUrl || `data:image/png;base64,${hoveredItem.imageData}`,
               width: hoveredItem.imageWidth || 0,
               height: hoveredItem.imageHeight || 0,
+              item: hoveredItem,
             });
             return;
           }
@@ -1516,7 +1527,11 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
         // If preview is open with an image, draw on that.
         if (preview && preview.type === 'image') {
           e.preventDefault();
-          onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+          if (preview.item) {
+            openSketchForSharedItem(preview.item).catch(() => {});
+          } else {
+            onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+          }
           dismissPreview();
           return;
         }
@@ -1530,8 +1545,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
 
         if (imageItem && (imageItem.imageUrl || imageItem.imageData)) {
           e.preventDefault();
-          const url = imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`;
-          onOpenSketch(url, imageItem.imageWidth || 800, imageItem.imageHeight || 600);
+          openSketchForSharedItem(imageItem).catch(() => {});
           return;
         }
       }
@@ -1560,7 +1574,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, copyItemToClipboard, copyStackToClipboard, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems, onOpenSketch, onSubmitFeedback]);
+  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, copyItemToClipboard, copyStackToClipboard, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems, onOpenSketch, openSketchForSharedItem, onSubmitFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render: Loading
@@ -2153,6 +2167,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                                       url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
                                       width: item.imageWidth || 0,
                                       height: item.imageHeight || 0,
+                                      item,
                                     });
                                   }
                                 }}
@@ -2284,8 +2299,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const url = imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`;
-                                  onOpenSketch(url, imageItem.imageWidth || 800, imageItem.imageHeight || 600);
+                                  openSketchForSharedItem(imageItem).catch(() => {});
                                 }}
                                 style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                               >
@@ -2308,6 +2322,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                                   url,
                                   width: imageItem.imageWidth || 0,
                                   height: imageItem.imageHeight || 0,
+                                  item: imageItem,
                                 });
                               } else if (textItem && textItem.content) {
                                 setPreview({ type: 'text', content: textItem.content });
@@ -2438,6 +2453,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                                 url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
                                 width: item.imageWidth || 0,
                                 height: item.imageHeight || 0,
+                                item,
                               });
                             }}
                           >
@@ -2553,8 +2569,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const url = item.imageUrl || `data:image/png;base64,${item.imageData}`;
-                                onOpenSketch(url, item.imageWidth || 800, item.imageHeight || 600);
+                                openSketchForSharedItem(item).catch(() => {});
                               }}
                               style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                             >
@@ -2693,9 +2708,13 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                       await pasteStack(selectedRow.items);
                     }
                   }},
-                  ...(onOpenSketch ? [{ label: 'draw', key: 'd', action: () => {
+                  ...(onOpenSketch ? [{ label: 'draw', key: 'd', action: async () => {
                     // Open draw mode with this image.
-                    onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+                    if (preview.item) {
+                      await openSketchForSharedItem(preview.item);
+                    } else {
+                      onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+                    }
                     dismissPreview();
                   }}] : []),
                   ...(onSubmitFeedback ? [{ label: 'feedback', key: 'f', action: async () => {

@@ -41,6 +41,14 @@ describe('HotkeyManager config', () => {
       category: 'navigation',
     });
   });
+
+  it('exposes global improve as a fixed text hotkey', () => {
+    expect(HOTKEY_CONFIGS.globalImprove).toMatchObject({
+      defaultKey: 'Command+Shift+I',
+      preferenceKey: null,
+      category: 'text',
+    });
+  });
 });
 
 describe('HotkeyManager policy', () => {

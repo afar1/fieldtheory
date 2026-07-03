@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
   // Load env vars from .env.local (and .env, .env.[mode], etc.)
   // The third param '' means load all env vars, not just VITE_ prefixed ones.
   const env = loadEnv(mode, process.cwd(), '');
+  const supabasePublishableKey = env.FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY ?? env.VITE_SUPABASE_ANON_KEY;
   
   return {
     base: './', // Use relative paths for assets (required for Electron file:// protocol)
@@ -21,6 +22,7 @@ export default defineConfig(({ mode }) => {
           main: path.resolve(__dirname, 'index.html'),
           overlay: path.resolve(__dirname, 'overlay.html'),
           clipboardHistory: path.resolve(__dirname, 'clipboard-history.html'),
+          browserLibrary: path.resolve(__dirname, 'browser-library.html'),
           cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
           commandLauncher: path.resolve(__dirname, 'command-launcher.html'),
           commandLauncherPreview: path.resolve(__dirname, 'command-launcher-preview.html'),
@@ -31,8 +33,13 @@ export default defineConfig(({ mode }) => {
     // Bake Supabase credentials into the production bundle at build time.
     // Without this, import.meta.env.VITE_* is undefined in production builds.
     define: {
+      'process.env': JSON.stringify({
+        NODE_ENV: mode === 'production' ? 'production' : 'development',
+      }),
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY),
+      'import.meta.env.FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabasePublishableKey),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabasePublishableKey),
+      'import.meta.env.VITE_FIELD_THEORY_BUILD_CHANNEL': JSON.stringify(env.VITE_FIELD_THEORY_BUILD_CHANNEL || env.FIELD_THEORY_BUILD_CHANNEL || 'production'),
     },
   };
 });

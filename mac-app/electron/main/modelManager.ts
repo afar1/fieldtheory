@@ -11,10 +11,11 @@ const log = createLogger('Model');
  * Available Whisper model sizes.
  * Small is the default balance for latency and quality.
  */
-export type ModelSize = 'small';
+export type ModelSize = 'small' | 'small-tdrz';
 
 export const DEFAULT_MODEL_SIZE: ModelSize = 'small';
-export const SUPPORTED_MODEL_SIZES: readonly ModelSize[] = ['small'];
+export const MEETING_DIARIZATION_MODEL_SIZE: ModelSize = 'small-tdrz';
+export const SUPPORTED_MODEL_SIZES: readonly ModelSize[] = ['small', MEETING_DIARIZATION_MODEL_SIZE];
 
 export function isModelSize(value: unknown): value is ModelSize {
   return typeof value === 'string' && (SUPPORTED_MODEL_SIZES as readonly string[]).includes(value);
@@ -28,6 +29,7 @@ interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 }
 
 export type ModelHealthStatus = 'ready' | 'missing' | 'corrupt';
@@ -49,6 +51,13 @@ const MODELS: Record<ModelSize, ModelInfo> = {
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
     sizeBytes: 466 * 1024 * 1024, // ~466MB
     description: 'Small English transcription model',
+  },
+  'small-tdrz': {
+    name: 'ggml-small.en-tdrz.bin',
+    url: 'https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin',
+    sizeBytes: 465 * 1024 * 1024, // ~465MiB
+    description: 'Small English transcription model with experimental speaker-turn labels for meetings',
+    supportsSpeakerDiarization: true,
   },
 };
 

@@ -1,3 +1,5 @@
+import type { MarkdownContentMode } from './utils/markdownContentMode';
+
 // =============================================================================
 // Hotkey Formatting
 // =============================================================================
@@ -36,11 +38,129 @@ export function formatTimeAgo(timestamp: number): string {
 }
 
 // =============================================================================
+// Local Instruction Fallback
+// =============================================================================
+
+export function shouldOfferLocalInstructionFallback(input: {
+  query: string;
+  resultCount: number;
+  fieldTheoryActive: boolean;
+  hasActiveLibraryFileContext: boolean;
+  inScopedMode?: boolean;
+}): boolean {
+  return input.query.trim().length > 0
+    && input.resultCount === 0
+    && input.fieldTheoryActive
+    && input.hasActiveLibraryFileContext
+    && !input.inScopedMode;
+}
+
+// =============================================================================
+// Empty State
+// =============================================================================
+
+export function getLauncherStatusText(input: {
+  hasQuery: boolean;
+  namespaceLabel?: string | null;
+  resultCount: number;
+  loading: boolean;
+  hasLoadedItems: boolean;
+}): string | null {
+  if ((!input.hasQuery && !input.namespaceLabel) || input.resultCount > 0) return null;
+  return input.loading && !input.hasLoadedItems ? 'Loading results...' : 'No matches found';
+}
+
+export function shouldPastePortableCommand(input: {
+  itemType?: string | null;
+  openFieldTheoryTarget?: boolean;
+  insertWikiLink?: boolean;
+}): boolean {
+  return input.itemType === 'command'
+    && input.openFieldTheoryTarget !== true
+    && input.insertWikiLink !== true;
+}
+
+export function getLauncherInvocationVisibilityPolicy(input: {
+  itemType?: string | null;
+  openFieldTheoryTarget?: boolean;
+  insertWikiLink?: boolean;
+}): {
+  suppressRevealDuringBlur: boolean;
+  revealWhenReadyAfterSuccess: boolean;
+  closeFromRendererAfterSuccess: boolean;
+} {
+  const isClipboardPaste = input.itemType === 'clipboard-item' || input.itemType === 'clipboard-stack';
+  const isExternalPaste = shouldPastePortableCommand(input) || isClipboardPaste;
+
+  return {
+    suppressRevealDuringBlur: isExternalPaste,
+    revealWhenReadyAfterSuccess: !isExternalPaste,
+    closeFromRendererAfterSuccess: isClipboardPaste,
+  };
+}
+
+function escapeLauncherBookmarkEmbedAlt(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+}
+
+export function formatLauncherBookmarkEmbedMarkdown(input: {
+  itemType?: string | null;
+  bookmarkId?: string | null;
+  displayName?: string | null;
+  name?: string | null;
+}): string | null {
+  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
+  const alt = escapeLauncherBookmarkEmbedAlt(input.displayName || input.name || 'Bookmark');
+  return `![${alt}](bookmark://${encodeURIComponent(input.bookmarkId)})`;
+}
+
+export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks'): string {
+  if (source === 'clipboard') return 'Clipboard';
+  if (source === 'bookmarks') return 'Bookmarks';
+  return 'Recents';
+}
+
+export function shouldSwitchLauncherDefaultPanelOnTab(input: {
+  isRootIdleLauncher: boolean;
+  hasExplicitSelection: boolean;
+}): boolean {
+  return input.isRootIdleLauncher;
+}
+
+export type LauncherDefaultBookmarkEnterAction =
+  | { kind: 'insert-bookmark-embed'; markdown: string }
+  | { kind: 'paste-bookmark-text' }
+  | { kind: 'copy-bookmark-for-agent' }
+  | { kind: 'invoke-bookmark' };
+
+export function getLauncherDefaultBookmarkEnterAction(input: {
+  itemType?: string | null;
+  bookmarkId?: string | null;
+  displayName?: string | null;
+  name?: string | null;
+  fieldTheoryActive: boolean;
+  hasActiveLibraryFileContext: boolean;
+  canInsertMarkdown: boolean;
+  hasBookmarkPasteText: boolean;
+  canPasteText: boolean;
+  canCopyForAgent: boolean;
+}): LauncherDefaultBookmarkEnterAction | null {
+  if (input.itemType !== 'bookmark' || !input.bookmarkId) return null;
+  if (input.hasActiveLibraryFileContext && input.canInsertMarkdown) {
+    const markdown = formatLauncherBookmarkEmbedMarkdown(input);
+    return markdown ? { kind: 'insert-bookmark-embed', markdown } : null;
+  }
+  if (input.hasBookmarkPasteText && input.canPasteText) return { kind: 'paste-bookmark-text' };
+  if (input.canCopyForAgent) return { kind: 'copy-bookmark-for-agent' };
+  return { kind: 'invoke-bookmark' };
+}
+
+// =============================================================================
 // Library Markdown Flattening
 // =============================================================================
 
 export type LauncherLibraryNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: 'open' | 'done' }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: 'open' | 'done'; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
   | { kind: 'dir'; name: string; relPath: string; children: LauncherLibraryNode[] };
 
 export interface LauncherLibraryRoot {
@@ -49,6 +169,8 @@ export interface LauncherLibraryRoot {
   builtin: boolean;
   tree: LauncherLibraryNode[];
 }
+
+export type LauncherLibraryRootSummary = Pick<LauncherLibraryRoot, 'path' | 'label' | 'builtin'>;
 
 export interface LauncherLibraryMarkdownItem {
   id: string;
@@ -60,6 +182,113 @@ export interface LauncherLibraryMarkdownItem {
   relPath?: string;
   lastUpdated?: number;
   todoState?: 'open' | 'done';
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+}
+
+export type LauncherRootSearchKind =
+  | 'system-setting'
+  | 'contact'
+  | 'file'
+  | 'recent-document'
+  | 'url'
+  | 'web-search'
+  | 'calculator'
+  | 'unit'
+  | 'currency'
+  | 'time-zone'
+  | 'dictionary'
+  | 'calendar'
+  | 'system-command'
+  | 'terminal-command';
+
+export const LAUNCHER_ROOT_SEARCH_KIND_LABELS: Record<LauncherRootSearchKind, string> = {
+  'system-setting': 'Setting',
+  contact: 'Contact',
+  file: 'File',
+  'recent-document': 'Recent',
+  url: 'URL',
+  'web-search': 'Search',
+  calculator: 'Calculator',
+  unit: 'Unit',
+  currency: 'Currency',
+  'time-zone': 'Time Zone',
+  dictionary: 'Dictionary',
+  calendar: 'Calendar',
+  'system-command': 'System',
+  'terminal-command': 'Terminal',
+};
+
+export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
+  'system-setting': false,
+  contact: false,
+  file: true,
+  'recent-document': false,
+  url: false,
+  'web-search': false,
+  calculator: false,
+  unit: false,
+  currency: false,
+  'time-zone': false,
+  dictionary: false,
+  calendar: false,
+  'system-command': false,
+  'terminal-command': false,
+};
+
+export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
+
+export function normalizeLauncherRootSearchEnabledKinds(
+  value: LauncherRootSearchEnabledKinds | null | undefined,
+): Record<LauncherRootSearchKind, boolean> {
+  const normalized = { ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS };
+  if (!value || typeof value !== 'object') return normalized;
+  for (const kind of Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS) as LauncherRootSearchKind[]) {
+    if (typeof value[kind] === 'boolean') normalized[kind] = value[kind];
+  }
+  return normalized;
+}
+
+export function isLauncherRootSearchKindEnabled(
+  settings: LauncherRootSearchEnabledKinds | null | undefined,
+  kind: LauncherRootSearchKind,
+): boolean {
+  return normalizeLauncherRootSearchEnabledKinds(settings)[kind];
+}
+
+export function areLauncherRootSearchEnabledKindsEqual(
+  a: LauncherRootSearchEnabledKinds | null | undefined,
+  b: LauncherRootSearchEnabledKinds | null | undefined,
+): boolean {
+  const left = normalizeLauncherRootSearchEnabledKinds(a);
+  const right = normalizeLauncherRootSearchEnabledKinds(b);
+  return (Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS) as LauncherRootSearchKind[])
+    .every(kind => left[kind] === right[kind]);
+}
+
+export interface LauncherNativeIconPathCandidate {
+  filePath?: string;
+  directoryPath?: string;
+}
+
+export interface LauncherFileSource {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+export interface LauncherFileItem extends LauncherSearchableItem, LauncherNormalModeItem {
+  id: string;
+  type: 'file';
+  rootSearchKind: 'file';
+  rootSearchLabel: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastUpdated?: number;
+  hotkeyDisplay: string;
 }
 
 export interface LauncherDirectoryItem extends LauncherSearchableItem {
@@ -69,7 +298,17 @@ export interface LauncherDirectoryItem extends LauncherSearchableItem {
   rootBuiltin: boolean;
   directoryPath: string;
   directoryRelPath?: string;
+  lastUpdated?: number;
   hotkeyDisplay: string;
+}
+
+export interface LauncherCommandDirectorySource {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
 }
 
 export type LauncherBookmarkFacetKind = 'category' | 'domain' | 'entity';
@@ -143,6 +382,13 @@ function shouldIndexLibraryNodeForLauncher(root: LauncherLibraryRoot, node: Laun
   return !isGeneratedBookmarkTaxonomyPath(node.relPath);
 }
 
+export function canPatchLibraryPageDeltaForLauncher(
+  root: LauncherLibraryRootSummary,
+  page: Extract<LauncherLibraryNode, { kind: 'file' }>,
+): boolean {
+  return shouldIndexLibraryNodeForLauncher({ ...root, tree: [] }, page);
+}
+
 export interface LauncherSearchableItem {
   name: string;
   displayName: string;
@@ -155,6 +401,7 @@ export interface LauncherBookmarkAuthorItem extends LauncherSearchableItem {
   authorHandle: string;
   bookmarkCount: number;
   hotkeyDisplay: string;
+  lastUpdated?: number;
 }
 
 export interface LauncherBookmarkPostSource {
@@ -177,6 +424,7 @@ export interface LauncherBookmarkPostItem extends LauncherSearchableItem {
   authorHandle: string;
   postedAt: string;
   hotkeyDisplay: string;
+  lastUpdated?: number;
 }
 
 export interface LauncherVisibleItem {
@@ -184,6 +432,39 @@ export interface LauncherVisibleItem {
   type?: string;
   name: string;
   displayName: string;
+  hotkeyDisplay?: string;
+  timeAgo?: string;
+}
+
+export function areLauncherVisibleItemsSameOrder(
+  current: readonly LauncherVisibleItem[],
+  next: readonly LauncherVisibleItem[],
+): boolean {
+  if (current === next) return true;
+  if (current.length !== next.length) return false;
+  return current.every((item, index) => (
+    item.id === next[index]?.id
+      && item.type === next[index]?.type
+      && item.name === next[index]?.name
+      && item.displayName === next[index]?.displayName
+      && item.hotkeyDisplay === next[index]?.hotkeyDisplay
+      && item.timeAgo === next[index]?.timeAgo
+  ));
+}
+
+export const LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS = 8;
+
+export function shouldTraceLauncherRendererEvent(
+  event: string,
+  details: Record<string, unknown> = {},
+): boolean {
+  if (event !== 'filter-results') return true;
+  const launcherSessionId = details.launcherSessionId;
+  if (typeof launcherSessionId === 'string' && launcherSessionId.startsWith('benchmark-')) return true;
+  const queryLength = details.queryLength;
+  if (typeof queryLength === 'number' && queryLength > 0 && queryLength <= 2) return true;
+  const elapsedMs = details.elapsedMs;
+  return typeof elapsedMs !== 'number' || elapsedMs >= LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS;
 }
 
 export interface LauncherAuthorNamespaceCandidate extends LauncherVisibleItem {
@@ -225,15 +506,27 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 }
 
 export type LauncherFieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
+  contentMode?: MarkdownContentMode;
+  selectionStart?: number;
+  selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 };
 
 export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem {
   filePath?: string;
   relPath?: string;
   recentKind?: 'wiki' | 'external';
+  isDirectory?: boolean;
   keywords?: string[];
+}
+
+export interface LauncherLibraryRootPath {
+  path: string;
+  builtin: boolean;
 }
 
 export type LauncherUsageMap = Record<string, { count: number; lastUsedAt: number }>;
@@ -244,16 +537,21 @@ export interface LauncherUsageScoreItem {
   name: string;
 }
 
-export type LauncherNormalModeSectionId = 'commands' | 'recent' | 'files' | 'actions' | 'bookmarks';
-
 export interface LauncherNormalModeItem {
   type?: string;
+  isPinned?: boolean;
   lastOpenedAt?: number;
+  lastUpdated?: number;
+  postedAt?: string;
 }
 
 export interface ScoredLauncherNormalModeItem<T extends LauncherNormalModeItem> {
   item: T;
   score: number;
+}
+
+export interface LauncherNormalModeBalanceOptions {
+  maxResults?: number;
 }
 
 export interface LauncherDirectoryNamespace {
@@ -262,54 +560,240 @@ export interface LauncherDirectoryNamespace {
   directoryRelPath?: string;
 }
 
-const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherNormalModeSectionId; predicate: (item: LauncherNormalModeItem) => boolean }> = [
-  { id: 'commands', predicate: (item) => item.type === 'command' },
-  { id: 'recent', predicate: (item) => item.type === 'recent-file' },
-  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
-  { id: 'actions', predicate: (item) => item.type === 'action' },
-  { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
-];
+export const LAUNCHER_NORMAL_MODE_MAX_RESULTS = 20;
 
-const NORMAL_MODE_SECTION_LIMITS: Record<LauncherNormalModeSectionId, number> = {
-  commands: 4,
-  recent: 3,
-  files: 6,
-  actions: 3,
-  bookmarks: 4,
-};
+interface NormalizedLauncherSearchableItem {
+  sourceName: string;
+  sourceDisplayName: string;
+  sourceKeywords: string[];
+  name: string;
+  displayName: string;
+  keywords: string[];
+  searchText: string;
+}
 
-function getNormalModeSectionId(item: LauncherNormalModeItem): LauncherNormalModeSectionId | null {
-  return NORMAL_MODE_SECTION_ORDER.find(section => section.predicate(item))?.id ?? null;
+const normalizedLauncherSearchableItems = new WeakMap<LauncherSearchableItem, NormalizedLauncherSearchableItem>();
+
+function normalizeLauncherSearchText(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function getNormalizedLauncherSearchableItem(item: LauncherSearchableItem): NormalizedLauncherSearchableItem {
+  const cached = normalizedLauncherSearchableItems.get(item);
+  if (
+    cached
+    && cached.sourceName === item.name
+    && cached.sourceDisplayName === item.displayName
+    && cached.sourceKeywords === item.keywords
+  ) {
+    return cached;
+  }
+
+  const normalized = {
+    sourceName: item.name,
+    sourceDisplayName: item.displayName,
+    sourceKeywords: item.keywords,
+    name: normalizeLauncherSearchText(item.name),
+    displayName: normalizeLauncherSearchText(item.displayName),
+    keywords: item.keywords.map(keyword => normalizeLauncherSearchText(keyword)),
+    searchText: '',
+  };
+  normalized.searchText = [
+    normalized.name,
+    normalized.displayName,
+    ...normalized.keywords,
+  ].filter(Boolean).join(' ');
+  normalizedLauncherSearchableItems.set(item, normalized);
+  return normalized;
+}
+
+export function warmLauncherSearchableItemCache(
+  items: LauncherSearchableItem[],
+  startIndex = 0,
+  maxItems = items.length,
+): number {
+  const endIndex = Math.min(items.length, startIndex + Math.max(0, maxItems));
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const item = items[index];
+    getNormalizedLauncherSearchableItem(item);
+  }
+  return endIndex;
+}
+
+function fuzzySubsequenceScore(text: string, query: string): number {
+  if (query.length < 3) return 0;
+  let queryIndex = 0;
+  let firstMatch = -1;
+  let lastMatch = -1;
+  let gapPenalty = 0;
+
+  for (let i = 0; i < text.length && queryIndex < query.length; i += 1) {
+    if (text[i] !== query[queryIndex]) continue;
+    if (firstMatch === -1) firstMatch = i;
+    if (lastMatch !== -1) gapPenalty += Math.max(0, i - lastMatch - 1);
+    lastMatch = i;
+    queryIndex += 1;
+  }
+
+  if (queryIndex !== query.length || firstMatch === -1) return 0;
+  return Math.max(40, 220 - firstMatch * 4 - gapPenalty * 8 - (text.length - query.length));
+}
+
+function hasLauncherTokenPrefix(text: string, query: string): boolean {
+  if (text.startsWith(query)) return true;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char !== ' ' && char !== '/' && char !== '.' && char !== '_' && char !== '-') continue;
+    if (text.startsWith(query, index + 1)) return true;
+  }
+  return false;
+}
+
+function scoreNormalizedLauncherText(text: string, query: string, allowFuzzy = true): number {
+  if (!text || !query) return 0;
+  if (text === query) return 1000;
+  if (text.startsWith(query)) return 850 - Math.min(120, text.length - query.length);
+  if (hasLauncherTokenPrefix(text, query)) return 760 - Math.min(120, text.length - query.length);
+  const containsIndex = text.indexOf(query);
+  if (containsIndex >= 0) return 600 - Math.min(180, containsIndex * 5);
+  if (!allowFuzzy) return 0;
+  return fuzzySubsequenceScore(text, query);
+}
+
+export function scoreLauncherText(rawText: string | undefined, query: string): number {
+  return scoreNormalizedLauncherText(normalizeLauncherSearchText(rawText), query);
+}
+
+export function scoreLauncherSearchableItem<T extends LauncherSearchableItem & LauncherNormalModeItem>(item: T, query: string): number {
+  const allowFuzzy = item.type !== 'wiki-page' && item.type !== 'markdown-file' && item.type !== 'recent-file';
+  if (query.length < 3 && (item.type === 'wiki-page' || item.type === 'markdown-file') && !item.isPinned) return 0;
+
+  const searchableItem = getNormalizedLauncherSearchableItem(item);
+  if (!allowFuzzy && !searchableItem.searchText.includes(query)) return 0;
+
+  let textScore = Math.max(
+    0,
+    scoreNormalizedLauncherText(searchableItem.name, query, allowFuzzy),
+    scoreNormalizedLauncherText(searchableItem.displayName, query, allowFuzzy) - 20,
+  );
+  for (const keyword of searchableItem.keywords) {
+    const keywordScore = scoreNormalizedLauncherText(keyword, query, allowFuzzy) - 70;
+    if (keywordScore > textScore) textScore = keywordScore;
+  }
+  if (textScore <= 0) return 0;
+
+  let typeScore = 0;
+  if (item.type === 'directory') typeScore += 35;
+  if (item.type === 'source') typeScore += 30;
+  if (item.type === 'command') typeScore += 20;
+  if (item.type === 'action') typeScore += 19;
+  if (item.type === 'file') typeScore += 16;
+  if (item.type === 'bookmark-author') typeScore += 15;
+  if (item.type === 'bookmark-facet') typeScore += 15;
+  if (item.type === 'recent-file') typeScore += 12;
+  if (item.type === 'handoff') typeScore += 3;
+
+  return textScore + typeScore;
+}
+
+function parseLauncherTimestamp(value: string | undefined): number {
+  if (!value) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function getLauncherItemRecency(item: LauncherNormalModeItem): number {
+  if (typeof item.lastOpenedAt === 'number') return item.lastOpenedAt;
+  if (typeof item.lastUpdated === 'number') return item.lastUpdated;
+  return parseLauncherTimestamp(item.postedAt);
+}
+
+function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
+  a: ScoredLauncherNormalModeItem<T>,
+  b: ScoredLauncherNormalModeItem<T>,
+): number {
+  const launcherTypePriority = (item: LauncherNormalModeItem): number => {
+    if (item.type === 'command') return 4;
+    if (item.type === 'action') return 3;
+    if (item.type === 'directory') return 2;
+    return 0;
+  };
+  const aTypePriority = launcherTypePriority(a.item);
+  const bTypePriority = launcherTypePriority(b.item);
+  if (aTypePriority !== bTypePriority) return bTypePriority - aTypePriority;
+
+  const pinnedDelta = Number(Boolean(b.item.isPinned)) - Number(Boolean(a.item.isPinned));
+  if (pinnedDelta !== 0) return pinnedDelta;
+
+  if (a.item.type === 'command' && b.item.type === 'command' && a.score !== b.score) {
+    return b.score - a.score;
+  }
+
+  if ((a.item.type === 'directory' || b.item.type === 'directory') && a.score !== b.score) {
+    return b.score - a.score;
+  }
+
+  const aRecency = getLauncherItemRecency(a.item);
+  const bRecency = getLauncherItemRecency(b.item);
+  if ((aRecency || bRecency) && aRecency !== bRecency) return bRecency - aRecency;
+  if (a.score !== b.score) return b.score - a.score;
+  return 0;
+}
+
+function insertScoredLauncherMatch<T extends LauncherNormalModeItem>(
+  bestMatches: ScoredLauncherNormalModeItem<T>[],
+  match: ScoredLauncherNormalModeItem<T>,
+  maxResults: number,
+): void {
+  if (match.score <= 0 || maxResults <= 0) return;
+
+  let insertIndex = 0;
+  while (
+    insertIndex < bestMatches.length
+    && compareScoredLauncherMatches(match, bestMatches[insertIndex]) >= 0
+  ) {
+    insertIndex += 1;
+  }
+
+  if (insertIndex >= maxResults) return;
+  bestMatches.splice(insertIndex, 0, match);
+  if (bestMatches.length > maxResults) {
+    bestMatches.pop();
+  }
 }
 
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
+  options: LauncherNormalModeBalanceOptions = {},
 ): T[] {
-  const groups = new Map<LauncherNormalModeSectionId, ScoredLauncherNormalModeItem<T>[]>();
-  for (const item of matches) {
-    const sectionId = getNormalModeSectionId(item.item);
-    if (!sectionId) continue;
-    const group = groups.get(sectionId) ?? [];
-    group.push(item);
-    groups.set(sectionId, group);
+  const maxResults = options.maxResults ?? LAUNCHER_NORMAL_MODE_MAX_RESULTS;
+  if (maxResults <= 0) return [];
+
+  const bestMatches: ScoredLauncherNormalModeItem<T>[] = [];
+
+  for (const match of matches) {
+    insertScoredLauncherMatch(bestMatches, match, maxResults);
   }
 
-  const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
-  const recentItems = groups.get('recent') ?? [];
-  if (activeSectionCount === 1 && recentItems.length > 0) {
-    return recentItems
-      .slice()
-      .sort((a, b) => (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0))
-      .map(({ item }) => item);
-  }
-  if (activeSectionCount <= 1) return matches.map(({ item }) => item);
+  return bestMatches.map(({ item }) => item);
+}
 
-  const balanced: T[] = [];
-  for (const { id } of NORMAL_MODE_SECTION_ORDER) {
-    const sectionMatches = groups.get(id) ?? [];
-    balanced.push(...sectionMatches.slice(0, NORMAL_MODE_SECTION_LIMITS[id]).map(({ item }) => item));
-  }
-  return balanced;
+interface LauncherCommandFileFilterInput {
+  filePath?: string | null;
+  commandFilePaths: ReadonlySet<string>;
+  allowCommandFile?: boolean;
+}
+
+function shouldIncludeLauncherNonCommandFile(input: LauncherCommandFileFilterInput): boolean {
+  return input.allowCommandFile === true || !input.filePath || !input.commandFilePaths.has(input.filePath);
+}
+
+export function shouldIncludeLauncherRecentFile(input: LauncherCommandFileFilterInput): boolean {
+  return shouldIncludeLauncherNonCommandFile(input);
+}
+
+export function shouldIncludeLauncherLibraryMarkdownItem(input: LauncherCommandFileFilterInput): boolean {
+  return shouldIncludeLauncherNonCommandFile(input);
 }
 
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
@@ -328,13 +812,20 @@ export function nextLauncherArrowIndex(
   currentIndex: number,
   itemCount: number,
   direction: 'down' | 'up',
-  hasExplicitSelection: boolean,
 ): number {
   if (itemCount <= 0) return 0;
-  if (!hasExplicitSelection) return Math.max(0, Math.min(currentIndex, itemCount - 1));
+  const clampedIndex = Math.max(0, Math.min(currentIndex, itemCount - 1));
   return direction === 'down'
-    ? Math.min(currentIndex + 1, itemCount - 1)
-    : Math.max(currentIndex - 1, 0);
+    ? Math.min(clampedIndex + 1, itemCount - 1)
+    : Math.max(clampedIndex - 1, 0);
+}
+
+export function shouldReturnLauncherSelectionToInput(
+  currentIndex: number,
+  itemCount: number,
+  hasExplicitSelection: boolean,
+): boolean {
+  return itemCount > 0 && hasExplicitSelection && currentIndex <= 0;
 }
 
 export function resolveHighlightedLauncherIndex(currentIndex: number, itemCount: number): number {
@@ -402,20 +893,11 @@ function basename(value: string): string {
   return parts[parts.length - 1] ?? value;
 }
 
-function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: string): number {
+function scoreLauncherOpenCandidateText(rawCandidates: string[], query: string): number {
   const q = normalizeCommandLookupText(query);
-  if (!q || item.type !== 'command' || !item.filePath) return 0;
+  if (!q) return 0;
 
-  const pathName = basename(item.filePath);
-  const candidates = [
-    item.name,
-    item.displayName,
-    pathName,
-    stripCommandMarkdownExtension(pathName),
-    item.filePath,
-    ...(item.keywords ?? []),
-  ].map(normalizeCommandLookupText).filter(Boolean);
-
+  const candidates = rawCandidates.map(normalizeCommandLookupText).filter(Boolean);
   let best = 0;
   for (const candidate of candidates) {
     const withoutExtension = stripCommandMarkdownExtension(candidate);
@@ -427,14 +909,69 @@ function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: st
   return best;
 }
 
-export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(items: T[], search: string): T[] {
+function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: string): number {
+  if (!query.trim() || item.type !== 'command' || !item.filePath) return 0;
+
+  const pathName = basename(item.filePath);
+  return scoreLauncherOpenCandidateText([
+    item.name,
+    item.displayName,
+    pathName,
+    stripCommandMarkdownExtension(pathName),
+    item.filePath,
+    ...(item.keywords ?? []),
+  ], query);
+}
+
+function scoreFieldTheoryOpenCandidate(item: LauncherFieldTheoryTargetCandidate, query: string): number {
+  if (!query.trim() || !getLauncherFieldTheoryMarkdownTarget(item)) return 0;
+
+  const pathName = basename(item.filePath ?? item.relPath ?? '');
+  return scoreLauncherOpenCandidateText([
+    item.name,
+    item.displayName,
+    pathName,
+    stripCommandMarkdownExtension(pathName),
+    item.relPath ?? '',
+    item.filePath ?? '',
+    ...(item.keywords ?? []),
+  ], query);
+}
+
+export function filterLauncherNamespaceItems<T extends LauncherSearchableItem & LauncherNormalModeItem>(items: T[], search: string): T[] {
   const normalizedSearch = search.trim().toLowerCase();
-  if (!normalizedSearch) return items;
-  return items.filter(item =>
-    item.name.toLowerCase().includes(normalizedSearch) ||
-    item.displayName.toLowerCase().includes(normalizedSearch) ||
-    item.keywords.some(k => k.toLowerCase().includes(normalizedSearch))
-  );
+  const filtered = normalizedSearch
+    ? items.filter(item =>
+      item.name.toLowerCase().includes(normalizedSearch) ||
+      item.displayName.toLowerCase().includes(normalizedSearch) ||
+      item.keywords.some(k => k.toLowerCase().includes(normalizedSearch))
+    )
+    : items;
+  return filtered.slice().sort(compareLauncherItemsByRecency);
+}
+
+export function shouldShowLauncherItemInTypedSearch(item: { type: string }): boolean {
+  return item.type !== 'recent-file';
+}
+
+export function isLauncherRiverItem(item: { source?: string; sourceLabel?: string }): boolean {
+  return item.source === 'shared' || item.sourceLabel === 'River (shared)';
+}
+
+export function getLauncherDefaultPanelItems<T>(input: {
+  expanded: boolean;
+  isRootIdle: boolean;
+  source: 'recents' | 'clipboard' | 'bookmarks';
+  recentItems: T[];
+  clipboardItems: T[];
+  bookmarkItems?: T[];
+  maxItems?: number;
+}): T[] {
+  if (!input.expanded || !input.isRootIdle) return [];
+  const maxItems = input.maxItems ?? 5;
+  if (input.source === 'clipboard') return input.clipboardItems.slice(0, maxItems);
+  if (input.source === 'bookmarks') return (input.bookmarkItems ?? []).slice(0, maxItems);
+  return input.recentItems.slice(0, maxItems);
 }
 
 function joinLauncherPath(parent: string, child: string): string {
@@ -506,8 +1043,54 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
   return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+export function flattenLibraryPageDeltaForLauncher(
+  root: LauncherLibraryRootSummary,
+  page: Extract<LauncherLibraryNode, { kind: 'file' }>,
+): { markdownItems: LauncherLibraryMarkdownItem[]; directoryItems: LauncherDirectoryItem[] } {
+  const singlePageRoot: LauncherLibraryRoot = {
+    ...root,
+    tree: [page],
+  };
+  return {
+    markdownItems: flattenLibraryRootsForLauncher([singlePageRoot]),
+    directoryItems: flattenLibraryDirectoriesForLauncher([singlePageRoot]),
+  };
+}
+
+export function buildCommandDirectoriesForLauncher(directories: LauncherCommandDirectorySource[]): LauncherDirectoryItem[] {
+  return directories.map((directory): LauncherDirectoryItem => ({
+    id: `command-directory-${directory.directoryPath}`,
+    type: 'directory',
+    name: directory.name,
+    displayName: directory.displayName,
+    keywords: [
+      directory.name,
+      directory.displayName,
+      directory.directoryRelPath,
+      directory.directoryPath,
+      directory.rootPath,
+      'command',
+      'commands',
+      'portable command',
+      'portable commands',
+      'folder',
+      ...directory.displayName.split(/[\\/]/),
+    ].filter(Boolean),
+    rootPath: directory.rootPath,
+    rootBuiltin: false,
+    directoryPath: directory.directoryPath,
+    directoryRelPath: directory.directoryRelPath,
+    lastUpdated: Number.isFinite(directory.lastModified) ? directory.lastModified : undefined,
+    hotkeyDisplay: 'folder',
+  })).sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
 export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherLibraryMarkdownItem[] {
   const items: LauncherLibraryMarkdownItem[] = [];
+
+  const isBuiltinCommandLibraryFile = (relPath: string | undefined): boolean => (
+    relPath?.split(/[\\/]/, 1)[0]?.toLowerCase() === 'commands'
+  );
 
   const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
     if (node.kind === 'dir') {
@@ -516,8 +1099,15 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     }
     if (!shouldIndexLibraryNodeForLauncher(root, node)) return;
 
-    const type = root.builtin ? 'wiki-page' : 'markdown-file';
-    const rootLabel = root.builtin ? 'wiki' : root.label;
+    const isCommandLibraryFile = root.builtin && isBuiltinCommandLibraryFile(node.relPath);
+    const isWikiMarkdown = root.builtin
+      && !isCommandLibraryFile
+      && (node.documentKind === undefined || node.documentKind === 'markdown');
+    const type = isWikiMarkdown ? 'wiki-page' : 'markdown-file';
+    const rootLabel = isCommandLibraryFile ? 'commands' : root.builtin ? 'wiki' : root.label;
+    const displayRootLabel = isCommandLibraryFile ? 'Commands' : root.label;
+    const sharedAuthorCallsign = node.sharedAuthorCallsign?.trim();
+    const isSharedRiverFile = root.label === 'River (shared)' || Boolean(node.sharedOriginalSourcePath || sharedAuthorCallsign);
     const readableName = node.name.replace(/[-_]+/g, ' ');
     const todoKeywords = node.todoState
       ? ['todo', 'task', node.todoState, node.todoState === 'done' ? 'completed' : 'open']
@@ -526,21 +1116,25 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       id: `${type}-${root.path}-${node.relPath}`,
       type,
       name: node.name,
-      displayName: root.builtin ? node.title : `${node.title} — ${root.label}`,
+      displayName: isWikiMarkdown ? node.title : `${node.title} — ${displayRootLabel}`,
       keywords: [
         node.name,
         readableName,
         node.title,
         node.relPath,
         rootLabel,
+        sharedAuthorCallsign ?? '',
         ...node.name.split('-'),
         ...node.title.split(/\s+/),
         ...todoKeywords,
       ].filter(Boolean),
       filePath: node.absPath,
-      relPath: root.builtin ? node.relPath : undefined,
+      relPath: isWikiMarkdown ? node.relPath : undefined,
       lastUpdated: Number.isFinite(node.lastUpdated) ? node.lastUpdated : undefined,
       todoState: node.todoState,
+      source: isSharedRiverFile ? 'shared' : undefined,
+      sourceLabel: isSharedRiverFile ? root.label : undefined,
+      sharedAuthorCallsign,
     });
   };
 
@@ -548,7 +1142,97 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     for (const node of root.tree) visit(root, node);
   }
 
-  return items;
+  return items.sort(compareLauncherItemsByRecency);
+}
+
+function normalizeFsPathForLauncherMatch(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+export function commandPathToLauncherLibraryOpenTarget(
+  commandPath: string,
+  libraryRoots: LauncherLibraryRootPath[] | undefined,
+): LauncherFieldTheoryMarkdownTarget {
+  const normalizedCommandPath = normalizeFsPathForLauncherMatch(commandPath);
+  const builtinRoot = libraryRoots?.find((root) => {
+    if (!root.builtin) return false;
+    const normalizedRoot = normalizeFsPathForLauncherMatch(root.path);
+    return normalizedCommandPath === normalizedRoot || normalizedCommandPath.startsWith(`${normalizedRoot}/`);
+  });
+
+  if (builtinRoot) {
+    const normalizedRoot = normalizeFsPathForLauncherMatch(builtinRoot.path);
+    const relPath = normalizedCommandPath.slice(normalizedRoot.length + 1).replace(/\.md$/i, '');
+    const topLevelFolder = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+    if (relPath && topLevelFolder !== 'commands') return { kind: 'wiki', path: relPath };
+  }
+
+  return { kind: 'external', path: commandPath };
+}
+
+export function getLauncherNativeIconPathForItem(item: LauncherNativeIconPathCandidate | undefined | null): string | null {
+  return item?.filePath || item?.directoryPath || null;
+}
+
+function launcherParentPathLabel(filePath: string): string {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 1) return 'file';
+  return parts[parts.length - 2] || 'file';
+}
+
+export function buildLauncherFileItems(files: LauncherFileSource[]): LauncherFileItem[] {
+  return files.map((fileInfo): LauncherFileItem => {
+    const pathParts = fileInfo.filePath.split(/[\\/]/).filter(Boolean);
+    const nameParts = fileInfo.name.split(/[\s._-]+/).filter(Boolean);
+    return {
+      id: `file-${fileInfo.filePath}`,
+      type: 'file',
+      rootSearchKind: 'file',
+      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.file,
+      name: fileInfo.name,
+      displayName: fileInfo.displayName,
+      keywords: [
+        fileInfo.name,
+        fileInfo.displayName,
+        fileInfo.filePath,
+        ...nameParts,
+        ...pathParts,
+      ].filter(Boolean),
+      filePath: fileInfo.filePath,
+      isDirectory: fileInfo.isDirectory,
+      lastUpdated: Number.isFinite(fileInfo.lastModified) ? fileInfo.lastModified : undefined,
+      hotkeyDisplay: fileInfo.isDirectory ? 'folder' : launcherParentPathLabel(fileInfo.filePath),
+    };
+  });
+}
+
+export function getLauncherFileSearchQuery(query: string): string | null {
+  if (!query.startsWith("'")) return null;
+  return query.slice(1).trim();
+}
+
+export function getLauncherClipboardSearchQuery(query: string): string | null {
+  if (!query.startsWith('. ')) return null;
+  return query.slice(2).trim();
+}
+
+export function getLauncherClipboardSearchInputState(input: {
+  active: boolean;
+  query: string;
+}): { active: boolean; query: string } {
+  if (input.active) return input;
+  const clipboardSearch = getLauncherClipboardSearchQuery(input.query);
+  return clipboardSearch === null
+    ? input
+    : { active: true, query: clipboardSearch };
+}
+
+export function shouldExitLauncherClipboardSearch(input: {
+  active: boolean;
+  query: string;
+  key: string;
+}): boolean {
+  return input.active && input.query.length === 0 && input.key === 'Backspace';
 }
 
 function isDescendantPath(path: string | undefined, directoryPath: string): boolean {
@@ -571,6 +1255,15 @@ function compareLauncherDirectoryItemsByRecency<T extends LauncherSearchableItem
   return a.displayName.localeCompare(b.displayName);
 }
 
+export function compareLauncherItemsByRecency<T extends LauncherSearchableItem & LauncherNormalModeItem>(a: T, b: T): number {
+  const pinnedDelta = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
+  if (pinnedDelta !== 0) return pinnedDelta;
+  const aRecency = getLauncherItemRecency(a);
+  const bRecency = getLauncherItemRecency(b);
+  if (aRecency !== bRecency) return bRecency - aRecency;
+  return a.displayName.localeCompare(b.displayName);
+}
+
 export function getLauncherUsageScore(
   item: LauncherUsageScoreItem,
   query: string,
@@ -584,6 +1277,41 @@ export function getLauncherUsageScore(
   const recencyScore = usage ? Math.max(0, 24 - Math.floor((now - usage.lastUsedAt) / 86_400_000)) : 0;
   const commandPrefixBoost = item.type === 'command' && item.name.toLowerCase().startsWith(query) ? 45 : 0;
   return usageScore + recencyScore + commandPrefixBoost;
+}
+
+export interface LauncherNormalModeFilterOptions<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem> extends LauncherNormalModeBalanceOptions {
+  includeItem?: (item: T, score: number, baseScore: number) => boolean;
+}
+
+export function filterLauncherNormalModeItems<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem>(
+  items: T[],
+  query: string,
+  usageByItemId: LauncherUsageMap = {},
+  options: LauncherNormalModeFilterOptions<T> = {},
+): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const maxResults = options.maxResults ?? LAUNCHER_NORMAL_MODE_MAX_RESULTS;
+  if (maxResults <= 0) return [];
+  const bestMatches: ScoredLauncherNormalModeItem<T>[] = [];
+
+  for (const item of items) {
+    const baseScore = scoreLauncherSearchableItem(item, q);
+    const score = baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore);
+    if (score <= 0 || !(options.includeItem?.(item, score, baseScore) ?? true)) continue;
+    insertScoredLauncherMatch(bestMatches, { item, score }, maxResults);
+  }
+
+  return bestMatches.map(({ item }) => item);
+}
+
+export function resolveLauncherNormalModeQueryMatch<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem>(
+  items: T[],
+  query: string,
+  usageByItemId: LauncherUsageMap = {},
+  options: LauncherNormalModeFilterOptions<T> = {},
+): T | null {
+  return filterLauncherNormalModeItems(items, query, usageByItemId, { ...options, maxResults: 1 })[0] ?? null;
 }
 
 export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchableItem & { filePath?: string; relPath?: string; lastUpdated?: number }>(
@@ -734,12 +1462,14 @@ export function buildBookmarkAuthorLauncherItems(authors: BookmarkAuthorSummary[
       authorHandle: handle,
       bookmarkCount: author.count,
       hotkeyDisplay: `${author.count} ${author.count === 1 ? 'bookmark' : 'bookmarks'}`,
+      lastUpdated: parseLauncherTimestamp(author.lastPostedAt),
     };
-  }).filter((item) => item.authorHandle || item.displayName);
+  }).filter((item) => item.authorHandle || item.displayName)
+    .sort(compareLauncherItemsByRecency);
 }
 
 export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSource[]): LauncherBookmarkPostItem[] {
-  return bookmarks.map((bookmark) => {
+  return bookmarks.map((bookmark): LauncherBookmarkPostItem => {
     const date = formatLauncherBookmarkDate(bookmark.postedAt);
     const handle = bookmark.authorHandle.trim().replace(/^@+/, '');
     const displayName = truncateLauncherBookmarkText(
@@ -767,8 +1497,9 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
       authorHandle: handle,
       postedAt: bookmark.postedAt,
       hotkeyDisplay: date,
+      lastUpdated: parseLauncherTimestamp(bookmark.postedAt),
     };
-  });
+  }).sort(compareLauncherItemsByRecency);
 }
 
 export function dedupeLauncherPersonItems<T extends LauncherVisibleItem>(items: T[]): T[] {
@@ -860,6 +1591,7 @@ export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCa
   if (selected?.type === 'command' && selected.filePath && (hasExplicitSelection || !rawQuery)) {
     return selected;
   }
+  if (hasExplicitSelection && selected) return null;
 
   if (!rawQuery) return null;
 
@@ -872,6 +1604,38 @@ export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCa
       return true;
     })
     .map((item) => ({ item, score: scoreCommandOpenCandidate(item, rawQuery) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.item ?? null;
+}
+
+export function resolveLauncherFieldTheoryOpenTarget<T extends LauncherFieldTheoryTargetCandidate>(
+  filteredItems: T[],
+  fieldTheoryItems: T[],
+  selectedIndex: number,
+  query: string,
+  hasExplicitSelection: boolean,
+): T | null {
+  const selected = filteredItems[selectedIndex];
+  const rawQuery = query.trim();
+  if (selected && getLauncherFieldTheoryMarkdownTarget(selected) && (hasExplicitSelection || !rawQuery)) {
+    return selected;
+  }
+
+  if (!rawQuery) return null;
+
+  const seen = new Set<string>();
+  const candidates = [...filteredItems, ...fieldTheoryItems]
+    .filter((item) => {
+      const target = getLauncherFieldTheoryMarkdownTarget(item);
+      if (!target) return false;
+      const key = `${target.kind}:${target.path}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item) => ({ item, score: scoreFieldTheoryOpenCandidate(item, rawQuery) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score);
 
@@ -896,6 +1660,12 @@ export function getLauncherFieldTheoryMarkdownTarget(
   }
   if (item.type === 'command' && item.filePath) {
     return { kind: 'command', path: item.filePath };
+  }
+  if (item.type === 'handoff' && item.filePath) {
+    return { kind: 'external', path: item.filePath };
+  }
+  if (item.type === 'file' && item.filePath && !item.isDirectory) {
+    return { kind: 'external', path: item.filePath };
   }
   return null;
 }
@@ -933,7 +1703,9 @@ export function getLauncherAreaActionIdForQuery(query: string): string | null {
     case 'library':
       return 'open-library';
     case 'commands':
-      return 'open-commands';
+      return 'open-library';
+    case 'archive':
+      return 'archive-current-library-file';
     default:
       return null;
   }
@@ -943,7 +1715,7 @@ export function buildBuiltInLauncherActions(
   hotkeys: LauncherHotkeyMap,
   isDarkMode: boolean,
   squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS,
-  showSquaresInCommandLauncher = true
+  _showSquaresInCommandLauncher = true
 ): BuiltInLauncherAction[] {
   const baseActions: BuiltInLauncherAction[] = [
     {
@@ -995,6 +1767,24 @@ export function buildBuiltInLauncherActions(
       actionId: 'start-recording',
     },
     {
+      id: 'action-improve-selected-text',
+      type: 'action',
+      name: 'improve selected text',
+      displayName: 'Improve Selected Text',
+      keywords: ['improve', 'rewrite', 'polish', 'selection', 'selected text', 'auto improve'],
+      hotkey: 'Command+Shift+I',
+      hotkeyDisplay: '⌘ ⇧ I',
+      actionId: 'improve-selected-text',
+    },
+    {
+      id: 'action-toggle-auto-improve',
+      type: 'action',
+      name: 'auto improve',
+      displayName: 'Toggle Auto-Improve',
+      keywords: ['auto improve', 'auto-improve', 'transcript improve', 'transcription cleanup', 'dictation cleanup'],
+      actionId: 'toggle-auto-improve',
+    },
+    {
       id: 'action-superpaste',
       type: 'action',
       name: 'terminal image paste',
@@ -1019,16 +1809,18 @@ export function buildBuiltInLauncherActions(
       type: 'action',
       name: 'library',
       displayName: 'Open Library',
-      keywords: ['library', 'markdown', 'wiki', 'files'],
+      keywords: ['library', 'markdown', 'wiki', 'files', 'commands', 'portable commands', 'command library'],
       actionId: 'open-library',
     },
     {
-      id: 'action-open-commands',
+      id: 'action-line-numbers',
       type: 'action',
-      name: 'commands',
-      displayName: 'Open Commands',
-      keywords: ['commands', 'portable commands', 'command library'],
-      actionId: 'open-commands',
+      name: 'line numbers',
+      displayName: 'Toggle Line Numbers',
+      keywords: ['line numbers', 'line number', 'numbers', 'editor lines', 'markdown line numbers'],
+      hotkey: 'Shift+Command+K',
+      hotkeyDisplay: '⇧ ⌘ K',
+      actionId: 'toggle-line-numbers',
     },
     {
       id: 'action-view-bookmarks',
@@ -1047,12 +1839,30 @@ export function buildBuiltInLauncherActions(
       actionId: 'save-current-website',
     },
     {
+      id: 'action-share-current-file-river',
+      type: 'action',
+      name: 'share river',
+      displayName: 'Share Current File to River',
+      keywords: ['river', 'share', 'share river', 'share current file', 'share to river', 'team', 'contact'],
+      actionId: 'share-current-file-river',
+    },
+    {
       id: 'action-move-current-library-file',
       type: 'action',
       name: 'move file',
       displayName: 'Move Current File',
       keywords: ['move', 'move file', 'move current file', 'library move', 'folder'],
       actionId: 'move-current-library-file',
+    },
+    {
+      id: 'action-archive-current-library-file',
+      type: 'action',
+      name: 'archive',
+      displayName: 'Archive Current File',
+      keywords: ['archive', 'archive file', 'archive current file', 'library archive', 'e'],
+      hotkey: 'E',
+      hotkeyDisplay: 'E',
+      actionId: 'archive-current-library-file',
     },
     {
       id: 'action-undo-library-move',
@@ -1073,10 +1883,6 @@ export function buildBuiltInLauncherActions(
       actionId: 'toggle-theme',
     },
   ];
-
-  if (!showSquaresInCommandLauncher) {
-    return baseActions;
-  }
 
   return [
     ...baseActions,
@@ -1100,7 +1906,7 @@ export function buildBuiltInLauncherActions(
 export const SQUARES_ACTION_DEFS = [
   { actionId: 'grid', name: 'grid windows', displayName: 'Grid Windows', keywords: ['grid', 'tile', 'arrange'] },
   { actionId: 'focus', name: 'focus mode', displayName: 'Focus Mode', keywords: ['focus', 'hide others', 'distraction'] },
-  { actionId: 'horizontalSpread', name: 'horizontal', displayName: 'Horizontal', keywords: ['horizontal', 'side by side', 'split'] },
+  { actionId: 'horizontalSpread', name: 'spread horizontal', displayName: 'Spread Horizontal', keywords: ['horizontal', 'spread horizontal', 'side by side', 'split'] },
   { actionId: 'verticalSpread', name: 'stack windows', displayName: 'Stack Windows', keywords: ['vertical', 'stack', 'top bottom'] },
   { actionId: 'cascade', name: 'cascade windows', displayName: 'Cascade Windows', keywords: ['cascade', 'overlap', 'stagger'] },
   { actionId: 'leftHalf', name: 'snap left', displayName: 'Snap Left', keywords: ['snap left', 'half', 'split'] },

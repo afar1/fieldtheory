@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,8 @@ describe('CommandsManager default internal commands', () => {
   let tempRoot: string;
   let manager: CommandsManager;
   let originalCommandsDir: string | undefined;
+  let originalSharedFilesCacheDir: string | undefined;
+  let originalSharedFilesDir: string | undefined;
 
   const mockUserDataManager = {
     isLoggedIn: () => true,
@@ -44,7 +46,11 @@ describe('CommandsManager default internal commands', () => {
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'commands-manager-test-'));
     originalCommandsDir = process.env.FT_COMMANDS_DIR;
-    process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'commands');
+    originalSharedFilesCacheDir = process.env.FT_SHARED_FILES_CACHE_DIR;
+    originalSharedFilesDir = process.env.FT_SHARED_FILES_DIR;
+    process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    process.env.FT_SHARED_FILES_CACHE_DIR = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    process.env.FT_SHARED_FILES_DIR = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
     mockApp.getPath.mockImplementation((name: string) => {
       if (name === 'userData') return join(tempRoot, 'app-data');
       if (name === 'home') return tempRoot;
@@ -59,6 +65,10 @@ describe('CommandsManager default internal commands', () => {
     await manager.onUserLoggedOut();
     if (originalCommandsDir === undefined) delete process.env.FT_COMMANDS_DIR;
     else process.env.FT_COMMANDS_DIR = originalCommandsDir;
+    if (originalSharedFilesCacheDir === undefined) delete process.env.FT_SHARED_FILES_CACHE_DIR;
+    else process.env.FT_SHARED_FILES_CACHE_DIR = originalSharedFilesCacheDir;
+    if (originalSharedFilesDir === undefined) delete process.env.FT_SHARED_FILES_DIR;
+    else process.env.FT_SHARED_FILES_DIR = originalSharedFilesDir;
     rmSync(tempRoot, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -66,17 +76,20 @@ describe('CommandsManager default internal commands', () => {
   it('creates the Field Theory default directory and seeds the built-in commands on first reinitialize', async () => {
     await manager.reinitializeForUser();
 
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     expect(manager.getDefaultDirectory()).toBe(defaultDir);
     expect(manager.getWatchedDirs().map(dir => dir.path)).toContain(defaultDir);
 
+    expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('kind: command');
     expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('Refactor those.');
     expect(readFileSync(join(defaultDir, 'review.md'), 'utf8')).toContain('Feel free to use the questions command');
     expect(readFileSync(join(defaultDir, 'questions.md'), 'utf8')).toContain('Ask me as many questions');
+    expect(readFileSync(join(defaultDir, 'improve.md'), 'utf8')).toContain('Improve the selected text');
     expect(readFileSync(join(defaultDir, 'commit.md'), 'utf8')).toContain('# Remove AI code slop');
 
     expect(manager.getCommands().map(command => command.name).sort()).toEqual([
       'commit',
+      'improve',
       'questions',
       'refactor',
       'review',
@@ -84,7 +97,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('does not overwrite an existing default commands directory that already has markdown commands', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(join(defaultDir, 'custom.md'), '# Custom\n');
 
@@ -96,8 +109,76 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.getCommands().map(command => command.name)).toEqual(['custom']);
   });
 
+  it('drops the legacy commands root when moving the default under Library', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
+    expect(existsSync(join(defaultDir, 'legacy-only.md'))).toBe(false);
+  });
+
+  it('prefers Library commands over duplicate legacy commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'refactor.md'), '# Old Refactor\n');
+
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getCommand('refactor')?.filePath).toBe(join(defaultDir, 'refactor.md'));
+  });
+
+  it('rejects manually adding the legacy commands root', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    const legacySubdir = join(legacyDir, 'nested');
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(legacySubdir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+    writeFileSync(join(legacySubdir, 'nested.md'), '# Nested Legacy\n');
+
+    await manager.reinitializeForUser();
+    await expect(manager.addWatchedDir(legacyDir)).resolves.toBeNull();
+    await expect(manager.addWatchedDir(legacySubdir)).resolves.toBeNull();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
+    expect(manager.getCommands().map(command => command.name)).not.toContain('nested');
+  });
+
+  it('removes configured legacy commands instead of keeping them active', async () => {
+    await manager.onUserLoggedOut();
+
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+    mkdirSync(join(tempRoot, 'app-data', 'users', 'user-1'), { recursive: true });
+    writeFileSync(join(tempRoot, 'app-data', 'users', 'user-1', 'commands-settings.json'), JSON.stringify({
+      watchedDirs: [legacyDir],
+      mobileSyncDirs: [legacyDir],
+    }, null, 2));
+
+    manager = new CommandsManager();
+    manager.setUserDataManager(mockUserDataManager as any);
+
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getMobileSyncDirs()).toEqual([]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
+    expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('kind: command');
+    expect(existsSync(join(defaultDir, 'legacy-only.md'))).toBe(false);
+  });
+
   it('reseeds and rescans when the default directory is already watched but currently empty', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
 
     await manager.addWatchedDir(defaultDir);
@@ -108,14 +189,109 @@ describe('CommandsManager default internal commands', () => {
     expect(created).toBe(defaultDir);
     expect(manager.getCommands().map(command => command.name).sort()).toEqual([
       'commit',
+      'improve',
       'questions',
       'refactor',
       'review',
     ]);
   });
 
+  it('indexes and invokes shared River commands from local cache type metadata', async () => {
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const commandPath = join(sharedRoot, 'daily-brief.md');
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(commandPath, '---\ntitle: "daily-brief"\nshared: true\nshared_id: "shared-daily-brief"\nshared_type: "command"\nshared_team: "Field Theory Team"\nshared_author_callsign: "AMB-MAC"\n---\n\nRiver brief body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('daily-brief');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'daily-brief',
+      displayName: 'daily-brief',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
+      sourceRootPath: sharedRoot,
+      sourceRelPath: 'daily-brief.md',
+    }));
+
+    const result = await manager.processTextWithCommands('please use the daily-brief command');
+    expect(result.commandsApplied).toEqual(['daily-brief']);
+    expect(result.processedText).toContain('River brief body');
+  });
+
+  it('prefers private commands over duplicate shared River commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const privatePath = join(defaultDir, 'duplicate.md');
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const sharedPath = join(sharedRoot, 'duplicate.md');
+    mkdirSync(defaultDir, { recursive: true });
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(privatePath, 'Private command body\n');
+    writeFileSync(sharedPath, '---\nshared: true\nshared_id: "shared-duplicate"\nshared_type: "command"\n---\n\nShared command body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('duplicate');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'duplicate',
+      displayName: 'duplicate',
+      filePath: privatePath,
+      source: 'private',
+    }));
+
+    const result = await manager.processTextWithCommands('please use the duplicate command');
+    expect(result.commandsApplied).toEqual(['duplicate']);
+    expect(result.processedText).toContain('Private command body');
+    expect(result.processedText).not.toContain('Shared command body');
+  });
+
+  it('labels shared River commands from the Commands cache and excludes them from mobile sync', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const sharedCommandsDir = join(tempRoot, '.fieldtheory', 'library', 'River (shared)', 'Commands');
+    const commandPath = join(sharedCommandsDir, 'standup.md');
+    mkdirSync(sharedCommandsDir, { recursive: true });
+    writeFileSync(commandPath, '---\ntitle: "standup"\nshared: true\nshared_id: "shared-standup"\nshared_type: "command"\nshared_author_callsign: "AMB-MAC"\n---\n\nShared standup body\n');
+
+    await manager.reinitializeForUser();
+    manager.setMobileSyncEnabled(defaultDir, true);
+
+    expect(manager.getCommand('standup')).toEqual(expect.objectContaining({
+      name: 'standup',
+      displayName: 'standup',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
+      sourceRelPath: 'Commands/standup.md',
+    }));
+
+    const syncableCommands = await manager.getCommandsForMobileSync();
+    expect(syncableCommands.map(command => command.name)).not.toContain('standup');
+  });
+
+  it('does not display initials-suffixed River command cache filenames as command titles', async () => {
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const commandPath = join(sharedRoot, 'brief AM.md');
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(commandPath, '---\nshared: true\nshared_id: "shared-brief"\nshared_type: "command"\nshared_author_callsign: "AMB-MAC"\n---\n\nRiver brief body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('brief am');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'brief am',
+      displayName: 'Untitled',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
+    }));
+  });
+
   it('rejects command names that would write outside the selected directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
 
@@ -128,8 +304,217 @@ describe('CommandsManager default internal commands', () => {
     expect(existsSync(join(defaultDir, '.hidden.md'))).toBe(false);
   });
 
+  it('adds command frontmatter to newly created commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+
+    const command = manager.createCommand(defaultDir, 'fresh', '# Fresh\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    expect(readFileSync(command!.path, 'utf8')).toBe(
+      '---\nkind: command\ntitle: "fresh"\nenabled: true\n---\n\n# Fresh\n\nBody\n'
+    );
+  });
+
+  it('uses the command basename for launcher labels when frontmatter title is stale', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    const filePath = join(defaultDir, 'entry.md');
+    writeFileSync(filePath, '---\nkind: command\ntitle: "Wiki entry capture (Field Theory)"\nenabled: true\n---\n\nBody\n');
+    await manager.addWatchedDir(defaultDir);
+
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'entry',
+        displayName: 'entry',
+      }),
+    ]);
+    expect(readFileSync(filePath, 'utf8')).toContain('title: "Wiki entry capture (Field Theory)"');
+  });
+
+  it('keeps cached launcher command labels tied to the filename when a command title is saved', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'rename-display', '---\ntitle: Old Name\n---\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    const result = manager.saveCommand(command!.path, '---\ntitle: New Name\n---\n\nBody\n', readDocumentVersion(command!.path));
+
+    expect(result.ok).toBe(true);
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'rename-display',
+        displayName: 'rename-display',
+      }),
+    ]);
+  });
+
+  it('refreshes command link-hit index hooks on create and save', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+    });
+
+    const command = manager.createCommand(defaultDir, 'linked', 'See [[Target]].\n');
+    expect(command).not.toBeNull();
+    expect(indexCommandContent).toHaveBeenCalledWith(command!.path, expect.stringContaining('See [[Target]].'));
+
+    indexCommandContent.mockClear();
+    expect(manager.saveCommand(command!.path, 'See [[Other]].\n')).toEqual(expect.objectContaining({ ok: true }));
+    expect(indexCommandContent).toHaveBeenCalledWith(command!.path, 'See [[Other]].\n');
+  });
+
+  it('removes old command link-hit index rows on delete and rename', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const removeCommandIndex = vi.fn();
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+      removeCommandIndex,
+    });
+
+    const renameMe = manager.createCommand(defaultDir, 'rename-me', 'See [[Target]].\n');
+    expect(renameMe).not.toBeNull();
+    const renamedPath = manager.renameCommand(renameMe!.path, 'renamed');
+    expect(renamedPath).toBe(join(defaultDir, 'renamed.md'));
+    expect(removeCommandIndex).toHaveBeenCalledWith(renameMe!.path);
+    expect(indexCommandContent).toHaveBeenCalledWith(renamedPath, expect.stringContaining('See [[Target]].'));
+
+    const deleteMe = manager.createCommand(defaultDir, 'delete-me', 'Delete\n');
+    expect(deleteMe).not.toBeNull();
+    vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+    await expect(manager.deleteCommand(deleteMe!.path)).resolves.toBe(true);
+    expect(removeCommandIndex).toHaveBeenCalledWith(deleteMe!.path);
+  });
+
+  it('removes command link-hit rows for files missing after refresh', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const removeCommandIndex = vi.fn();
+    manager.setIndexHooks({
+      removeCommandIndex,
+    });
+    const command = manager.createCommand(defaultDir, 'external-delete', 'See [[Target]].\n');
+    expect(command).not.toBeNull();
+
+    rmSync(command!.path, { force: true });
+    await manager.refresh();
+
+    expect(removeCommandIndex).toHaveBeenCalledWith(command!.path);
+  });
+
+  it('does not reread unchanged command content while refreshing index hooks', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    const filePath = join(defaultDir, 'steady.md');
+    writeFileSync(filePath, 'See [[Target]].\n');
+    const indexCommandContent = vi.fn();
+    manager.setIndexHooks({
+      indexCommandContent,
+    });
+    await manager.addWatchedDir(defaultDir);
+    expect(indexCommandContent).toHaveBeenCalledTimes(1);
+
+    await manager.refresh();
+    expect(indexCommandContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps sibling-prefix command indexes when removing one watched directory', async () => {
+    const commandsDir = join(tempRoot, 'Commands');
+    const commandsBackupDir = join(tempRoot, 'Commands Backup');
+    mkdirSync(commandsDir, { recursive: true });
+    mkdirSync(commandsBackupDir, { recursive: true });
+    await manager.addWatchedDir(commandsDir);
+    await manager.addWatchedDir(commandsBackupDir);
+    const first = manager.createCommand(commandsDir, 'first', 'First\n');
+    const backup = manager.createCommand(commandsBackupDir, 'backup', 'Backup\n');
+    expect(first).not.toBeNull();
+    expect(backup).not.toBeNull();
+    const removeCommandIndex = vi.fn();
+    manager.setIndexHooks({
+      removeCommandIndex,
+    });
+
+    expect(manager.removeWatchedDir(commandsDir)).toBe(true);
+
+    expect(removeCommandIndex).toHaveBeenCalledWith(first!.path);
+    expect(removeCommandIndex).not.toHaveBeenCalledWith(backup!.path);
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({ filePath: backup!.path }),
+    ]);
+  });
+
+  it('lists command folders from watched directories including duplicate, empty, renamed, and missing folders', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const emptyDir = join(defaultDir, 'Empty');
+    const renamedDir = join(defaultDir, 'Renamed');
+    const otherDir = join(tempRoot, 'Other Commands');
+    const duplicateEmptyDir = join(otherDir, 'Empty');
+    mkdirSync(emptyDir, { recursive: true });
+    mkdirSync(duplicateEmptyDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    await manager.addWatchedDir(otherDir);
+
+    expect(manager.getCommandDirectories()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Commands',
+        displayName: 'Commands',
+        directoryPath: defaultDir,
+        directoryRelPath: '',
+      }),
+      expect.objectContaining({
+        name: 'Empty',
+        displayName: 'Empty',
+        directoryPath: emptyDir,
+        directoryRelPath: 'Empty',
+      }),
+      expect.objectContaining({
+        name: 'Empty',
+        displayName: 'Empty',
+        directoryPath: duplicateEmptyDir,
+        directoryRelPath: 'Empty',
+      }),
+    ]));
+
+    renameSync(emptyDir, renamedDir);
+
+    expect(manager.getCommandDirectories()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Renamed',
+        displayName: 'Renamed',
+        directoryPath: renamedDir,
+        directoryRelPath: 'Renamed',
+      }),
+    ]));
+    expect(manager.getCommandDirectories().map(directory => directory.directoryPath)).not.toContain(emptyDir);
+
+    rmSync(renamedDir, { recursive: true, force: true });
+    expect(manager.getCommandDirectories().map(directory => directory.directoryPath)).not.toContain(renamedDir);
+  });
+
+  it('forces the command kind when created content has non-command frontmatter', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+
+    const command = manager.createCommand(defaultDir, 'typed', '---\nkind: note\ntitle: Existing\n---\n\n# Typed\n');
+
+    expect(command).not.toBeNull();
+    expect(readFileSync(command!.path, 'utf8')).toBe(
+      '---\nkind: command\ntitle: "typed"\nenabled: true\n---\n\n# Typed\n'
+    );
+  });
+
   it('only saves commands inside watched directories', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const outsidePath = join(tempRoot, 'outside.md');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(outsidePath, 'original\n');
@@ -141,7 +526,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('reports a conflict when a command changed since it was opened', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
     const command = manager.createCommand(defaultDir, 'conflict', 'original\n');
@@ -161,7 +546,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('moves deleted commands to Trash only when they are inside a watched directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const outsidePath = join(tempRoot, 'outside.md');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(outsidePath, 'outside\n');
@@ -179,7 +564,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('rejects command renames that would leave the watched directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
     const command = manager.createCommand(defaultDir, 'inside', 'body\n');
@@ -189,5 +574,52 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.renameCommand(command!.path, 'nested/outside')).toBeNull();
     expect(existsSync(join(tempRoot, '.fieldtheory', 'outside.md'))).toBe(false);
     expect(existsSync(join(defaultDir, 'nested', 'outside.md'))).toBe(false);
+  });
+
+  it('updates command frontmatter title during app-driven renames', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'wiki-entry-capture', '---\ntags: [capture]\ntitle: Old Title\n---\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    const newPath = manager.renameCommand(command!.path, 'entry');
+
+    expect(newPath).toBe(join(defaultDir, 'entry.md'));
+    const renamedContent = readFileSync(newPath!, 'utf8');
+    expect(renamedContent).toContain('tags: [capture]');
+    expect(renamedContent).toContain('kind: command');
+    expect(renamedContent).toContain('title: "entry"');
+    expect(renamedContent).toContain('enabled: true');
+    expect(renamedContent).not.toContain('Old Title');
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'entry',
+        displayName: 'entry',
+        filePath: newPath,
+      }),
+    ]);
+  });
+
+  it('does not rewrite stale frontmatter titles from external command renames', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    const oldPath = join(defaultDir, 'Wiki entry capture (Field Theory).md');
+    const newPath = join(defaultDir, 'entry.md');
+    const content = '---\nkind: command\ntitle: "Wiki entry capture (Field Theory)"\nenabled: true\n---\n\nBody\n';
+    writeFileSync(oldPath, content);
+    await manager.addWatchedDir(defaultDir);
+
+    renameSync(oldPath, newPath);
+    await manager.refresh();
+
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'entry',
+        displayName: 'entry',
+        filePath: newPath,
+      }),
+    ]);
+    expect(readFileSync(newPath, 'utf8')).toBe(content);
   });
 });

@@ -83,6 +83,7 @@ import {
   buildScreencaptureCommand,
   ClipboardManager,
   isIDEWithTerminal,
+  isTerminalApp,
   orderStackItemsForPaste,
   shouldPasteMixedStackImagesFirst,
 } from './clipboardManager';
@@ -176,6 +177,21 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(manager.storeText).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps portable command launcher transport text out of clipboard history', async () => {
+    const transportText = '[mail.md]\n/Users/afar/.fieldtheory/library/Commands/mail.md ';
+    testState.readText.mockReturnValue(transportText);
+
+    manager.syncClipboardHash();
+    await manager.checkClipboard();
+
+    expect(manager.storeText).not.toHaveBeenCalled();
+
+    testState.readText.mockReturnValue('real user copy');
+    await manager.checkClipboard();
+
+    expect(manager.storeText).toHaveBeenCalledTimes(1);
+  });
+
   it('notifies callback for duplicate text already in DB', async () => {
     testState.readText.mockReturnValue('existing text');
     testState.dbPrepare.mockReturnValue({
@@ -251,6 +267,66 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(manager.storeImage).toHaveBeenCalledTimes(1);
   });
 
+  it('does not re-encode the same image on every clipboard poll', async () => {
+    testState.readText.mockReturnValue('');
+    testState.availableFormats.mockReturnValue(['image/png']);
+    const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const toPNG = vi.fn(() => imageBuffer);
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 100, height: 100 }),
+      resize: vi.fn(() => ({ toPNG: () => Buffer.from([0x89]) })),
+    });
+
+    await manager.checkClipboard();
+    await manager.checkClipboard();
+
+    expect(toPNG).toHaveBeenCalledTimes(1);
+    expect(manager.storeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips oversized automatic image capture before PNG encoding', async () => {
+    testState.readText.mockReturnValue('');
+    const toPNG = vi.fn(() => Buffer.from([1, 2, 3]));
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 5712, height: 4284 }),
+    });
+
+    await manager.checkClipboard();
+
+    expect(toPNG).not.toHaveBeenCalled();
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
+  it('skips automatic image capture when the encoded PNG is too large', async () => {
+    testState.readText.mockReturnValue('');
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG: () => Buffer.alloc(10 * 1024 * 1024 + 1),
+      getSize: () => ({ width: 1000, height: 1000 }),
+    });
+
+    await manager.checkClipboard();
+
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
+  it('does not export oversized current clipboard images through the global pasteboard fallback', async () => {
+    const toPNG = vi.fn(() => Buffer.from([1, 2, 3]));
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 5712, height: 4284 }),
+    });
+
+    await expect(manager.exportCurrentClipboardImageToCache()).resolves.toBeNull();
+    expect(toPNG).not.toHaveBeenCalled();
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
   it('captures different images even when clipboard formats are identical', async () => {
     // This is the bug we fixed — previously, same formats would short-circuit
     testState.readText.mockReturnValue('');
@@ -273,6 +349,7 @@ describe('ClipboardManager.checkClipboard', () => {
       getSize: () => ({ width: 100, height: 100 }),
       resize: vi.fn(() => ({ toPNG: () => Buffer.from([0x89]) })),
     });
+    manager.lastImagePollCheckedAt = 0;
     await manager.checkClipboard();
 
     // Both images should be stored — this was the bug
@@ -341,6 +418,50 @@ describe('ClipboardManager.checkClipboard', () => {
   });
 });
 
+describe('ClipboardManager.storeImage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not dedupe explicit screenshot captures by content hash', async () => {
+    const manager: any = new ClipboardManager();
+    manager.getFrontmostApp = vi.fn(async () => null);
+    manager.cleanupOldItems = vi.fn();
+
+    const insertRun = vi.fn(() => ({ lastInsertRowid: 77 }));
+    testState.dbPrepare.mockClear();
+    (testState.dbPrepare as any).mockImplementation((sql: string): any => {
+      if (sql.includes('SELECT id FROM clipboard_items WHERE content_hash = ?')) {
+        return { get: vi.fn(() => ({ id: 42 })) };
+      }
+      if (sql.includes('INSERT INTO clipboard_items')) {
+        return { run: insertRun };
+      }
+      return {
+        get: vi.fn(() => undefined),
+        run: vi.fn(),
+        all: vi.fn(() => []),
+      };
+    });
+
+    const image = {
+      getSize: () => ({ width: 100, height: 80 }),
+      resize: () => ({ toPNG: () => Buffer.from([0x01]) }),
+    };
+
+    const id = await manager.storeImage(
+      image,
+      Buffer.from([0x89, 0x50]),
+      'screenshot'
+    );
+
+    expect(id).toBe(77);
+    expect(insertRun).toHaveBeenCalledTimes(1);
+    const preparedSql = (testState.dbPrepare as any).mock.calls.map(([sql]: [unknown]) => String(sql));
+    expect(preparedSql.some((sql: string) => sql.includes('SELECT id FROM clipboard_items WHERE content_hash = ?'))).toBe(false);
+  });
+});
+
 describe('buildScreencaptureCommand', () => {
   it('removes window shadow in interactive capture mode', () => {
     expect(buildScreencaptureCommand({ region: true })).toBe('screencapture -i -o -c');
@@ -368,6 +489,12 @@ describe('isIDEWithTerminal', () => {
     expect(isIDEWithTerminal('com.anthropic.claudefordesktop')).toBe(true);
     expect(isIDEWithTerminal('com.todesktop.230313mzl4w4u92')).toBe(true);
     expect(isIDEWithTerminal('com.openai.codex')).toBe(true);
+  });
+});
+
+describe('isTerminalApp', () => {
+  it('treats Ghostty as a terminal target for portable command text references', () => {
+    expect(isTerminalApp('com.mitchellh.ghostty')).toBe(true);
   });
 });
 

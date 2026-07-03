@@ -6,10 +6,15 @@ import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
-import { libraryDir } from './fieldTheoryPaths';
+import { commandsDir, libraryDir } from './fieldTheoryPaths';
+import { hasExistingLibraryContent } from './librarianSetupState';
+import { LibraryIndexStore, type StoredLibraryFileMetadata } from './libraryIndexStore';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
+import { getRawMarkdownLinkHits } from '../shared/wikiLinkParser';
 import {
   existingPathInsideRoots,
+  getLibraryTextDocumentKind,
+  isLibraryTextDocumentPath,
   isMarkdownDocumentPath,
   isPathInside,
   markdownFileNameFromUserInput,
@@ -18,7 +23,14 @@ import {
   stripMarkdownFileExtension,
 } from './pathSafety';
 import {
+  getMarkdownEditActor,
+  parseMarkdownFrontmatter,
+  parseMarkdownArchivedState,
+  parseMarkdownContentEditedAt,
+  parseMarkdownEditActor,
   parseMarkdownTodoState,
+  stampMarkdownContentEditIfBodyChanged,
+  type MarkdownEditActor,
   type MarkdownTodoState,
 } from '../shared/markdownFrontmatter';
 
@@ -42,13 +54,16 @@ const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n
 const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
 const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
+const WIKI_RESERVED_FOLDER_NAMES = new Set(['commands']);
 const LIBRARIAN_INDEX_VERSION = 2;
+const RIVER_SHARED_FOLDER_ID = 'River (shared)';
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'artifacts',
   'scratchpad',
-  'Shared Markdown',
+  RIVER_SHARED_FOLDER_ID,
   'debates',
   'Plans',
+  'bookmarks-shortcut',
   'bookmarks-from-x',
   'entries',
   'categories',
@@ -85,7 +100,7 @@ const DEFAULT_LIBRARIAN_RULE_CONTENT =
 const DEFAULT_LIBRARY_README_HELP = `## Useful Shortcuts
 
 Invoke a portable command from any app with Command+Shift+K, type the command name, then press Enter.
-Create or edit portable commands in Field Theory's Commands tab; each one is a Markdown file in a watched commands folder such as ~/.fieldtheory/commands/.
+Create or edit portable commands as Markdown files in a watched commands folder such as ~/.fieldtheory/library/Commands/.
 Create a scratchpad note from anywhere with Control+Option+Command+Space.
 Inside Library, use Command+N to create a page in the selected folder and Command+Shift+N to create a folder.
 Use Command+F or / to search, Command+, to switch between rendered and Markdown, and Command+S to save Markdown edits.
@@ -98,6 +113,11 @@ function normalizeDefaultReadmeContent(content: string): string {
 function isWikiSkipFileName(fileName: string): boolean {
   return WIKI_SKIP_FILE_NAMES.has(fileName)
     || WIKI_SKIP_FILE_NAMES.has(`${stripMarkdownFileExtension(fileName)}.md`);
+}
+
+function isWikiReservedRelPath(relPath: string): boolean {
+  const firstPart = relPath.split(/[\\/]/, 1)[0]?.toLowerCase();
+  return Boolean(firstPart && WIKI_RESERVED_FOLDER_NAMES.has(firstPart));
 }
 
 function buildDefaultReadmeWithHelp(content: string): string {
@@ -147,7 +167,7 @@ Use this folder for rough captures before they become entries.
     relPath: 'debates',
     ...buildDefaultFolderReadme(`# README: Debates
 
-Run the portable command at ~/.fieldtheory/commands/debate.md when you want a debate.
+Run the portable command at ~/.fieldtheory/library/Commands/debate.md when you want a debate.
 It starts a structured comparison between models or approaches, then saves the result so you can come back to the reasoning later.
 `, `# Debates
 
@@ -160,11 +180,11 @@ Use the portable command at .cursor/commands/debate.md when you want one generat
     relPath: 'Plans',
     ...buildDefaultFolderReadme(`# README: Plans
 
-Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+Run the portable command at ~/.fieldtheory/library/Commands/plan.md when you want a plan saved here.
 It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
 `, `# Plans
 
-Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+Run the portable command at ~/.fieldtheory/library/Commands/plan.md when you want a plan saved here.
 It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
 `),
   },
@@ -174,7 +194,7 @@ It turns the current proposal or next steps into a Markdown plan with a clear fi
     ...buildDefaultFolderReadme(`# README: Entries
 
 Entries are durable wiki notes.
-Use portable commands from ~/.fieldtheory/commands/ when you want the app or an agent to create one.
+Use portable commands from ~/.fieldtheory/library/Commands/ when you want the app or an agent to create one.
 `, `# Entries
 
 Entries are durable wiki notes.
@@ -287,8 +307,8 @@ export function normalizeHiddenDefaultFolders(value: unknown): string[] {
       .filter((item): item is string => item !== null)
   );
   return [
-    ...DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => requested.has(folderId)),
-    ...[...requested].filter((folderId) => !DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)),
+    ...DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => folderId !== RIVER_SHARED_FOLDER_ID && requested.has(folderId)),
+    ...[...requested].filter((folderId) => folderId !== RIVER_SHARED_FOLDER_ID && !DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)),
   ];
 }
 
@@ -785,6 +805,8 @@ def main():
             except:
                 seq = 0
         seq += 1
+        while (jobs_dir / f"job_{seq}.json").exists():
+            seq += 1
         seq_file.write_text(str(seq))
 
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -1091,6 +1113,18 @@ def find_pending_job():
     return None
 
 
+def abandon_pending_job(job_file, job, reason):
+    try:
+        next_job = dict(job) if isinstance(job, dict) else {}
+        next_job["status"] = "abandoned"
+        next_job["abandoned_reason"] = reason
+        from datetime import datetime
+        next_job["abandoned_at"] = datetime.now().isoformat()
+        job_file.write_text(json.dumps(next_job, indent=2) + "\\n")
+    except:
+        pass
+
+
 def get_rule_file_path(job):
     rule_file = job.get("rule_file") if isinstance(job, dict) else None
     if isinstance(rule_file, str) and rule_file.strip():
@@ -1217,13 +1251,18 @@ def main():
     pending_job = find_pending_job()
     if pending_job:
         job_file, job = pending_job
-        SENTINEL_FILE.write_text(json.dumps({
-            "job_file": str(job_file),
-            "output": job.get("output", ""),
-            "created_at": datetime.now().isoformat()
-        }, indent=2))
-        sync_stop_hook(should_stop_on_pending(cfg))
-        return
+        if should_stop_on_pending(cfg):
+            SENTINEL_FILE.write_text(json.dumps({
+                "job_file": str(job_file),
+                "output": job.get("output", ""),
+                "created_at": datetime.now().isoformat()
+            }, indent=2))
+            sync_stop_hook(True)
+            return
+
+        abandon_pending_job(job_file, job, "codex_non_blocking_superseded")
+        SENTINEL_FILE.unlink(missing_ok=True)
+        sync_stop_hook(False)
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -1261,6 +1300,8 @@ def main():
             except:
                 seq = 0
         seq += 1
+        while (jobs_dir / f"job_{seq}.json").exists():
+            seq += 1
         seq_file.write_text(str(seq))
 
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -1369,6 +1410,7 @@ export interface ParsedMarkdownHeader {
   context: string | null;
   readingTime: string | null;
   modelSignature: string | null;
+  editActor: MarkdownEditActor | null;
 }
 
 export { parseMarkdownTodoState, type MarkdownTodoState };
@@ -1418,7 +1460,7 @@ export function defaultScratchpadNameWithTime(date: Date): string {
 }
 
 export function isHiddenWikiFolderName(name: string): boolean {
-  return name.startsWith('.') || name.startsWith('_');
+  return name === 'Codex Context' || name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
 }
 
 export function isHiddenWikiFileName(name: string): boolean {
@@ -1445,102 +1487,6 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
   return additions.length > 0
     ? `${baseRule}\n\n${additions.join('\n\n')}`
     : baseRule;
-}
-
-export function buildFieldTheoryMarkdownCommandContent(): string {
-  return `# Write Field Theory Markdown
-
-Use this when writing Markdown that will be read or edited in Field Theory.
-This applies to normal notes, scratchpads, entries, README pages, and command-written docs.
-It does not apply to Librarian artifacts; keep the existing artifact design and artifact-specific rules.
-
-## Goal
-
-Write clean source Markdown that already feels tidy in raw mode.
-Rendered mode should be a light presentation layer, not a rescue operation.
-
-## Voice
-
-Write in plain, practical English.
-Lead with the main point.
-Use concrete words and exact numbers when they matter.
-Be comprehensive when the topic needs it, but do not add filler scaffolding.
-
-## Structure
-
-Use one H1 title at the top.
-For normal notes, prefer bold section labels instead of more heading levels.
-
-Example:
-
-**Decision**
-
-Use a single shared paste target resolver.
-
-**Why**
-
-The bug was duplicated target detection, not paste timing.
-
-Avoid H2/H3 unless the document is long enough that real navigation matters.
-Avoid H4 and deeper.
-Keep most text at the same visual size; create hierarchy with order, spacing, and bold labels.
-
-## Spacing
-
-Use one blank line between blocks.
-Do not use repeated blank lines for visual spacing.
-Do not put blank lines between simple list items.
-
-## Lists
-
-Prefer prose.
-Use bullets only when the items are parallel or genuinely easier to scan.
-Use ordered lists only for real sequence, priority, or steps.
-Keep lists short. If a list needs explanation, write prose under a bold label instead.
-
-## Tasks
-
-Use clear Markdown tasks:
-
-- [ ] One action per line
-- [x] Finished action
-
-Do not hide decisions or explanations inside task text.
-Put context in prose, then tasks underneath.
-
-## Links
-
-Use Field Theory backlinks for internal pages:
-
-[[Page Name]]
-
-Use embedded Markdown links when the link carries the sentence:
-
-[source title](https://example.com)
-
-For sourced notes, repeat important sources at the bottom:
-
-**Sources**
-
-- [Readable source title](https://example.com)
-
-Do not dump unsorted URLs.
-Do not repeat sources at the bottom if the note is private, unsourced scratch work, or the link is incidental.
-
-## Formatting
-
-Use bold sparingly for labels, decisions, and important terms.
-Do not bold whole paragraphs.
-Use blockquotes only for actual quoted text.
-Use code formatting only for commands, paths, keys, symbols, and identifiers.
-
-## Avoid
-
-Avoid generic AI headings like "Overview", "Key Takeaways", "Conclusion", and "Final Thoughts" unless they add real structure.
-Avoid decorative callouts.
-Avoid excessive bullets.
-Avoid multiple heading sizes in short notes.
-Avoid writing for the renderer instead of the source file.`;
 }
 
 export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
@@ -1582,7 +1528,7 @@ export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
     }
   }
 
-  return { title, context, readingTime, modelSignature };
+  return { title, context, readingTime, modelSignature, editActor: parseMarkdownEditActor(content) };
 }
 
 /**
@@ -1618,7 +1564,12 @@ export interface WikiPageMeta {
   name: string;     // filename without extension
   title: string;    // filename without extension
   lastUpdated: number;
+  documentKind?: 'markdown' | 'html' | 'css';
   todoState?: MarkdownTodoState;
+  archived?: boolean;
+  sharedOriginalSourcePath?: string;
+  sharedAuthorCallsign?: string;
+  editActor?: MarkdownEditActor;
 }
 
 export interface WikiPage extends WikiPageMeta {
@@ -1632,8 +1583,18 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string; editActor?: MarkdownEditActor }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+
+type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign' | 'editActor'> & {
+  contentEditedAt?: number;
+};
+
+type WikiFileMetadataCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  metadata: WikiFileMetadata;
+};
 
 export interface LibraryRoot {
   path: string;
@@ -1656,6 +1617,45 @@ export interface LibraryRenameEvent {
   emittedAt?: number;
 }
 
+export interface LibraryChangeEvent {
+  type: 'file-added' | 'file-changed' | 'file-deleted';
+  rootPath: string;
+  relPath: string;
+  absPath: string;
+  builtin: boolean;
+  source: 'watcher' | 'app' | 'external';
+  detectedAt: number;
+  page?: WikiPageMeta;
+}
+
+export interface WikiBacklinkRelationDocument {
+  target: { kind: 'wiki'; relPath: string };
+  title: string;
+  content: string;
+}
+
+export type LibraryBacklinkTarget =
+  | { kind: 'wiki'; relPath: string }
+  | { kind: 'artifact'; path: string }
+  | { kind: 'command'; path: string };
+
+export interface LibraryBacklinkRelationDocument {
+  target: LibraryBacklinkTarget;
+  title: string;
+  content: string;
+}
+
+export interface CommandBacklinkSourceDocument {
+  filePath: string;
+  displayName?: string;
+  name?: string;
+  content: string;
+}
+
+export type CommandBacklinkSourceLoader = (
+  filePath: string,
+) => CommandBacklinkSourceDocument | null | Promise<CommandBacklinkSourceDocument | null>;
+
 export type LibraryMoveKind = 'file' | 'dir';
 
 export interface ReadingMeta {
@@ -1666,6 +1666,7 @@ export interface ReadingMeta {
   modelSignature: string | null;
   createdAt: number;
   mtime: number;
+  editActor?: MarkdownEditActor;
 }
 
 /**
@@ -1735,6 +1736,7 @@ interface LibrarianIndex {
     modelSignature: string | null;
     createdAt: number;
     mtime: number;
+    editActor?: MarkdownEditActor;
   }>;
 }
 
@@ -1751,6 +1753,7 @@ interface LibrarianIndex {
 export class LibrarianManager extends EventEmitter {
   private settingsPath: string;
   private indexPath: string;
+  private libraryIndexPath: string;
   private oldDbPath: string;
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
@@ -1761,6 +1764,8 @@ export class LibrarianManager extends EventEmitter {
   private userDataManager: UserDataManager | null = null;
   private wikiTreeCache: WikiNode[] | null = null;
   private libraryRootsCache: LibraryRoot[] | null = null;
+  private wikiFileMetadataCache: Map<string, WikiFileMetadataCacheEntry> = new Map();
+  private libraryIndexStore: LibraryIndexStore | null = null;
   private pendingWikiUnlinks: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private pendingLibraryUnlinks: Map<string, { rootPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
   private wikiRenameAliases: Map<string, { relPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
@@ -1772,8 +1777,10 @@ export class LibrarianManager extends EventEmitter {
     const userDataPath = app.getPath('userData');
     this.settingsPath = path.join(userDataPath, 'librarian-settings.json');
     this.indexPath = path.join(userDataPath, 'librarian-index.json');
+    this.libraryIndexPath = path.join(userDataPath, 'library-index.db');
     this.oldDbPath = path.join(userDataPath, 'librarian.db');
     this.oldLibrarianDir = path.join(userDataPath, 'librarian');
+    this.libraryIndexStore = new LibraryIndexStore(this.libraryIndexPath);
 
     // Migrate from old database if needed
     this.migrateFromDatabase();
@@ -1810,6 +1817,12 @@ export class LibrarianManager extends EventEmitter {
    */
   setUserDataManager(manager: UserDataManager): void {
     this.userDataManager = manager;
+    if (!manager.isLoggedIn()) return;
+    this.updatePathsForUser();
+    this.settings = this.loadSettings();
+    this.loadIndex();
+    this.invalidateWikiTreeCache();
+    this.invalidateLibraryRootsCache();
   }
 
   /**
@@ -1819,17 +1832,32 @@ export class LibrarianManager extends EventEmitter {
     if (this.userDataManager?.isLoggedIn()) {
       this.settingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
       this.indexPath = this.userDataManager.getUserDataPath('librarian-index.json');
+      this.libraryIndexPath = this.userDataManager.getUserDataPath('library-index.db');
+      this.libraryIndexStore?.setDatabasePath(this.libraryIndexPath);
     }
   }
 
+  private ensureUserScopedSettingsLoaded(): void {
+    if (!this.userDataManager?.isLoggedIn()) return;
+
+    const expectedSettingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
+    if (this.settingsPath === expectedSettingsPath) return;
+
+    this.updatePathsForUser();
+    this.settings = this.loadSettings();
+    this.loadIndex();
+    this.invalidateWikiTreeCache();
+    this.invalidateLibraryRootsCache();
+  }
+
   /**
-   * Get the central librarian directory (user-specific).
+   * Get the central librarian directory.
+   *
+   * Artifacts are intentionally global. Agent hooks run outside the app and do
+   * not reliably know the signed-in user, so a user-scoped artifacts root splits
+   * dev and packaged output into different folders.
    */
   getCentralLibrarianDir(): string {
-    if (this.userDataManager?.isLoggedIn()) {
-      return this.userDataManager.getFieldTheoryPath('librarian');
-    }
-    // Fallback to legacy path
     return path.join(os.homedir(), '.fieldtheory', 'librarian');
   }
 
@@ -2068,6 +2096,7 @@ export class LibrarianManager extends EventEmitter {
               modelSignature: meta.modelSignature ?? null,
               createdAt: meta.createdAt,
               mtime: meta.mtime,
+              editActor: meta.editActor,
             });
           }
         }
@@ -2095,6 +2124,7 @@ export class LibrarianManager extends EventEmitter {
           modelSignature: meta.modelSignature,
           createdAt: meta.createdAt,
           mtime: meta.mtime,
+          editActor: meta.editActor,
         };
       }
       fs.writeFileSync(this.indexPath, JSON.stringify(index, null, 2));
@@ -2201,7 +2231,8 @@ export class LibrarianManager extends EventEmitter {
     try {
       const stats = fs.statSync(filePath);
       const content = fs.readFileSync(filePath, 'utf-8');
-      const { title, context, readingTime, modelSignature } = this.parseMarkdownHeader(content);
+      const { title, context, readingTime, modelSignature, editActor } = this.parseMarkdownHeader(content);
+      this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
 
       return {
         path: filePath,
@@ -2211,6 +2242,7 @@ export class LibrarianManager extends EventEmitter {
         modelSignature,
         createdAt: Math.floor(stats.birthtimeMs),
         mtime: Math.floor(stats.mtimeMs),
+        editActor: editActor ?? undefined,
       };
     } catch (error) {
       log.error(`Error parsing file ${filePath}:`, error);
@@ -2317,6 +2349,7 @@ export class LibrarianManager extends EventEmitter {
     const watcher = chokidar.watch([
       path.join(normalizedDir, '*.md'),
       path.join(normalizedDir, '*.markdown'),
+      path.join(normalizedDir, '*.mdx'),
     ], {
       ignoreInitial: true,           // Don't fire for existing files
       awaitWriteFinish: {            // Wait for file to be fully written
@@ -2394,6 +2427,7 @@ export class LibrarianManager extends EventEmitter {
     if (this.cache.has(normalizedPath)) {
       this.cache.delete(normalizedPath);
       this.saveIndex();
+      this.libraryIndexStore?.removePath(normalizedPath);
       this.emit('reading-removed', normalizedPath);
     }
   }
@@ -2468,12 +2502,27 @@ export class LibrarianManager extends EventEmitter {
       ignorePermissionErrors: true,
     });
     watcher.on('add', (absPath: string) => {
-      if (isMarkdownDocumentPath(absPath)) this.handleLibraryRootAdd(normalizedDir, absPath);
+      if (isLibraryTextDocumentPath(absPath)) this.handleLibraryRootAdd(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
     });
-    watcher.on('change', () => this.emit('library:changed', normalizedDir));
+    watcher.on('change', (absPath: string) => {
+      if (isLibraryTextDocumentPath(absPath)) {
+        this.emit('library:changed', normalizedDir, {
+          type: 'file-changed',
+          rootPath: normalizedDir,
+          relPath: this.libraryRelPathFromAbsPath(normalizedDir, absPath),
+          absPath,
+          builtin: normalizedDir === this.wikiDir,
+          source: 'watcher',
+          detectedAt: Date.now(),
+          page: this.fileNodeFromPath(normalizedDir, absPath, true) ?? undefined,
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', normalizedDir);
+      }
+    });
     watcher.on('unlink', (absPath: string) => {
-      if (isMarkdownDocumentPath(absPath)) this.scheduleLibraryRootUnlink(normalizedDir, absPath);
+      if (isLibraryTextDocumentPath(absPath)) this.scheduleLibraryRootUnlink(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
     });
     watcher.on('addDir', () => this.emit('library:changed', normalizedDir));
@@ -2600,19 +2649,111 @@ export class LibrarianManager extends EventEmitter {
   private wikiWatcher: chokidar.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
-  private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState } {
+  private parseWikiMetadata(content: string, filePath: string): WikiFileMetadata {
+    const frontmatter = parseMarkdownFrontmatter(content).meta;
+    const isShared = frontmatter.shared === 'true';
+    const frontmatterTitle = frontmatter.title?.trim();
+    const sharedTitle = isShared && frontmatterTitle ? frontmatterTitle : undefined;
+    const sharedUpdatedAt = isShared ? Date.parse(frontmatter.shared_updated_at ?? '') : Number.NaN;
     return {
-      title: stripMarkdownFileExtension(path.basename(filePath)),
+      title: sharedTitle ?? (isShared ? 'Untitled' : stripMarkdownFileExtension(path.basename(filePath))),
       todoState: parseMarkdownTodoState(content) ?? undefined,
+      archived: parseMarkdownArchivedState(content) || undefined,
+      sharedOriginalSourcePath: frontmatter.shared_original_source_path,
+      sharedAuthorCallsign: frontmatter.shared_author_callsign,
+      editActor: getMarkdownEditActor(frontmatter) ?? undefined,
+      contentEditedAt: parseMarkdownContentEditedAt(content)
+        ?? (Number.isFinite(sharedUpdatedAt) ? sharedUpdatedAt : undefined),
     };
   }
 
-  private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState } {
+  private wikiFileMetadataFromStored(metadata: StoredLibraryFileMetadata): WikiFileMetadata {
+    return {
+      title: metadata.title,
+      todoState: metadata.todoState,
+      archived: metadata.archived,
+      sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+      sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+      editActor: metadata.editActor,
+      contentEditedAt: metadata.contentEditedAt,
+    };
+  }
+
+  private storedMetadataFromWikiFile(metadata: WikiFileMetadata): StoredLibraryFileMetadata {
+    return {
+      title: metadata.title,
+      todoState: metadata.todoState,
+      archived: metadata.archived,
+      sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+      sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+      editActor: metadata.editActor,
+      contentEditedAt: metadata.contentEditedAt,
+    };
+  }
+
+  private parseWikiFileMetadata(filePath: string, stats?: fs.Stats): WikiFileMetadata {
+    if (!isMarkdownDocumentPath(filePath)) {
+      return { title: path.basename(filePath) };
+    }
+    let fileStats = stats;
+    if (!fileStats) {
+      try {
+        fileStats = fs.statSync(filePath);
+      } catch {
+        return { title: path.basename(filePath, '.md') };
+      }
+    }
+    const mtimeMs = Math.floor(fileStats.mtimeMs);
+    this.wikiFileMetadataCache ??= new Map();
+    const cached = this.wikiFileMetadataCache.get(filePath);
+    if (cached && cached.mtimeMs === mtimeMs && cached.size === fileStats.size) {
+      return cached.metadata;
+    }
+    const stored = this.libraryIndexStore?.getMetadata(filePath, mtimeMs, fileStats.size);
+    if (stored) {
+      const metadata = this.wikiFileMetadataFromStored(stored);
+      this.wikiFileMetadataCache.set(filePath, { mtimeMs, size: fileStats.size, metadata });
+      return metadata;
+    }
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      return this.parseWikiMetadata(content, filePath);
+      const metadata = this.parseWikiMetadata(content, filePath);
+      this.wikiFileMetadataCache.set(filePath, { mtimeMs, size: fileStats.size, metadata });
+      this.libraryIndexStore?.setMetadata(filePath, mtimeMs, fileStats.size, this.storedMetadataFromWikiFile(metadata));
+      this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
+      return metadata;
     } catch {}
     return { title: path.basename(filePath, '.md') };
+  }
+
+  private collectLibraryIndexFilePaths(rootPath: string, absPath: string): string[] {
+    try {
+      const stats = fs.statSync(absPath);
+      if (stats.isFile()) return isLibraryTextDocumentPath(absPath) ? [absPath] : [];
+      if (!stats.isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    return this.flattenWikiFiles(this.scanMarkdownTree(rootPath, absPath, new Set<string>(), true))
+      .map((page) => page.absPath);
+  }
+
+  private removeLibraryIndexFilePaths(filePaths: string[]): void {
+    const uniquePaths = [...new Set(filePaths)].filter(Boolean);
+    if (uniquePaths.length === 0) return;
+    for (const filePath of uniquePaths) {
+      this.wikiFileMetadataCache?.delete(filePath);
+    }
+    this.libraryIndexStore?.removePaths(uniquePaths);
+  }
+
+  recordLibraryIndexLinkHits(filePath: string, content: string): void {
+    if (!isMarkdownDocumentPath(filePath)) return;
+    this.libraryIndexStore?.replaceLinkHits(filePath, getRawMarkdownLinkHits(content));
+  }
+
+  removeLibraryIndexPath(filePath: string): void {
+    this.removeLibraryIndexFilePaths([filePath]);
   }
 
   private toPortableRelPath(relPath: string): string {
@@ -2826,7 +2967,85 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  private scanMarkdownTree(rootPath: string, currentDir = rootPath, seenRealPaths = new Set<string>()): WikiNode[] {
+  private isUserScopedArtifactsDir(dirPath: string): boolean {
+    const usersRoot = path.join(os.homedir(), '.fieldtheory', 'users');
+    const normalizedPath = this.normalizePath(this.expandPath(dirPath));
+    const relPath = path.relative(usersRoot, normalizedPath);
+    if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) return false;
+    const parts = relPath.split(path.sep);
+    return parts.length === 3 && parts[1] === 'librarian' && parts[2] === 'artifacts';
+  }
+
+  private resolveArtifactMigrationTarget(artifactsDir: string, fileName: string, userId: string, srcPath: string): string | null {
+    const firstTarget = path.join(artifactsDir, fileName);
+    if (!fs.existsSync(firstTarget)) return firstTarget;
+
+    try {
+      if (fs.readFileSync(firstTarget, 'utf-8') === fs.readFileSync(srcPath, 'utf-8')) {
+        return null;
+      }
+    } catch {
+      // Fall through to a collision-safe filename.
+    }
+
+    const ext = path.extname(fileName);
+    const base = path.basename(fileName, ext);
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '-');
+    for (let index = 1; index < 1000; index += 1) {
+      const suffix = index === 1 ? safeUserId : `${safeUserId}-${index}`;
+      const candidate = path.join(artifactsDir, `${base}-${suffix}${ext}`);
+      if (!fs.existsSync(candidate)) return candidate;
+      try {
+        if (fs.readFileSync(candidate, 'utf-8') === fs.readFileSync(srcPath, 'utf-8')) {
+          return null;
+        }
+      } catch {
+        // Keep trying a new filename.
+      }
+    }
+
+    return null;
+  }
+
+  private migrateUserScopedArtifactsToCentral(artifactsDir: string): boolean {
+    const usersRoot = path.join(os.homedir(), '.fieldtheory', 'users');
+    if (!fs.existsSync(usersRoot)) return true;
+
+    try {
+      const userDirs = fs.readdirSync(usersRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+
+      for (const userDir of userDirs) {
+        const sourceDir = path.join(usersRoot, userDir.name, 'librarian', 'artifacts');
+        if (!fs.existsSync(sourceDir) || this.libraryRootKey(sourceDir) === this.libraryRootKey(artifactsDir)) {
+          continue;
+        }
+
+        const files = fs.readdirSync(sourceDir, { withFileTypes: true });
+        for (const file of files) {
+          if (!file.isFile() || file.name === 'README.md' || !isMarkdownDocumentPath(file.name)) {
+            continue;
+          }
+          const srcPath = path.join(sourceDir, file.name);
+          const dstPath = this.resolveArtifactMigrationTarget(artifactsDir, file.name, userDir.name, srcPath);
+          if (!dstPath) continue;
+          fs.copyFileSync(srcPath, dstPath);
+        }
+      }
+      return true;
+    } catch (error) {
+      log.warn('Failed to migrate user-scoped artifacts to central directory:', error);
+      return false;
+    }
+  }
+
+  private scanMarkdownTree(
+    rootPath: string,
+    currentDir = rootPath,
+    seenRealPaths = new Set<string>(),
+    includeLibraryTextDocuments = false,
+    options: { excludeWikiReservedFolders?: boolean } = {},
+  ): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
     let currentRealPath: string;
@@ -2848,7 +3067,7 @@ export class LibrarianManager extends EventEmitter {
 
     const nodes: WikiNode[] = [];
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
+      if (entry.isDirectory() ? isHiddenWikiFolderName(entry.name) : isHiddenWikiFileName(entry.name)) continue;
 
       const absPath = path.join(currentDir, entry.name);
       let stats: fs.Stats;
@@ -2860,30 +3079,42 @@ export class LibrarianManager extends EventEmitter {
 
       if (stats.isDirectory()) {
         const relPath = this.toPortableRelPath(path.relative(rootPath, absPath));
+        if (options.excludeWikiReservedFolders && rootPath === this.wikiDir && isWikiReservedRelPath(relPath)) continue;
         nodes.push({
           kind: 'dir',
           name: entry.name,
           relPath,
-          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths),
+          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments, options),
         });
         continue;
       }
 
-      if (!stats.isFile() || !isMarkdownDocumentPath(entry.name) || isWikiSkipFileName(entry.name)) {
+      const documentKind = getLibraryTextDocumentKind(entry.name);
+      const canShowFile = includeLibraryTextDocuments
+        ? documentKind !== null
+        : isMarkdownDocumentPath(entry.name);
+      if (!stats.isFile() || !canShowFile || isWikiSkipFileName(entry.name)) {
         continue;
       }
 
-      const nameWithoutExt = stripMarkdownFileExtension(entry.name);
-      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, nameWithoutExt)));
-      const metadata = this.parseWikiFileMetadata(absPath);
+      const name = documentKind === 'markdown'
+        ? stripMarkdownFileExtension(entry.name)
+        : entry.name;
+      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, name)));
+      const metadata = this.parseWikiFileMetadata(absPath, stats);
       nodes.push({
         kind: 'file',
         relPath,
         absPath,
-        name: nameWithoutExt,
+        name,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
+        documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
+        archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
       });
     }
 
@@ -2903,7 +3134,12 @@ export class LibrarianManager extends EventEmitter {
           name: node.name,
           title: node.title,
           lastUpdated: node.lastUpdated,
+          documentKind: node.documentKind,
           todoState: node.todoState,
+          archived: node.archived,
+          sharedOriginalSourcePath: node.sharedOriginalSourcePath,
+          sharedAuthorCallsign: node.sharedAuthorCallsign,
+          editActor: node.editActor,
         }];
       }
       return this.flattenWikiFiles(node.children);
@@ -2919,21 +3155,29 @@ export class LibrarianManager extends EventEmitter {
     this.libraryRootsCache = null;
   }
 
-  private fileNodeFromPath(rootPath: string, absPath: string): Extract<WikiNode, { kind: 'file' }> | null {
+  private fileNodeFromPath(rootPath: string, absPath: string, includeLibraryTextDocuments = false): Extract<WikiNode, { kind: 'file' }> | null {
     try {
       const stats = fs.statSync(absPath);
-      if (!stats.isFile() || !isMarkdownDocumentPath(absPath)) return null;
-      const nameWithoutExt = stripMarkdownFileExtension(path.basename(absPath));
-      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(path.dirname(absPath), nameWithoutExt)));
-      const metadata = this.parseWikiFileMetadata(absPath);
+      const documentKind = getLibraryTextDocumentKind(absPath);
+      if (!stats.isFile() || !(includeLibraryTextDocuments ? documentKind !== null : isMarkdownDocumentPath(absPath))) return null;
+      const name = documentKind === 'markdown'
+        ? stripMarkdownFileExtension(path.basename(absPath))
+        : path.basename(absPath);
+      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(path.dirname(absPath), name)));
+      const metadata = this.parseWikiFileMetadata(absPath, stats);
       return {
         kind: 'file',
         relPath,
         absPath,
-        name: nameWithoutExt,
+        name,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
+        documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
+        archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
       };
     } catch {
       return null;
@@ -2965,7 +3209,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private patchCachedRename(event: LibraryRenameEvent): void {
-    const newNode = this.fileNodeFromPath(event.rootPath, event.newAbsPath);
+    const newNode = this.fileNodeFromPath(event.rootPath, event.newAbsPath, true);
     if (!newNode) {
       if (event.builtin) this.invalidateWikiTreeCache();
       else this.invalidateLibraryRootsCache();
@@ -3010,6 +3254,7 @@ export class LibrarianManager extends EventEmitter {
       changedListeners: this.listenerCount(tracedEvent.builtin ? 'wiki:changed' : 'library:changed'),
     });
     const beforePatch = Date.now();
+    this.removeLibraryIndexFilePaths([tracedEvent.oldAbsPath]);
     this.patchCachedRename(tracedEvent);
     this.rememberWikiRenameAlias(tracedEvent);
     traceRename('cache-patched', {
@@ -3066,6 +3311,7 @@ export class LibrarianManager extends EventEmitter {
     if (!oldCached && !newMeta) return null;
 
     this.cache.delete(oldPath);
+    this.libraryIndexStore?.removePath(oldPath);
     if (newMeta) this.cache.set(newPath, newMeta);
     this.saveIndex();
 
@@ -3091,7 +3337,9 @@ export class LibrarianManager extends EventEmitter {
 
   private getCachedWikiTree(): WikiNode[] {
     if (!this.wikiTreeCache) {
-      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir);
+      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir, this.wikiDir, new Set<string>(), false, {
+        excludeWikiReservedFolders: true,
+      });
     }
     return this.wikiTreeCache;
   }
@@ -3126,7 +3374,7 @@ export class LibrarianManager extends EventEmitter {
         label: 'Wiki',
         builtin: true,
         writable: true,
-        tree: this.getCachedWikiTree(),
+        tree: this.scanMarkdownTree(this.wikiDir, this.wikiDir, new Set<string>(), true),
       },
     ];
     const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
@@ -3141,11 +3389,29 @@ export class LibrarianManager extends EventEmitter {
         label: path.basename(normalizedRoot) || normalizedRoot,
         builtin: false,
         writable: this.canWriteDirectory(normalizedRoot),
-        tree: this.scanMarkdownTree(normalizedRoot),
+        tree: this.scanMarkdownTree(normalizedRoot, normalizedRoot, new Set<string>(), true),
       });
     }
 
     this.libraryRootsCache = roots;
+    return roots;
+  }
+
+  getLibraryRootPaths(): string[] {
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    const addRoot = (rootPath: string): void => {
+      const normalizedRoot = this.normalizePath(rootPath);
+      const key = this.libraryRootKey(normalizedRoot);
+      if (seen.has(key)) return;
+      seen.add(key);
+      roots.push(normalizedRoot);
+    };
+
+    addRoot(this.wikiDir);
+    for (const savedRoot of this.getSafeLibraryRootPaths()) {
+      addRoot(savedRoot);
+    }
     return roots;
   }
 
@@ -3172,7 +3438,7 @@ export class LibrarianManager extends EventEmitter {
       label: path.basename(canonicalPath) || canonicalPath,
       builtin: false,
       writable: this.canWriteDirectory(canonicalPath),
-      tree: this.scanMarkdownTree(canonicalPath),
+      tree: this.scanMarkdownTree(canonicalPath, canonicalPath, new Set<string>(), true),
     };
   }
 
@@ -3193,9 +3459,11 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private resolveExistingWikiPagePath(relPath: string): string | null {
+    if (isWikiReservedRelPath(relPath)) return null;
     const candidates = [
       path.resolve(this.wikiDir, `${relPath}.md`),
       path.resolve(this.wikiDir, `${relPath}.markdown`),
+      path.resolve(this.wikiDir, `${relPath}.mdx`),
     ];
 
     for (const candidate of candidates) {
@@ -3230,14 +3498,234 @@ export class LibrarianManager extends EventEmitter {
         absPath,
         name: nameWithoutExt,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
+        archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
+        editActor: metadata.editActor,
         content,
         documentVersion: readDocumentVersion(absPath),
       };
     } catch (error) {
       log.error(`Error reading wiki page ${relPath}:`, error);
       return null;
+    }
+  }
+
+  getWikiBacklinkRelationDocuments(relPath: string): WikiBacklinkRelationDocument[] {
+    const targetPage = this.getWikiPage(relPath);
+    if (!targetPage) return [];
+
+    return this.getIndexedBacklinkRelationDocumentsSync({
+      target: { kind: 'wiki', relPath: targetPage.relPath },
+      title: targetPage.title,
+      pathKey: this.libraryRootKey(targetPage.absPath),
+      rawCandidates: [
+        targetPage.relPath,
+        `${targetPage.relPath}.md`,
+        targetPage.title,
+        stripMarkdownFileExtension(path.basename(targetPage.relPath)),
+      ],
+      hrefCandidates: [
+        `wiki://${encodeURI(targetPage.relPath)}`,
+        targetPage.title,
+      ],
+    }).filter((document): document is WikiBacklinkRelationDocument => document.target.kind === 'wiki');
+  }
+
+  async getLibraryBacklinkRelationDocuments(
+    target: LibraryBacklinkTarget,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument[]> {
+    const targetInfo = await this.getLibraryBacklinkTargetInfo(target, loadCommandByPath);
+    if (!targetInfo) return [];
+    return this.getIndexedBacklinkRelationDocuments(targetInfo, loadCommandByPath);
+  }
+
+  private async getLibraryBacklinkTargetInfo(
+    target: LibraryBacklinkTarget,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<{
+    target: LibraryBacklinkTarget;
+    title: string;
+    pathKey: string;
+    rawCandidates: string[];
+    hrefCandidates: string[];
+  } | null> {
+    if (target.kind === 'wiki') {
+      const page = this.getWikiPage(target.relPath);
+      if (!page) return null;
+      return {
+        target: { kind: 'wiki', relPath: page.relPath },
+        title: page.title,
+        pathKey: this.libraryRootKey(page.absPath),
+        rawCandidates: [
+          page.relPath,
+          `${page.relPath}.md`,
+          page.title,
+          stripMarkdownFileExtension(path.basename(page.relPath)),
+        ],
+        hrefCandidates: [
+          `wiki://${encodeURI(page.relPath)}`,
+          page.title,
+        ],
+      };
+    }
+
+    if (target.kind === 'artifact') {
+      const reading = this.getReading(target.path);
+      if (!reading) return null;
+      return {
+        target: { kind: 'artifact', path: reading.path },
+        title: reading.title,
+        pathKey: this.libraryRootKey(reading.path),
+        rawCandidates: [reading.title],
+        hrefCandidates: [
+          `artifact://${encodeURIComponent(reading.path)}`,
+          reading.title,
+        ],
+      };
+    }
+
+    const command = await loadCommandByPath?.(target.path);
+    if (!command) return null;
+    const title = command.displayName || command.name || stripMarkdownFileExtension(path.basename(command.filePath));
+    return {
+      target: { kind: 'command', path: command.filePath },
+      title,
+      pathKey: this.libraryRootKey(command.filePath),
+      rawCandidates: [title],
+      hrefCandidates: [
+        `command://${encodeURIComponent(command.filePath)}`,
+        title,
+      ],
+    };
+  }
+
+  private getIndexedBacklinkRelationDocumentsSync(
+    targetInfo: {
+      target: LibraryBacklinkTarget;
+      title: string;
+      pathKey: string;
+      rawCandidates: string[];
+      hrefCandidates: string[];
+    },
+  ): LibraryBacklinkRelationDocument[] {
+    const sourcePaths = this.getIndexedBacklinkSourcePaths(targetInfo.rawCandidates, targetInfo.hrefCandidates);
+    const documents: LibraryBacklinkRelationDocument[] = [];
+    const seenTargets = new Set<string>();
+
+    for (const sourcePath of sourcePaths) {
+      if (this.libraryRootKey(sourcePath) === targetInfo.pathKey) continue;
+      const document = this.getBacklinkRelationDocumentForSourcePathSync(sourcePath);
+      if (!document) continue;
+      const documentKey = this.libraryBacklinkTargetKey(document.target);
+      if (documentKey === this.libraryBacklinkTargetKey(targetInfo.target) || seenTargets.has(documentKey)) continue;
+      seenTargets.add(documentKey);
+      documents.push(document);
+    }
+
+    return documents.sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  private async getIndexedBacklinkRelationDocuments(
+    targetInfo: {
+      target: LibraryBacklinkTarget;
+      title: string;
+      pathKey: string;
+      rawCandidates: string[];
+      hrefCandidates: string[];
+    },
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument[]> {
+    const sourcePaths = this.getIndexedBacklinkSourcePaths(targetInfo.rawCandidates, targetInfo.hrefCandidates);
+    const documents: LibraryBacklinkRelationDocument[] = [];
+    const seenTargets = new Set<string>();
+
+    for (const sourcePath of sourcePaths) {
+      if (this.libraryRootKey(sourcePath) === targetInfo.pathKey) continue;
+      const document = await this.getBacklinkRelationDocumentForSourcePath(sourcePath, loadCommandByPath);
+      if (!document) continue;
+      const documentKey = this.libraryBacklinkTargetKey(document.target);
+      if (documentKey === this.libraryBacklinkTargetKey(targetInfo.target) || seenTargets.has(documentKey)) continue;
+      seenTargets.add(documentKey);
+      documents.push(document);
+    }
+
+    return documents.sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  private getIndexedBacklinkSourcePaths(rawCandidates: string[], hrefCandidates: string[]): string[] {
+    const sourcePaths = new Set<string>();
+
+    for (const candidate of new Set(rawCandidates.map((value) => value.trim()).filter(Boolean))) {
+      for (const row of this.libraryIndexStore?.findWikiLinkHitsByRawTarget?.(candidate) ?? []) {
+        sourcePaths.add(row.sourcePath);
+      }
+    }
+
+    for (const candidate of new Set(hrefCandidates.map((value) => value.trim()).filter(Boolean))) {
+      for (const row of this.libraryIndexStore?.findLinkHitsByHref?.(candidate) ?? []) {
+        sourcePaths.add(row.sourcePath);
+      }
+    }
+
+    return Array.from(sourcePaths);
+  }
+
+  private getBacklinkRelationDocumentForSourcePathSync(
+    sourcePath: string,
+  ): LibraryBacklinkRelationDocument | null {
+    if (this.isInsidePath(this.wikiDir, sourcePath)) {
+      const sourceRelPath = this.wikiRelPathFromAbsPath(sourcePath);
+      const page = this.getWikiPage(sourceRelPath);
+      if (page) {
+        return {
+          target: { kind: 'wiki', relPath: page.relPath },
+          title: page.title,
+          content: page.content,
+        };
+      }
+    }
+
+    const reading = this.cache ? this.getReading(sourcePath) : null;
+    if (reading) {
+      return {
+        target: { kind: 'artifact', path: reading.path },
+        title: reading.title,
+        content: reading.content,
+      };
+    }
+
+    return null;
+  }
+
+  private async getBacklinkRelationDocumentForSourcePath(
+    sourcePath: string,
+    loadCommandByPath?: CommandBacklinkSourceLoader,
+  ): Promise<LibraryBacklinkRelationDocument | null> {
+    const command = await loadCommandByPath?.(sourcePath);
+    if (command) {
+      const title = command.displayName || command.name || stripMarkdownFileExtension(path.basename(command.filePath));
+      return {
+        target: { kind: 'command', path: command.filePath },
+        title,
+        content: command.content,
+      };
+    }
+
+    return this.getBacklinkRelationDocumentForSourcePathSync(sourcePath);
+  }
+
+  private libraryBacklinkTargetKey(target: LibraryBacklinkTarget): string {
+    switch (target.kind) {
+      case 'wiki':
+        return `wiki:${target.relPath}`;
+      case 'artifact':
+        return `artifact:${this.normalizePath(target.path)}`;
+      case 'command':
+        return `command:${this.normalizePath(target.path)}`;
     }
   }
 
@@ -3274,8 +3762,9 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingWikiRename(newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, timer] of this.pendingWikiUnlinks) {
-      if (path.dirname(oldAbsPath) !== newDir) continue;
+      if (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName) continue;
       clearTimeout(timer);
       this.pendingWikiUnlinks.delete(oldAbsPath);
       return oldAbsPath;
@@ -3287,7 +3776,16 @@ export class LibrarianManager extends EventEmitter {
     const oldAbsPath = this.takePendingWikiRename(absPath);
     if (!oldAbsPath) {
       traceRename('wiki-add-unmatched', { absPath });
-      this.emit('wiki:changed');
+      this.emit('wiki:changed', {
+        type: 'file-added',
+        rootPath: this.wikiDir,
+        relPath: this.wikiRelPathFromAbsPath(absPath),
+        absPath,
+        builtin: true,
+        source: 'watcher',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return;
     }
 
@@ -3313,9 +3811,19 @@ export class LibrarianManager extends EventEmitter {
     traceRename('wiki-unlink-pending', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingWikiUnlinks.delete(absPath);
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.libraryIndexStore?.removePath(absPath);
       traceRename('wiki-unlink-unmatched', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath) });
-      this.emit('wiki:changed');
       const rel = this.wikiRelPathFromAbsPath(absPath);
+      this.emit('wiki:changed', {
+        type: 'file-deleted',
+        rootPath: this.wikiDir,
+        relPath: rel,
+        absPath,
+        builtin: true,
+        source: 'watcher',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
       if (rel && !rel.startsWith('..')) this.emit('wiki:deleted', rel);
     }, 350);
     this.pendingWikiUnlinks.set(absPath, timer);
@@ -3323,8 +3831,12 @@ export class LibrarianManager extends EventEmitter {
 
   private takePendingLibraryRename(rootPath: string, newAbsPath: string): string | null {
     const newDir = path.dirname(newAbsPath);
+    const newName = path.basename(newAbsPath);
     for (const [oldAbsPath, pending] of this.pendingLibraryUnlinks) {
-      if (pending.rootPath !== rootPath || path.dirname(oldAbsPath) !== newDir) continue;
+      if (
+        pending.rootPath !== rootPath ||
+        (path.dirname(oldAbsPath) !== newDir && path.basename(oldAbsPath) !== newName)
+      ) continue;
       clearTimeout(pending.timer);
       this.pendingLibraryUnlinks.delete(oldAbsPath);
       return oldAbsPath;
@@ -3336,7 +3848,16 @@ export class LibrarianManager extends EventEmitter {
     const oldAbsPath = this.takePendingLibraryRename(rootPath, absPath);
     if (!oldAbsPath) {
       traceRename('library-add-unmatched', { rootPath, absPath });
-      this.emit('library:changed', rootPath);
+      this.emit('library:changed', rootPath, {
+        type: 'file-added',
+        rootPath,
+        relPath: this.libraryRelPathFromAbsPath(rootPath, absPath),
+        absPath,
+        builtin: false,
+        source: 'watcher',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(rootPath, absPath, true) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return;
     }
 
@@ -3362,8 +3883,18 @@ export class LibrarianManager extends EventEmitter {
     traceRename('library-unlink-pending', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingLibraryUnlinks.delete(absPath);
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.libraryIndexStore?.removePath(absPath);
       traceRename('library-unlink-unmatched', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath) });
-      this.emit('library:changed', rootPath);
+      this.emit('library:changed', rootPath, {
+        type: 'file-deleted',
+        rootPath,
+        relPath: this.libraryRelPathFromAbsPath(rootPath, absPath),
+        absPath,
+        builtin: false,
+        source: 'watcher',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
     }, 350);
     this.pendingLibraryUnlinks.set(absPath, { rootPath, timer });
   }
@@ -3393,18 +3924,43 @@ export class LibrarianManager extends EventEmitter {
     this.wikiWatcher = chokidar.watch([
       path.join(wikiRoot, '**/*.md'),
       path.join(wikiRoot, '**/*.markdown'),
+      path.join(wikiRoot, '**/*.mdx'),
+      path.join(wikiRoot, '**/*.html'),
+      path.join(wikiRoot, '**/*.htm'),
+      path.join(wikiRoot, '**/*.css'),
     ], {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
     });
 
-    this.wikiWatcher.on('add', (absPath: string) => this.handleWikiAdd(absPath));
-    this.wikiWatcher.on('change', () => this.emit('wiki:changed'));
+    this.wikiWatcher.on('add', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.handleWikiAdd(absPath);
+      else this.emit('library:changed', this.wikiDir);
+    });
+    this.wikiWatcher.on('change', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') {
+        this.emit('wiki:changed', {
+          type: 'file-changed',
+          rootPath: this.wikiDir,
+          relPath: this.wikiRelPathFromAbsPath(absPath),
+          absPath,
+          builtin: true,
+          source: 'watcher',
+          detectedAt: Date.now(),
+          page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', this.wikiDir);
+      }
+    });
     // On unlink, also emit `wiki:deleted` with the relPath so downstream
     // consumers (RecentManager) can prune stale entries when the delete
     // happens outside the app — Finder trash, `rm`, `git checkout`, etc.
-    this.wikiWatcher.on('unlink', (absPath: string) => this.scheduleWikiUnlink(absPath));
+    this.wikiWatcher.on('unlink', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.scheduleWikiUnlink(absPath);
+      else this.emit('library:changed', this.wikiDir);
+    });
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
@@ -3412,9 +3968,23 @@ export class LibrarianManager extends EventEmitter {
     const absPath = this.resolveWikiPageWritePath(relPath);
     if (!absPath) return { ok: false, reason: 'not-found' };
     try {
-      const result = writeTextFileWithConflictGuard(absPath, content, expectedVersion);
+      const previousContent = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : '';
+      const nextContent = isMarkdownDocumentPath(absPath)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      const result = writeTextFileWithConflictGuard(absPath, nextContent, expectedVersion);
       if (!result.ok) return result;
-      this.emit('wiki:changed');
+      this.wikiFileMetadataCache?.delete(absPath);
+      this.emit('wiki:changed', {
+        type: 'file-changed',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+        page: this.fileNodeFromPath(this.wikiDir, absPath) ?? undefined,
+      } satisfies LibraryChangeEvent);
       return result;
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);
@@ -3442,6 +4012,7 @@ export class LibrarianManager extends EventEmitter {
     if (existingTargetAbs && !this.isSameExistingPath(existingTargetAbs, oldAbs)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
+      this.removeLibraryIndexFilePaths([oldAbs]);
       this.emitRename({
         rootPath: this.wikiDir,
         oldRelPath: relPath,
@@ -3466,7 +4037,16 @@ export class LibrarianManager extends EventEmitter {
     if (!absPath) return false;
     try {
       await shell.trashItem(absPath);
-      this.emit('wiki:changed');
+      this.removeLibraryIndexFilePaths([absPath]);
+      this.emit('wiki:changed', {
+        type: 'file-deleted',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+      } satisfies LibraryChangeEvent);
       this.emit('wiki:deleted', relPath);
       return true;
     } catch (error) {
@@ -3479,7 +4059,6 @@ export class LibrarianManager extends EventEmitter {
     const root = this.resolveLibraryRootForWrite(rootPath);
     const normalizedDir = this.normalizeLibraryRelPath(dirRelPath);
     if (!root || !normalizedDir) return false;
-    if (root.builtin && DEFAULT_LIBRARY_FOLDER_ID_SET.has(normalizedDir)) return false;
 
     const dirPath = path.resolve(root.rootPath, normalizedDir);
     if (!this.isInsidePath(root.rootPath, dirPath)) return false;
@@ -3488,9 +4067,11 @@ export class LibrarianManager extends EventEmitter {
     const deletedWikiRelPaths = root.builtin
       ? this.flattenWikiFiles(this.scanMarkdownTree(root.rootPath, dirPath)).map((page) => page.relPath)
       : [];
+    const deletedIndexFilePaths = this.collectLibraryIndexFilePaths(root.rootPath, dirPath);
 
     try {
       await shell.trashItem(dirPath);
+      this.removeLibraryIndexFilePaths(deletedIndexFilePaths);
       if (root.builtin) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
@@ -3506,6 +4087,62 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  async deleteExternalLibraryFile(filePath: string): Promise<boolean> {
+    const normalizedPath = this.normalizePath(this.expandPath(filePath));
+
+    let canonicalPath: string;
+    try {
+      canonicalPath = fs.realpathSync(normalizedPath);
+    } catch {
+      return false;
+    }
+
+    const rootMatch = [this.wikiDir, ...this.getSafeLibraryRootPaths()].map((savedRoot) => {
+      const normalizedRoot = this.normalizePath(this.expandPath(savedRoot));
+      const rootKey = this.libraryRootKey(normalizedRoot);
+      const relative = path.relative(rootKey, canonicalPath);
+      return {
+        normalizedRoot,
+        rootKey,
+        relative,
+      };
+    }).find(({ relative }) => !!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    if (!rootMatch || !fs.existsSync(canonicalPath) || !fs.statSync(canonicalPath).isFile()) return false;
+
+    try {
+      await shell.trashItem(canonicalPath);
+      this.removeLibraryIndexFilePaths([canonicalPath]);
+      if (isLibraryTextDocumentPath(canonicalPath)) {
+        this.emit('library:changed', rootMatch.normalizedRoot, {
+          type: 'file-deleted',
+          rootPath: rootMatch.normalizedRoot,
+          relPath: stripMarkdownFileExtension(this.toPortableRelPath(rootMatch.relative)),
+          absPath: canonicalPath,
+          builtin: rootMatch.normalizedRoot === this.wikiDir,
+          source: 'app',
+          detectedAt: Date.now(),
+        } satisfies LibraryChangeEvent);
+      } else {
+        this.emit('library:changed', rootMatch.normalizedRoot);
+      }
+      return true;
+    } catch (error) {
+      log.error(`Error trashing external library file ${canonicalPath}:`, error);
+      return false;
+    }
+  }
+
+  private resolveLibraryFilePathFromRelPath(rootPath: string, relPath: string): string {
+    const exact = path.resolve(rootPath, relPath);
+    if (isLibraryTextDocumentPath(exact)) return exact;
+    const markdownCandidates = [
+      path.resolve(rootPath, `${relPath}.md`),
+      path.resolve(rootPath, `${relPath}.markdown`),
+      path.resolve(rootPath, `${relPath}.mdx`),
+    ];
+    return markdownCandidates.find((candidate) => fs.existsSync(candidate)) ?? markdownCandidates[0];
+  }
+
   moveLibraryItem(rootPath: string, kind: LibraryMoveKind, sourceRelPath: string, targetDirRelPath: string, targetRootPath = rootPath): string | null {
     const sourceRoot = this.resolveLibraryRootForWrite(rootPath);
     const targetRoot = this.resolveLibraryRootForWrite(targetRootPath);
@@ -3518,7 +4155,9 @@ export class LibrarianManager extends EventEmitter {
     if (!targetRoot.builtin && !this.canWriteDirectory(targetRoot.rootPath)) return null;
     if (sourceRoot.builtin && kind === 'dir' && DEFAULT_LIBRARY_FOLDER_ID_SET.has(sourceRel)) return null;
 
-    const sourceAbs = path.resolve(sourceRoot.rootPath, kind === 'file' ? `${sourceRel}.md` : sourceRel);
+    const sourceAbs = kind === 'file'
+      ? this.resolveLibraryFilePathFromRelPath(sourceRoot.rootPath, sourceRel)
+      : path.resolve(sourceRoot.rootPath, sourceRel);
     const targetDirAbs = path.resolve(targetRoot.rootPath, targetDirRel);
     if (!this.isInsidePath(sourceRoot.rootPath, sourceAbs) || !this.isInsidePath(targetRoot.rootPath, targetDirAbs)) return null;
     if (!fs.existsSync(sourceAbs)) return null;
@@ -3538,16 +4177,32 @@ export class LibrarianManager extends EventEmitter {
     if (sourceAbs === targetAbs) return sourceRel;
     if (fs.existsSync(targetAbs)) return null;
 
-    const deletedWikiRelPaths = sourceRoot.builtin
+    const sourceIsMarkdownDocument = getLibraryTextDocumentKind(sourceAbs) === 'markdown';
+    const sourceIsWikiMove = sourceRoot.builtin && (kind === 'dir' || sourceIsMarkdownDocument);
+    const deletedWikiRelPaths = sourceIsWikiMove
       ? kind === 'file'
         ? [sourceRel]
         : this.flattenWikiFiles(this.scanMarkdownTree(sourceRoot.rootPath, sourceAbs)).map((page) => page.relPath)
       : [];
+    const sourceIndexFilePaths = this.collectLibraryIndexFilePaths(sourceRoot.rootPath, sourceAbs);
 
     try {
       this.moveLibraryPathSync(sourceAbs, targetAbs, kind);
+      this.removeLibraryIndexFilePaths(sourceIndexFilePaths);
       const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(targetRoot.rootPath, targetAbs)));
-      if (sourceRoot.builtin) {
+      if (!crossRoot) {
+        this.emitRename({
+          rootPath: sourceRoot.rootPath,
+          oldRelPath: sourceRel,
+          newRelPath,
+          oldAbsPath: sourceAbs,
+          newAbsPath: targetAbs,
+          builtin: sourceRoot.builtin,
+          source: 'app',
+          detectedAt: Date.now(),
+        });
+      }
+      if (sourceIsWikiMove) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
           this.emit('wiki:deleted', relPath);
@@ -3557,7 +4212,8 @@ export class LibrarianManager extends EventEmitter {
       }
       if (crossRoot) {
         if (targetRoot.builtin) {
-          this.emit('wiki:changed');
+          if (sourceIsMarkdownDocument) this.emit('wiki:changed');
+          else this.emit('library:changed', targetRoot.rootPath);
         } else {
           this.emit('library:changed', targetRoot.rootPath);
         }
@@ -3585,11 +4241,21 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
+      const page = { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
       // Emit synchronously — chokidar can lag
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
-      this.emit('wiki:changed');
-      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      this.emit('wiki:changed', {
+        type: 'file-added',
+        rootPath: this.wikiDir,
+        relPath,
+        absPath,
+        builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
+        page,
+      } satisfies LibraryChangeEvent);
+      return page;
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
@@ -3663,8 +4329,18 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
-      this.emit('library:changed', root.rootPath);
-      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      const page = { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      this.emit('library:changed', root.rootPath, {
+        type: 'file-added',
+        rootPath: root.rootPath,
+        relPath,
+        absPath,
+        builtin: false,
+        source: 'app',
+        detectedAt: Date.now(),
+        page,
+      } satisfies LibraryChangeEvent);
+      return page;
     } catch (error) {
       log.error(`Error creating library file ${relPath}:`, error);
       return null;
@@ -3705,7 +4381,11 @@ export class LibrarianManager extends EventEmitter {
     if (!normalizedPath) return { ok: false, reason: 'not-found' };
 
     try {
-      const result = writeTextFileWithConflictGuard(normalizedPath, content, expectedVersion);
+      const previousContent = fs.existsSync(normalizedPath) ? fs.readFileSync(normalizedPath, 'utf-8') : '';
+      const nextContent = isMarkdownDocumentPath(normalizedPath)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      const result = writeTextFileWithConflictGuard(normalizedPath, nextContent, expectedVersion);
       if (!result.ok) return result;
 
       // Re-parse metadata since content may have changed title/context
@@ -3743,6 +4423,7 @@ export class LibrarianManager extends EventEmitter {
       // Remove from cache
       this.cache.delete(normalizedPath);
       this.saveIndex();
+      this.libraryIndexStore?.removePath(normalizedPath);
 
       // Emit removal event so UI can refresh
       this.emit('reading-removed', normalizedPath);
@@ -3899,13 +4580,15 @@ export class LibrarianManager extends EventEmitter {
    * Check if Librarian setup wizard has been completed.
    */
   isSetupComplete(): boolean {
-    return this.settings.librarianSetupComplete === true;
+    this.ensureUserScopedSettingsLoaded();
+    return this.settings.librarianSetupComplete === true || hasExistingLibraryContent(this.wikiDir);
   }
 
   /**
    * Mark Librarian setup as complete.
    */
   setSetupComplete(complete: boolean): void {
+    this.ensureUserScopedSettingsLoaded();
     this.settings.librarianSetupComplete = complete;
     this.saveSettings();
   }
@@ -4656,32 +5339,11 @@ You may find the reading changes what you think matters about the task.`;
    * This is the single source of truth for Librarian instructions.
    */
   private getLibrarianCommandPath(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md');
-  }
-
-  private getFieldTheoryMarkdownCommandPath(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'commands', 'write-ft-markdown.md');
-  }
-
-  private writeFieldTheoryMarkdownCommandFile(): boolean {
-    const commandPath = this.getFieldTheoryMarkdownCommandPath();
-    const commandDir = path.dirname(commandPath);
-
-    try {
-      if (!fs.existsSync(commandDir)) {
-        fs.mkdirSync(commandDir, { recursive: true });
-      }
-
-      fs.writeFileSync(commandPath, `${buildFieldTheoryMarkdownCommandContent().trim()}\n`);
-      return true;
-    } catch (error) {
-      log.error('Failed to write Field Theory Markdown command file:', error);
-      return false;
-    }
+    return path.join(commandsDir(), 'librarian.md');
   }
 
   /**
-   * Write the full Librarian instructions to ~/.fieldtheory/commands/librarian.md
+   * Write the full Librarian instructions to the default Field Theory commands directory.
    * This is the single source of truth that CLAUDE.md references.
    */
   private writeLibrarianCommandFile(): boolean {
@@ -4761,7 +5423,6 @@ You may find the reading changes what you think matters about the task.
    */
   private generateLibrarianSectionV2(): string {
     const commandPath = this.getLibrarianCommandPath();
-    const markdownCommandPath = this.getFieldTheoryMarkdownCommandPath();
 
     return `${this.CLAUDE_MD_START_MARKER}
 ## Librarian (Field Theory)
@@ -4772,11 +5433,6 @@ Before non-trivial implementations, provide a short reading via the Librarian:
 ${commandPath}
 
 Store each reading in \`~/.fieldtheory/librarian/artifacts/\` with a unique filename.
-
-When writing normal Field Theory Markdown outside Librarian artifacts, follow:
-
-[run this command: write-ft-markdown.md]
-${markdownCommandPath}
 
 This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
 ${this.CLAUDE_MD_END_MARKER}`;
@@ -4790,10 +5446,6 @@ ${this.CLAUDE_MD_END_MARKER}`;
     // First write the command file (single source of truth)
     if (!this.writeLibrarianCommandFile()) {
       log.error('Failed to write command file, aborting CLAUDE.md update');
-      return false;
-    }
-    if (!this.writeFieldTheoryMarkdownCommandFile()) {
-      log.error('Failed to write Field Theory Markdown command file, aborting CLAUDE.md update');
       return false;
     }
 
@@ -5112,14 +5764,10 @@ After writing, update the job file in ~/.fieldtheory/librarian/jobs/ setting "st
    * This allows Claude to read figures from Field Theory's app data directory.
    */
   private getScreenshotPermission(): string {
-    const figuresPath = path.join(
-      os.homedir(),
-      'Library',
-      'Application Support',
-      'fieldtheory-mac',
-      'figures',
-      '*'
-    );
+    const figuresDir = this.userDataManager?.isLoggedIn()
+      ? this.userDataManager.getUserDataPath('figures')
+      : path.join(app.getPath('userData'), 'figures');
+    const figuresPath = path.join(figuresDir, '*');
     return `Read(${figuresPath})`;
   }
 
@@ -5787,19 +6435,28 @@ exit 0
    * This runs on startup so users don't need to configure anything.
    */
   private ensureCentralArtifactsDir(): void {
-    // Use global path - hooks write artifacts here, not per-user path
-    const globalLibrarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
-    const artifactsDir = path.join(globalLibrarianDir, 'artifacts');
+    const artifactsDir = this.getCentralArtifactsDir();
 
     // Create directory if it doesn't exist
     if (!fs.existsSync(artifactsDir)) {
       fs.mkdirSync(artifactsDir, { recursive: true });
     }
+    const artifactsMigrated = this.migrateUserScopedArtifactsToCentral(artifactsDir);
     this.ensureCentralArtifactsReadme(artifactsDir);
 
-    // Add to watched dirs if not already present
-    if (!this.settings.watchedDirs.includes(artifactsDir)) {
-      this.settings.watchedDirs.push(artifactsDir);
+    const watchedDirs = artifactsMigrated
+      ? this.settings.watchedDirs.filter((dirPath) => !this.isUserScopedArtifactsDir(dirPath))
+      : [...this.settings.watchedDirs];
+    let changed = watchedDirs.length !== this.settings.watchedDirs.length;
+
+    // Add to watched dirs if not already present.
+    if (!watchedDirs.some((dirPath) => this.libraryRootKey(dirPath) === this.libraryRootKey(artifactsDir))) {
+      watchedDirs.push(artifactsDir);
+      changed = true;
+    }
+
+    if (changed) {
+      this.settings.watchedDirs = watchedDirs;
       this.saveSettings();
     }
   }
@@ -5868,7 +6525,7 @@ PreToolUse Auto-Approve Hook for Field Theory Read Permissions
 
 Auto-approves Read/Write/Edit operations for:
 - ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
-- ~/.fieldtheory/commands/* and .cursor/commands/* (portable commands)
+- ~/.fieldtheory/library/Commands/* and .cursor/commands/* (portable commands)
 
 This is separate from Librarian functionality.
 Never blocks - only auto-approves or passes through to normal flow.
@@ -5899,7 +6556,7 @@ def main():
             sys.exit(0)
 
         # Check for portable commands.
-        if "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
+        if "/.fieldtheory/library/Commands/" in file_path or "/.cursor/commands/" in file_path:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -7079,16 +7736,13 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   /**
    * Stop all watchers.
    */
-  destroy(): void {
-    for (const [, watcher] of this.watchers) {
-      watcher.close();
-    }
+  async destroy(): Promise<void> {
+    await Promise.allSettled(Array.from(this.watchers.values(), (watcher) => watcher.close()));
     this.watchers.clear();
-    for (const [, watcher] of this.libraryRootWatchers) {
-      watcher.close();
-    }
+    await Promise.allSettled(Array.from(this.libraryRootWatchers.values(), (watcher) => watcher.close()));
     this.libraryRootWatchers.clear();
     this.clearPendingRenameTimers();
+    this.libraryIndexStore?.close();
   }
 
   // ===========================================================================
@@ -7652,10 +8306,6 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     try {
       // 1. Shared setup: directories, rule file, config, watched dirs
       this.ensureCentralLibrarianSetup();
-      if (!this.writeFieldTheoryMarkdownCommandFile()) {
-        log.error('Failed to write Field Theory Markdown command file, aborting Codex hook install');
-        return false;
-      }
 
       // 2. Ensure ~/.codex directory exists
       const codexDir = path.join(os.homedir(), '.codex');
@@ -7705,11 +8355,6 @@ When you receive instructions prefixed with [STATE-ENFORCED] or [LIBRARIAN],
 follow them before proceeding. These create short reflective artifacts.
 Artifacts go in ~/.fieldtheory/librarian/artifacts/.
 After writing, update the job file in ~/.fieldtheory/librarian/jobs/ setting "status" to "done".
-
-When writing normal Field Theory Markdown outside Librarian artifacts, follow:
-
-[run this command: write-ft-markdown.md]
-${this.getFieldTheoryMarkdownCommandPath()}
 <!-- End Field Theory Librarian -->
 `;
       agentsMd = managedSectionUpsert(agentsMd, 'Field Theory Librarian - managed section', librarianSection);

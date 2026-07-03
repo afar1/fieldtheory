@@ -16,6 +16,7 @@ export type HotkeyId =
   | 'transcription'
   | 'transcriptionSecondary'
   | 'abandonRecording'
+  | 'globalImprove'
   | 'superPaste'
   | 'commandLauncher'
   | 'scratchpad'
@@ -92,6 +93,13 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
     preferenceKey: 'abandonRecordingHotkey',
     description: 'Cancel recording',
     category: 'transcription',
+  },
+  globalImprove: {
+    id: 'globalImprove',
+    defaultKey: 'Command+Shift+I',
+    preferenceKey: null,
+    description: 'Improve selected text',
+    category: 'text',
   },
   superPaste: {
     id: 'superPaste',

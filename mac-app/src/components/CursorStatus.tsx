@@ -58,6 +58,7 @@ export default function CursorStatus() {
   // Stack count state for pipe indicator (screenshots during recording).
   const [pipeCount, setPipeCount] = useState<number>(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
+  const stackAnimationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Hide labels setting - show only colored dots without text.
   const [hideLabels, setHideLabels] = useState<boolean>(false);
@@ -201,30 +202,40 @@ export default function CursorStatus() {
     if (!window.cursorStatusAPI?.onStackChange) return;
     
     window.cursorStatusAPI.onStackChange((count) => {
-      if (count < pipeCount) {
-        // Count decreased - reset for new recording.
-        setPipeCount(count);
-        setAnimatedPipes(new Set());
-      } else if (count > pipeCount) {
-        // New screenshot - animate in the new pipe.
-        setPipeCount(count);
-        // Trigger animation after a brief delay so CSS sees the change.
-        setTimeout(() => {
-          setAnimatedPipes(prev => {
-            const next = new Set(prev);
-            for (let i = pipeCount; i < count; i++) {
-              next.add(i);
-            }
-            return next;
-          });
-        }, 50);
-      }
+      setPipeCount((previousCount) => {
+        if (count < previousCount) {
+          // Count decreased - reset for new recording.
+          setAnimatedPipes(new Set());
+          return count;
+        }
+        if (count > previousCount) {
+          // Trigger animation after a brief delay so CSS sees the change.
+          if (stackAnimationTimeoutRef.current) {
+            clearTimeout(stackAnimationTimeoutRef.current);
+          }
+          stackAnimationTimeoutRef.current = setTimeout(() => {
+            stackAnimationTimeoutRef.current = null;
+            setAnimatedPipes(prev => {
+              const next = new Set(prev);
+              for (let i = previousCount; i < count; i++) {
+                next.add(i);
+              }
+              return next;
+            });
+          }, 50);
+        }
+        return count;
+      });
     });
     
     return () => {
+      if (stackAnimationTimeoutRef.current) {
+        clearTimeout(stackAnimationTimeoutRef.current);
+        stackAnimationTimeoutRef.current = null;
+      }
       window.cursorStatusAPI?.removeAllListeners('cursor-status-stack');
     };
-  }, [pipeCount]);
+  }, []);
   
   // Listen for hide labels setting changes.
   useEffect(() => {

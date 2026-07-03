@@ -6,11 +6,11 @@
 
 set -e
 
-SCRIPT_DIR="$(dirname "$0")"
-NATIVE_DIR="$SCRIPT_DIR/../electron/native"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+NATIVE_DIR="$(cd "$SCRIPT_DIR/../electron/native" && pwd)"
 BUILD_DIR="$NATIVE_DIR/build"
 
-echo "🔨 Building FieldTheoryHelper..."
+echo "🔨 Building FieldTheory native tools..."
 
 # Check if we're on macOS.
 if [[ "$OSTYPE" != "darwin"* ]]; then
@@ -38,16 +38,21 @@ swift build -c release
 
 # Create build output directory.
 mkdir -p "$BUILD_DIR"
+rm -f "$BUILD_DIR/FieldTheoryLauncher"
 
-# Copy the built binary.
+# Copy the built binaries.
 cp ".build/release/FieldTheoryHelper" "$BUILD_DIR/"
+
+codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryHelper"
 
 echo "✅ Built FieldTheoryHelper at $BUILD_DIR/FieldTheoryHelper"
 
-# Verify the binary.
-if [[ -x "$BUILD_DIR/FieldTheoryHelper" ]]; then
-    echo "   Binary is executable ✓"
-else
-    echo "❌ Binary is not executable"
-    exit 1
-fi
+# Verify the binaries.
+for binary in FieldTheoryHelper; do
+    if [[ -x "$BUILD_DIR/$binary" ]]; then
+        echo "   $binary is executable ✓"
+    else
+        echo "❌ $binary is not executable"
+        exit 1
+    fi
+done

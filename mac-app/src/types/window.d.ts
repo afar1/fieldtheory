@@ -199,6 +199,25 @@ interface GazeAPI {
  * Transcription status.
  */
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+interface AutoImproveModelOptions {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+}
+interface AutoImproveContextFile {
+  path: string;
+  enabled: boolean;
+}
+interface AutoImproveProviderStatus {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+}
 
 /**
  * Model download status.
@@ -229,6 +248,20 @@ interface SoundOption {
   category: string;
 }
 
+export type ParakeetSetupErrorCode =
+  | 'missing-python'
+  | 'unsupported-python'
+  | 'python-venv-failed'
+  | 'setup-failed';
+
+export interface ParakeetSetupError {
+  code: ParakeetSetupErrorCode;
+  summary: string;
+  detail: string;
+  recoveryCommand: string;
+  moreInfo: string;
+}
+
 export interface ParakeetEngineStatus {
   engine: 'parakeet' | 'parakeet-multilingual';
   label: string;
@@ -237,6 +270,7 @@ export interface ParakeetEngineStatus {
   lastError: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+  setupError?: ParakeetSetupError | null;
 }
 
 export type ParakeetSetupStage =
@@ -293,6 +327,18 @@ interface TranscribeAPI {
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
   getAutoImprove?: () => Promise<boolean>;
   setAutoImprove?: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider?: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider?: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus?: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions?: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions?: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences?: () => Promise<string>;
+  setAutoImproveWritingPreferences?: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles?: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping?: () => Promise<boolean>;
+  setLiveTyping?: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
@@ -304,7 +350,7 @@ interface TranscribeAPI {
   getParakeetStatus?: () => Promise<ParakeetStatus | null>;
   isAppleSilicon?: () => Promise<boolean>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }>;
   uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
@@ -432,6 +478,25 @@ interface TargetAppInfo {
   runningApps: RunningApp[];
 }
 
+interface LocalLlmModelInfo {
+  name: string;
+  filename: string;
+  sizeBytes: number;
+  description: string;
+  license: string;
+  sourceUrl: string;
+  baseModelUrl: string;
+  ollamaTag?: string;
+}
+
+interface LocalLlmHealth {
+  status: 'ready' | 'missing' | 'corrupt';
+  modelPath: string;
+  fileSizeBytes: number | null;
+  expectedSizeBytes: number;
+  minValidSizeBytes: number;
+}
+
 /**
  * The clipboard API exposed by the preload script.
  */
@@ -441,10 +506,12 @@ interface ClipboardAPI {
   deleteItem: (id: number) => Promise<void>;
   restoreItem?: (item: ClipboardItem) => Promise<number>;
   pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
+  writeText?: (text: string) => Promise<{ success?: boolean; error?: string }>;
 
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath?: () => Promise<string | null>;
+  savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
@@ -460,6 +527,7 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowLibrary?: (callback: () => void) => () => void;
   onShowTranscriptHistory?: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
   onCollapseImmersive?: (callback: () => void) => () => void;
@@ -480,6 +548,21 @@ interface ClipboardAPI {
   getUniqueStacks?: () => Promise<StackInfo[]>;
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
+
+  // Local LLM model management
+  getLocalLLMModels?: () => Promise<Record<string, LocalLlmModelInfo>>;
+  getLocalLLMStatus?: () => Promise<Record<string, boolean>>;
+  getLocalLLMHealth?: () => Promise<Record<string, LocalLlmHealth>>;
+  getLocalLLMSelected?: () => Promise<string>;
+  setLocalLLMSelected?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }>;
+  deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  getUseLocalLLM?: () => Promise<boolean>;
+  setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMeetingSummaryPrompt?: () => Promise<string>;
+  saveMeetingSummaryPrompt?: (prompt: string) => Promise<{ success: boolean; prompt?: string; error?: string }>;
+  resetMeetingSummaryPrompt?: () => Promise<{ success: boolean; prompt: string; error?: string }>;
+  onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
@@ -608,6 +691,7 @@ interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 }
 
 /**
@@ -657,6 +741,7 @@ interface OnboardingAPI {
   getState: () => Promise<OnboardingState>;
   setStep: (step: number) => Promise<boolean>;
   complete: () => Promise<boolean>;
+  completeLocalSetup: () => Promise<boolean>;
   skip: () => Promise<boolean>;
   reset: () => Promise<boolean>;
   checkModelStatus: () => Promise<{ downloaded: boolean }>;
@@ -675,7 +760,8 @@ interface OnboardingAPI {
  */
 interface UpdaterAPI {
   getVersion: () => string;
-  getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null>;
+  isEnabled: () => boolean;
+  getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null>;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
@@ -685,6 +771,7 @@ interface UpdaterAPI {
   onUpdateNotAvailable: (callback: () => void) => () => void;
   onDownloadProgress: (callback: (percent: number) => void) => () => void;
   onUpdateDownloaded: (callback: (info: UpdateInfo) => void) => () => void;
+  onInstalling: (callback: () => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
 }
 
@@ -756,20 +843,37 @@ interface TaggedDocsAPI {
  */
 type AuthTestState = 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT';
 
+interface AuthSessionState {
+  authenticated: boolean;
+  expires_at: number | null;
+  expiresAt: number | null;
+  tier: 'free' | 'pro';
+  callsign: string | null;
+  displayName?: string;
+  user: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+  } | null;
+}
+
 interface AuthAPI {
+  isConfigured?: () => Promise<boolean>;
   prepareForNewLogin: () => Promise<void>;
   requestOtp: (email: string) => Promise<{ error: string | null }>;
-  verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
+  verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   signOut: () => Promise<{ error: string | null }>;
-  getSession: () => Promise<any | null>;
-  onSessionChanged?: (callback: (session: any | null) => void) => () => void;
+  getSession: () => Promise<AuthSessionState | null>;
+  getCallsign?: () => Promise<string | null>;
+  onSessionChanged?: (callback: (session: AuthSessionState | null) => void) => () => void;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
-  signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
+  signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
   updateFullName?: (fullName: string) => Promise<{ error: string | null }>;
-  setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
+  setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
   deleteAccount?: () => Promise<{ error: string | null }>;
   // Auth state simulator (dev only)
   simulateState?: (state: AuthTestState, options?: { tier?: 'free' | 'pro' }) => Promise<{ success: boolean; message: string }>;
@@ -959,6 +1063,7 @@ interface SocialAPI {
   getFeedbackReplies: (feedbackId: string) => Promise<SocialMessage[]>;
   updateFeedbackStatus: (feedbackId: string, status: 'open' | 'resolved' | 'archived') => Promise<boolean>;
   getActivityLog: (feedbackId: string) => Promise<ActivityLogEntry[]>;
+  setFeedbackRealtimeActive: (active: boolean) => Promise<boolean>;
   
   // Contact operations
   getContacts: () => Promise<SocialContact[]>;
@@ -1098,6 +1203,8 @@ interface ShellAPI {
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fullPath: string) => Promise<void>;
   setRepresentedFilename: (fullPath: string) => Promise<void>;
+  pasteIntoCodexInput?: (text: string) => Promise<{ success: boolean; error?: string; delivery?: string }>;
+  openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
 }
 
 type AgentImproveTool = 'codex' | 'claude';
@@ -1122,12 +1229,143 @@ interface AgentImproveAPI {
   launch: (request: AgentImproveLaunchRequest) => Promise<AgentImproveLaunchResult>;
 }
 
+type LocalCommandRunMode = 'document' | 'selection';
+
+interface LocalCommandRunRequest {
+  commandName?: string;
+  customInstruction?: string;
+  mode?: LocalCommandRunMode;
+  selection?: {
+    start?: number;
+    end?: number;
+    text?: string;
+  } | null;
+  useMemory?: boolean;
+}
+
+interface LocalCommandRunResult {
+  success: boolean;
+  error?: string;
+  filePath?: string;
+  commandName?: string;
+  mode?: LocalCommandRunMode;
+  runId?: string;
+}
+
+interface LocalCommandStatus {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  detail?: string;
+  eventKind?: 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
+  commandName?: string;
+  filePath?: string;
+  mode?: LocalCommandRunMode;
+  runId?: string;
+  phase?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  changedLines?: number;
+  changedBytes?: number;
+  error?: string;
+  updatedAt: number;
+}
+
+interface ReplaceSelectedMarkdownTextRequest {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
+}
+
+type MaxwellRunStatus =
+  | 'pending'
+  | 'generated'
+  | 'success'
+  | 'generation_error'
+  | 'selection_error'
+  | 'save_conflict'
+  | 'save_error'
+  | 'cancelled'
+  | 'reverted';
+
+type MaxwellRunMode = 'document' | 'selection';
+type MaxwellTargetType = 'wiki' | 'reading';
+
+interface MaxwellRunSummary {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: MaxwellRunStatus;
+  commandName: string;
+  targetPath: string;
+  targetRelPath: string | null;
+  targetType: MaxwellTargetType;
+  mode: MaxwellRunMode;
+  summary: string | null;
+  errorMessage: string | null;
+  model: string | null;
+  harness: string | null;
+  memoryUsed: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+type MaxwellUndoFailureReason =
+  | 'not-ready'
+  | 'not-found'
+  | 'not-applied'
+  | 'not-reverted'
+  | 'conflict'
+  | 'blocked'
+  | 'save-error'
+  | 'error';
+
+type MaxwellRedoFailureReason = MaxwellUndoFailureReason;
+
+type MaxwellUndoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellUndoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellRedoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellCancelResult = {
+  success: boolean;
+  error?: string;
+  run?: MaxwellRunSummary;
+};
+
+type MaxwellMemoryState = {
+  enabled: boolean;
+  content: string;
+  path: string;
+  updatedAt: number | null;
+  maxChars: number;
+};
+
+type MaxwellMemorySaveRequest = {
+  enabled: boolean;
+  content: string;
+};
+
+type MaxwellMemorySaveResult = {
+  success: boolean;
+  error?: string;
+  memory?: MaxwellMemoryState;
+};
+
 /**
  * Diagnostics API for system diagnostics.
  */
 interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
+  appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  appendScrollDiagnostics: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  getRenderedEditorDebugLogPath: () => Promise<string>;
+  getScrollDiagnosticsLogPath: () => Promise<string>;
+  clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
+  clearScrollDiagnosticsLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 /**
@@ -1149,6 +1387,12 @@ interface PortableCommandInfo {
   name: string;           // Command name (filename without extension)
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
+  lastModified: number;   // File modification time
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
 }
 
 /**
@@ -1212,9 +1456,14 @@ interface HandoffInfo {
 }
 
 interface FieldTheoryMarkdownTarget {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
+  selectionStart?: number;
+  selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 }
 
 interface ActiveLibraryFileContext {
@@ -1223,12 +1472,76 @@ interface ActiveLibraryFileContext {
   relPath: string;
   filePath: string;
   title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
+}
+
+type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+
+interface MeetingSession {
+  meetingId: string;
+  title: string;
+  type: 'wiki' | 'external';
+  filePath: string;
+  relPath: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: MeetingStatus;
+  audioPath: string | null;
+  transcriptPath: string | null;
+  rawTranscriptPath: string | null;
+  speakerDiarizationSupported: boolean;
+  summaryRunId?: string;
+  summaryError?: string;
+}
+
+interface MeetingActionResult {
+  success: boolean;
+  error?: string;
+  session?: MeetingSession;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryRunId?: string;
+  summaryError?: string;
+}
+
+interface LauncherFileInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+interface LauncherFileSearchResult {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+}
+
+interface LauncherFileIconResult {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+}
+
+interface LauncherSettings {
+  rootSearchEnabledKinds: Record<string, boolean>;
 }
 
 interface MarkdownPreview {
   title: string;
   filePath: string;
   content: string;
+}
+
+interface PortableCommandDirectoryInfo {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
 }
 
 type LauncherPreviewPayload =
@@ -1246,6 +1559,7 @@ interface CommandsAPI {
   setDirectory: (directoryPath: string | null) => Promise<{ success: boolean; error?: string }>;
   browseDirectory: () => Promise<string | null>;
   getCommands: () => Promise<PortableCommandInfo[]>;
+  getCommandDirectories: () => Promise<PortableCommandDirectoryInfo[]>;
   refreshCommands: () => Promise<PortableCommandInfo[]>;
   getCommandContent: (commandName: string) => Promise<{ content: string; filePath: string } | null>;
   onCommandsChanged: (callback: (commands: PortableCommandInfo[]) => void) => () => void;
@@ -1268,22 +1582,49 @@ interface CommandsAPI {
   renameCommand: (oldFilePath: string, newName: string) => Promise<string | null>;
 
   // Command launcher (Cmd+Shift+K)
-  invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
+  invokeCommand?: (commandName: string, traceContext?: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>;
+  getLauncherFileIcon?: (filePath: string) => Promise<LauncherFileIconResult>;
+  searchLauncherFiles?: (query: string) => Promise<LauncherFileSearchResult>;
+  openLauncherFile?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  warmLauncherFileIndex?: () => Promise<{ started: boolean }>;
+  getLauncherSettings?: () => Promise<LauncherSettings>;
+  setLauncherSettings?: (settings: LauncherSettings) => Promise<LauncherSettings>;
+  runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
+  runGlobalImproveSelection?: () => Promise<{ success: boolean; error?: string }>;
+  listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
+  getMaxwellMemory?: () => Promise<MaxwellMemoryState>;
+  saveMaxwellMemory?: (request: MaxwellMemorySaveRequest) => Promise<MaxwellMemorySaveResult>;
+  cancelMaxwellRun?: (runId: string) => Promise<MaxwellCancelResult>;
+  undoMaxwellRun?: (runId: string) => Promise<MaxwellUndoResult>;
+  redoMaxwellRun?: (runId: string) => Promise<MaxwellRedoResult>;
+  onLocalCommandStatus?: (callback: (status: LocalCommandStatus) => void) => () => void;
   launcherResize?: (height: number) => void;
-  launcherClose?: (options?: { skipActivation?: boolean }) => void;
+  launcherClose?: (options?: { skipActivation?: boolean; generation?: number }) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
   launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
-  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
-  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number; launcherSessionId?: string }) => void) => () => void;
+  onLauncherFocusInput?: (callback: (payload?: { generation?: number; launcherSessionId?: string; qualityScenario?: string | null }) => void) => () => void;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
+  archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  toggleActiveLibraryLineNumbers?: () => Promise<{ success: boolean; error?: string }>;
+  createMeetingNote?: (title?: string) => Promise<MeetingActionResult>;
+  startMeetingHere?: () => Promise<MeetingActionResult>;
+  stopMeeting?: () => Promise<MeetingActionResult>;
+  cancelMeeting?: () => Promise<MeetingActionResult>;
+  summarizeCurrentMeeting?: () => Promise<MeetingActionResult>;
+  getActiveMeeting?: () => Promise<MeetingSession | null>;
+  onMeetingStatus?: (callback: (session: MeetingSession) => void) => () => void;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
+  insertClipboardItemsAsMarkdown?: (ids: number[]) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
+  onToggleLineNumbersFromLauncher?: (callback: () => void) => () => void;
 
   // Mobile sync operations
   setMobileSync: (dirPath: string, enabled: boolean) => Promise<boolean>;
@@ -1399,12 +1740,20 @@ interface HotMicAPI {
   } | null>;
   getIslandStayOnLaptop: () => Promise<boolean>;
   setIslandStayOnLaptop: (value: boolean) => Promise<boolean>;
+  getRecordingIndicatorMode: () => Promise<'auto' | 'notch' | 'floating'>;
+  setRecordingIndicatorMode: (mode: 'auto' | 'notch' | 'floating') => Promise<'auto' | 'notch' | 'floating'>;
+  getResolvedRecordingIndicatorMode: () => Promise<'notch' | 'floating'>;
+  getFloatingIndicatorPosition: () => Promise<{ x: number; y: number } | null>;
+  setFloatingIndicatorPosition: (position: { x: number; y: number } | null) => Promise<{ x: number; y: number } | null>;
   getIslandAutoHide: () => Promise<boolean>;
   setIslandAutoHide: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
+  getCommandEnterWords: () => Promise<string>;
+  setCommandEnterWords: (words: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
+  onHotkeyChanged: (callback: (hotkey: string | null) => void) => () => void;
   getPasteWords: () => Promise<string>;
   setPasteWords: (words: string) => Promise<string>;
   getShowWordCount: () => Promise<boolean>;
@@ -1498,6 +1847,7 @@ interface ThemeAPI {
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
+  traceNavigation?: (stage: string, payload: Record<string, unknown>) => Promise<void>;
   saveReading: (path: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   deleteReading: (path: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
@@ -1572,8 +1922,11 @@ interface LibrarianAPI {
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
   setMarkdownEditorFocused: (focused: boolean) => void;
   onInsertMarkdownText: (callback: (text: string) => void) => () => void;
+  onInsertPlainMarkdownText?: (callback: (text: string) => void) => () => void;
+  onReplaceSelectedMarkdownText?: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   setImmersiveDismissable: (dismissable: boolean) => void;
+  setWindowButtonVisibility?: (visible: boolean) => void;
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;
   // Content guidance customization
   getDefaultContentGuidance: () => Promise<string>;
@@ -1604,6 +1957,237 @@ interface LibrarianAPI {
   getConceptsIndex: () => Promise<ConceptsIndex | null>;
 }
 
+type SharedFileType = 'document' | 'command' | 'plan';
+
+interface SharedFileStatus {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+  error?: string;
+}
+
+interface SharedFileAudienceStatus {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+}
+
+type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
+
+interface SharedFileShareTarget {
+  id: string;
+  kind: SharedFileDestinationKind;
+}
+
+interface RiverShareTarget {
+  id: string;
+  kind: RiverTargetKind;
+}
+
+interface RiverTarget {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+}
+
+interface RiverDefaultDestination {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+}
+
+interface RiverSourcePreference {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+}
+
+interface RiverMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+interface RiverTimelineQuery {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+}
+
+interface RiverTimelineItem {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  content?: string;
+  authorUserId?: string | null;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+}
+
+interface SharedFileDestination {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
+}
+
+interface SharedFileShareInput {
+  filePath: string;
+  title?: string;
+  content: string;
+  type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
+}
+
+interface SharedFileAudienceUpdateInput {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
+}
+
+interface SharedFileUpdateResult {
+  ok: boolean;
+  revision?: number;
+  cachePath?: string;
+  conflictPath?: string;
+  remoteContent?: string;
+  error?: string;
+}
+
+interface SharedFilePresenceUser {
+  userId: string;
+  email: string | null;
+  initials: string;
+}
+
+interface SharedFilesAvailability {
+  available: boolean;
+  canWrite: boolean;
+  hasTeamMembers: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  currentTeamScopeUserId?: string | null;
+  stale?: boolean;
+}
+
+interface SharedFilePinResult {
+  ok: boolean;
+  pinned?: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  error?: string;
+}
+
+interface SharedFilesAPI {
+  getAvailability: () => Promise<SharedFilesAvailability>;
+  getStatus: (filePath: string) => Promise<SharedFileStatus>;
+  getAudience: (filePath: string) => Promise<SharedFileAudienceStatus>;
+  getTimeline: (query: RiverTimelineQuery) => Promise<RiverTimelineItem[]>;
+  getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
+  getTargets: (query?: string) => Promise<RiverTarget[]>;
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]) => Promise<RiverMutationResult>;
+  getSourcePreferences: () => Promise<RiverSourcePreference[]>;
+  updateSourcePreferences: (preferences: RiverSourcePreference[]) => Promise<RiverMutationResult>;
+  share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
+  updateAudience: (input: SharedFileAudienceUpdateInput) => Promise<SharedFileAudienceStatus>;
+  unshare: (filePath: string) => Promise<boolean>;
+  sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;
+  updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => Promise<SharedFileUpdateResult>;
+  setActivePresence: (sharedId: string | null) => Promise<SharedFilePresenceUser[]>;
+  getPinnedItemIds: () => Promise<string[]>;
+  setPinned: (filePath: string, pinned: boolean) => Promise<SharedFilePinResult>;
+  onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void) => () => void;
+  onPinsChanged: (callback: () => void) => () => void;
+}
+
+type SharedTeamUnavailableReason =
+  | 'not_authenticated'
+  | 'not_entitled'
+  | 'no_team_members'
+  | 'pending_only'
+  | 'ambiguous_team_scope'
+  | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
+
+interface SharedTeamMember {
+  contactId: string;
+  userId: string | null;
+  email: string;
+  role: 'owner' | 'member';
+  teamScopeUserId: string;
+}
+
+interface SharedTeamInvite {
+  contactId: string;
+  ownerUserId: string;
+  contactUserId: string | null;
+  email: string;
+  direction: 'incoming' | 'outgoing';
+  createdAt: string | null;
+}
+
+interface SharedTeamState {
+  available: boolean;
+  currentTeamScopeUserId: string | null;
+  reason?: SharedTeamUnavailableReason;
+  isOwner: boolean;
+  members: SharedTeamMember[];
+  pendingIncoming: SharedTeamInvite[];
+  pendingOutgoing: SharedTeamInvite[];
+}
+
+interface SharedTeamMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+interface TeamAPI {
+  getEntitlement: () => Promise<SharedTeamEntitlementState>;
+  getState: () => Promise<SharedTeamState>;
+  inviteMember: (email: string) => Promise<SharedTeamMutationResult>;
+  respondToInvite: (contactId: string, accept: boolean) => Promise<SharedTeamMutationResult>;
+  removeMember: (contactId: string) => Promise<SharedTeamMutationResult>;
+  leaveTeam: () => Promise<SharedTeamMutationResult>;
+  onTeamChanged: (callback: () => void) => () => void;
+}
+
 declare global {
   /**
    * Result of testing a hotkey for conflicts.
@@ -1629,6 +2213,9 @@ declare global {
     createdAt: number;
     mtime: number;
     todoState?: MarkdownTodoState;
+    sharedOriginalSourcePath?: string;
+    sharedAuthorCallsign?: string;
+    editActor?: MarkdownEditActor;
   }
 
   /**
@@ -1651,6 +2238,11 @@ declare global {
   // ── Wiki viewer types ──────────────────────────────────────────────────
 
   type MarkdownTodoState = 'open' | 'done';
+  type MarkdownEditActor = {
+    type: 'human' | 'model' | 'system';
+    name: string;
+    detail?: string;
+  };
 
   interface WikiPageMeta {
     relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
@@ -1658,12 +2250,32 @@ declare global {
     name: string;        // filename slug without date/ext
     title: string;       // filename without extension
     lastUpdated: number; // mtime
+    documentKind?: 'markdown' | 'html' | 'css';
     todoState?: MarkdownTodoState;
+    archived?: boolean;
+    sharedOriginalSourcePath?: string;
+    sharedAuthorCallsign?: string;
+    editActor?: MarkdownEditActor;
   }
 
   interface WikiPage extends WikiPageMeta {
     content: string;
     documentVersion: DocumentVersion;
+  }
+
+  interface WikiBacklinkRelationDocument {
+    target: { kind: 'wiki'; relPath: string };
+    title: string;
+    content: string;
+  }
+  type LibraryBacklinkTarget =
+    | { kind: 'wiki'; relPath: string }
+    | { kind: 'artifact'; path: string }
+    | { kind: 'command'; path: string };
+  interface LibraryBacklinkRelationDocument {
+    target: LibraryBacklinkTarget;
+    title: string;
+    content: string;
   }
 
   interface WikiFolder {
@@ -1672,7 +2284,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string; editActor?: MarkdownEditActor }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {
@@ -1694,6 +2306,17 @@ declare global {
     source?: 'app' | 'watcher' | 'external';
     detectedAt?: number;
     emittedAt?: number;
+  }
+
+  interface LibraryChangeEvent {
+    type: 'file-added' | 'file-changed' | 'file-deleted';
+    rootPath: string;
+    relPath: string;
+    absPath: string;
+    builtin: boolean;
+    source: 'watcher' | 'app' | 'external';
+    detectedAt: number;
+    page?: WikiPageMeta;
   }
 
   interface LibraryMigrationFile {
@@ -1746,7 +2369,9 @@ declare global {
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
-    onRootsChanged: (callback: () => void) => () => void;
+    getBacklinkRelationDocuments: (target: LibraryBacklinkTarget) => Promise<LibraryBacklinkRelationDocument[]>;
+    openDocumentWindow: (target: LibraryDocumentWindowTarget) => Promise<{ success: boolean; error?: string }>;
+    onRootsChanged: (callback: (event?: LibraryChangeEvent) => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
   }
 
@@ -1836,9 +2461,17 @@ declare global {
     getBatch: (batchId?: string) => Promise<PossibleIdeaBatch | null>;
   }
 
+  type LibraryDocumentWindowTarget = {
+    kind: 'wiki' | 'artifact' | 'external';
+    path: string;
+    contentMode?: 'rendered' | 'markdown' | 'typedown';
+    sidebarCollapsed?: boolean;
+  };
+
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
+    getBacklinkRelationDocuments: (relPath: string) => Promise<WikiBacklinkRelationDocument[]>;
     findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
@@ -1848,7 +2481,7 @@ declare global {
     createDir: (dirName: string) => Promise<boolean>;
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
-    onPageChanged: (callback: () => void) => () => void;
+    onPageChanged: (callback: (event?: LibraryChangeEvent) => void) => () => void;
     onPageDeleted: (callback: (relPath: string) => void) => () => void;
     onPageRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
@@ -1870,7 +2503,30 @@ declare global {
     save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     findLibraryFileByDocumentVersion: (version: DocumentVersion, previousAbsPath?: string) => Promise<ExternalMarkdownFile | null>;
     rename: (absPath: string, newName: string) => Promise<ExternalMarkdownFile | null>;
+    delete: (absPath: string) => Promise<boolean>;
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
+  }
+
+  interface MarkdownImagesAPI {
+    copyImageForDocument: (
+      documentPath: string,
+      imagePath: string,
+      alt?: string,
+    ) => Promise<{ markdown: string; destination: string; copiedPath: string } | null>;
+    copyImageDataUrlForDocument: (
+      documentPath: string,
+      dataUrl: string,
+      alt?: string,
+    ) => Promise<{ markdown: string; destination: string; copiedPath: string } | null>;
+    makeImagesPortable: (
+      documentPath: string,
+      content: string,
+    ) => Promise<{ content: string; copied: number; rewritten: number; missing: number }>;
+    deleteUnusedCopiedImages: (
+      documentPath: string,
+      removedMarkdown: string,
+      remainingContent: string,
+    ) => Promise<{ deleted: number; skipped: number; missing: number }>;
   }
 
   interface RecentEntry {
@@ -1884,7 +2540,7 @@ declare global {
     list: () => Promise<RecentEntry[]>;
     visit: (entry: RecentEntry) => Promise<RecentEntry[]>;
     remove: (kind: 'wiki' | 'external', entryPath: string) => Promise<RecentEntry[]>;
-    onChanged: (callback: () => void) => () => void;
+    onChanged: (callback: (entries?: RecentEntry[]) => void) => () => void;
   }
 
   interface BookmarkImage {
@@ -1954,6 +2610,7 @@ declare global {
   }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
+    getDataSource?: () => Promise<unknown>;
     syncIfStale: () => Promise<{ status: string; error?: string }>;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
@@ -1963,9 +2620,16 @@ declare global {
     getActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
     saveActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
     invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    sendToCodex?: (id: string) => Promise<{ success: boolean; error?: string; delivery?: string }>;
     copyForAgent: (id: string) => Promise<{ success: boolean; error?: string }>;
     invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
+  }
+  interface FieldTheoryBookmarkMediaAPI {
+    mediaUrl: (filename: string) => string;
+  }
+  interface FieldTheoryLocalImageAPI {
+    localImageUrl: (url: string) => string;
   }
 
   /**
@@ -2287,6 +2951,29 @@ declare global {
     setLocalEnabled: (enabled: boolean) => Promise<FieldTheorySyncStatus>;
   }
 
+  interface CodexTerminalHistoryEntry {
+    filePath: string;
+    fileName: string;
+    threadId: string | null;
+    title: string;
+    cwd: string | null;
+    startedAt: string | null;
+    updatedAt: string;
+    sizeBytes: number;
+    preview: string;
+  }
+
+  interface CodexTerminalHistoryPreview {
+    filePath: string;
+    threadId: string | null;
+    title: string;
+    cwd: string | null;
+    startedAt: string | null;
+    updatedAt: string;
+    preview: string;
+    truncated: boolean;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -2310,12 +2997,17 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    sharedFilesAPI?: SharedFilesAPI;
+    teamAPI?: TeamAPI;
     libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
+    markdownImagesAPI?: MarkdownImagesAPI;
     possibleAPI?: PossibleAPI;
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;
+    fieldTheoryBookmarkMediaAPI?: FieldTheoryBookmarkMediaAPI;
+    fieldTheoryLocalImageAPI?: FieldTheoryLocalImageAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;
@@ -2326,6 +3018,7 @@ declare global {
     squaresAPI?: SquaresAPI;
     agentHooksAPI?: AgentHooksAPI;
     agentKickoffAPI?: AgentKickoffAPI;
+    codexTerminalAPI?: CodexTerminalAPI;
 
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
@@ -2340,6 +3033,105 @@ interface AgentHooksAPI {
   install: (targets: AgentHookTargets) => Promise<AgentHookResult>;
   uninstall: (targets: AgentHookTargets) => Promise<AgentHookResult>;
   getStatus: () => Promise<AgentHookStatus>;
+}
+
+interface CodexTerminalSessionSummary {
+  id: string;
+  title: string;
+  cwd: string;
+  engine: 'pty';
+  createdAt: string;
+  exitedAt: string | null;
+  exitCode: number | null;
+  restored: boolean;
+  modelRunActive: boolean;
+  transcriptPath: string;
+  attachedContexts: CodexTerminalAttachedContext[];
+}
+
+interface CodexTerminalPageContext {
+  title: string;
+  path: string;
+  kind: 'wiki' | 'artifact' | 'external' | 'unknown';
+  contentMode: string;
+  content: string;
+  selectionText?: string;
+  lineMapping?: {
+    activeLineKind: 'source' | 'renderedVisual';
+    contentMode: string;
+    visibleRowsOnly?: boolean;
+    lines: Array<{
+      visibleLine: number;
+      sourceLine: number;
+      rowInSourceLine?: number;
+      rowsInSourceLine?: number;
+      text: string;
+    }>;
+  };
+}
+
+interface CodexTerminalAttachResult {
+  ok: boolean;
+  filePath?: string;
+  prompt?: string;
+  error?: string;
+}
+
+interface CodexTerminalHistoryEntry {
+  filePath: string;
+  fileName: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  sizeBytes: number;
+  preview: string;
+}
+
+interface CodexTerminalHistoryPreview {
+  filePath: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  preview: string;
+  truncated: boolean;
+}
+
+interface CodexTerminalAttachedContext {
+  sessionId: string;
+  sessionTitle: string;
+  sessionCwd: string;
+  launchedCommand: string;
+  repoPath: string | null;
+  gitBranch: string | null;
+  filePath: string;
+  title: string;
+  sourcePath: string;
+  kind: CodexTerminalPageContext['kind'];
+  attachedAt: string;
+}
+
+interface CodexTerminalAPI {
+  create: (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }) => Promise<CodexTerminalSessionSummary>;
+  list: () => Promise<CodexTerminalSessionSummary[]>;
+  listHistory: (input?: { query?: string; limit?: number }) => Promise<CodexTerminalHistoryEntry[]>;
+  readHistoryPreview: (filePath: string, input?: { maxBytes?: number }) => Promise<CodexTerminalHistoryPreview | null>;
+  getBuffer: (id: string) => Promise<string | null>;
+  input: (id: string, data: string) => Promise<boolean>;
+  setLauncherTargetSession: (id: string | null) => Promise<boolean>;
+  resize: (id: string, cols: number, rows: number) => Promise<boolean>;
+  kill: (id: string) => Promise<boolean>;
+  rename: (id: string, title: string) => Promise<boolean>;
+  readClipboardText: () => Promise<string>;
+  readTerminalPasteText: () => Promise<string>;
+  writeClipboardText: (text: string) => Promise<boolean>;
+  attachPageContext: (id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }) => Promise<CodexTerminalAttachResult>;
+  onData: (callback: (event: { id: string; data: string }) => void) => () => void;
+  onExit: (callback: (session: CodexTerminalSessionSummary) => void) => () => void;
+  onSessionsChanged: (callback: (sessions: CodexTerminalSessionSummary[]) => void) => () => void;
 }
 
 type AgentKickoffModel = 'claude' | 'codex';

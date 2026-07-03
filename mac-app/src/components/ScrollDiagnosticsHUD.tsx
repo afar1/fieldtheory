@@ -1,10 +1,16 @@
 /**
- * ScrollDiagnosticsHUD — floating panel that surfaces scroll-perf metrics
+ * ScrollDiagnosticsHUD — floating panel that surfaces interaction metrics
  * captured by `utils/scrollDiagnostics.ts`. Visible only when the user has
  * opted in via `window.ftDebugScroll.enable()`.
  */
 import { useEffect, useState } from 'react';
 import {
+  SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS,
+  SCROLL_DIAGNOSTICS_TARGET_FPS,
+  getScrollDiagnosticsBudgetViolations,
+  getScrollDiagnosticsFpsLevel,
+  getScrollDiagnosticsValidationReport,
+  clearScrollDiagnosticsSamples,
   subscribeScrollDiagnostics,
   setScrollDiagnosticsEnabled,
   type ScrollDiagnosticsSnapshot,
@@ -13,9 +19,10 @@ import {
 const PANEL_WIDTH = 248;
 
 function fpsColor(fps: number): string {
-  if (fps === 0) return '#9ca3af';
-  if (fps >= 55) return '#22c55e';
-  if (fps >= 40) return '#eab308';
+  const level = getScrollDiagnosticsFpsLevel(fps);
+  if (level === 'muted') return '#9ca3af';
+  if (level === 'ok') return '#22c55e';
+  if (level === 'warning') return '#eab308';
   return '#ef4444';
 }
 
@@ -31,6 +38,10 @@ export default function ScrollDiagnosticsHUD() {
     (max, t) => Math.max(max, t.duration),
     0,
   );
+  const budgetViolations = getScrollDiagnosticsBudgetViolations(snap);
+  const validationReport = getScrollDiagnosticsValidationReport(snap);
+  const missingSurfaceCount = validationReport.missingScrollSources.length
+    + validationReport.missingInteractionSources.length;
 
   return (
     <div
@@ -73,11 +84,32 @@ export default function ScrollDiagnosticsHUD() {
       </div>
 
       <div style={{ marginBottom: '4px' }}>
-        <div style={{ color: '#9ca3af', fontSize: '9.5px' }}>scroll fps (last burst)</div>
+        <div style={{ color: '#9ca3af', fontSize: '9.5px' }}>
+          scroll fps (last burst, target {SCROLL_DIAGNOSTICS_TARGET_FPS - SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS}+)
+        </div>
         {Object.entries(snap.scrollByLastSource).length === 0 && (
           <div style={{ color: '#6b7280' }}>—</div>
         )}
         {Object.entries(snap.scrollByLastSource).map(([source, rec]) => (
+          <div key={source} style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>{source}</span>
+            <span>
+              <span style={{ color: fpsColor(rec.fps) }}>{rec.fps}fps</span>
+              {' '}
+              <span style={{ color: '#9ca3af' }}>worst {Math.round(rec.longestFrameMs)}ms</span>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: '4px' }}>
+        <div style={{ color: '#9ca3af', fontSize: '9.5px' }}>
+          interaction fps (last burst, target {SCROLL_DIAGNOSTICS_TARGET_FPS - SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS}+)
+        </div>
+        {Object.entries(snap.interactionByLastSource).length === 0 && (
+          <div style={{ color: '#6b7280' }}>—</div>
+        )}
+        {Object.entries(snap.interactionByLastSource).map(([source, rec]) => (
           <div key={source} style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span>{source}</span>
             <span>
@@ -99,6 +131,28 @@ export default function ScrollDiagnosticsHUD() {
           peak {Math.round(longestTask)}ms
         </div>
       </div>
+
+      <div style={{ color: budgetViolations.length === 0 ? '#22c55e' : '#ef4444' }}>
+        budget misses {budgetViolations.length}
+      </div>
+      <div style={{ color: missingSurfaceCount === 0 ? '#22c55e' : '#eab308' }}>
+        missing surfaces {missingSurfaceCount}
+      </div>
+      <button
+        type="button"
+        onClick={clearScrollDiagnosticsSamples}
+        style={{
+          marginTop: '4px',
+          background: 'transparent',
+          border: 'none',
+          color: '#9ca3af',
+          cursor: 'pointer',
+          fontSize: '10px',
+          padding: 0,
+        }}
+      >
+        clear
+      </button>
     </div>
   );
 }

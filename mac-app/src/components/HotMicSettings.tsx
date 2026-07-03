@@ -5,11 +5,25 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
-import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
+import {
+  SETTINGS_CARD_GAP,
+  SettingsCard,
+  SettingsDisabledBlock,
+  SettingsRow,
+  SettingsSectionHeading,
+  SettingsToggle,
+} from './settings/SettingsPrimitives';
 
 type HotMicRuntimeStatus = Awaited<
   ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
 >;
+
+function canEnableHotMicForRuntimeStatus(status: HotMicRuntimeStatus | null): boolean {
+  if (!status) return true;
+  const readiness = status?.engine?.readiness;
+  return readiness === 'ready' || readiness === 'warming' || readiness === 'cold';
+}
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   const rounded = Math.round(value);
@@ -19,8 +33,6 @@ function clampInt(value: number, min: number, max: number): number {
 export default function HotMicSettings() {
   const { theme } = useTheme();
 
-  const [selectedWhisperModel, setSelectedWhisperModel] = useState('small');
-  const [whisperModelReady, setWhisperModelReady] = useState(true);
   const [enabled, setEnabled] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
@@ -30,6 +42,7 @@ export default function HotMicSettings() {
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
   const [submitWord, setSubmitWord] = useState('');
+  const [commandEnterWords, setCommandEnterWords] = useState('');
   const [pasteWords, setPasteWords] = useState('');
   const [cancelWords, setCancelWords] = useState('');
   const [scrapWords, setScrapWords] = useState('');
@@ -65,19 +78,12 @@ export default function HotMicSettings() {
   const [rectangleCommands, setRectangleCommands] = useState<Record<string, string>>({});
 
   const styles = getStyles(theme);
-  const canEnableHotMic = whisperModelReady;
+  const canEnableHotMic = canEnableHotMicForRuntimeStatus(runtimeStatus);
   const canToggleHotMic = enabled || canEnableHotMic;
   useEffect(() => {
     if (!window.hotMicAPI) return;
 
-    // Check runtime availability and engine preferences
-    Promise.all([
-      window.transcribeAPI?.getSelectedModel?.() ?? Promise.resolve('small'),
-      window.transcribeAPI?.getModelDownloadStatus?.() ?? Promise.resolve({ small: true } as Record<string, boolean>),
-      window.hotMicAPI?.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
-    ]).then(([selectedModel, downloadStatus, hotMicStatus]) => {
-      setSelectedWhisperModel(selectedModel);
-      setWhisperModelReady(Boolean(downloadStatus?.[selectedModel]));
+    (window.hotMicAPI.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false })).then((hotMicStatus) => {
       setCurrentState(hotMicStatus.state);
       setCurrentMuted(hotMicStatus.muted);
     });
@@ -85,13 +91,12 @@ export default function HotMicSettings() {
     const load = async () => {
       const [
         en,
-        selectedModel,
-        downloadStatus,
         bgFilterEnabled,
         bgFilterStrengthValue,
         hotMicStatus,
         hookStatus,
         submit,
+        commandEnter,
         pw,
         cw,
         skw,
@@ -114,13 +119,12 @@ export default function HotMicSettings() {
         wc,
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
-        window.transcribeAPI!.getSelectedModel(),
-        window.transcribeAPI!.getModelDownloadStatus(),
         window.hotMicAPI!.getBackgroundFilterEnabled(),
         window.hotMicAPI!.getBackgroundFilterStrength(),
         window.hotMicAPI!.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
+        window.hotMicAPI!.getCommandEnterWords(),
         window.hotMicAPI!.getPasteWords(),
         window.hotMicAPI!.getCancelWords(),
         window.hotMicAPI!.getScrapWords(),
@@ -143,14 +147,13 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getShowWordCount(),
       ]);
       setEnabled(en);
-      setSelectedWhisperModel(selectedModel);
-      setWhisperModelReady(Boolean(downloadStatus?.[selectedModel]));
       setBackgroundFilterEnabled(bgFilterEnabled);
       setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(bgFilterStrengthValue))));
       setCurrentState(hotMicStatus.state);
       setCurrentMuted(hotMicStatus.muted);
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
+      setCommandEnterWords(commandEnter);
       setPasteWords(pw);
       setCancelWords(cw);
       setScrapWords(skw);
@@ -204,6 +207,9 @@ export default function HotMicSettings() {
     const unsubInputMode = window.hotMicAPI!.onInputModeChanged?.((mode) => {
       setEnabled(mode === 'hot-mic');
     }) ?? (() => {});
+    const unsubHotkey = window.hotMicAPI!.onHotkeyChanged?.((hotkey) => {
+      setModeToggleHotkey(hotkey ?? '');
+    }) ?? (() => {});
 
     const unsubRuntime = window.hotMicAPI!.onRuntimeStatusChanged?.((status) => {
       setRuntimeStatus(status);
@@ -213,6 +219,7 @@ export default function HotMicSettings() {
       unsub();
       unsubStatus();
       unsubInputMode();
+      unsubHotkey();
       unsubRuntime?.();
     };
   }, []);
@@ -241,6 +248,11 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !submitWord.trim()) return;
     await window.hotMicAPI.setSubmitWord(submitWord.trim());
   }, [submitWord]);
+
+  const handleCommandEnterWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !commandEnterWords.trim()) return;
+    await window.hotMicAPI.setCommandEnterWords(commandEnterWords.trim());
+  }, [commandEnterWords]);
 
   const handlePasteWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !pasteWords.trim()) return;
@@ -418,8 +430,9 @@ export default function HotMicSettings() {
     setResettingDefaults(true);
     try {
       await window.hotMicAPI.resetCommandDefaults();
-      const [submit, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds, rects] = await Promise.all([
+      const [submit, commandEnter, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds, rects] = await Promise.all([
         window.hotMicAPI.getSubmitWord(),
+        window.hotMicAPI.getCommandEnterWords(),
         window.hotMicAPI.getPasteWords(),
         window.hotMicAPI.getCancelWords(),
         window.hotMicAPI.getScrapWords(),
@@ -444,6 +457,7 @@ export default function HotMicSettings() {
       ]);
 
       setSubmitWord(submit);
+      setCommandEnterWords(commandEnter);
       setPasteWords(pw);
       setCancelWords(cw);
       setScrapWords(skw);
@@ -509,23 +523,115 @@ export default function HotMicSettings() {
 
   return (
     <div style={styles.container}>
-      {/* Enable toggle */}
+      <SettingsCard theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Hot Mic"
+          description="Always-listening voice commands backed by the current Hot Mic runtime."
+        />
+        <SettingsRow
+          theme={theme}
+          label="Enable Hot Mic"
+          hint={canEnableHotMic ? 'Use Hot Mic as the current voice input mode.' : 'Set up the selected transcription engine in Audio & Transcription before enabling Hot Mic.'}
+          control={(
+            <SettingsToggle
+              theme={theme}
+              checked={enabled}
+              disabled={!canToggleHotMic}
+              onClick={() => handleEnabledChange(!enabled)}
+              activeColor={theme.success}
+              title={enabled ? 'Hot Mic enabled' : 'Hot Mic disabled'}
+            />
+          )}
+        />
+        <SettingsRow
+          theme={theme}
+          label="Status"
+          hint={runtimeStatus?.engine?.detail || undefined}
+          last
+          control={(
+            <div style={styles.rowControls}>
+              <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(displayState) }}>
+                {displayState}
+              </span>
+              {runtimeStatus?.condition && (
+                <span style={{ ...styles.stateBadge, backgroundColor: getConditionColor(runtimeStatus.condition), fontSize: '10px' }}>
+                  {runtimeStatus.condition}
+                </span>
+              )}
+              {isActive ? (
+                <button onClick={handleStop} style={styles.stopButton}>Stop</button>
+              ) : (
+                <button
+                  onClick={async () => { if (window.hotMicAPI) await window.hotMicAPI.start(); }}
+                  style={{ ...styles.hookButton, backgroundColor: theme.success, color: '#fff' }}
+                >
+                  Start
+                </button>
+              )}
+            </div>
+          )}
+        />
+        {isActive && runtimeStatus && (
+          <div style={styles.healthPanel}>
+            <span>engine: {runtimeStatus.engineReady ? 'ready' : 'loading'}</span>
+            {runtimeStatus.engine && (
+              <span>
+                profile: {formatEngineLabel(runtimeStatus.engine.selectedEngine)} ({runtimeStatus.engine.readiness})
+              </span>
+            )}
+            <span>queue: {runtimeStatus.queueDepth}</span>
+            <span>chunks: {runtimeStatus.chunksReceived}</span>
+            <span style={{ color: runtimeStatus.micHealthy ? '#10b981' : '#ef4444' }}>
+              mic: {runtimeStatus.micHealthy ? 'healthy' : 'stale'}
+            </span>
+          </div>
+        )}
+      </SettingsCard>
+
+      <div style={styles.cardStack}>
+      <SettingsCard theme={theme}>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Voice Filter"
+        description="Reject far-field speech before it reaches voice commands."
+      />
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Enable Hot Mic</span>
+        <span style={styles.rowLabel}>Background Voice Filter</span>
         <button
-          onClick={() => canToggleHotMic && handleEnabledChange(!enabled)}
-          style={{
-            ...styles.toggle,
-            backgroundColor: enabled ? theme.success : '#d1d5db',
-            opacity: canToggleHotMic ? 1 : 0.5,
-            cursor: canToggleHotMic ? 'pointer' : 'not-allowed',
-          }}
+          onClick={() => handleBackgroundFilterEnabledChange(!backgroundFilterEnabled)}
+          style={{ ...styles.toggle, backgroundColor: backgroundFilterEnabled ? theme.success : '#d1d5db' }}
         >
-          <span style={{ ...styles.toggleKnob, transform: enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+          <span style={{ ...styles.toggleKnob, transform: backgroundFilterEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
+      <div style={{ padding: '4px 0' }}>
+        <div style={styles.rangeHeader}>
+          <span style={styles.rangeLabel}>Strictness</span>
+          <span style={styles.rangeValue}>{backgroundFilterStrength}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={backgroundFilterStrength}
+          onChange={(e) => void handleBackgroundFilterStrengthChange(Number(e.target.value))}
+          style={styles.rangeInput}
+        />
+        <p style={{ ...styles.description, marginTop: 6 }}>
+          Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
+        </p>
+      </div>
+      </SettingsCard>
 
       <SettingsDisabledBlock disabled={!enabled}>
+      <SettingsCard theme={theme}>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Controls"
+        description="Hotkey controls for the active Hot Mic mode."
+      />
       <div style={styles.row}>
         <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
         <div style={styles.rowControls}>
@@ -566,56 +672,14 @@ export default function HotMicSettings() {
         Toggles between hot mic and standard mode.
       </p>
       {modeToggleHotkeyError && <p style={styles.hotkeyError}>{modeToggleHotkeyError}</p>}
+      </SettingsCard>
 
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Whisper Model</span>
-        <span style={{ fontSize: '12px', color: whisperModelReady ? theme.textSecondary : '#ef4444' }}>
-          {selectedWhisperModel}
-          {whisperModelReady ? '' : ' (not downloaded)'}
-        </span>
-      </div>
-      {whisperModelReady ? (
-        <p style={styles.description}>
-          Hot Mic follows Voice & Transcription. This Whisper model is used when fallback is needed.
-        </p>
-      ) : (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Whisper fallback model is missing or incomplete. Download it in Voice & Transcription settings.
-        </p>
-      )}
-
-      <div style={styles.divider} />
-
-      {/* Background voice filter */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Background Voice Filter</span>
-        <button
-          onClick={() => handleBackgroundFilterEnabledChange(!backgroundFilterEnabled)}
-          style={{ ...styles.toggle, backgroundColor: backgroundFilterEnabled ? theme.success : '#d1d5db' }}
-        >
-          <span style={{ ...styles.toggleKnob, transform: backgroundFilterEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-      <div style={{ padding: '4px 0' }}>
-        <div style={styles.rangeHeader}>
-          <span style={styles.rangeLabel}>Strictness</span>
-          <span style={styles.rangeValue}>{backgroundFilterStrength}%</span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={backgroundFilterStrength}
-          onChange={(e) => void handleBackgroundFilterStrengthChange(Number(e.target.value))}
-          style={styles.rangeInput}
-        />
-        <p style={{ ...styles.description, marginTop: 6 }}>
-          Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
-        </p>
-      </div>
-
-      <div style={styles.divider} />
+      <SettingsCard theme={theme}>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Voice Commands"
+        description="Comma-separated phrases. Press Enter or leave a field to save."
+      />
 
       {/* Cancel */}
       <div style={{ padding: '4px 0' }}>
@@ -901,6 +965,22 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* Command Enter */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Command Enter</span>
+        <input
+          type="text"
+          value={commandEnterWords}
+          onChange={(e) => setCommandEnterWords(e.target.value)}
+          placeholder="command enter, command return"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleCommandEnterWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCommandEnterWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
       {/* Switch Window */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>Switch Window</span>
@@ -992,9 +1072,9 @@ export default function HotMicSettings() {
           {resettingDefaults ? 'Resetting...' : 'Reset Voice Defaults'}
         </button>
       </div>
+      </SettingsCard>
 
-      <div style={styles.divider} />
-
+      <SettingsCard theme={theme}>
       {/* App Voice Aliases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>App Voice Aliases</span>
@@ -1096,60 +1176,9 @@ export default function HotMicSettings() {
           Example: Ghostty → "ghosty, ghost tea, ghost"
         </p>
       )}
-
-      <div style={styles.divider} />
-
-      {/* Current state */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Status</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(displayState) }}>
-            {displayState}
-          </span>
-          {runtimeStatus?.condition && (
-            <span style={{ ...styles.stateBadge, backgroundColor: getConditionColor(runtimeStatus.condition), fontSize: '10px' }}>
-              {runtimeStatus.condition}
-            </span>
-          )}
-          {isActive ? (
-            <button onClick={handleStop} style={styles.stopButton}>Stop</button>
-          ) : (
-            <button
-              onClick={async () => { if (window.hotMicAPI) await window.hotMicAPI.start(); }}
-              style={{ ...styles.hookButton, backgroundColor: theme.success, color: '#fff' }}
-            >
-              Start
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Runtime health — only shown when active */}
-      {isActive && runtimeStatus && (
-        <div style={{ ...styles.row, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-          <span style={{ ...styles.rowLabel, marginBottom: '2px' }}>Health</span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
-            <span>engine: {runtimeStatus.engineReady ? 'ready' : 'loading'}</span>
-            {runtimeStatus.engine && (
-              <span>
-                profile: {formatEngineLabel(runtimeStatus.engine.selectedEngine)} ({runtimeStatus.engine.readiness})
-              </span>
-            )}
-            <span>queue: {runtimeStatus.queueDepth}</span>
-            <span>chunks: {runtimeStatus.chunksReceived}</span>
-            {runtimeStatus.whisperFallbackActive && (
-              <span style={{ color: '#f59e0b' }}>whisper fallback</span>
-            )}
-            <span style={{ color: runtimeStatus.micHealthy ? '#10b981' : '#ef4444' }}>
-              mic: {runtimeStatus.micHealthy ? 'healthy' : 'stale'}
-            </span>
-            {runtimeStatus.engine?.detail && (
-              <span style={{ color: '#f59e0b' }}>{runtimeStatus.engine.detail}</span>
-            )}
-          </div>
-        </div>
-      )}
+      </SettingsCard>
       </SettingsDisabledBlock>
+      </div>
     </div>
   );
 }
@@ -1167,9 +1196,7 @@ function getConditionColor(condition: string): string {
 
 function formatEngineLabel(engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
   if (engine === 'parakeet-multilingual') return 'Parakeet Multilingual';
-  if (engine === 'parakeet') return 'Parakeet English';
-  if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
-  return 'Whisper';
+  return 'Parakeet English';
 }
 
 function getStateColor(state: string): string {
@@ -1185,6 +1212,14 @@ function getStateColor(state: string): string {
 const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: SETTINGS_CARD_GAP,
+  },
+  cardStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: SETTINGS_CARD_GAP,
   },
   row: {
     display: 'flex',
@@ -1276,7 +1311,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   divider: {
     height: '1px',
-    backgroundColor: theme.border,
+    backgroundColor: theme.isDark ? theme.border : '#ece8e0',
     margin: '12px 0',
   },
   description: {
@@ -1322,6 +1357,18 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   rangeInput: {
     width: '100%',
     accentColor: theme.success,
+  },
+  healthPanel: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px 10px',
+    marginTop: '10px',
+    padding: '10px 12px',
+    borderRadius: '6px',
+    border: `1px solid ${theme.border}`,
+    backgroundColor: theme.surface0,
+    fontSize: '11px',
+    color: theme.textSecondary,
   },
   stateBadge: {
     fontSize: '10px',

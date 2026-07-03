@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   getMarkdownTodoState,
+  parseMarkdownEditActor,
   parseMarkdownFrontmatter,
+  parseMarkdownArchivedState,
   parseMarkdownTodoState,
+  setMarkdownArchivedState,
   setMarkdownTodoState,
 } from './markdownFrontmatter';
 
@@ -31,6 +34,19 @@ describe('markdownFrontmatter', () => {
     expect(getMarkdownTodoState({ todo: 'yes' })).toBe('open');
   });
 
+  it('reads model-agnostic edit actor metadata', () => {
+    expect(parseMarkdownEditActor('---\nlast_editor_model: GPT-5.5\nlast_editor_reasoning: high\n---\n# Note')).toEqual({
+      type: 'model',
+      name: 'GPT-5.5',
+      detail: 'high reasoning',
+    });
+    expect(parseMarkdownEditActor('---\nedit_actor_type: assistant\nedit_actor_name: Claude Sonnet 4\nedit_actor_detail: extended thinking\n---\n# Note')).toEqual({
+      type: 'model',
+      name: 'Claude Sonnet 4',
+      detail: 'extended thinking',
+    });
+  });
+
   it('sets and removes todo state while preserving unrelated frontmatter lines', () => {
     const content = '---\ntags: [work]\n---\n# Task\n';
 
@@ -41,5 +57,13 @@ describe('markdownFrontmatter', () => {
   it('does not add frontmatter when removing a missing todo state', () => {
     expect(setMarkdownTodoState('# Note\n', null)).toBe('# Note\n');
     expect(setMarkdownTodoState('---\n---\n\n# Note\n', null)).toBe('---\n---\n\n# Note\n');
+  });
+
+  it('reads, sets, and removes archived state', () => {
+    expect(parseMarkdownArchivedState('---\narchived: true\n---\n# Note')).toBe(true);
+    expect(parseMarkdownArchivedState('---\narchived: false\n---\n# Note')).toBe(false);
+
+    expect(setMarkdownArchivedState('# Note\n', true)).toBe('---\narchived: true\n---\n\n# Note\n');
+    expect(setMarkdownArchivedState('---\ntags: [work]\narchived: true\n---\n# Note\n', false)).toBe('---\ntags: [work]\n---\n\n# Note\n');
   });
 });

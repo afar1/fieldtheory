@@ -10,6 +10,7 @@ import {
   NativeWindowInfo,
   GazeTrackingStatusMessage,
   GazeSampleMessage,
+  TextTargetFailureReason,
 } from './types/audio';
 import { createLogger } from './logger';
 import { DEFAULT_GAZE_TARGET_FPS } from './types/gaze';
@@ -81,19 +82,19 @@ export class NativeHelper extends EventEmitter {
    * This is a fast call (~1-5ms) that fetches fresh bounds,
    * useful when switching between windows of the same app.
    */
-  async getFrontmostWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  async getFrontmostWindowBounds(timeoutMs = 1000): Promise<{ x: number; y: number; width: number; height: number } | null> {
     return new Promise(async (resolve) => {
       if (!this.child || !this.child.stdin.writable) {
         resolve(null);
         return;
       }
 
-      await this.waitForReady();
+      await this.waitForReady({ readyDelayMs: 0, settledDelayMs: 0 });
 
       const timeout = setTimeout(() => {
         cleanup();
         resolve(null);
-      }, 1000);
+      }, timeoutMs);
 
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'frontmostWindowBounds') {
@@ -226,10 +227,14 @@ export class NativeHelper extends EventEmitter {
   /**
    * Wait for the helper to be ready (has sent initial message).
    */
-  private async waitForReady(): Promise<void> {
+  private async waitForReady(options: { readyDelayMs?: number; settledDelayMs?: number } = {}): Promise<void> {
+    const readyDelayMs = options.readyDelayMs ?? 50;
+    const settledDelayMs = options.settledDelayMs ?? 100;
     if (this.isReady) {
       // Even if ready, give a small delay to ensure stdin loop is fully initialized
-      await new Promise(resolve => setTimeout(resolve, 50));
+      if (readyDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, readyDelayMs));
+      }
       return;
     }
     
@@ -245,7 +250,9 @@ export class NativeHelper extends EventEmitter {
       log.error('Helper did not become ready within timeout');
     } else {
       // Give Swift a moment to fully initialize its stdin reading loop after first message
-      await new Promise(resolve => setTimeout(resolve, 100));
+      if (settledDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, settledDelayMs));
+      }
     }
   }
 
@@ -633,7 +640,21 @@ export class NativeHelper extends EventEmitter {
    * Type text into a specific app via pasteboard + CGEvent simulation.
    * Used by Hot Mic to inject transcribed text into terminal apps.
    */
-  async typeIntoApp(bundleId: string, text: string, pressEnter: boolean): Promise<{ success: boolean; error?: string }> {
+  async typeIntoApp(
+    bundleId: string,
+    text: string,
+    pressEnter: boolean,
+    submitMode?: 'none' | 'enter' | 'command-enter',
+    targetWindowBounds?: { x: number; y: number; width: number; height: number } | null
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    accessibilityTrusted?: boolean;
+    targetFrontmost?: boolean;
+    focusedTextInput?: boolean;
+    pasteboardWritten?: boolean;
+    eventTarget?: string;
+  }> {
     if (!this.child || !this.child.stdin.writable) {
       return { success: false, error: 'Helper not running' };
     }
@@ -649,7 +670,15 @@ export class NativeHelper extends EventEmitter {
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'typeIntoAppResult') {
           cleanup();
-          resolve({ success: msg.success, error: msg.error });
+          resolve({
+            success: msg.success,
+            error: msg.error,
+            accessibilityTrusted: msg.accessibilityTrusted,
+            targetFrontmost: msg.targetFrontmost,
+            focusedTextInput: msg.focusedTextInput,
+            pasteboardWritten: msg.pasteboardWritten,
+            eventTarget: msg.eventTarget,
+          });
         }
       };
 
@@ -659,7 +688,103 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.on('message', onMessage);
-      this.send({ type: 'typeIntoApp', bundleId, text, pressEnter });
+      const command: HelperIncomingCommand = { type: 'typeIntoApp', bundleId, text, pressEnter };
+      if (submitMode) {
+        command.submitMode = submitMode;
+      }
+      if (targetWindowBounds) {
+        command.targetWindowBounds = targetWindowBounds;
+      }
+      this.send(command);
+    });
+  }
+
+  /**
+   * Insert one live-typing segment into the currently focused field of a target app.
+   * Unlike typeIntoApp, this never writes to the pasteboard or activates the app.
+   */
+  async insertTextSegment(
+    bundleId: string,
+    text: string
+  ): Promise<{
+    success: boolean;
+    reason?: TextTargetFailureReason | 'helper-not-running' | 'timeout';
+    accessibilityTrusted?: boolean;
+  }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, reason: 'helper-not-running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, reason: 'timeout' });
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'insertTextSegmentResult') {
+          cleanup();
+          resolve({
+            success: msg.success,
+            reason: msg.reason,
+            accessibilityTrusted: msg.accessibilityTrusted,
+          });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'insertTextSegment', bundleId, text });
+    });
+  }
+
+  /**
+   * Submit the currently focused text target without writing to the pasteboard.
+   */
+  async submitTextTarget(
+    bundleId: string,
+    submitMode: 'enter' | 'command-enter'
+  ): Promise<{
+    success: boolean;
+    reason?: TextTargetFailureReason | 'helper-not-running' | 'timeout';
+    accessibilityTrusted?: boolean;
+  }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, reason: 'helper-not-running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, reason: 'timeout' });
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'submitTextTargetResult') {
+          cleanup();
+          resolve({
+            success: msg.success,
+            reason: msg.reason,
+            accessibilityTrusted: msg.accessibilityTrusted,
+          });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'submitTextTarget', bundleId, submitMode });
     });
   }
 
@@ -1011,6 +1136,16 @@ export class NativeHelper extends EventEmitter {
 
       case 'typeIntoAppResult':
         // Response to typeIntoApp - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'insertTextSegmentResult':
+        // Response to insertTextSegment - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'submitTextTargetResult':
+        // Response to submitTextTarget - handled by promise listener.
         this.emit('message', msg);
         break;
 

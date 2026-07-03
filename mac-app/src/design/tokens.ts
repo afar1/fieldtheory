@@ -1,6 +1,6 @@
 // =============================================================================
 // Design Tokens - Unified design system for Field Theory
-// Extracted from www/styles.css to ensure consistency across platforms.
+// Shared palette values for the Field Theory app surfaces.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -9,6 +9,7 @@
 // -----------------------------------------------------------------------------
 
 export type AccentPreset = 'forest' | 'ocean' | 'purple' | 'rose' | 'coral' | 'gold';
+export type ThemeStylePreset = 'default' | 'soft' | 'cool' | 'contrast';
 
 export const accentPresets: Record<AccentPreset, { light: string; dark: string; name: string }> = {
   forest: { light: '#14372A', dark: '#3d8b6a', name: 'Forest' },
@@ -17,6 +18,13 @@ export const accentPresets: Record<AccentPreset, { light: string; dark: string; 
   rose:   { light: '#6a2c4a', dark: '#ca6d9b', name: 'Rose' },
   coral:  { light: '#c45844', dark: '#e8836e', name: 'Coral' },
   gold:   { light: '#8a6914', dark: '#d4a934', name: 'Gold' },
+};
+
+export const themeStylePresets: Record<ThemeStylePreset, { name: string; description: string }> = {
+  default: { name: 'Default', description: 'The current Field Theory palette' },
+  soft: { name: 'Soft', description: 'Lower-contrast surfaces for long writing sessions' },
+  cool: { name: 'Cool', description: 'Cooler gray surfaces with a quieter paper tone' },
+  contrast: { name: 'Contrast', description: 'Clearer surface separation and stronger borders' },
 };
 
 // Helper to generate accent hover colors (slightly darker/lighter)

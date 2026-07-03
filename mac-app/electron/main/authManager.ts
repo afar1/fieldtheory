@@ -27,13 +27,15 @@ const CLI_SESSION_PATH = path.join(os.homedir(), '.fieldtheory', 'session.json')
 // FileStorage - Persists session to disk for survival across app updates
 // =============================================================================
 
-class FileStorage implements SupportedStorage {
+export class FileStorage implements SupportedStorage {
   private storage: Map<string, string> = new Map();
   private filePath: string;
+  private protectedFilePath: string;
   private hasLoggedEmptySkip: boolean = false;  // Only log "skipping save" once
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, 'supabase-session.json');
+    this.protectedFilePath = path.join(userDataPath, 'supabase-session.enc');
     this.loadFromDisk();
   }
 
@@ -84,17 +86,44 @@ class FileStorage implements SupportedStorage {
   private loadFromDisk(): void {
     try {
       if (fs.existsSync(this.filePath)) {
-        const data = fs.readFileSync(this.filePath, 'utf-8');
-        const parsed = JSON.parse(data);
-        this.storage = new Map(Object.entries(parsed));
-        const keys = Array.from(this.storage.keys());
-        log.debug('Loaded from disk, keys present:', keys.length > 0 ? keys : '(none)');
-      } else {
-        log.debug('No session file exists yet');
+        try {
+          fs.chmodSync(this.filePath, 0o600);
+          const data = fs.readFileSync(this.filePath, 'utf-8');
+          const parsed = JSON.parse(data);
+          this.storage = new Map(Object.entries(parsed));
+          const keys = Array.from(this.storage.keys());
+          log.debug('Loaded session from disk, keys present:', keys.length > 0 ? keys : '(none)');
+          fs.rmSync(this.protectedFilePath, { force: true });
+          if (keys.length > 0) {
+            return;
+          }
+        } catch (err) {
+          log.warn('Failed to load session file:', err);
+          this.storage = new Map();
+          this.writeSessionFile({});
+          fs.rmSync(this.protectedFilePath, { force: true });
+        }
+        return;
       }
+
+      if (fs.existsSync(this.protectedFilePath)) {
+        fs.rmSync(this.protectedFilePath, { force: true });
+        log.info('Removed legacy protected session; safeStorage is no longer used for auth');
+        return;
+      }
+
+      log.debug('No session file exists yet');
     } catch (err) {
       log.warn('Failed to load session from disk:', err);
     }
+  }
+
+  private writeSessionFile(obj: Record<string, string>): void {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    const tempPath = `${this.filePath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(obj));
+    fs.chmodSync(tempPath, 0o600);
+    fs.renameSync(tempPath, this.filePath);
   }
 
   private saveToDisk(): void {
@@ -115,7 +144,8 @@ class FileStorage implements SupportedStorage {
       }
       this.hasLoggedEmptySkip = false;  // Reset flag when we have real data to save
 
-      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+      this.writeSessionFile(obj);
+      fs.rmSync(this.protectedFilePath, { force: true });
     } catch (err) {
       log.warn('Failed to save session to disk:', err);
     }
@@ -128,7 +158,8 @@ class FileStorage implements SupportedStorage {
   clearStorage(): void {
     this.storage.clear();
     try {
-      fs.writeFileSync(this.filePath, '{}');
+      this.writeSessionFile({});
+      fs.rmSync(this.protectedFilePath, { force: true });
       log.info('Storage cleared (explicit sign-out)');
     } catch (err) {
       log.warn('Failed to clear storage:', err);
@@ -167,6 +198,21 @@ export interface AuthManagerEvents {
   userChanged: (callsign: string) => void;
   userLoggedOut: () => void;
   authDebug: (event: AuthDebugEvent) => void;
+}
+
+export interface AuthSessionState {
+  authenticated: boolean;
+  expires_at: number | null;
+  expiresAt: number | null;
+  tier: 'free' | 'pro';
+  callsign: string | null;
+  displayName?: string;
+  user: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+  } | null;
 }
 
 export class AuthManager extends EventEmitter {
@@ -333,6 +379,10 @@ export class AuthManager extends EventEmitter {
     return false;
   }
 
+  private isSessionStorageUsable(userDataPath: string): boolean {
+    return this.isSessionFileUsable(path.join(userDataPath, 'supabase-session.json'));
+  }
+
   /**
    * Best-effort migration for session storage when app-data directory names changed
    * across releases (e.g. field-theory -> fieldtheory-mac).
@@ -340,21 +390,18 @@ export class AuthManager extends EventEmitter {
    * This keeps users signed in after manual drag-replace installs.
    */
   private migrateLegacySessionStorageIfNeeded(targetUserDataPath: string): void {
-    // Experimental builds intentionally isolate data from production.
-    if (process.env.EXPERIMENTAL === 'true') {
+    if (this.isSessionStorageUsable(targetUserDataPath)) {
       return;
     }
 
     const targetSessionPath = path.join(targetUserDataPath, 'supabase-session.json');
-    if (this.isSessionFileUsable(targetSessionPath)) {
-      return;
-    }
-
     const appDataRoot = app.getPath('appData');
     const knownAppDataNames = [
       'fieldtheory-mac',
       'field-theory',
       'Field Theory',
+      'Field Theory Experimental',
+      'Electron',
       'littleai-mac',
       'Oscar',
     ];
@@ -388,11 +435,13 @@ export class AuthManager extends EventEmitter {
   /**
    * Initialize the auth manager with Supabase credentials.
    */
-  async init(supabaseUrl?: string, supabaseAnonKey?: string): Promise<void> {
+  async init(supabaseUrl?: string, supabasePublishableKey?: string): Promise<void> {
     const url = supabaseUrl || process.env.VITE_SUPABASE_URL;
-    const anonKey = supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY;
+    const publishableKey = supabasePublishableKey
+      || process.env.FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY
+      || process.env.VITE_SUPABASE_ANON_KEY;
 
-    if (!url || !anonKey) {
+    if (!url || !publishableKey) {
       log.warn('No Supabase credentials available');
       return;
     }
@@ -402,7 +451,7 @@ export class AuthManager extends EventEmitter {
     this.fileStorage = new FileStorage(userDataPath);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.supabase = createClient(url, anonKey, {
+    this.supabase = createClient(url, publishableKey, {
       auth: {
         storage: this.fileStorage,
         autoRefreshToken: false,  // DISABLED: We handle refresh ourselves to prevent race conditions
@@ -661,7 +710,7 @@ export class AuthManager extends EventEmitter {
     // Start a new refresh operation
     this.emitDebug('REFRESH_STARTED', {
       source,
-      tokenPrefix: refreshToken.substring(0, 8) + '...',
+      hasRefreshToken: refreshToken.length > 0,
     }, 'info');
 
     // Create a promise that other callers can wait on
@@ -784,34 +833,23 @@ export class AuthManager extends EventEmitter {
 
   /**
    * Attempt to recover session when SDK fires spurious SIGNED_OUT.
-   * FileStorage preserves disk data when SDK clears memory, so we read directly from disk.
+   * FileStorage preserves protected data when SDK clears memory, so recover through it.
    */
   private async attemptSessionRecovery(): Promise<boolean> {
-    const sessionPath = path.join(app.getPath('userData'), 'supabase-session.json');
     try {
-      if (!fs.existsSync(sessionPath)) {
+      const rawSession = this.fileStorage?.getRawSessionData();
+      if (!rawSession?.refresh_token) {
         this.emitDebug('RECOVERY_NO_DISK_SESSION', {
-          path: sessionPath,
+          path: path.join(app.getPath('userData'), 'supabase-session.json'),
         }, 'info');
         return false;
       }
 
-      const diskData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-      for (const value of Object.values(diskData)) {
-        if (typeof value === 'string') {
-          const parsed = JSON.parse(value);
-          if (parsed?.refresh_token) {
-            this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
-              tokenPrefix: parsed.refresh_token.substring(0, 8) + '...',
-              user: parsed.user?.email,
-            }, 'recovery');
-            return await this.coordinatedRefresh(parsed.refresh_token, 'recovery');
-          }
-        }
-      }
-      this.emitDebug('RECOVERY_NO_TOKEN_IN_DISK_DATA', {
-        keysFound: Object.keys(diskData),
-      }, 'warn');
+      this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
+        hasRefreshToken: true,
+        user: rawSession.user?.email,
+      }, 'recovery');
+      return await this.coordinatedRefresh(rawSession.refresh_token, 'recovery');
     } catch (err) {
       this.emitDebug('RECOVERY_FAILED', {
         error: err instanceof Error ? err.message : String(err),
@@ -912,6 +950,25 @@ export class AuthManager extends EventEmitter {
    */
   getSession(): Session | null {
     return this.session;
+  }
+
+  getSessionState(): AuthSessionState | null {
+    const session = this.session;
+    if (!session?.user?.id) return null;
+    return {
+      authenticated: true,
+      expires_at: session.expires_at ?? null,
+      expiresAt: session.expires_at ?? null,
+      tier: this.cachedTier,
+      callsign: this.getCallsignFromSession(session),
+      displayName: this.getDisplayNameFromSession(session),
+      user: {
+        id: session.user.id,
+        email: session.user.email ?? undefined,
+        user_metadata: session.user.user_metadata as Record<string, unknown> | undefined,
+        app_metadata: session.user.app_metadata as Record<string, unknown> | undefined,
+      },
+    };
   }
 
   /**

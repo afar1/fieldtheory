@@ -1,9 +1,47 @@
 {
   "appId": "com.fieldtheory.experimental",
   "productName": "Field Theory Experimental",
+  "artifactName": "Field.Theory.Experimental-${version}-${arch}.${ext}",
+  "dmg": {
+    "sign": true
+  },
   "beforeBuild": "scripts/electron-builder-before-build.js",
+  "afterSign": "scripts/notarize.js",
+  "extraMetadata": {
+    "fieldTheoryBuildChannel": "experimental"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "afar1",
+    "repo": "oscar",
+    "private": true
+  },
+  "fileAssociations": [
+    {
+      "ext": "md",
+      "name": "Markdown",
+      "description": "Markdown document",
+      "role": "Editor",
+      "rank": "Alternate"
+    },
+    {
+      "ext": "markdown",
+      "name": "Markdown",
+      "description": "Markdown document",
+      "role": "Editor",
+      "rank": "Alternate"
+    },
+    {
+      "ext": "mdx",
+      "name": "MDX",
+      "description": "MDX document",
+      "role": "Editor",
+      "rank": "Alternate"
+    }
+  ],
   "mac": {
     "category": "public.app-category.productivity",
+    "notarize": false,
     "minimumSystemVersion": "13.0",
     "target": [
       "dmg",
@@ -13,7 +51,7 @@
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.plist",
     "extendInfo": {
-      "LSUIElement": true,
+      "LSUIElement": false,
       "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
       "NSCameraUsageDescription": "Used locally to detect gaze direction for window focus. No video is recorded or transmitted.",
       "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots and system audio for AI context.",
@@ -31,32 +69,20 @@
         "to": "assets"
       },
       {
-        "from": "../build-whisper/bin/whisper-cli",
-        "to": "whisper-cli"
-      },
-      {
-        "from": "../build-whisper/bin/whisper-server",
-        "to": "whisper-server"
-      },
-      {
         "from": "public/sounds",
         "to": "sounds"
       },
       {
-        "from": "resources/chatterbox",
-        "to": "chatterbox"
+        "from": "scripts/gemma-generate.mjs",
+        "to": "scripts/gemma-generate.mjs"
+      },
+      {
+        "from": "scripts/setup-gemma.sh",
+        "to": "scripts/setup-gemma.sh"
       },
       {
         "from": "scripts/find-mlx-python.sh",
         "to": "scripts/find-mlx-python.sh"
-      },
-      {
-        "from": "scripts/mlx-whisper-transcribe.py",
-        "to": "scripts/mlx-whisper-transcribe.py"
-      },
-      {
-        "from": "scripts/setup-mlx-whisper.sh",
-        "to": "scripts/setup-mlx-whisper.sh"
       },
       {
         "from": "scripts/parakeet-transcribe.py",
@@ -72,6 +98,8 @@
     "dist/**/*",
     "electron-dist/**/*",
     "package.json",
+    "scripts/gemma-generate.mjs",
+    "scripts/setup-gemma.sh",
     "node_modules/**/*",
     "!electron-dist/**/*.test.js",
     "!electron-dist/**/*.test.js.map",

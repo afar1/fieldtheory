@@ -18,6 +18,7 @@ vi.mock('./logger', () => ({
 import {
   DEFAULT_MODEL_SIZE,
   isModelSize,
+  MEETING_DIARIZATION_MODEL_SIZE,
   ModelManager,
   SUPPORTED_MODEL_SIZES,
 } from './modelManager';
@@ -29,6 +30,7 @@ describe('ModelManager model size helpers', () => {
 
   it('recognizes supported model sizes and rejects invalid values', () => {
     expect(isModelSize('small')).toBe(true);
+    expect(isModelSize('small-tdrz')).toBe(true);
     expect(isModelSize('medium')).toBe(false);
     expect(isModelSize('tiny')).toBe(false);
     expect(isModelSize(null)).toBe(false);
@@ -37,7 +39,8 @@ describe('ModelManager model size helpers', () => {
 
   it('exports shared defaults used by transcriber and ipc layers', () => {
     expect(DEFAULT_MODEL_SIZE).toBe('small');
-    expect(SUPPORTED_MODEL_SIZES).toEqual(['small']);
+    expect(MEETING_DIARIZATION_MODEL_SIZE).toBe('small-tdrz');
+    expect(SUPPORTED_MODEL_SIZES).toEqual(['small', 'small-tdrz']);
   });
 
   it('checks download status for every supported model size', async () => {
@@ -53,10 +56,15 @@ describe('ModelManager model size helpers', () => {
     }
   });
 
-  it('only exposes the small whisper model in available model metadata', () => {
+  it('exposes the standard and meeting diarization whisper models in available model metadata', () => {
     const manager = new ModelManager();
 
-    expect(Object.keys(manager.getAvailableModels())).toEqual(['small']);
+    expect(Object.keys(manager.getAvailableModels())).toEqual(['small', 'small-tdrz']);
     expect(manager.getAvailableModels().small.name).toContain('small');
+    expect(manager.getAvailableModels()['small-tdrz']).toEqual(expect.objectContaining({
+      name: 'ggml-small.en-tdrz.bin',
+      url: expect.stringContaining('akashmjn/tinydiarize-whisper.cpp'),
+      supportsSpeakerDiarization: true,
+    }));
   });
 });

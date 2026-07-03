@@ -19,6 +19,32 @@ const CONFIG = {
   BUFFER: 600,
 };
 
+export const BOOKMARKS_CANVAS_EDGE_GUTTER_PX = 30;
+
+export function getBookmarksCanvasColumnMetrics(viewportWidth: number): {
+  cols: number;
+  itemWidth: number;
+  totalWidth: number;
+  edgeGutter: number;
+  gap: number;
+} {
+  const gap = CONFIG.GAP;
+  const edgeGutter = BOOKMARKS_CANVAS_EDGE_GUTTER_PX;
+  const contentWidth = Math.max(1, viewportWidth - edgeGutter * 2);
+  const cols = Math.max(
+    CONFIG.MIN_COLS,
+    Math.min(CONFIG.MAX_COLS, Math.floor((contentWidth + gap) / CONFIG.TARGET_COL_WIDTH)),
+  );
+  const itemWidth = Math.max(1, Math.floor((contentWidth - gap * (cols - 1)) / cols));
+  return {
+    cols,
+    itemWidth,
+    totalWidth: edgeGutter * 2 + itemWidth * cols + gap * (cols - 1),
+    edgeGutter,
+    gap,
+  };
+}
+
 const easeInOutQuart = (t: number) =>
   t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
 
@@ -75,6 +101,11 @@ function applyImageGrid(gridEl: HTMLDivElement, sources: string[], alt: string):
     if (img.src !== src) img.src = src;
     img.alt = alt;
     img.style.display = 'block';
+    img.onerror = () => {
+      img.removeAttribute('src');
+      img.alt = '';
+      img.style.display = 'none';
+    };
     img.style.gridColumn = sources.length === 3 && i === 0 ? '1' : '';
     img.style.gridRow = sources.length === 3 && i === 0 ? '1 / span 2' : '';
   }
@@ -103,6 +134,10 @@ function resetLightboxVideo(video: HTMLVideoElement): void {
 function applyAvatar(img: HTMLImageElement, url: string | null): void {
   if (url) {
     if (img.src !== url) img.src = url;
+    img.onerror = () => {
+      img.removeAttribute('src');
+      img.style.display = 'none';
+    };
     img.style.display = 'block';
   } else {
     img.removeAttribute('src');
@@ -179,7 +214,7 @@ type Controller = {
   destroy: () => void;
 };
 
-export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }) {
+export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookmarks: Bookmark[]; onActionFeedback?: (message: string) => void }) {
   const { theme } = useTheme();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -259,12 +294,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const buildLayout = () => {
       const vw = viewport.clientWidth;
       if (vw === 0) return; // canvas is hidden; don't waste a layout pass.
-      const gap = CONFIG.GAP;
-      const newCols = Math.max(
-        CONFIG.MIN_COLS,
-        Math.min(CONFIG.MAX_COLS, Math.floor((vw - gap) / CONFIG.TARGET_COL_WIDTH)),
-      );
-      const newColWidth = Math.max(1, Math.floor((vw - gap) / newCols));
+      const metrics = getBookmarksCanvasColumnMetrics(vw);
+      const gap = metrics.gap;
+      const newCols = metrics.cols;
+      const newColWidth = metrics.itemWidth + gap;
       if (
         newColWidth === lastBuildColWidth &&
         newCols === lastBuildCols &&
@@ -278,11 +311,11 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       lastBuildCurrent = current;
       colWidth = newColWidth;
       cols = newCols;
-      totalWidth = colWidth * cols;
+      totalWidth = metrics.totalWidth;
 
       const colHeights = new Array(cols).fill(0);
       const columns: LayoutItem[][] = Array.from({ length: cols }, () => []);
-      const itemW = colWidth - gap;
+      const itemW = metrics.itemWidth;
 
       for (const bm of current) {
         let minCol = 0;
@@ -301,7 +334,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         } else {
           itemH = estimateTextCardHeight(bm, itemW);
         }
-        const x = minCol * colWidth + gap / 2;
+        const x = metrics.edgeGutter + minCol * colWidth;
         const y = colHeights[minCol] + gap / 2;
         columns[minCol].push({ key: '', bookmark: bm, x, y, w: itemW, h: itemH });
         colHeights[minCol] += itemH + gap;
@@ -324,6 +357,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const freePool: HTMLDivElement[] = [];
     const activeMap = new Map<string, ActiveEntry>();
     const elToBookmark = new WeakMap<HTMLDivElement, Bookmark>();
+    const cardCopyButtonCleanups: Array<() => void> = [];
+    const copyResetTimers = new Set<ReturnType<typeof setTimeout>>();
+    const scheduleCopyReset = (callback: () => void) => {
+      const timer = setTimeout(() => {
+        copyResetTimers.delete(timer);
+        callback();
+      }, 1200);
+      copyResetTimers.add(timer);
+    };
 
     // Text-card colors come from CSS custom properties on the viewport, so
     // theme toggles propagate to existing pool elements without a rebuild.
@@ -396,7 +438,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         el.appendChild(dateBadgeEl);
 
         const cardCopyBtn = document.createElement('button');
-        cardCopyBtn.className = 'bm-card-copy-button';
+        cardCopyBtn.className = 'bm-card-action-button bm-card-copy-button';
         cardCopyBtn.type = 'button';
         cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
         cardCopyBtn.title = 'Copy bookmark content';
@@ -409,15 +451,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
         `;
-        cardCopyBtn.addEventListener('mousedown', (event) => {
+        const onCardCopyMouseDown = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
-        });
-        cardCopyBtn.addEventListener('mouseup', (event) => {
+        };
+        const onCardCopyMouseUp = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
-        });
-        cardCopyBtn.addEventListener('click', (event) => {
+        };
+        const onCardCopyClick = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
           const bookmark = elToBookmark.get(el);
@@ -427,12 +469,20 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             cardCopyBtn.dataset.copied = '1';
             cardCopyBtn.setAttribute('aria-label', 'Copied');
             cardCopyBtn.title = 'Copied';
-            setTimeout(() => {
+            scheduleCopyReset(() => {
               delete cardCopyBtn.dataset.copied;
               cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
               cardCopyBtn.title = 'Copy bookmark content';
-            }, 1200);
+            });
           });
+        };
+        cardCopyBtn.addEventListener('mousedown', onCardCopyMouseDown);
+        cardCopyBtn.addEventListener('mouseup', onCardCopyMouseUp);
+        cardCopyBtn.addEventListener('click', onCardCopyClick);
+        cardCopyButtonCleanups.push(() => {
+          cardCopyBtn.removeEventListener('mousedown', onCardCopyMouseDown);
+          cardCopyBtn.removeEventListener('mouseup', onCardCopyMouseUp);
+          cardCopyBtn.removeEventListener('click', onCardCopyClick);
         });
         el.appendChild(cardCopyBtn);
 
@@ -984,7 +1034,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const pngBlob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
         copyBtn.dataset.copied = '1';
-        setTimeout(() => { delete copyBtn.dataset.copied; }, 1200);
+        scheduleCopyReset(() => { delete copyBtn.dataset.copied; });
       } catch (err) {
         console.error('[BookmarksCanvas] copy image failed', err);
       }
@@ -998,7 +1048,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const result = await window.bookmarksAPI?.copyForAgent(bm.id);
         if (!result?.success) throw new Error(result?.error ?? 'Copy failed');
         agentCopyBtn.dataset.copied = '1';
-        setTimeout(() => { delete agentCopyBtn.dataset.copied; }, 1200);
+        scheduleCopyReset(() => { delete agentCopyBtn.dataset.copied; });
       } catch (err) {
         console.error('[BookmarksCanvas] copy content failed', err);
       }
@@ -1092,6 +1142,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         agentCopyBtn.removeEventListener('click', onAgentCopyClick);
         openBtn.removeEventListener('click', onOpenClick);
         linkEl.removeEventListener('click', onLinkClick);
+        cardCopyButtonCleanups.forEach((cleanup) => cleanup());
+        cardCopyButtonCleanups.length = 0;
+        copyResetTimers.forEach(clearTimeout);
+        copyResetTimers.clear();
         if (state.lightbox) {
           state.lightbox.clone.remove();
           state.lightbox.sourceEl.style.visibility = '';
@@ -1102,6 +1156,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     };
 
     return () => {
+      copyResetTimers.forEach((timer) => clearTimeout(timer));
+      copyResetTimers.clear();
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
@@ -1152,10 +1208,9 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         .bm-check-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-copy-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-check-icon { opacity: 1; transform: scale(1); }
-        .bm-card-copy-button {
+        .bm-card-action-button {
           position: absolute;
           top: 10px;
-          right: 10px;
           z-index: 3;
           width: 28px;
           height: 28px;
@@ -1176,16 +1231,19 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           transform: translateY(-2px);
           transition: opacity 0.14s ease, transform 0.14s ease, color 0.14s ease, background 0.14s ease;
         }
-        .bm-grid-item:hover .bm-card-copy-button,
-        .bm-card-copy-button[data-copied="1"] {
+        .bm-card-copy-button {
+          right: 10px;
+        }
+        .bm-grid-item:hover .bm-card-action-button,
+        .bm-card-action-button[data-copied="1"] {
           opacity: 1;
           pointer-events: auto;
           transform: translateY(0);
         }
-        .bm-card-copy-button[data-copied="1"] {
+        .bm-card-action-button[data-copied="1"] {
           color: #22c55e;
         }
-        .bm-card-copy-button:hover {
+        .bm-card-action-button:hover {
           background: rgba(0,0,0,0.58);
         }
         .bm-card-check-icon {

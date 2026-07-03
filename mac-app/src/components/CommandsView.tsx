@@ -9,9 +9,13 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
-import ContentToolbar from './ContentToolbar';
+import { FEATURE_CLOUD_COMMANDS_ENABLED } from '../featureFlags';
+import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ContentModeToggleButton from './ContentModeToggleButton';
 import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
+import LinkedDocumentsSection from './LinkedDocumentsSection';
 import {
   SIDEBAR_DARK_ICON_COLOR,
   SIDEBAR_DARK_TEXT_COLOR,
@@ -21,25 +25,76 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
 } from './SidebarIcons';
-import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, getMarkdownFormattingShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
+import { getMarkdownFormattingEdit } from '../utils/markdownFormatting';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import {
   buildWikiIndex,
   classifyLinkHref,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
-  getWikiLinkTargetKey,
+  getMarkdownLinkRelationMetadataDocuments,
   isUnresolvedWikiHref,
+  mergeMarkdownLinkRelationDocuments,
   transformWikiLinks,
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
+  type WikiIndex,
   type WikiIndexInput,
   type WikiLinkTarget,
+  upsertMarkdownLinkRelationDocument,
 } from '../utils/wikiLinks';
+import { wikiTargetPartsFromUnresolvedTitle } from '../utils/wikiIndexPages';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
+const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
+const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
+const COMMANDS_MARKDOWN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 22.2;
+const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
+const COMMANDS_RENDERED_CONTENT_BOTTOM_SCROLL_SPACE_PX = 44.4;
+const COMMANDS_TEXT_SIZE_STORAGE_KEY = 'commands-text-size';
+const COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY = 'commands-sidebar-width';
+const COMMANDS_RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
+const BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT = 'fieldtheory:browser-helper-event-stream-open';
+const COMMANDS_FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
+type CommandsTextSize = 'small' | 'normal' | 'large';
+
+function loadCommandsTextSize(): CommandsTextSize {
+  const saved = localStorage.getItem(COMMANDS_TEXT_SIZE_STORAGE_KEY);
+  return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
+}
+
+function loadCommandsSidebarWidth(): number {
+  const saved = localStorage.getItem(COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY);
+  const parsed = saved ? parseInt(saved, 10) : NaN;
+  return Number.isFinite(parsed) ? parsed : 180;
+}
+
+function isCommandsStorageKey(key: string | null | undefined): boolean {
+  return key === COMMANDS_TEXT_SIZE_STORAGE_KEY || key === COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY;
+}
+
+export function getCommandsContentTopPadding(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  const normalTopPadding = input.isEditing
+    ? COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX
+    : COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX;
+
+  return input.focusChromeActive
+    ? normalTopPadding + COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX
+    : normalTopPadding;
+}
+
+export function getCommandsContentBottomScrollSpace(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  return input.isEditing ? 0 : COMMANDS_RENDERED_CONTENT_BOTTOM_SCROLL_SPACE_PX;
+}
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -103,10 +158,13 @@ const InlineNameInput = forwardRef<HTMLInputElement, {
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
   sidebarCollapsed?: boolean;
-  onFocusChromeActiveChange?: (active: boolean) => void;
+  onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean, visualOpacity?: number) => void;
   initialCommandPath?: string | null;
   onInitialCommandConsumed?: () => void;
   onFocusChromeShortcut?: () => void;
+  focusChromeEnabled?: boolean;
+  onFocusChromeEnabledChange?: (enabled: boolean) => void;
+  focusChromeGroupOpacity?: number;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
   onNavigateBack?: () => void;
@@ -144,27 +202,25 @@ interface CommandWithContent extends CommandItem {
   documentVersion: DocumentVersion;
 }
 
-const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: '→',
-  inbound: '←',
-  bidirectional: '↔',
-};
-
-const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: 'This document links out',
-  inbound: 'Links back to this document',
-  bidirectional: 'Linked both ways',
-};
-
-const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
-  wiki: 'Wiki',
-  artifact: 'Artifact',
-  command: 'Command',
+type DeletedCommandUndo = {
+  command: CommandWithContent;
+  directoryPath: string;
+  restoreName: string;
+  previousSelectedPath: string | null;
 };
 
 function commandNameFromFilePath(filePath: string): string {
   const fileName = filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? filePath;
   return fileName.replace(/\.md$/i, '');
+}
+
+function commandDirectoryFromFilePath(filePath: string): string {
+  const match = filePath.match(/^(.*)[\\/][^\\/]+$/);
+  return match?.[1] ?? '';
+}
+
+function commandFileNameFromFilePath(filePath: string): string {
+  return filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? commandNameFromFilePath(filePath);
 }
 
 function commandsToWikiIndexPages(commands: Array<{ name: string; displayName: string; filePath: string }>): WikiIndexInput[] {
@@ -208,6 +264,9 @@ export default function CommandsView({
   initialCommandPath,
   onInitialCommandConsumed,
   onFocusChromeShortcut,
+  focusChromeEnabled,
+  onFocusChromeEnabledChange,
+  focusChromeGroupOpacity = 0,
   canNavigateBack = false,
   canNavigateForward = false,
   onNavigateBack,
@@ -232,6 +291,8 @@ export default function CommandsView({
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
+  const markdownLinkRelationDocumentsRequestRef = useRef(0);
 
   // Popular commands state
   const [popularCommands, setPopularCommands] = useState<PopularCommand[]>([]);
@@ -251,6 +312,7 @@ export default function CommandsView({
   const lastSavedContentRef = useRef<string | null>(null);
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const lastSeededPathRef = useRef<string | null>(null);
+  const deletedCommandUndoRef = useRef<DeletedCommandUndo | null>(null);
 
   // Inline new command input
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
@@ -266,46 +328,76 @@ export default function CommandsView({
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // Text size
-  const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
-    const saved = localStorage.getItem('commands-text-size');
-    return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
-  });
+  const [textSize, setTextSize] = useState<CommandsTextSize>(loadCommandsTextSize);
   const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
 
   // Layout
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('commands-sidebar-width');
-    return saved ? parseInt(saved, 10) : 180;
-  });
+  const [sidebarWidth, setSidebarWidth] = useState(loadCommandsSidebarWidth);
+  const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editTextareaFocusedRef = useRef(false);
   const commandContentRef = useRef<HTMLDivElement | null>(null);
+  const wikiIndexRef = useRef<WikiIndex | null>(null);
+  const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
-  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
-  const [focusImmersive, setFocusImmersive] = useState(false);
+  const [uncontrolledFocusImmersive, setUncontrolledFocusImmersive] = useState(false);
+  const focusImmersive = focusChromeEnabled ?? uncontrolledFocusImmersive;
+  const setFocusImmersive = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    const nextValue = typeof next === 'function' ? next(focusImmersive) : next;
+    if (focusChromeEnabled === undefined) {
+      setUncontrolledFocusImmersive(nextValue);
+    }
+    onFocusChromeEnabledChange?.(nextValue);
+  }, [focusChromeEnabled, focusImmersive, onFocusChromeEnabledChange]);
   const focusChromeActive = focusImmersive && sidebarCollapsed;
-  const focusToolbarControlsVisible = !focusChromeActive;
+  const focusChromeVisualOpacity = focusChromeActive ? focusChromeGroupOpacity : 1;
+  const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
+  const focusToolbarControlsVisible = !focusChromeActive || focusChromeVisualVisible;
+  const commandContentTopPadding = getCommandsContentTopPadding({ isEditing, focusChromeActive });
+  const commandContentBottomScrollSpace = getCommandsContentBottomScrollSpace({ isEditing, focusChromeActive });
   const toggleFocusImmersive = useCallback(() => {
     if (!focusImmersive) {
       onFocusChromeShortcut?.();
     }
     setFocusImmersive((prev) => !prev);
-  }, [focusImmersive, onFocusChromeShortcut]);
+  }, [focusImmersive, onFocusChromeShortcut, setFocusImmersive]);
   const handleEditTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (isImmersiveToggleShortcut(e)) {
       e.preventDefault();
       e.stopPropagation();
       e.nativeEvent.stopImmediatePropagation?.();
       toggleFocusImmersive();
+      return;
+    }
+
+    const formattingKind = getMarkdownFormattingShortcut(e);
+    if (formattingKind) {
+      e.preventDefault();
+      const formattingEdit = getMarkdownFormattingEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+        formattingKind,
+      );
+      const scrollTop = e.currentTarget.scrollTop;
+      setEditContent(formattingEdit.nextValue);
+      requestAnimationFrame(() => {
+        const editor = editTextareaRef.current;
+        if (!editor || editor.value !== formattingEdit.nextValue) return;
+        editor.setSelectionRange(formattingEdit.selectionStart, formattingEdit.selectionEnd);
+        editor.scrollTop = scrollTop;
+      });
       return;
     }
 
@@ -364,13 +456,38 @@ export default function CommandsView({
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
     if (isResizing) return;
-    localStorage.setItem('commands-sidebar-width', String(sidebarWidth));
+    localStorage.setItem(COMMANDS_SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
   }, [isResizing, sidebarWidth]);
 
   // Persist text size preference
   useEffect(() => {
-    localStorage.setItem('commands-text-size', textSize);
+    localStorage.setItem(COMMANDS_TEXT_SIZE_STORAGE_KEY, textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    const applyStoredCommandPreferences = () => {
+      const nextTextSize = loadCommandsTextSize();
+      const nextSidebarWidth = loadCommandsSidebarWidth();
+      setTextSize((current) => current === nextTextSize ? current : nextTextSize);
+      setSidebarWidth((current) => current === nextSidebarWidth ? current : nextSidebarWidth);
+      sidebarWidthRef.current = nextSidebarWidth;
+      if (!isResizing) applySidebarWidth(nextSidebarWidth);
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      if (isCommandsStorageKey(key)) applyStoredCommandPreferences();
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isCommandsStorageKey(key)) applyStoredCommandPreferences();
+    };
+    window.addEventListener(COMMANDS_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(COMMANDS_RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [applySidebarWidth, isResizing]);
 
   useEffect(() => {
     const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
@@ -383,58 +500,20 @@ export default function CommandsView({
   }, []);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(focusChromeActive);
-  }, [focusChromeActive, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(focusChromeActive, focusChromeActive && focusChromeVisualVisible, focusChromeActive ? focusChromeVisualOpacity : 0);
+  }, [focusChromeActive, focusChromeVisualOpacity, focusChromeVisualVisible, onFocusChromeActiveChange]);
 
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
   }, [onFocusChromeActiveChange]);
 
-  // Mock popular commands (fallback if Supabase unavailable)
-  const getMockCommands = useCallback((): PopularCommand[] => [
-    {
-      id: 'mock-1',
-      name: 'learn',
-      content: 'Periodically you will learn something from talking to me. Document your learnings in a markdown file in the learnings/ directory.',
-      copy_count: 42,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-2',
-      name: 'refactor',
-      content: 'Refactor the selected code to be more readable, maintainable, and follow best practices. Explain what changes you made and why.',
-      copy_count: 38,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-3',
-      name: 'review',
-      content: 'Review this code for bugs, security issues, and opportunities for improvement. Be thorough and specific.',
-      copy_count: 35,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-4',
-      name: 'commit',
-      content: 'Create a git commit with a clear, concise message following conventional commit standards.',
-      copy_count: 31,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'mock-5',
-      name: 'pr',
-      content: 'Create a pull request with a clear description of changes, testing done, and any relevant context.',
-      copy_count: 28,
-      contributed_by: null,
-      created_at: new Date().toISOString(),
-    },
-  ], []);
-
   useEffect(() => {
+    if (!FEATURE_CLOUD_COMMANDS_ENABLED) {
+      setFieldTheorySyncEnabled(false);
+      setViewMode((current) => current === 'popular' ? 'mine' : current);
+      return;
+    }
+
     let alive = true;
     const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
     if (!syncStatusPromise) {
@@ -474,20 +553,20 @@ export default function CommandsView({
             .order('created_at', { ascending: false });
 
           if (error) throw error;
-          setPopularCommands(data || getMockCommands());
+          setPopularCommands(data ?? []);
         } else {
-          setPopularCommands(getMockCommands());
+          setPopularCommands([]);
         }
       } catch (err) {
         console.error('Failed to fetch popular commands:', err);
-        setPopularCommands(getMockCommands());
+        setPopularCommands([]);
       } finally {
         setPopularLoading(false);
       }
     };
 
     fetchPopular();
-  }, [viewMode, fieldTheorySyncEnabled, popularCommands.length, getMockCommands]);
+  }, [viewMode, fieldTheorySyncEnabled, popularCommands.length]);
 
   // Filter popular commands
   const filteredPopularCommands = useMemo(() => {
@@ -517,8 +596,24 @@ export default function CommandsView({
     }
     return '';
   }, [fieldTheorySyncEnabled, selectedCommand, selectedPopularCommand, viewMode]);
+  const commandToolbarContextHasFolder = focusToolbarControlsVisible
+    && viewMode === 'mine'
+    && Boolean(selectedCommand)
+    && Boolean(commandToolbarContext);
+  const showSelectedCommandInFolder = () => {
+    if (selectedCommand?.filePath) {
+      window.shellAPI?.showItemInFolder(selectedCommand.filePath);
+    }
+  };
 
-  const commandIndexPages = useMemo(() => commandsToWikiIndexPages(commands), [commands]);
+  const commandIndexKey = useMemo(
+    () => JSON.stringify(commands.map(({ name, displayName, filePath }) => [name, displayName, filePath])),
+    [commands],
+  );
+  const commandIndexPages = useMemo(() => commandsToWikiIndexPages(commands), [commandIndexKey]);
+  const commandTitleByPath = useMemo(() => new Map(
+    commands.map((command) => [command.filePath, command.displayName || command.name]),
+  ), [commandIndexKey]);
   const wikiIndex = useMemo(() => buildWikiIndex([
     ...wikiIndexPages,
     ...readings.map((reading) => ({
@@ -528,6 +623,19 @@ export default function CommandsView({
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+  wikiIndexRef.current = wikiIndex;
+
+  const upsertCommandRelationDocument = useCallback((filePath: string, title: string | undefined, content: string) => {
+    const currentWikiIndex = wikiIndexRef.current;
+    if (!currentWikiIndex) return;
+    const commandTitle = title || commandTitleByPath.get(filePath) || filePath;
+    setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+      target: { kind: 'command', path: filePath },
+      title: commandTitle,
+      content,
+      linkHits: getMarkdownEditorLinkHits(content, currentWikiIndex),
+    }));
+  }, [commandTitleByPath]);
 
   // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
   const displayContent = useMemo(() => {
@@ -543,24 +651,40 @@ export default function CommandsView({
     }
     return null;
   }, [selectedCommand, viewMode]);
+  const hasSelectedCommand = Boolean(selectedCommand);
+  const markdownLinkRelationMetadataDocuments = useMemo(() => getMarkdownLinkRelationMetadataDocuments([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
+  const visibleMarkdownLinkRelationDocuments = useMemo(() => (
+    mergeMarkdownLinkRelationDocuments(
+      markdownLinkRelationMetadataDocuments,
+      markdownLinkRelationDocuments,
+    )
+  ), [markdownLinkRelationDocuments, markdownLinkRelationMetadataDocuments]);
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!selectedCommand) return [];
     return getMarkdownLinkedDocuments(
       activeLinkTarget,
       selectedCommand.content,
-      markdownLinkRelationDocuments,
+      visibleMarkdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeLinkTarget, markdownLinkRelationDocuments, selectedCommand, wikiIndex]);
+  }, [activeLinkTarget, selectedCommand, visibleMarkdownLinkRelationDocuments, wikiIndex]);
 
-  const flashCopyPathCopied = useCallback(() => {
-    setCopyPathCopied(true);
+  const flashCopyFeedback = useCallback((label: string) => {
+    setCopyFeedbackLabel(label);
     if (copyPathFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyPathFeedbackTimerRef.current);
     }
     copyPathFeedbackTimerRef.current = window.setTimeout(() => {
-      setCopyPathCopied(false);
+      setCopyFeedbackLabel(null);
       copyPathFeedbackTimerRef.current = null;
     }, COPY_PATH_FEEDBACK_MS);
   }, []);
@@ -590,38 +714,60 @@ export default function CommandsView({
     return selectedCommand.filePath;
   }, [getRenderedSelectionText, selectedCommand?.filePath]);
 
-  const copySelectedCommandTextOrPath = useCallback(async () => {
+  const getSelectedCommandCopyPayload = useCallback((): { text: string; label: string } | null => {
     const text = getSelectedCommandTextOrPath();
-    if (!text) return;
+    if (!text) return null;
+    return {
+      text,
+      label: text === selectedCommand?.filePath ? 'Copied file path' : 'Copied segment',
+    };
+  }, [getSelectedCommandTextOrPath, selectedCommand?.filePath]);
+
+  const copySelectedCommandTextOrPath = useCallback(async () => {
+    const payload = getSelectedCommandCopyPayload();
+    if (!payload) return;
     try {
-      await navigator.clipboard.writeText(text);
-      flashCopyPathCopied();
+      await navigator.clipboard.writeText(payload.text);
+      flashCopyFeedback(payload.label);
     } catch (err) {
       console.error('Failed to copy command text or path:', err);
     }
-  }, [flashCopyPathCopied, getSelectedCommandTextOrPath]);
+  }, [flashCopyFeedback, getSelectedCommandCopyPayload]);
 
   const copySelectedCommandPath = useCallback(async () => {
     if (!selectedCommand?.filePath) return;
     try {
       await navigator.clipboard.writeText(selectedCommand.filePath);
-      flashCopyPathCopied();
+      flashCopyFeedback('Copied file path');
     } catch (err) {
       console.error('Failed to copy command path:', err);
     }
-  }, [flashCopyPathCopied, selectedCommand?.filePath]);
+  }, [flashCopyFeedback, selectedCommand?.filePath]);
 
   const openFieldTheoryMarkdownTarget = useCallback((target: WikiLinkTarget) => {
+    const path = target.kind === 'wiki'
+      ? target.relPath
+      : target.kind === 'bookmarks'
+        ? 'bookmarks'
+        : target.path;
     void window.commandsAPI?.openFieldTheoryMarkdown?.({
       kind: target.kind,
-      path: target.kind === 'wiki' ? target.relPath : target.path,
+      path,
     });
   }, []);
 
   const createUnresolvedWikiLink = useCallback(async (title: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+
+    const { folder, fileName, relPath } = wikiTargetPartsFromUnresolvedTitle(trimmed);
+    const existing = relPath ? await window.wikiAPI?.getPage(relPath) : null;
+    if (existing?.relPath) {
+      void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: existing.relPath });
+      return;
+    }
+
+    const page = await window.wikiAPI?.createFile(folder, fileName);
     if (page?.relPath) {
       void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: page.relPath });
     }
@@ -640,6 +786,9 @@ export default function CommandsView({
         return;
       case 'command':
         void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'command', path: action.path });
+        return;
+      case 'bookmarks':
+        void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'bookmarks', path: 'bookmarks' });
         return;
       case 'external':
         window.shellAPI?.openExternal(action.href);
@@ -754,7 +903,7 @@ export default function CommandsView({
     });
   }, [editContent, isEditing, selectedCommand]);
 
-  const saveCommandContent = useCallback(async (filePath: string, content: string) => {
+  const saveCommandContent = useCallback(async (filePath: string, content: string, title?: string) => {
     try {
       const expectedVersion = lastSavedVersionRef.current;
       const result = expectedVersion
@@ -767,6 +916,7 @@ export default function CommandsView({
             ? { ...prev, content: result.currentContent, documentVersion: result.currentVersion }
             : prev
           );
+          upsertCommandRelationDocument(filePath, title, result.currentContent);
           setEditContent(result.currentContent);
           lastSavedContentRef.current = result.currentContent;
           lastSavedVersionRef.current = result.currentVersion;
@@ -780,6 +930,7 @@ export default function CommandsView({
             ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
             : prev
           );
+          upsertCommandRelationDocument(filePath, title, content);
           lastSavedContentRef.current = content;
           lastSavedVersionRef.current = nextVersion ?? result.currentVersion;
           return true;
@@ -792,6 +943,7 @@ export default function CommandsView({
           ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
           : prev
         );
+        upsertCommandRelationDocument(filePath, title, content);
         lastSavedContentRef.current = content;
         if (nextVersion) lastSavedVersionRef.current = nextVersion;
         return true;
@@ -800,13 +952,13 @@ export default function CommandsView({
       console.error('Failed to save command:', err);
     }
     return false;
-  }, []);
+  }, [upsertCommandRelationDocument]);
 
   const flushCurrentEdit = useCallback(async () => {
     const pendingSave = flushSaveRef.current;
     if (pendingSave) return pendingSave();
     if (!selectedCommand || !isDirty) return true;
-    return saveCommandContent(selectedCommand.filePath, editContent);
+    return saveCommandContent(selectedCommand.filePath, editContent, selectedCommand.displayName || selectedCommand.name);
   }, [editContent, isDirty, saveCommandContent, selectedCommand]);
 
   const exitEditMode = useCallback(async () => {
@@ -899,12 +1051,13 @@ export default function CommandsView({
     if (editContent === lastSavedContentRef.current) return;
 
     const targetPath = selectedCommand.filePath;
+    const targetTitle = selectedCommand.displayName || selectedCommand.name;
     const targetContent = editContent;
     let done = false;
     const doSave = async () => {
       if (done) return true;
       done = true;
-      const saved = await saveCommandContent(targetPath, targetContent);
+      const saved = await saveCommandContent(targetPath, targetContent, targetTitle);
       if (flushSaveRef.current === doSave) flushSaveRef.current = null;
       return saved;
     };
@@ -934,6 +1087,17 @@ export default function CommandsView({
     return () => window.librarianAPI?.setMarkdownEditorFocused?.(false);
   }, []);
 
+  const reportCurrentMarkdownEditorFocus = useCallback(() => {
+    window.librarianAPI?.setMarkdownEditorFocused?.(editTextareaFocusedRef.current);
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    return () => {
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentMarkdownEditorFocus);
+    };
+  }, [reportCurrentMarkdownEditorFocus]);
+
   // Listen for commands changes. Also refresh on window focus as a safety
   // net — fs.watch with recursive:true is flaky on macOS for renames, so
   // external filename changes can be missed until the user comes back.
@@ -941,14 +1105,16 @@ export default function CommandsView({
     const unsubscribe = window.commandsAPI?.onCommandsChanged((updatedCommands) => {
       setCommands(updatedCommands);
     });
-    const onFocus = async () => {
+    const reloadCommands = async () => {
       const fresh = await window.commandsAPI?.getCommands();
       if (fresh) setCommands(fresh);
     };
-    window.addEventListener('focus', onFocus);
+    window.addEventListener('focus', reloadCommands);
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadCommands);
     return () => {
       unsubscribe?.();
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', reloadCommands);
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reloadCommands);
     };
   }, []);
 
@@ -959,8 +1125,10 @@ export default function CommandsView({
       if (!cancelled && result) setReadings(result);
     };
     void load();
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     };
   }, []);
 
@@ -976,13 +1144,52 @@ export default function CommandsView({
     };
     void load();
     const unsubscribe = window.wikiAPI?.onPageChanged?.(() => { void load(); });
+    window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     return () => {
       cancelled = true;
       unsubscribe?.();
+      window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, load);
     };
   }, []);
 
   useEffect(() => {
+    if (!hasSelectedCommand) {
+      setMarkdownLinkRelationDocuments([]);
+      return;
+    }
+
+    const requestId = markdownLinkBacklinkDocumentsRequestRef.current + 1;
+    markdownLinkBacklinkDocumentsRequestRef.current = requestId;
+    if (!activeLinkTarget || activeLinkTarget.kind !== 'command') return;
+
+    const load = async () => {
+      const documents = await window.libraryAPI?.getBacklinkRelationDocuments?.(activeLinkTarget);
+      const currentWikiIndex = wikiIndexRef.current;
+      if (
+        markdownLinkBacklinkDocumentsRequestRef.current !== requestId
+        || !documents?.length
+        || !currentWikiIndex
+      ) return;
+      setMarkdownLinkRelationDocuments((prev) => documents.reduce((next, document) => (
+        upsertMarkdownLinkRelationDocument(next, {
+          ...document,
+          linkHits: getMarkdownEditorLinkHits(document.content, currentWikiIndex),
+        })
+      ), prev));
+    };
+
+    void load();
+  }, [activeLinkTarget, hasSelectedCommand]);
+
+  useEffect(() => {
+    const requestId = markdownLinkRelationDocumentsRequestRef.current + 1;
+    markdownLinkRelationDocumentsRequestRef.current = requestId;
+
+    if (!hasSelectedCommand) {
+      setMarkdownLinkRelationDocuments([]);
+      return;
+    }
+
     let cancelled = false;
     const load = async () => {
       const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
@@ -1029,18 +1236,21 @@ export default function CommandsView({
             : null;
         }),
       );
-      if (cancelled) return;
+      if (cancelled || markdownLinkRelationDocumentsRequestRef.current !== requestId) return;
       setMarkdownLinkRelationDocuments(
         [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
           .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
-    void load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, COMMANDS_FULL_LINK_RELATION_LOAD_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [commandIndexPages, readings, selectedCommand?.content, wikiIndex, wikiIndexPages]);
+  }, [commandIndexPages, hasSelectedCommand, readings, wikiIndex, wikiIndexPages]);
 
   // Check if selected command is already shared
   useEffect(() => {
@@ -1110,6 +1320,37 @@ export default function CommandsView({
       setIsSharing(false);
     }
   }, [fieldTheorySyncEnabled, selectedCommand, shareStatus, isSharing]);
+
+  const undoDeletedCommand = useCallback(async (): Promise<boolean> => {
+    const undo = deletedCommandUndoRef.current;
+    if (!undo || !undo.directoryPath || !window.commandsAPI?.createCommand) return false;
+
+    const result = await window.commandsAPI.createCommand(undo.directoryPath, undo.restoreName, undo.command.content);
+    if (!result) return false;
+
+    const restoredCommand = await window.commandsAPI.getCommandByPath(result.path);
+    const nextCommand = restoredCommand ?? {
+      ...undo.command,
+      filePath: result.path,
+      name: result.name,
+      displayName: result.name,
+    };
+    setCommands((current) => upsertCommandItem(current, {
+      name: nextCommand.name,
+      displayName: nextCommand.displayName,
+      filePath: nextCommand.filePath,
+    }));
+    setSelectedPath(undo.previousSelectedPath === undo.command.filePath ? nextCommand.filePath : undo.previousSelectedPath);
+    if (undo.previousSelectedPath === undo.command.filePath) {
+      setSelectedCommand(nextCommand);
+      setEditContent(nextCommand.content);
+      lastSavedContentRef.current = nextCommand.content;
+      lastSavedVersionRef.current = nextCommand.documentVersion;
+      lastSeededPathRef.current = nextCommand.filePath;
+    }
+    deletedCommandUndoRef.current = null;
+    return true;
+  }, []);
 
   // Keyboard navigation
   useEffect(() => {
@@ -1191,6 +1432,17 @@ export default function CommandsView({
         return;
       }
 
+      if (e.key.toLowerCase() === 'z' && e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        const inEditableField = activeElement instanceof HTMLInputElement
+          || activeElement instanceof HTMLTextAreaElement
+          || (activeElement instanceof HTMLElement && activeElement.isContentEditable);
+        if (!inEditableField && deletedCommandUndoRef.current) {
+          e.preventDefault();
+          void undoDeletedCommand();
+          return;
+        }
+      }
+
       // Don't handle navigation keys when typing in any input
       const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
       const activeEl = document.activeElement;
@@ -1223,7 +1475,7 @@ export default function CommandsView({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath, canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath, undoDeletedCommand, canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1342,6 +1594,8 @@ export default function CommandsView({
       targetDir = watchedDirs[0].path;
     }
     if (!targetDir) return;
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(targetDir);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1351,6 +1605,8 @@ export default function CommandsView({
   // Create new command in a specific directory
   // Start inline input for new command
   const startCreatingCommand = useCallback((dirPath: string) => {
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(dirPath);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1382,6 +1638,8 @@ export default function CommandsView({
         filePath: result.path,
       };
       setCommands((current) => upsertCommandItem(current, command));
+      setSearchQuery('');
+      setSearchOpen(false);
       setSelectedPath(result.path);
       const loaded = await window.commandsAPI?.getCommandByPath(result.path);
       if (loaded) {
@@ -1403,10 +1661,21 @@ export default function CommandsView({
   const handleDeleteCommand = useCallback((filePath: string) => {
     confirmDelete({
       title: 'Delete command?',
-      message: 'Delete this command? This cannot be undone.',
+      message: 'Delete this command? Press Command+Z to undo.',
       onConfirm: async () => {
+        const commandBeforeDelete = selectedCommand?.filePath === filePath
+          ? selectedCommand
+          : await window.commandsAPI?.getCommandByPath(filePath) ?? null;
         const success = await window.commandsAPI?.deleteCommand(filePath);
         if (success) {
+          if (commandBeforeDelete) {
+            deletedCommandUndoRef.current = {
+              command: commandBeforeDelete,
+              directoryPath: commandDirectoryFromFilePath(filePath),
+              restoreName: commandFileNameFromFilePath(filePath),
+              previousSelectedPath: selectedPath,
+            };
+          }
           const updatedCommands = commands.filter((command) => command.filePath !== filePath);
           setCommands(updatedCommands);
           if (selectedPath === filePath) {
@@ -1416,7 +1685,7 @@ export default function CommandsView({
         }
       },
     });
-  }, [commands, confirmDelete, selectedPath]);
+  }, [commands, confirmDelete, selectedCommand, selectedPath]);
 
   // Rename command handler — kicks off the inline input in the sidebar.
   // Actual rename happens in commitRename() when the user confirms.
@@ -1483,10 +1752,22 @@ export default function CommandsView({
     };
   }, [contextMenu]);
 
+  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded;
+  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
+
   return (
     <div
       ref={containerRef}
       tabIndex={0}
+      onMouseDownCapture={handleCollapsedSidebarSurfaceMouseDownCapture}
+      onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
+      onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
         display: 'flex',
         flex: 1,
@@ -1496,16 +1777,40 @@ export default function CommandsView({
         position: 'relative',
       }}
     >
+      {sidebarCollapsed && !sidebarTemporarilyExpanded && (
+        <div
+          aria-hidden="true"
+          data-fieldtheory-collapsed-sidebar-hover-strip="true"
+          onMouseOver={collapsedSidebarHoverReveal.handleHoverStripMouseOver}
+          onClick={collapsedSidebarHoverReveal.handleHoverStripClick}
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: `${collapsedSidebarHoverReveal.hoverStripWidth}px`,
+            zIndex: 25,
+            cursor: 'pointer',
+            opacity: collapsedSidebarHoverReveal.affordanceOpacity,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+            boxShadow: theme.isDark ? 'inset 1px 0 rgba(255,255,255,0.16)' : 'inset 1px 0 rgba(0,0,0,0.14)',
+            transition: 'opacity 120ms ease',
+          }}
+        />
+      )}
       {/* Sidebar - kept in DOM when collapsed for instant transition */}
       <div
         ref={sidebarPaneRef}
+        data-fieldtheory-collapsed-sidebar-pane="true"
         style={{
-          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          width: sidebarVisible ? `${sidebarWidth}px` : '0px',
+          minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
           overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
           display: 'block',
           flexShrink: 0,
+          zIndex: sidebarTemporarilyExpanded ? 30 : undefined,
+          boxShadow: sidebarTemporarilyExpanded ? (theme.isDark ? '12px 0 24px rgba(0,0,0,0.36)' : '12px 0 24px rgba(0,0,0,0.12)') : undefined,
           transition: isResizing ? undefined : 'width 0.18s ease, min-width 0.18s ease',
         }}
       >
@@ -1519,7 +1824,7 @@ export default function CommandsView({
             padding: '12px 0',
             display: 'flex',
             flexDirection: 'column',
-            pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+            pointerEvents: sidebarVisible ? 'auto' : 'none',
           }}
         >
         {/* Header - Librarian style */}
@@ -1883,15 +2188,15 @@ export default function CommandsView({
       <div
         onMouseDown={handleResizeMouseDown}
         style={{
-          width: sidebarCollapsed ? '0px' : '4px',
-          minWidth: sidebarCollapsed ? '0px' : '4px',
+          width: sidebarVisible ? '4px' : '0px',
+          minWidth: sidebarVisible ? '4px' : '0px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
+          borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
           transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
           display: 'block',
-          pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+          pointerEvents: sidebarVisible ? 'auto' : 'none',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -1941,6 +2246,15 @@ export default function CommandsView({
               padding: '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              position: focusChromeActive ? 'absolute' : 'relative',
+              top: focusChromeActive ? 0 : undefined,
+              left: focusChromeActive ? 0 : undefined,
+              right: focusChromeActive ? 0 : undefined,
+              zIndex: focusChromeActive ? 20 : undefined,
+              boxSizing: 'border-box',
+              opacity: focusChromeVisualOpacity,
+              pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
+              transition: 'opacity 90ms linear',
             }}
           >
             {/* Inner container - matches content width (600px centered) */}
@@ -1953,6 +2267,9 @@ export default function CommandsView({
                 gap: '8px',
               }}
             >
+              {commandToolbarContextHasFolder && (
+                <ContentToolbarFolderButton onShowInFolder={showSelectedCommandInFolder} />
+              )}
               {focusToolbarControlsVisible && commandToolbarContext && (
                 <div
                   style={{
@@ -1983,6 +2300,7 @@ export default function CommandsView({
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
                 isFullScreen={focusImmersive}
+                dragSpacer={!focusChromeActive}
                 canNavigateBack={canNavigateBack}
                 canNavigateForward={canNavigateForward}
                 onNavigateBack={onNavigateBack}
@@ -1993,10 +2311,10 @@ export default function CommandsView({
                 onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
-                onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
-                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
+                onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? showSelectedCommandInFolder : undefined}
+                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand && !commandToolbarContextHasFolder}
                 onCopyPath={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand?.filePath ? copySelectedCommandTextOrPath : undefined}
-                copyPathCopied={copyPathCopied}
+                copyPathCopied={copyFeedbackLabel !== null}
                 copyPathTitle="Copy selected text or command path (⌘C)"
               />
 
@@ -2028,75 +2346,11 @@ export default function CommandsView({
                 </button>
               )}
               {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '2px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                    borderRadius: '6px',
-                    padding: '2px',
-                    // @ts-ignore - toolbar buttons should receive clicks.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      if (!isEditing) enterEditMode();
-                    }}
-                    title="Markdown source"
-                    aria-label="Markdown source"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: isEditing
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="5 4 2 8 5 12" />
-                      <polyline points="11 4 14 8 11 12" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={switchToRenderedMode}
-                    title="Rendered"
-                    aria-label="Rendered"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: !isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: !isEditing
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 4h12M2 8h12M2 12h8" />
-                    </svg>
-                  </button>
-                </div>
+                <ContentModeToggleButton
+                  mode={isEditing ? 'markdown' : 'rendered'}
+                  onSwitchToSource={enterEditMode}
+                  onSwitchToRendered={switchToRenderedMode}
+                />
               )}
               {fieldTheorySyncEnabled && focusToolbarControlsVisible && viewMode === 'popular' && selectedPopularCommand && (
                 <button
@@ -2133,7 +2387,8 @@ export default function CommandsView({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: isEditing ? '8px 20px 12px 20px' : '24px 20px',
+            padding: `${commandContentTopPadding}px 20px 0 20px`,
+            scrollPaddingBottom: `${commandContentBottomScrollSpace}px`,
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -2158,15 +2413,20 @@ export default function CommandsView({
                   value={editContent}
                   onFocus={() => {
                     sidebarKeyboardActiveRef.current = false;
+                    editTextareaFocusedRef.current = true;
                     window.librarianAPI?.setMarkdownEditorFocused?.(true);
                   }}
-                  onBlur={() => window.librarianAPI?.setMarkdownEditorFocused?.(false)}
+                  onBlur={() => {
+                    editTextareaFocusedRef.current = false;
+                    window.librarianAPI?.setMarkdownEditorFocused?.(false);
+                  }}
                   onChange={(e) => setEditContent(e.target.value)}
                   onKeyDown={handleEditTextareaKeyDown}
                   style={{
                     flex: 1,
                     minHeight: 0,
                     padding: 0,
+                    scrollPaddingBottom: `${COMMANDS_MARKDOWN_CONTENT_BOTTOM_SCROLL_SPACE_PX}px`,
                     fontSize: textSizes[textSize].base,
                     lineHeight: 1.5,
                     fontFamily: fonts.sans,
@@ -2265,94 +2525,17 @@ export default function CommandsView({
                   >
                     {displayContent}
                   </FieldTheoryProse>
-                  {viewMode === 'mine' && linkedDocuments.length > 0 && (
-                    <section
-                      aria-label="Linked"
-                      style={{
-                        marginTop: '32px',
-                        paddingTop: '16px',
-                        borderTop: `1px solid ${theme.border}`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          marginBottom: '8px',
-                          fontSize: '12px',
-                          fontWeight: 650,
-                          color: theme.textSecondary,
-                          letterSpacing: 0,
-                        }}
-                      >
-                        Linked
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {linkedDocuments.map((link) => (
-                          <button
-                            key={getWikiLinkTargetKey(link.target)}
-                            type="button"
-                            title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              openFieldTheoryMarkdownTarget(link.target);
-                            }}
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: '18px minmax(0, 1fr)',
-                              columnGap: '8px',
-                              alignItems: 'start',
-                              padding: '6px 0',
-                              border: 'none',
-                              backgroundColor: 'transparent',
-                              color: theme.text,
-                              cursor: 'pointer',
-                              textAlign: 'left',
-                              font: 'inherit',
-                            }}
-                          >
-                            <span
-                              aria-hidden="true"
-                              style={{
-                                marginTop: '1px',
-                                color: theme.textSecondary,
-                                fontSize: '13px',
-                                lineHeight: 1.2,
-                                textAlign: 'center',
-                              }}
-                            >
-                              {WIKI_LINK_DIRECTION_MARKER[link.direction]}
-                            </span>
-                            <span style={{ minWidth: 0 }}>
-                              <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
-                                {link.title}
-                                <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
-                                  {WIKI_LINK_TARGET_LABEL[link.target.kind]}
-                                </span>
-                              </span>
-                              {link.excerpt && (
-                                <span
-                                  style={{
-                                    display: 'block',
-                                    marginTop: '2px',
-                                    color: theme.textSecondary,
-                                    fontSize: '12px',
-                                    lineHeight: 1.35,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {link.excerpt}
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </section>
+                  {viewMode === 'mine' && (
+                    <LinkedDocumentsSection links={linkedDocuments} onOpen={openFieldTheoryMarkdownTarget} />
                   )}
-                  <div style={{ height: '50vh', flexShrink: 0 }} />
+                  {commandContentBottomScrollSpace > 0 && (
+                    <div
+                      aria-hidden="true"
+                      data-testid="command-rendered-bottom-scroll-space"
+                      data-ft-rendered-bottom-scroll-space="commands"
+                      style={{ height: `${commandContentBottomScrollSpace}px`, flexShrink: 0 }}
+                    />
+                  )}
                 </>
               )}
             </div>
@@ -2485,7 +2668,7 @@ export default function CommandsView({
       )}
       {deleteConfirmationDialog}
 
-      {copyPathCopied && (
+      {copyFeedbackLabel && (
         <div
           role="status"
           style={{
@@ -2503,7 +2686,7 @@ export default function CommandsView({
             zIndex: 6,
           }}
         >
-          Copied path
+          {copyFeedbackLabel}
         </div>
       )}
     </div>

@@ -3,11 +3,13 @@ import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
 import ImmersiveToggle from './ImmersiveToggle';
-import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
+import { getBookmarks, peekBookmarks, onBookmarksChanged, refreshBookmarks } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
+type BookmarkSyncStatus = 'idle' | 'syncing' | 'up-to-date' | 'offline' | 'failed';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
+const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 const FIELD_THEORY_CLI_INSTALL_COMMAND = 'npm install -g fieldtheory';
 const FIELD_THEORY_CLI_URL = 'https://fieldtheory.dev/cli/';
 
@@ -21,17 +23,63 @@ function loadShowText(): boolean {
   return saved === null ? true : saved === '1';
 }
 
+function isBookmarksStorageKey(key: string | null | undefined): boolean {
+  return key === STORAGE_KEY || key === SHOW_TEXT_KEY;
+}
+
+function countNewBookmarks(current: BookmarksSnapshot | null, next: BookmarksSnapshot | null): number {
+  if (!current || !next) return 0;
+  const currentIds = new Set(current.bookmarks.map((bookmark) => bookmark.id));
+  return next.bookmarks.reduce((count, bookmark) => count + (currentIds.has(bookmark.id) ? 0 : 1), 0);
+}
+
+function pluralizeBookmark(count: number): string {
+  return count === 1 ? 'bookmark' : 'bookmarks';
+}
+
+function isOfflineSyncError(error: string | undefined): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  const message = (error ?? '').toLowerCase();
+  return [
+    'eai_again',
+    'econnreset',
+    'enetwork',
+    'enotfound',
+    'etimedout',
+    'fetch failed',
+    'network',
+    'offline',
+    'timed out',
+  ].some((token) => message.includes(token));
+}
+
 interface BookmarksPaneProps {
   active?: boolean;
   isFullScreen?: boolean;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
   onToggleFullScreen?: () => void;
   onCanvasModeActiveChange?: (active: boolean) => void;
   onCanvasToolbarTopChange?: (top: number | null) => void;
+  onActionFeedback?: (message: string) => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange, onCanvasToolbarTopChange }: BookmarksPaneProps) {
+function BookmarksPane({
+  active = true,
+  isFullScreen,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onNavigateBack,
+  onNavigateForward,
+  onToggleFullScreen,
+  onCanvasModeActiveChange,
+  onCanvasToolbarTopChange,
+  onActionFeedback,
+}: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -39,6 +87,9 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const [listEverShown, setListEverShown] = useState<boolean>(() => loadMode() === 'list');
   const [canvasEverShown, setCanvasEverShown] = useState<boolean>(() => loadMode() === 'canvas');
   const [snapshot, setSnapshot] = useState<BookmarksSnapshot | null>(() => peekBookmarks());
+  const [pendingSnapshot, setPendingSnapshot] = useState<BookmarksSnapshot | null>(null);
+  const [syncStatus, setSyncStatus] = useState<BookmarkSyncStatus>('idle');
+  const [syncRetryCount, setSyncRetryCount] = useState(0);
   const [folder, setFolder] = useState<string>('All');
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,7 +99,16 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const installCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const displayedSnapshotRef = useRef<BookmarksSnapshot | null>(snapshot);
+  const pendingSnapshotRef = useRef<BookmarksSnapshot | null>(null);
+  const syncInFlightRef = useRef(false);
   const loading = snapshot === null;
+  const pendingNewCount = useMemo(() => countNewBookmarks(snapshot, pendingSnapshot), [snapshot, pendingSnapshot]);
+
+  const holdPendingSnapshot = (nextSnapshot: BookmarksSnapshot | null) => {
+    pendingSnapshotRef.current = nextSnapshot;
+    setPendingSnapshot(nextSnapshot);
+  };
 
   useEffect(() => {
     return () => {
@@ -57,11 +117,14 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   }, []);
 
   useEffect(() => {
+    displayedSnapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
-    if (active && mode === 'canvas') window.librarianAPI?.setSizeKey?.('draw');
     if (mode === 'list' && !listEverShown) setListEverShown(true);
     if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
-  }, [active, mode, listEverShown, canvasEverShown]);
+  }, [mode, listEverShown, canvasEverShown]);
 
   useEffect(() => {
     onCanvasModeActiveChange?.(active && mode === 'canvas');
@@ -92,15 +155,92 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   }, [showText]);
 
   useEffect(() => {
+    const applyStoredBookmarkPreferences = () => {
+      const nextMode = loadMode();
+      setMode((current) => (current === nextMode ? current : nextMode));
+      setListEverShown((current) => current || nextMode === 'list');
+      setCanvasEverShown((current) => current || nextMode === 'canvas');
+      setShowText((current) => {
+        const nextShowText = loadShowText();
+        return current === nextShowText ? current : nextShowText;
+      });
+    };
+    const handleRendererStorageChanged = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string | null }>).detail?.key;
+      if (isBookmarksStorageKey(key)) applyStoredBookmarkPreferences();
+    };
+    const handleStorage = (event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key === undefined || key === null || isBookmarksStorageKey(key)) applyStoredBookmarkPreferences();
+    };
+    window.addEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(RENDERER_STORAGE_CHANGED_EVENT, handleRendererStorageChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
-    getBookmarks().then((data) => {
-      if (!cancelled) setSnapshot(data);
+    const unsub = onBookmarksChanged((s) => {
+      if (cancelled) return;
+      const displayedSnapshot = displayedSnapshotRef.current;
+      if ((syncInFlightRef.current || pendingSnapshotRef.current) && countNewBookmarks(displayedSnapshot, s) > 0) {
+        holdPendingSnapshot(s);
+        return;
+      }
+      holdPendingSnapshot(null);
+      displayedSnapshotRef.current = s;
+      setSnapshot(s);
     });
-    void window.bookmarksAPI?.syncIfStale?.();
-    return () => { cancelled = true; unsub(); };
-  }, [active, mode]);
+    getBookmarks().then((data) => {
+      if (!cancelled) {
+        displayedSnapshotRef.current = data;
+        setSnapshot(data);
+      }
+    });
+    const syncBookmarks = async () => {
+      const syncIfStale = window.bookmarksAPI?.syncIfStale;
+      if (!syncIfStale) return;
+      syncInFlightRef.current = true;
+      setSyncStatus('syncing');
+      try {
+        const result = await syncIfStale();
+        if (cancelled) return;
+        if (result.status === 'failed') {
+          setSyncStatus(isOfflineSyncError(result.error) ? 'offline' : 'failed');
+        } else if (result.status === 'missing-cli' || result.status === 'unavailable') {
+          setSyncStatus('failed');
+        } else if (result.status === 'already-running') {
+          setSyncStatus('syncing');
+        } else {
+          if (result.status === 'synced') {
+            const refreshed = await refreshBookmarks();
+            if (cancelled) return;
+            const displayedSnapshot = displayedSnapshotRef.current;
+            if (countNewBookmarks(displayedSnapshot, refreshed) > 0) {
+              holdPendingSnapshot(refreshed);
+              setSyncStatus('idle');
+              return;
+            }
+          }
+          setSyncStatus('up-to-date');
+        }
+      } catch {
+        if (!cancelled) setSyncStatus(typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'failed');
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    };
+    void syncBookmarks();
+    return () => {
+      cancelled = true;
+      syncInFlightRef.current = false;
+      unsub();
+    };
+  }, [active, syncRetryCount]);
 
   // Debounce search input; 7k substring scans is fast but avoid churn while typing.
   useEffect(() => {
@@ -129,6 +269,27 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
 
   const folders = snapshot?.folders ?? [];
 
+  const showPendingBookmarks = () => {
+    if (!pendingSnapshot) return;
+    displayedSnapshotRef.current = pendingSnapshot;
+    setSnapshot(pendingSnapshot);
+    holdPendingSnapshot(null);
+    setSyncStatus('up-to-date');
+  };
+
+  const retryBookmarkSync = () => {
+    if (syncStatus === 'syncing') return;
+    setSyncRetryCount((count) => count + 1);
+  };
+
+  const syncStatusView = pendingNewCount > 0 ? null : (() => {
+    if (syncStatus === 'syncing') return { label: 'Syncing bookmarks...', color: theme.textSecondary, retry: false };
+    if (syncStatus === 'up-to-date') return { label: 'Up to date', color: theme.textSecondary, retry: false };
+    if (syncStatus === 'offline') return { label: 'Network offline', color: theme.textSecondary, retry: true };
+    if (syncStatus === 'failed') return { label: 'Sync failed', color: theme.textSecondary, retry: true };
+    return null;
+  })();
+
   const copyInstallCommand = async () => {
     await navigator.clipboard?.writeText(FIELD_THEORY_CLI_INSTALL_COMMAND);
     setInstallCopied(true);
@@ -141,15 +302,93 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
       {/* Toolbar */}
       <div
         ref={toolbarRef}
+        data-fieldtheory-bookmarks-toolbar="true"
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: '10px',
-          padding: '10px 16px',
+          padding: '10px 30px 10px 44px',
           borderBottom: `1px solid ${theme.border}`,
           flexShrink: 0,
         }}
       >
+        <div
+          aria-label="Bookmarks location"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            minWidth: 0,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={onNavigateBack}
+              disabled={!canNavigateBack}
+              title="Back"
+              aria-label="Back"
+              style={{
+                width: '22px',
+                height: '24px',
+                padding: 0,
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: canNavigateBack ? 'pointer' : 'default',
+                opacity: canNavigateBack ? 1 : 0.32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={onNavigateForward}
+              disabled={!canNavigateForward}
+              title="Forward"
+              aria-label="Forward"
+              style={{
+                width: '22px',
+                height: '24px',
+                padding: 0,
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: canNavigateForward ? 'pointer' : 'default',
+                opacity: canNavigateForward ? 1 : 0.32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+              </svg>
+            </button>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              minWidth: 0,
+              fontSize: '11px',
+              color: theme.textSecondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span style={{ color: theme.text, fontWeight: 600 }}>Bookmarks</span>
+          </div>
+        </div>
+
         {/* List / Canvas segmented toggle */}
         <div
           style={{
@@ -204,6 +443,77 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
             }}
           />
         </div>
+
+        {pendingNewCount > 0 && (
+          <button
+            type="button"
+            onClick={showPendingBookmarks}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              color: theme.isDark ? '#8ecbff' : '#0a7bdc',
+              backgroundColor: theme.isDark ? 'rgba(29,155,240,0.12)' : 'rgba(10,123,220,0.08)',
+              border: `1px solid ${theme.isDark ? 'rgba(142,203,255,0.28)' : 'rgba(10,123,220,0.18)'}`,
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Show {pendingNewCount} new {pluralizeBookmark(pendingNewCount)}
+          </button>
+        )}
+
+        {syncStatusView && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              className={syncStatus === 'syncing' ? 'bookmarks-sync-dot bookmarks-sync-dot--syncing' : 'bookmarks-sync-dot'}
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: theme.isDark ? '#8ecbff' : '#0a7bdc',
+              }}
+            />
+            <span>{syncStatusView.label}</span>
+            {syncStatusView.retry && (
+              <button
+                type="button"
+                onClick={retryBookmarkSync}
+                title="Retry bookmark sync"
+                aria-label="Retry bookmark sync"
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  padding: 0,
+                  color: syncStatusView.color,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13.2 5.4A5.8 5.8 0 1 0 14 8" />
+                  <path d="M13.2 2.4v3h-3" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Show text toggle */}
         <button
@@ -384,12 +694,12 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
           <>
             {listEverShown && (
               <div style={{ position: 'absolute', inset: 0, display: mode === 'list' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
-                <BookmarksList bookmarks={filtered} />
+                <BookmarksList bookmarks={filtered} onActionFeedback={onActionFeedback} />
               </div>
             )}
             {canvasEverShown && (
               <div style={{ position: 'absolute', inset: 0, display: mode === 'canvas' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
-                <BookmarksCanvas bookmarks={filtered} />
+                <BookmarksCanvas bookmarks={filtered} onActionFeedback={onActionFeedback} />
               </div>
             )}
           </>

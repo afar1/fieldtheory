@@ -4,6 +4,7 @@ import path from 'path';
 
 import { createLogger } from './logger';
 import { ModelSize } from './modelManager';
+import type { AutoImproveContextFile, AutoImproveEffort, AutoImproveProvider } from './types/transcribe';
 import {
   createDefaultGazeWindowFocusConfig,
   type GazeDebugOverlayBounds,
@@ -50,6 +51,53 @@ export interface ClipboardHistoryBounds {
  */
 export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
 export type FieldTheoryWindowMode = 'panel' | 'app';
+export const LAUNCHER_ROOT_SEARCH_KINDS = [
+  'system-setting',
+  'contact',
+  'file',
+  'recent-document',
+  'url',
+  'web-search',
+  'calculator',
+  'dictionary',
+  'calendar',
+  'system-command',
+] as const;
+export type LauncherRootSearchKind = typeof LAUNCHER_ROOT_SEARCH_KINDS[number];
+export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
+export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
+  'system-setting': false,
+  contact: false,
+  file: true,
+  'recent-document': false,
+  url: false,
+  'web-search': false,
+  calculator: false,
+  dictionary: false,
+  calendar: false,
+  'system-command': false,
+};
+
+export const DEFAULT_MEETING_SUMMARY_PROMPT = [
+  'Given this meeting markdown, update only the Summary section.',
+  'Preserve frontmatter, Notes, Transcript, speaker labels and stable speaker IDs if present, links, figures, and checkboxes.',
+  'Do not renumber speakers or invent speaker names unless they are already present in the meeting note.',
+  'Keep user-written notes intact. Do not delete or rewrite raw transcript text.',
+  'Use concise organized markdown with Decisions, Action Items, Open Questions, and Notable Context when present.',
+  'Return the full replacement markdown document.',
+].join('\n');
+
+export function normalizeLauncherRootSearchEnabledKinds(
+  value: LauncherRootSearchEnabledKinds | undefined,
+): Record<LauncherRootSearchKind, boolean> {
+  const normalized = { ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS };
+  if (!value || typeof value !== 'object') return normalized;
+  for (const kind of LAUNCHER_ROOT_SEARCH_KINDS) {
+    if (typeof value[kind] === 'boolean') normalized[kind] = value[kind];
+  }
+  return normalized;
+}
+
 export interface FieldTheoryWindowModePreferenceSnapshot {
   fieldTheoryWindowMode?: FieldTheoryWindowMode;
   showInDock?: boolean;
@@ -86,16 +134,28 @@ export function resolveFieldTheoryWindowMode(
     return prefs.fieldTheoryWindowMode;
   }
 
-  return prefs?.showInDock === true || prefs?.clickAwayToDismiss === false ? 'app' : 'panel';
+  return 'app';
 }
 
 function normalizeFieldTheoryWindowMode(prefs: Partial<Preferences>): Partial<Preferences> {
   const hasExplicitMode = prefs.fieldTheoryWindowMode === 'app' || prefs.fieldTheoryWindowMode === 'panel';
-  const hasLegacyAppMode = prefs.showInDock === true || prefs.clickAwayToDismiss === false;
-  const hasLegacyPanelMode = prefs.showInDock === false || prefs.clickAwayToDismiss === true;
 
-  if (hasExplicitMode || hasLegacyAppMode || hasLegacyPanelMode) {
+  if (hasExplicitMode || prefs.showInDock !== undefined || prefs.clickAwayToDismiss !== undefined) {
     const mode = resolveFieldTheoryWindowMode(prefs);
+    return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
+  }
+
+  return prefs;
+}
+
+function normalizeFieldTheoryWindowModeSavePatch(prefs: Partial<Preferences>): Partial<Preferences> {
+  if (prefs.fieldTheoryWindowMode === 'app' || prefs.fieldTheoryWindowMode === 'panel') {
+    const mode = prefs.fieldTheoryWindowMode;
+    return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
+  }
+
+  if (prefs.showInDock === true || prefs.showInDock === false) {
+    const mode = prefs.showInDock ? 'app' : 'panel';
     return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
   }
 
@@ -124,6 +184,8 @@ interface Preferences {
   clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView;
   /** Last active size profile, so reopen starts at the same view size. */
   clipboardHistoryLastSizeKey?: ClipboardHistorySizeKey;
+  /** Last bounds for standalone Library document windows. */
+  libraryDocumentWindowBounds?: ClipboardHistoryBounds;
 
   // Onboarding state - tracks whether user has completed first-run setup.
   onboardingComplete?: boolean;
@@ -150,8 +212,17 @@ interface Preferences {
 
   // Auto-improve transcripts - automatically run AI improvement on completed transcripts
   autoImproveTranscripts?: boolean;
+  autoImproveProvider?: AutoImproveProvider;
+  autoImproveCodexModel?: string;
+  autoImproveCodexEffort?: AutoImproveEffort;
+  autoImproveClaudeModel?: string;
+  autoImproveClaudeEffort?: AutoImproveEffort;
+  autoImproveWritingPreferences?: string;
+  autoImproveContextFiles?: AutoImproveContextFile[];
   // Minimum word count for auto-improve - only improve transcripts with at least this many words
   autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
+  // Live typing - type finalized standard dictation chunks into the target app as they arrive.
+  liveTypingEnabled?: boolean;
 
   // Auto-improve usage stats - cumulative all-time tracking
   autoImproveStats?: {
@@ -198,12 +269,28 @@ interface Preferences {
   // Add a Supabase allowlist before enabling this outside dev.
   fieldTheoryInternalSyncEnabled?: boolean;
 
+  // User chose the local-only setup path and does not need an account to use
+  // local Field Theory surfaces.
+  localSetupComplete?: boolean;
+
   // Launch at login - start Field Theory automatically when macOS starts.
   launchAtLogin?: boolean;
 
   // Portable Commands - directory path where user's command markdown files are stored.
   // Can point to Claude skills, Cursor rules, or any directory with .md files.
   commandsDirectory?: string;
+
+  // Maxwell local command memory. Content lives in maxwell/memory.md.
+  maxwellMemoryEnabled?: boolean;
+
+  // Selected local command model. Kept separate from transcription selectedModel.
+  localLlmSelectedModel?: string;
+
+  // Maxwell meeting summaries - user-customizable prompt/style contract.
+  meetingSummaryPrompt?: string;
+
+  // Launcher root search categories. Apps and file search are the first active slices.
+  launcherRootSearchEnabledKinds?: LauncherRootSearchEnabledKinds;
 
   // Dark mode preference - synced across all windows.
   darkMode?: boolean;
@@ -235,6 +322,7 @@ interface Preferences {
   hotMicSoundsEnabled?: boolean;
   hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
   hotMicSubmitWord?: string; // Word that flushes the transcript buffer (default: "go")
+  hotMicCommandEnterWords?: string; // Comma-separated words that flush the buffer with Cmd+Enter
   hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
   hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
   hotMicCancelWords?: string; // Comma-separated words that send Ctrl+C to terminal
@@ -276,6 +364,8 @@ interface Preferences {
   // Dynamic Island display preference.
   // When true, the island stays on the built-in laptop display even when an external monitor is primary.
   hotMicIslandStayOnLaptop?: boolean;
+  recordingIndicatorMode?: 'auto' | 'notch' | 'floating';
+  floatingIndicatorPosition?: { x: number; y: number } | null;
 
   // Auto-hide the Dynamic Island pills (left + right + gap filler) until
   // the cursor approaches the notch or a non-idle state / hot-mic becomes active.
@@ -323,6 +413,14 @@ const DEFAULT_PREFERENCES: Preferences = {
   scratchpadHotkey: 'Control+Option+Command+Space',
   autoImproveHotkey: 'Command+Shift+\\',
   autoImproveTranscripts: false,
+  autoImproveProvider: 'local',
+  autoImproveCodexModel: '',
+  autoImproveCodexEffort: 'balanced',
+  autoImproveClaudeModel: '',
+  autoImproveClaudeEffort: 'balanced',
+  autoImproveWritingPreferences: '',
+  autoImproveContextFiles: [],
+  liveTypingEnabled: false,
 
   // Sound settings - librarian sound ON by default, other sounds OFF by default
   soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default
@@ -334,14 +432,14 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
 
-  // Show in Dock - disabled by default (panel mode). Kept for legacy callers.
-  showInDock: false,
+  // Show in Dock by default. Kept for legacy callers.
+  showInDock: true,
 
-  // Field Theory opens as the existing floating panel by default.
-  fieldTheoryWindowMode: 'panel',
+  // Field Theory opens as a normal app window by default.
+  fieldTheoryWindowMode: 'app',
 
-  // Click-away dismissal matches the existing panel behavior by default.
-  clickAwayToDismiss: true,
+  // App-window mode does not hide just because focus moves elsewhere.
+  clickAwayToDismiss: false,
 
   // Dark mode - disabled by default (light mode).
   darkMode: false,
@@ -352,8 +450,23 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Field Theory cloud sync is internal-only for this release.
   fieldTheoryInternalSyncEnabled: false,
 
+  // Local-only setup is opt-in from onboarding.
+  localSetupComplete: false,
+
   // Word substitutions - empty by default.
   wordSubstitutions: [],
+
+  // Maxwell memory is explicit, visible, and opt-out.
+  maxwellMemoryEnabled: true,
+
+  // Local command model defaults to the larger local Gemma option.
+  localLlmSelectedModel: 'gemma-4-12B-it-Q4_K_M',
+
+  // Meeting summary prompt defaults to preserving the note as the source of truth.
+  meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT,
+
+  // Launcher root search starts with apps and Spotlight-backed file search.
+  launcherRootSearchEnabledKinds: DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
 
   // Data retention - never delete by default.
   dataRetentionDays: -1,
@@ -367,6 +480,8 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicBackgroundFilterStrength: 4,
   hotMicDrawerTextSize: 14,
   hotMicIslandStayOnLaptop: false,
+  recordingIndicatorMode: 'floating',
+  floatingIndicatorPosition: null,
   hotMicIslandAutoHide: false,
   hotMicIslandNotchWidthOverride: 0,
   hotMicIslandPillWidth: 72,
@@ -398,6 +513,19 @@ const SHARED_HOTKEY_PREFERENCE_KEYS = [
   'autoImproveHotkey',
   'abandonRecordingHotkey',
   'hotMicHotkey',
+] as const satisfies ReadonlyArray<keyof Preferences>;
+
+const SHARED_SURFACE_PREFERENCE_KEYS = [
+  'fieldTheoryWindowMode',
+  'showInDock',
+  'clickAwayToDismiss',
+  'recordingIndicatorMode',
+  'hotMicIslandAutoHide',
+] as const satisfies ReadonlyArray<keyof Preferences>;
+
+const SHARED_PREFERENCE_KEYS = [
+  ...SHARED_HOTKEY_PREFERENCE_KEYS,
+  ...SHARED_SURFACE_PREFERENCE_KEYS,
 ] as const satisfies ReadonlyArray<keyof Preferences>;
 
 /**
@@ -460,10 +588,10 @@ export class PreferencesManager {
     }
   }
 
-  private pickSharedHotkeys(source: Partial<Preferences>): Partial<Preferences> {
+  private pickSharedPreferences(source: Partial<Preferences>): Partial<Preferences> {
     const shared: Partial<Preferences> = {};
 
-    for (const key of SHARED_HOTKEY_PREFERENCE_KEYS) {
+    for (const key of SHARED_PREFERENCE_KEYS) {
       const value = source[key];
       if (value !== undefined) {
         (shared as Record<string, unknown>)[key] = value;
@@ -473,17 +601,17 @@ export class PreferencesManager {
     return shared;
   }
 
-  private async syncSharedHotkeysFromPreferences(source: Partial<Preferences>): Promise<void> {
+  private async syncSharedPreferencesFromPreferences(source: Partial<Preferences>): Promise<void> {
     const sharedPrefsPath = this.getSharedPrefsPath();
     if (sharedPrefsPath === this.prefsPath) {
       return;
     }
 
-    const nextSharedHotkeys = this.pickSharedHotkeys(source);
+    const nextSharedPrefs = this.pickSharedPreferences(source);
     const existingSharedPrefs = (await this.readPrefsFile(sharedPrefsPath)) ?? {};
-    const existingSharedHotkeys = this.pickSharedHotkeys(existingSharedPrefs);
+    const existingPickedSharedPrefs = this.pickSharedPreferences(existingSharedPrefs);
 
-    if (JSON.stringify(existingSharedHotkeys) === JSON.stringify(nextSharedHotkeys)) {
+    if (JSON.stringify(existingPickedSharedPrefs) === JSON.stringify(nextSharedPrefs)) {
       return;
     }
 
@@ -491,7 +619,7 @@ export class PreferencesManager {
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
     await fs.writeFile(
       sharedPrefsPath,
-      JSON.stringify({ ...existingSharedPrefs, ...nextSharedHotkeys }, null, 2),
+      JSON.stringify({ ...existingSharedPrefs, ...nextSharedPrefs }, null, 2),
       'utf-8',
     );
   }
@@ -504,15 +632,15 @@ export class PreferencesManager {
     // Update path in case user changed
     this.updatePrefsPath();
     const sharedPrefsPath = this.getSharedPrefsPath();
-    const sharedHotkeys =
+    const sharedPrefs =
       this.prefsPath === sharedPrefsPath
         ? {}
-        : this.pickSharedHotkeys((await this.readPrefsFile(sharedPrefsPath)) ?? {});
+        : this.pickSharedPreferences((await this.readPrefsFile(sharedPrefsPath)) ?? {});
 
     const loaded = await this.readPrefsFile(this.prefsPath);
     if (loaded) {
-      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(loaded) };
-      await this.syncSharedHotkeysFromPreferences(this.preferences);
+      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs, ...normalizeFieldTheoryWindowMode(loaded) };
+      await this.syncSharedPreferencesFromPreferences(this.preferences);
       return this.preferences;
     }
 
@@ -522,7 +650,7 @@ export class PreferencesManager {
       if (legacyPath !== this.prefsPath) {
         const legacyPrefs = await this.readPrefsFile(legacyPath);
         if (legacyPrefs) {
-          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(legacyPrefs) };
+          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs, ...normalizeFieldTheoryWindowMode(legacyPrefs) };
           // Save to new per-user path
           await this.save({});
           return this.preferences;
@@ -530,7 +658,7 @@ export class PreferencesManager {
       }
     }
 
-    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs };
     return this.preferences;
   }
 
@@ -558,7 +686,7 @@ export class PreferencesManager {
    * Internal save implementation.
    */
   private async saveInternal(prefs: Partial<Preferences>): Promise<void> {
-    const normalizedPrefs = normalizeFieldTheoryWindowMode(prefs);
+    const normalizedPrefs = normalizeFieldTheoryWindowModeSavePatch(prefs);
     // Check if path needs updating (user logged in since last load)
     const oldPath = this.prefsPath;
     this.updatePrefsPath();
@@ -586,7 +714,7 @@ export class PreferencesManager {
 
     try {
       await fs.writeFile(this.prefsPath, JSON.stringify(this.preferences, null, 2), 'utf-8');
-      await this.syncSharedHotkeysFromPreferences(this.preferences);
+      await this.syncSharedPreferencesFromPreferences(this.preferences);
     } catch (error) {
       log.error('Failed to save preferences:', error);
       throw error;
@@ -605,10 +733,10 @@ export class PreferencesManager {
    */
   async resetForSignedOutState(): Promise<void> {
     this.updatePrefsPath();
-    const sharedHotkeys = this.pickSharedHotkeys(
+    const sharedPrefs = this.pickSharedPreferences(
       (await this.readPrefsFile(this.getSharedPrefsPath())) ?? {}
     );
-    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs };
   }
 
   /**

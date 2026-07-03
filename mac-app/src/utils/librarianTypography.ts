@@ -5,6 +5,7 @@ export const LIBRARIAN_LINE_HEIGHT_STORAGE_KEY = 'librarian-line-height';
 
 export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft';
 export type LibrarianLineHeightId = 'tight' | 'normal' | 'loose';
+export type LibrarianTextSizeId = 'small' | 'normal' | 'large';
 
 export type LibrarianTypographyPreset = {
   id: LibrarianTypographyPresetId;
@@ -18,32 +19,33 @@ export type LibrarianTypographyPreset = {
 
 export const DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET: LibrarianTypographyPresetId = 'book';
 export const DEFAULT_LIBRARIAN_LINE_HEIGHT: LibrarianLineHeightId = 'normal';
+const LIBRARIAN_TYPOGRAPHY_PRESET_IDS: LibrarianTypographyPresetId[] = ['book', 'note', 'draft'];
 
 export const LIBRARIAN_TYPOGRAPHY_PRESETS: LibrarianTypographyPreset[] = [
   {
     id: 'book',
-    label: 'Book',
-    title: 'Serif, wider leading, best for longer reading',
-    fontFamily: `"New York", "Iowan Old Style", ${fonts.serif}`,
-    headingFontFamily: `"New York", "Iowan Old Style", ${fonts.serif}`,
+    label: 'Serif',
+    title: 'Source Serif, wider leading, best for longer reading',
+    fontFamily: `"Source Serif 4", ${fonts.serif}`,
+    headingFontFamily: `"Source Serif 4", ${fonts.serif}`,
     lineHeight: 1.66,
     maxWidth: 'min(720px, 68ch)',
   },
   {
     id: 'note',
-    label: 'Note',
-    title: 'System text, compact and clear for mixed reading and editing',
-    fontFamily: fonts.sans,
-    headingFontFamily: fonts.sans,
+    label: 'Sans Serif',
+    title: 'Source Sans, compact and clear for mixed reading and editing',
+    fontFamily: `"Source Sans 3", ${fonts.sans}`,
+    headingFontFamily: `"Source Sans 3", ${fonts.sans}`,
     lineHeight: 1.58,
     maxWidth: 'min(700px, 66ch)',
   },
   {
     id: 'draft',
-    label: 'Draft',
-    title: 'Monospace focus mode for raw markdown writing',
-    fontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
-    headingFontFamily: `"iA Writer Mono S", "SF Mono", ${fonts.mono}`,
+    label: 'Mono',
+    title: 'Source Code Pro focus mode for raw markdown writing',
+    fontFamily: `"Source Code Pro", ${fonts.mono}`,
+    headingFontFamily: `"Source Code Pro", ${fonts.mono}`,
     lineHeight: 1.7,
     maxWidth: 'min(680px, 64ch)',
   },
@@ -61,7 +63,7 @@ export const LIBRARIAN_LINE_HEIGHT_OPTIONS: Array<{
 ];
 
 export function isLibrarianTypographyPresetId(value: unknown): value is LibrarianTypographyPresetId {
-  return value === 'book' || value === 'note' || value === 'draft';
+  return typeof value === 'string' && LIBRARIAN_TYPOGRAPHY_PRESET_IDS.includes(value as LibrarianTypographyPresetId);
 }
 
 export function isLibrarianLineHeightId(value: unknown): value is LibrarianLineHeightId {
@@ -80,6 +82,12 @@ export function resolveLibrarianParagraphSpacing(lineHeight: LibrarianLineHeight
   if (lineHeight === 'tight') return '0.36em';
   if (lineHeight === 'loose') return '0.78em';
   return '0.52em';
+}
+
+export function resolveLibrarianDocumentMaxWidth(maxWidth: string, textSize: LibrarianTextSizeId): string {
+  if (textSize === 'small') return `calc(${maxWidth} - 72px)`;
+  if (textSize === 'large') return `calc(${maxWidth} + 90px)`;
+  return maxWidth;
 }
 
 export function restoreLibrarianTypographyPreset(

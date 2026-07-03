@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared helper: find a Python 3.10-3.13 ARM64 installation that can resolve
-# MLX wheels. Sourced by both setup-qwen.sh and setup-mlx-whisper.sh.
+# MLX wheels. Sourced by setup-qwen.sh.
 #
 # Usage:
 #   source scripts/find-mlx-python.sh

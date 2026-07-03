@@ -4,6 +4,7 @@ vi.mock('electron', () => ({
   app: {
     getVersion: vi.fn(() => '0.0.0-test'),
     getPath: vi.fn(() => '/tmp'),
+    getLoginItemSettings: vi.fn(() => ({ openAtLogin: true })),
     isPackaged: false,
   },
 }));
@@ -127,6 +128,16 @@ describe('DiagnosticsCollector audio diagnostics', () => {
             },
           ],
         },
+        standardRecording: {
+          status: 'recording',
+          source: 'microphone',
+          activeSource: 'microphone',
+          recordingAgeMs: 5000,
+          helperRecordingActive: true,
+          liveTranscriptChars: 12,
+          queueDepth: 2,
+          chunkProcessingInFlight: true,
+        },
       },
       audio: {
         priorityMode: true,
@@ -146,6 +157,26 @@ describe('DiagnosticsCollector audio diagnostics', () => {
         backgroundFilterEnabled: true,
         backgroundFilterStrength: 4,
         drawerTextSize: 14,
+        runtime: {
+          state: 'recording',
+          condition: 'ready',
+          engineReady: true,
+          whisperFallbackActive: false,
+          queueDepth: 1,
+          lastChunkAgeMs: 250,
+          chunksReceived: 3,
+          micHealthy: true,
+          engine: null,
+          timing: {
+            chunkIntervalMs: 1200,
+            queueWaitMs: 15,
+            transcribeMs: 420,
+            postProcessMs: null,
+            totalPipelineMs: null,
+            avgTranscribeMs: null,
+            avgTotalPipelineMs: null,
+          },
+        },
       },
       windowManagement: {
         enabled: true,
@@ -187,7 +218,11 @@ describe('DiagnosticsCollector audio diagnostics', () => {
     expect(markdown).toContain('### Transcription');
     expect(markdown).toContain('Parakeet English: latest verification failed');
     expect(markdown).toContain('Fetching 4 files: 42%');
+    expect(markdown).toContain('Standard Recording Status: recording');
+    expect(markdown).toContain('Standard Queue Depth: 2');
     expect(markdown).toContain('### Hot Mic');
+    expect(markdown).toContain('Runtime Chunks Received: 3');
+    expect(markdown).toContain('Runtime Last Chunk Age: 250ms');
     expect(markdown).toContain('### Window Management');
     expect(markdown).toContain('### Portable Commands');
     expect(markdown).toContain('Transcription Hotkey: unset');

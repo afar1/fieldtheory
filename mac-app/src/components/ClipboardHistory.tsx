@@ -7,20 +7,55 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
-import FeedbackView from './FeedbackView';
-import CommandsView from './CommandsView';
+import DMsView from './DMsView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome, type LibrarianSelectedItemType } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
+import {
+  LibraryFooterLocalCommandStatusControls,
+  LibraryFooterLogo,
+  LibraryFooterMaxwellHistoryButton,
+  LibraryFooterMaxwellHistoryPopover,
+  LibraryFooterSidebarToggle,
+  LibraryFooterStatusOverlay,
+  LibraryFooterThemeToggleButton,
+  useLibraryFooterLocalCommandStatus,
+} from './LibraryFooterControls';
+import {
+  FOCUS_CHROME_ICON_OPACITY,
+  FOCUS_CHROME_ICON_SIZE_PX,
+  FOCUS_CHROME_ICON_TOP_PX,
+  FIELD_THEORY_CHROME_TABS_BOTTOM_PX,
+  FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
+  FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+  LibraryFocusChromeIcon,
+  LibrarySurfaceTopTabs,
+  LibraryTopChromeActionFeedback,
+} from './LibrarySurfaceTopTabs';
+import { ImagePreviewFrame } from './ImagePreviewOverlay';
+import {
+  dispatchCodexTerminalDarkModeSync,
+  getLinkedCodexTerminalDarkModeUpdate,
+  readStoredCodexTerminalDarkMode,
+  writeStoredCodexTerminalDarkMode,
+} from './codexTerminalTheme';
+import { formatCompactPriorityMicName } from '../../electron/shared/audioDeviceLabels';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_MOBILE_SYNC_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
-import { getBookmarks, onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
+import { getAgentKickoffFooterStatus } from '../utils/agentKickoffStatus';
+import { commandPathToLauncherLibraryOpenTarget } from '../commandLauncherUtils';
+import {
+  FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+  FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+  FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
+  isClientPointOutsideBounds,
+} from '../utils/focusChrome';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -51,14 +86,13 @@ import {
   ClipboardQueryOptions,
   RunningApp,
   TAB_LABELS,
-  nextTopNavViewMode,
-  shouldCycleTopNavWithControlTab,
   MAX_UNDO,
 } from '../types/clipboard';
-import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
+import { formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
-import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut, shouldForceLibrarySidebarOpen, shouldRevealFooterChrome } from '../utils/editorShortcuts';
+import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
 import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
+import { resolveUpdaterStatusTransition, type UpdateStatus } from '../../electron/shared/updaterState';
 import {
   buildClipboardListRows,
   getStackHydrationIds,
@@ -68,8 +102,19 @@ import { smartTruncateText, detectColor } from '../utils/textUtils';
 import {
   FIELD_THEORY_VIEW_STORAGE_KEY,
   SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
+  getAppBracketNavigationDirection,
+  getAppNavigationSurface,
+  getAppNumberTabSurface,
+  isLibrarianSurfaceVisible,
+  popAppBackHistory,
+  popAppForwardHistory,
   persistClipboardSurface,
+  pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  resolveInitialViewMode,
+  shouldKeepLibrarianMounted,
+  viewModeAfterSignedOut,
+  type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
 import {
   buildClipboardItemsMarkdown,
@@ -78,64 +123,94 @@ import {
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
+import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'ember' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
+  sidebarCollapsed?: boolean;
+  focusChrome?: boolean;
+  selectionStart?: number;
+  selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 };
 
-type TopNavMode = 'clipboard' | 'librarian' | 'commands' | 'possible';
+function getDocumentWindowInitialTarget(location: Pick<Location, 'search'>): FieldTheoryMarkdownTarget | null {
+  const params = new URLSearchParams(location.search);
+  if (params.get('documentWindow') !== '1') return null;
+  const kind = params.get('kind');
+  const path = params.get('path');
+  if (!path || (kind !== 'wiki' && kind !== 'artifact' && kind !== 'external')) return null;
+  const contentModeParam = params.get('contentMode');
+  const contentMode = contentModeParam === 'markdown' || contentModeParam === 'typedown' || contentModeParam === 'rendered'
+    ? contentModeParam
+    : 'rendered';
+  return {
+    kind,
+    path,
+    contentMode,
+    sidebarCollapsed: params.get('sidebarCollapsed') === '1',
+    focusChrome: params.get('focusChrome') === '1',
+  };
+}
 
-type FieldTheoryNavigationEntry =
-  | { surface: 'librarian' }
-  | { surface: 'commands'; commandPath: string };
+type TopNavMode = 'clipboard' | 'librarian' | 'possible';
 
-type FieldTheoryNavigationHistory = {
-  entries: FieldTheoryNavigationEntry[];
-  index: number;
-};
+function FooterFpsCounter({ active, color }: { active: boolean; color: string }) {
+  const [fps, setFps] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setFps(null);
+      return;
+    }
+
+    let rafId = 0;
+    let frameCount = 0;
+    let sampleStart = performance.now();
+
+    const sample = (now: number) => {
+      frameCount += 1;
+      if (now - sampleStart >= 500) {
+        const nextFps = Math.round((frameCount * 1000) / (now - sampleStart));
+        setFps((previous) => previous === nextFps ? previous : nextFps);
+        frameCount = 0;
+        sampleStart = now;
+      }
+      rafId = requestAnimationFrame(sample);
+    };
+
+    rafId = requestAnimationFrame(sample);
+    return () => cancelAnimationFrame(rafId);
+  }, [active]);
+
+  if (fps === null) return null;
+
+  return (
+    <span
+      title="Renderer frames per second"
+      style={{ color, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', opacity: 0.72 }}
+    >
+      {fps}fps
+    </span>
+  );
+}
 
 type TopNavPaintTrace = {
   from: ViewMode;
   to: TopNavMode;
-  source: 'keyboard-control-tab' | 'tab-click';
+  source: 'tab-click';
   startedAt: number;
   highlightAppliedAt?: number;
 };
 
 function isTopNavMode(mode: ViewMode): mode is TopNavMode {
-  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands' || mode === 'possible';
-}
-
-function sameFieldTheoryNavigationEntry(
-  a: FieldTheoryNavigationEntry | null,
-  b: FieldTheoryNavigationEntry | null,
-): boolean {
-  if (!a || !b || a.surface !== b.surface) return false;
-  if (a.surface === 'librarian') return true;
-  if (b.surface !== 'commands') return false;
-  return a.commandPath === b.commandPath;
-}
-
-function pushFieldTheoryNavigationEntry(
-  history: FieldTheoryNavigationHistory,
-  entry: FieldTheoryNavigationEntry,
-): FieldTheoryNavigationHistory {
-  if (sameFieldTheoryNavigationEntry(history.entries[history.index] ?? null, entry)) return history;
-  const entries = [...history.entries.slice(0, history.index + 1), entry];
-  return { entries, index: entries.length - 1 };
-}
-
-function moveFieldTheoryNavigationHistory(
-  history: FieldTheoryNavigationHistory,
-  delta: -1 | 1,
-): { history: FieldTheoryNavigationHistory; entry: FieldTheoryNavigationEntry } | null {
-  const index = history.index + delta;
-  if (index < 0 || index >= history.entries.length) return null;
-  return { history: { entries: history.entries, index }, entry: history.entries[index] };
+  return mode === 'clipboard' || mode === 'librarian' || mode === 'possible';
 }
 
 function traceTopNav(event: string, details: Record<string, unknown> = {}) {
@@ -170,13 +245,8 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
   }, 0);
 }
 
-const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_TOP_PX = 48;
 const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
-const FIELD_THEORY_CHROME_LOGO_TOP_PX = 24;
-const FIELD_THEORY_CHROME_MIC_TOP_PX = 21;
-const FIELD_THEORY_CHROME_TABS_TOP_PX = 60;
-const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 12;
+const FIELD_THEORY_CHROME_TABS_TOP_PX = 44;
 const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
 
 /**
@@ -344,6 +414,11 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
  * ClipboardHistory component - Alfred-style popup for clipboard history.
  */
 export default function ClipboardHistory() {
+  const documentWindowInitialTarget = getDocumentWindowInitialTarget(window.location);
+  return <ClipboardHistoryApp initialLibraryOpenTarget={documentWindowInitialTarget} />;
+}
+
+function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibraryOpenTarget?: FieldTheoryMarkdownTarget | null }) {
   const { theme, toggleDarkMode } = useTheme();
   const scratchpadHotkeyRef = useRef('');
   const [isVisible, setIsVisible] = useState(false);
@@ -416,8 +491,14 @@ export default function ClipboardHistory() {
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
+  const [autoImproveEnabled, setAutoImproveEnabled] = useState(false);
+  const [autoImproveAvailable, setAutoImproveAvailable] = useState(false);
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => resolveClipboardRestoreState(localStorage).viewMode);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (
+    initialLibraryOpenTarget
+      ? 'librarian'
+      : resolveInitialViewMode(window.location.search) ?? resolveClipboardRestoreState(localStorage).viewMode
+  ));
   const [librarianEverRendered, setLibrarianEverRendered] = useState(() => viewMode === 'librarian');
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
@@ -444,40 +525,35 @@ export default function ClipboardHistory() {
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
 
-  // Librarian legacy immersive mode. Kept for Bookmarks; normal Library docs use focus chrome.
+  // Librarian legacy immersive mode. Normal Library surfaces use focus chrome.
   const [librarianImmersive, setLibrarianImmersive] = useState(
-    () => shouldRestoreLibrarianImmersive(localStorage)
+    () => initialLibraryOpenTarget ? false : shouldRestoreLibrarianImmersive(localStorage)
   );
   // Sidebar collapse state lives here so the footer toggle can drive it
   // regardless of which view is currently active. Shared between Library and
   // Commands views so the toggle has consistent behavior.
   const [navSidebarCollapsed, setNavSidebarCollapsed] = useState<boolean>(
-    () => localStorage.getItem('librarian-sidebar-collapsed') === '1'
+    () => initialLibraryOpenTarget?.focusChrome === true
+      || initialLibraryOpenTarget?.sidebarCollapsed === true
+      || localStorage.getItem('librarian-sidebar-collapsed') === '1'
+  );
+  const skipInitialSidebarCollapsedPersistRef = useRef(
+    initialLibraryOpenTarget?.focusChrome === true || initialLibraryOpenTarget?.sidebarCollapsed === true
   );
   useEffect(() => {
+    if (skipInitialSidebarCollapsedPersistRef.current) {
+      skipInitialSidebarCollapsedPersistRef.current = false;
+      return;
+    }
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
-  const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
-    path: string;
-    title: string;
-    mtime: number;
-  } | null>(null);
-  const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
-  const hasLibraryActiveFile = !!libraryActiveFileUpdated;
-  const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
-  const forceLibrarySidebarOpen = shouldForceLibrarySidebarOpen({
-    viewMode,
-    showSettings,
-    librarianImmersive,
-    hasLibraryActiveFile,
-    bookmarksFooterActive,
-  });
+  const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = useState(0);
+  const librarianSurfaceVisible = isLibrarianSurfaceVisible({ viewMode, showSettings });
+  const keepLibrarianMounted = shouldKeepLibrarianMounted({ viewMode, librarianEverRendered });
   const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
     viewMode,
     showSettings,
     librarianImmersive,
-    hasLibraryActiveFile,
-    bookmarksFooterActive,
   });
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
@@ -485,11 +561,64 @@ export default function ClipboardHistory() {
   });
   const topNavPaintTraceRef = useRef<TopNavPaintTrace | null>(null);
   const viewModeRef = useRef(viewMode);
+  const appNavigationSurfaceRef = useRef<AppNavigationSurface>(getAppNavigationSurface({ viewMode, showSettings }));
+  const appBackHistoryRef = useRef<AppNavigationSurface[]>([]);
+  const appForwardHistoryRef = useRef<AppNavigationSurface[]>([]);
+  const appHistoryNavigationRef = useRef(false);
   const previousSizeViewModeRef = useRef(viewMode);
   const [libraryKeepsCurrentSizeKey, setLibraryKeepsCurrentSizeKey] = useState(false);
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
+  useEffect(() => {
+    const nextSurface = getAppNavigationSurface({ viewMode, showSettings });
+    const previousSurface = appNavigationSurfaceRef.current;
+    if (appHistoryNavigationRef.current) {
+      appHistoryNavigationRef.current = false;
+      appNavigationSurfaceRef.current = nextSurface;
+      return;
+    }
+
+    appBackHistoryRef.current = pushAppNavigationHistory(
+      appBackHistoryRef.current,
+      previousSurface,
+      nextSurface,
+    );
+    if (previousSurface !== nextSurface) {
+      appForwardHistoryRef.current = [];
+    }
+    appNavigationSurfaceRef.current = nextSurface;
+  }, [showSettings, viewMode]);
+  const applyAppNavigationSurface = useCallback((surface: AppNavigationSurface) => {
+    appHistoryNavigationRef.current = true;
+    if (surface === 'settings') {
+      setShowSettings(true);
+      return;
+    }
+
+    setShowSettings(false);
+    setViewMode(surface);
+  }, []);
+  const navigateAppHistory = useCallback((direction: -1 | 1): boolean => {
+    const current = appNavigationSurfaceRef.current;
+    const result = direction < 0
+      ? popAppBackHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      })
+      : popAppForwardHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      });
+
+    if (!result.target) return false;
+    appBackHistoryRef.current = result.backHistory;
+    appForwardHistoryRef.current = result.forwardHistory;
+    applyAppNavigationSurface(result.target);
+    return true;
+  }, [applyAppNavigationSurface]);
   const applyTopNavVisualMode = useCallback((mode: TopNavMode): number => {
     const appliedAt = performance.now();
     document.querySelectorAll<HTMLElement>('[data-top-nav-mode]').forEach((button) => {
@@ -499,135 +628,86 @@ export default function ClipboardHistory() {
     });
     return appliedAt;
   }, [theme.accent, theme.textSecondary]);
-  const switchTopNavView = useCallback((delta: 1 | -1) => {
-    const startedAt = performance.now();
-    const previous = viewModeRef.current;
-    const next = nextTopNavViewMode(previous, delta, librarianEnabled);
-    if (!isTopNavMode(next) || next === previous) return;
-
-    const highlightAppliedAt = applyTopNavVisualMode(next);
-    viewModeRef.current = next;
-    traceTopNav('top-nav-switch-start', {
-      source: 'keyboard-control-tab',
-      from: previous,
-      to: next,
-      activeTag: document.activeElement?.tagName ?? null,
-      activeTopNavMode: (document.activeElement as HTMLElement | null)?.dataset?.topNavMode ?? null,
-    });
-    topNavPaintTraceRef.current = {
-      from: previous,
-      to: next,
-      source: 'keyboard-control-tab',
-      startedAt,
-      highlightAppliedAt,
-    };
-    setLibraryKeepsCurrentSizeKey(next === 'librarian' && previous === 'clipboard');
-    setViewMode(next);
-  }, [applyTopNavVisualMode, librarianEnabled]);
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
-  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
-  const [pendingCommandPath, setPendingCommandPath] = useState<string | null>(null);
-  const [selectedCommandPath, setSelectedCommandPath] = useState<string | null>(null);
-  const [fieldTheoryNavigationHistory, setFieldTheoryNavigationHistory] = useState<FieldTheoryNavigationHistory>({ entries: [], index: -1 });
-  const fieldTheoryNavigationTargetRef = useRef<FieldTheoryNavigationEntry | null>(null);
+  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(initialLibraryOpenTarget);
   // Path of an artifact the librarian auto-popped that the user hasn't navigated
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
-  const [focusChromeActive, setFocusChromeActive] = useState(false);
-  const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
-  const [footerChromeProximityVisible, setFooterChromeProximityVisible] = useState(false);
-  const [focusChromeChildVisible, setFocusChromeChildVisible] = useState(false);
+  const [focusChromeChildActive, setFocusChromeChildActive] = useState(false);
+  const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = useState(
+    () => initialLibraryOpenTarget?.focusChrome === true
+  );
+  const [focusChromeGroupOpacity, setFocusChromeGroupOpacity] = useState(0);
+  const [focusChromeContentCenterX, setFocusChromeContentCenterX] = useState<number | null>(null);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
+  const focusChromeGlobalEnabledRef = useRef(initialLibraryOpenTarget?.focusChrome === true);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
-  const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
-  const appChromeHidden = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
-  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible && !focusChromeChildVisible;
-  const footerChromeHidden = (isFocusChromeSurface && focusChromeActive && !footerChromeProximityVisible) || bookmarksCanvasChromeActive;
-  const [footerFps, setFooterFps] = useState<number | null>(null);
-  useEffect(() => {
-    if (!isWindowVisible || footerChromeHidden) {
-      setFooterFps(null);
-      return;
-    }
-
-    let rafId = 0;
-    let frameCount = 0;
-    let sampleStart = performance.now();
-
-    const sample = (now: number) => {
-      frameCount += 1;
-      if (now - sampleStart >= 500) {
-        setFooterFps(Math.round((frameCount * 1000) / (now - sampleStart)));
-        frameCount = 0;
-        sampleStart = now;
-      }
-      rafId = requestAnimationFrame(sample);
-    };
-
-    rafId = requestAnimationFrame(sample);
-    return () => cancelAnimationFrame(rafId);
-  }, [footerChromeHidden, isWindowVisible]);
-  const currentFieldTheoryNavigationEntry = useMemo((): FieldTheoryNavigationEntry | null => {
-    if (showSettings) return null;
-    if (viewMode === 'librarian') return { surface: 'librarian' };
-    if (viewMode === 'commands' && selectedCommandPath) {
-      return { surface: 'commands', commandPath: selectedCommandPath };
-    }
-    return null;
-  }, [selectedCommandPath, showSettings, viewMode]);
-  const openFieldTheoryNavigationEntry = useCallback((entry: FieldTheoryNavigationEntry) => {
-    fieldTheoryNavigationTargetRef.current = entry;
-    setShowSettings(false);
-    if (entry.surface === 'librarian') {
-      setViewMode('librarian');
-      return;
-    }
-    setSelectedCommandPath(entry.commandPath);
-    setPendingCommandPath(entry.commandPath);
-    setViewMode('commands');
+  const setFocusChromeGlobalEnabled = useCallback((enabled: boolean) => {
+    focusChromeGlobalEnabledRef.current = enabled;
+    setFocusChromeGlobalEnabledState(enabled);
   }, []);
-  const navigateFieldTheoryHistory = useCallback((delta: -1 | 1) => {
-    const next = moveFieldTheoryNavigationHistory(fieldTheoryNavigationHistory, delta);
-    if (!next) return;
-    setFieldTheoryNavigationHistory(next.history);
-    openFieldTheoryNavigationEntry(next.entry);
-  }, [fieldTheoryNavigationHistory, openFieldTheoryNavigationEntry]);
-  const canNavigateFieldTheoryBack = fieldTheoryNavigationHistory.index > 0;
-  const canNavigateFieldTheoryForward =
-    fieldTheoryNavigationHistory.index >= 0 &&
-    fieldTheoryNavigationHistory.index < fieldTheoryNavigationHistory.entries.length - 1;
-  const collapseSidebarForFocusChrome = useCallback(() => {
-    if (forceLibrarySidebarOpen) return;
-    focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
-    setNavSidebarCollapsed(true);
-  }, [forceLibrarySidebarOpen, navSidebarCollapsed]);
-  const toggleNavSidebarCollapsed = useCallback(() => {
-    if (!navSidebarToggleEnabled) return;
-    setNavSidebarCollapsed((collapsed) => {
-      if (focusChromeActive && collapsed) {
-        focusChromePreviousSidebarCollapsedRef.current = null;
-        setFocusChromeProximityVisible(false);
-      }
-      return !collapsed;
-    });
-  }, [focusChromeActive, navSidebarToggleEnabled]);
-  const handleFocusChromeActiveChange = useCallback((active: boolean, visualVisible: boolean = false) => {
-    setFocusChromeActive(active);
-    setFocusChromeChildVisible(active && visualVisible);
-    if (!active) {
-      setFocusChromeProximityVisible(false);
-      setFooterChromeProximityVisible(false);
+  const isFocusChromeSurface = viewMode === 'librarian' && !showSettings;
+  const focusChromeSurfaceEnabled = focusChromeChildActive || focusChromeGlobalEnabled;
+  const focusChromeOverlayActive = isFocusChromeSurface && focusChromeSurfaceEnabled;
+  const appChromeOpacity = getFocusChromeSurfaceOpacity({
+    isFocusChromeSurface,
+    focusChromeActive: focusChromeSurfaceEnabled,
+  });
+  const footerChromeOpacity = focusChromeOverlayActive ? 0 : 1;
+  const appChromeInteractive = appChromeOpacity > 0.05;
+  const footerChromeInteractive = footerChromeOpacity > 0.05;
+  const appChromeHidden = focusChromeOverlayActive && !appChromeInteractive;
+  const focusChromeIconOpacity = focusChromeOverlayActive ? FOCUS_CHROME_ICON_OPACITY : 0;
+  const showFocusChromeIcon = focusChromeOverlayActive;
+  const footerChromeHidden = bookmarksCanvasChromeActive || (focusChromeOverlayActive && !footerChromeInteractive);
+  const enableGlobalFocusChrome = useCallback(() => {
+    if (focusChromePreviousSidebarCollapsedRef.current === null) {
+      focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     }
-    if (active) return;
+    setFocusChromeGlobalEnabled(true);
+    setNavSidebarCollapsed(true);
+  }, [navSidebarCollapsed]);
+  const disableGlobalFocusChrome = useCallback(() => {
+    setFocusChromeGlobalEnabled(false);
+    setFocusChromeGroupOpacity(0);
 
     const previous = focusChromePreviousSidebarCollapsedRef.current;
     if (previous === null) return;
     focusChromePreviousSidebarCollapsedRef.current = null;
     setNavSidebarCollapsed(previous);
+  }, []);
+  const handleGlobalFocusChromeChange = useCallback((enabled: boolean) => {
+    if (enabled) {
+      enableGlobalFocusChrome();
+    } else {
+      disableGlobalFocusChrome();
+    }
+  }, [disableGlobalFocusChrome, enableGlobalFocusChrome]);
+  const toggleNavSidebarCollapsed = useCallback(() => {
+    if (!navSidebarToggleEnabled) return;
+    setNavSidebarCollapsed((collapsed) => {
+      if (focusChromeSurfaceEnabled && collapsed) {
+        setFocusChromeGlobalEnabled(false);
+        focusChromePreviousSidebarCollapsedRef.current = null;
+        setFocusChromeGroupOpacity(0);
+      }
+      return !collapsed;
+    });
+  }, [focusChromeSurfaceEnabled, navSidebarToggleEnabled]);
+  const handleFocusChromeActiveChange = useCallback((active: boolean) => {
+    setFocusChromeChildActive(active);
+    if (!active && !focusChromeGlobalEnabledRef.current) {
+      setFocusChromeGroupOpacity(0);
+
+      const previous = focusChromePreviousSidebarCollapsedRef.current;
+      if (previous === null) return;
+      focusChromePreviousSidebarCollapsedRef.current = null;
+      setNavSidebarCollapsed(previous);
+    }
   }, []);
 
   useEffect(() => {
@@ -641,34 +721,30 @@ export default function ClipboardHistory() {
   }, [navSidebarToggleEnabled, toggleNavSidebarCollapsed]);
 
   useEffect(() => {
-    if (forceLibrarySidebarOpen && navSidebarCollapsed) {
-      setNavSidebarCollapsed(false);
-    }
-  }, [forceLibrarySidebarOpen, navSidebarCollapsed]);
-
-  useEffect(() => {
-    if (!currentFieldTheoryNavigationEntry) return;
-    if (sameFieldTheoryNavigationEntry(fieldTheoryNavigationTargetRef.current, currentFieldTheoryNavigationEntry)) {
-      fieldTheoryNavigationTargetRef.current = null;
-      return;
-    }
-    setFieldTheoryNavigationHistory((history) => pushFieldTheoryNavigationEntry(history, currentFieldTheoryNavigationEntry));
-  }, [currentFieldTheoryNavigationEntry]);
-
-  useEffect(() => {
-    if (!isFocusChromeSurface || !focusChromeActive) {
-      setFocusChromeProximityVisible(false);
-      setFooterChromeProximityVisible(false);
+    if (!focusChromeOverlayActive) {
+      setFocusChromeGroupOpacity(0);
       return;
     }
 
     const updateProximity = (event: MouseEvent) => {
-      setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, 0));
-      setFooterChromeProximityVisible(shouldRevealFooterChrome(event.clientY, window.innerHeight));
+      const opacity = getGroupedFocusChromeProximityOpacity({
+        cursorClientY: event.clientY,
+        paneClientTop: 0,
+        viewportHeight: window.innerHeight,
+        revealDistancePx: FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+        fullOpacityDistancePx: FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+        topFullOpacityDistancePx: FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
+      });
+      setFocusChromeGroupOpacity(opacity);
     };
-    const hideProximityChrome = () => {
-      setFocusChromeProximityVisible(false);
-      setFooterChromeProximityVisible(false);
+    const hideProximityChrome = (event: MouseEvent) => {
+      if (!isClientPointOutsideBounds(event.clientX, event.clientY, {
+        left: 0,
+        top: 0,
+        right: window.innerWidth,
+        bottom: window.innerHeight,
+      })) return;
+      setFocusChromeGroupOpacity(0);
     };
 
     window.addEventListener('mousemove', updateProximity);
@@ -677,7 +753,7 @@ export default function ClipboardHistory() {
       window.removeEventListener('mousemove', updateProximity);
       window.removeEventListener('mouseleave', hideProximityChrome);
     };
-  }, [focusChromeActive, isFocusChromeSurface]);
+  }, [focusChromeOverlayActive]);
   useEffect(() => {
     if (!appChromeHidden) setThemeToggleProximityVisible(false);
   }, [appChromeHidden]);
@@ -689,13 +765,27 @@ export default function ClipboardHistory() {
   const handleLibrarianReadingConsumed = useCallback(() => setPendingReadingPath(null), []);
   const handleLibrarianOpenTargetConsumed = useCallback(() => setPendingLibraryOpenTarget(null), []);
   const handleAutoPopArtifactSuperseded = useCallback(() => setAutoPopArtifactPath(null), []);
-  const handleLibrarianOpenCommandPath = useCallback((path: string) => {
-    setSelectedCommandPath(path);
-    setPendingCommandPath(path);
-    setViewMode('commands');
+  const openCommandPathInLibrary = useCallback((path: string) => {
+    setShowSettings(false);
+    setLibraryKeepsCurrentSizeKey(false);
+    setViewMode('librarian');
+    void (async () => {
+      const roots = await window.libraryAPI?.getRoots?.().catch(() => undefined);
+      setPendingLibraryOpenTarget(commandPathToLauncherLibraryOpenTarget(path, roots));
+    })();
   }, []);
+  const handleLibrarianOpenCommandPath = useCallback((path: string) => {
+    openCommandPathInLibrary(path);
+  }, [openCommandPathInLibrary]);
   const selectTopNavView = useCallback((mode: TopNavMode) => {
     const previous = viewModeRef.current;
+    if (mode === 'librarian' && previous === 'librarian' && !showSettings) {
+      if (navSidebarCollapsed) {
+        setLibrarySidebarToggleRequestKey((key) => key + 1);
+      } else {
+        setNavSidebarCollapsed(true);
+      }
+    }
     if (previous !== mode || showSettings) {
       const startedAt = performance.now();
       const highlightAppliedAt = applyTopNavVisualMode(mode);
@@ -718,7 +808,7 @@ export default function ClipboardHistory() {
     setLibraryKeepsCurrentSizeKey(mode === 'librarian' && previous === 'clipboard');
     setViewMode(mode);
     setShowSettings(false);
-  }, [applyTopNavVisualMode, showSettings]);
+  }, [applyTopNavVisualMode, navSidebarCollapsed, showSettings]);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -750,10 +840,11 @@ export default function ClipboardHistory() {
   
   // Sign-in prompt modal - shown when user tries to share without being logged in.
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+  const [showSyncLoginPrompt, setShowSyncLoginPrompt] = useState(false);
   
   const handleRendererSignedOut = useCallback(() => {
     setHasUnreadFeedback(false);
-    setViewMode('clipboard');
+    setViewMode(viewModeAfterSignedOut);
   }, []);
 
   const {
@@ -763,6 +854,7 @@ export default function ClipboardHistory() {
     supabase,
     onSignedOut: handleRendererSignedOut,
   });
+  const shouldShowFooterLoginButton = sessionInitialized && !authSession;
 
   // User's callsign from profile
   const [userCallsign, setUserCallsign] = useState<string | null>(null);
@@ -992,10 +1084,10 @@ export default function ClipboardHistory() {
   });
   
   // Update notification state.
-  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'uptodate';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [showUpdateErrorModal, setShowUpdateErrorModal] = useState(false);
 
   // Network status for update checks.
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -1013,6 +1105,7 @@ export default function ClipboardHistory() {
 
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
+  const [updaterEnabled] = useState(() => window.updaterAPI?.isEnabled?.() ?? true);
   
   // Release notes popup - shows once automatically after update, or manually via toggle button.
   const [showReleaseNotes, setShowReleaseNotes] = useState(false);
@@ -1047,55 +1140,10 @@ export default function ClipboardHistory() {
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
   const appTitlebarOffsetPx = showInDock ? FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX : 0;
-  const chromeLogoTopPx = FIELD_THEORY_CHROME_LOGO_TOP_PX - appTitlebarOffsetPx;
-  const chromeMicTopPx = FIELD_THEORY_CHROME_MIC_TOP_PX - appTitlebarOffsetPx;
   const chromeTabsTopPx = FIELD_THEORY_CHROME_TABS_TOP_PX - appTitlebarOffsetPx;
   const focusChromeIconTop = bookmarksCanvasToolbarTop === null
     ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
-
-  // Center footer label: Bookmarks sync time, active Library timestamp, or fieldtheory.dev.
-  const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
-  const [footerRelativeTimeTick, setFooterRelativeTimeTick] = useState(() => Date.now());
-  const [xBookmarksLastSyncedAt, setXBookmarksLastSyncedAt] = useState<string | null | undefined>(
-    () => peekBookmarks()?.xLastSyncedAt
-  );
-  useEffect(() => {
-    if (viewMode !== 'librarian' || (!libraryActiveFileUpdated && !(bookmarksFooterActive && xBookmarksLastSyncedAt))) return;
-    const interval = window.setInterval(() => setFooterRelativeTimeTick(Date.now()), 60_000);
-    return () => window.clearInterval(interval);
-  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, libraryActiveFileUpdated, viewMode]);
-
-  useEffect(() => {
-    if (!bookmarksFooterActive) return;
-    let cancelled = false;
-    const applySnapshot = (snapshot: BookmarksSnapshot) => {
-      if (!cancelled) setXBookmarksLastSyncedAt(snapshot.xLastSyncedAt ?? null);
-    };
-
-    const cachedBookmarks = peekBookmarks();
-    if (cachedBookmarks) applySnapshot(cachedBookmarks);
-    void getBookmarks().then(applySnapshot);
-    const unsubscribe = onBookmarksChanged(applySnapshot);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [bookmarksFooterActive]);
-
-  const libraryFooterUpdatedLabel = useMemo(() => {
-    if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return null;
-    return `Updated ${formatRelativeTime(libraryActiveFileUpdated.mtime)}`;
-  }, [footerRelativeTimeTick, libraryActiveFileUpdated, viewMode]);
-
-  const bookmarksFooterSyncLabel = useMemo(() => {
-    if (!bookmarksFooterActive) return null;
-    if (xBookmarksLastSyncedAt === undefined) return 'bookmarks last synced from X loading...';
-    if (!xBookmarksLastSyncedAt) return 'bookmarks last synced from X never';
-    const syncedAtMs = Date.parse(xBookmarksLastSyncedAt);
-    if (!Number.isFinite(syncedAtMs)) return 'bookmarks last synced from X unknown';
-    return `bookmarks last synced from X ${formatRelativeTime(syncedAtMs)}`;
-  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, footerRelativeTimeTick]);
 
   // In-app performance HUD visibility.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
@@ -1145,13 +1193,6 @@ export default function ClipboardHistory() {
   useEffect(() => {
     window.clipboardAPI?.getShowInDock?.().then(show => {
       setShowInDock(show);
-    });
-  }, [isVisible]);
-
-  // Load show fieldtheory.dev link setting.
-  useEffect(() => {
-    window.clipboardAPI?.getShowFieldTheoryLink?.().then(show => {
-      setShowFieldTheoryLink(show);
     });
   }, [isVisible]);
 
@@ -1286,6 +1327,33 @@ export default function ClipboardHistory() {
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshAutoImprove = async () => {
+      if (!window.transcribeAPI?.getAutoImprove) {
+        if (!cancelled) setAutoImproveAvailable(false);
+        return;
+      }
+      try {
+        const enabled = await window.transcribeAPI.getAutoImprove();
+        if (cancelled) return;
+        setAutoImproveEnabled(enabled);
+        setAutoImproveAvailable(Boolean(window.transcribeAPI?.setAutoImprove));
+      } catch (err) {
+        console.error('[ClipboardHistory] Failed to load auto-improve state:', err);
+        if (!cancelled) setAutoImproveAvailable(false);
+      }
+    };
+
+    void refreshAutoImprove();
+    window.addEventListener('focus', refreshAutoImprove);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refreshAutoImprove);
+    };
+  }, []);
+
   // Fetch and subscribe to audio state for Priority Mic dropdown.
   useEffect(() => {
     if (!window.audioAPI) return;
@@ -1335,9 +1403,8 @@ export default function ClipboardHistory() {
 
     checkUnread();
 
-    // Re-poll periodically and on window focus. The realtime IPC for
-    // `messageReceived` is not currently emitted by the main process, so
-    // without this the dot stays stuck on the value captured at mount.
+    // Re-poll periodically and on window focus so the dot still catches up if
+    // the realtime IPC event is missed while the window is hidden or suspended.
     const pollId = window.setInterval(checkUnread, 300_000);
     const onFocus = () => checkUnread();
     window.addEventListener('focus', onFocus);
@@ -1377,50 +1444,60 @@ export default function ClipboardHistory() {
   // Subscribe to update events for in-app notification.
   useEffect(() => {
     if (!window.updaterAPI) return;
+    if (!updaterEnabled) return;
     
     // Query current update status on mount (in case we missed the IPC event).
     window.updaterAPI.getStatus().then((info) => {
       if (info) {
-        setUpdateStatus(info.status);
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, info.status));
         setUpdateVersion(info.version);
       }
     });
     
     const cleanups = [
       window.updaterAPI.onCheckingForUpdate(() => {
-        setUpdateStatus('checking');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'checking'));
+        setUpdateError(null);
       }),
       window.updaterAPI.onUpdateAvailable((info) => {
-        setUpdateStatus('available');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'available'));
         setUpdateVersion(info.version);
+        setUpdateError(null);
       }),
       window.updaterAPI.onDownloadProgress(() => {
-        setUpdateStatus('downloading');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'downloading'));
       }),
       window.updaterAPI.onUpdateDownloaded((info) => {
-        setUpdateStatus('ready');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'ready'));
         setUpdateVersion(info.version);
+        setUpdateError(null);
+      }),
+      window.updaterAPI.onInstalling(() => {
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'installing'));
+        setUpdateError(null);
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
-        setUpdateStatus('uptodate');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'uptodate'));
+        setUpdateError(null);
         // Don't auto-show release notes - only show when user explicitly requests via hover or button.
         // Reset to idle after 3 seconds so the version number returns.
-        setTimeout(() => setUpdateStatus('idle'), 3000);
+        setTimeout(() => setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle')), 3000);
       }),
       window.updaterAPI.onError((error) => {
         console.error('[Updater] Error:', error);
         // Silently ignore network errors - button is disabled when offline anyway
         if (error?.includes('ERR_INTERNET_DISCONNECTED') || error?.includes('ERR_NETWORK') || error?.includes('ENOTFOUND')) {
-          setUpdateStatus('idle');
+          setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle'));
           return;
         }
         setUpdateError(error);
-        setUpdateStatus('error');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'error'));
+        setShowUpdateErrorModal(false);
       }),
     ];
     
     return () => cleanups.forEach(cleanup => cleanup());
-  }, []);
+  }, [updaterEnabled]);
 
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
@@ -1446,6 +1523,14 @@ export default function ClipboardHistory() {
   const [agentImproveTool, setAgentImproveTool] = useState<'codex' | 'claude'>('codex');
   const [agentImproveLaunching, setAgentImproveLaunching] = useState(false);
   const [agentImproveStatus, setAgentImproveStatus] = useState<string | null>(null);
+  const {
+    localCommandStatus,
+    setLocalCommandStatus,
+    footerStatusLabel: localCommandFooterStatusLabel,
+    cancelLocalCommandRun,
+  } = useLibraryFooterLocalCommandStatus();
+  const [maxwellHistoryOpen, setMaxwellHistoryOpen] = useState(false);
+  const footerRef = useRef<HTMLDivElement | null>(null);
 
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
@@ -1579,6 +1664,24 @@ export default function ClipboardHistory() {
     feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
   }, []);
 
+  const handleToggleAutoImprove = useCallback(async () => {
+    if (!window.transcribeAPI?.setAutoImprove) {
+      showFeedback('auto improve unavailable');
+      return;
+    }
+
+    const next = !autoImproveEnabled;
+    setAutoImproveEnabled(next);
+    try {
+      await window.transcribeAPI.setAutoImprove(next);
+      showFeedback(next ? 'auto improve on' : 'auto improve off');
+    } catch (err) {
+      console.error('[ClipboardHistory] Failed to toggle auto-improve:', err);
+      setAutoImproveEnabled(!next);
+      showFeedback('could not toggle auto improve');
+    }
+  }, [autoImproveEnabled, showFeedback]);
+
   const handleCreateMarkdownFromItems = useCallback(async (
     sourceItems: ClipboardItem[],
     options: { stackId?: string; contentVersion?: 'stored' | 'original' | 'improved' } = {},
@@ -1614,14 +1717,21 @@ export default function ClipboardHistory() {
         return;
       }
 
-      const saved = await window.wikiAPI?.save(page.relPath, markdown);
+      const portableMarkdown = (await window.markdownImagesAPI?.makeImagesPortable(page.absPath, markdown))?.content ?? markdown;
+      const saved = await window.wikiAPI?.save(page.relPath, portableMarkdown);
       if (!isDocumentSaveOk(saved)) {
         showFeedback('could not save markdown');
         return;
       }
 
       showFeedback(`saved to ${page.relPath}.md`);
-      setPendingLibraryOpenTarget({ kind: 'wiki', path: page.relPath, contentMode: 'markdown' });
+      setPendingLibraryOpenTarget({
+        kind: 'wiki',
+        path: page.relPath,
+        contentMode: 'markdown',
+        selectionStart: portableMarkdown.length,
+        selectionEnd: portableMarkdown.length,
+      });
       setShowSettings(false);
       setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
@@ -1859,8 +1969,10 @@ export default function ClipboardHistory() {
     localStorage.removeItem('pendingSketch');
     setEditingSketchItem(null);
     setSketchAssociatedTranscripts([]);
-    setViewMode('clipboard');
-  }, []);
+    if (!navigateAppHistory(-1)) {
+      setViewMode('clipboard');
+    }
+  }, [navigateAppHistory]);
 
   const openSketchForEditing = useCallback(async (item: ClipboardItem) => {
     setEditingSketchItem(item);
@@ -1917,8 +2029,8 @@ export default function ClipboardHistory() {
 
   useEffect(() => {
     localStorage.setItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY, librarianImmersive ? 'true' : 'false');
-    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive && !focusChromeActive);
-  }, [focusChromeActive, librarianImmersive, showSettings, viewMode]);
+    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive && !focusChromeOverlayActive);
+  }, [focusChromeOverlayActive, librarianImmersive, showSettings, viewMode]);
 
   useEffect(() => {
     if ((showSettings || viewMode !== 'librarian') && librarianImmersive) {
@@ -2048,6 +2160,20 @@ export default function ClipboardHistory() {
       );
     });
 
+    const unsubscribeShowLibrary = window.clipboardAPI.onShowLibrary?.(() => {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+      setSelectedIndex(0);
+      setSelectedIds(new Set());
+      setIsMultiSelect(false);
+      setFilter('all');
+      setShowSettings(false);
+      setPendingReadingPath(null);
+      setLibraryKeepsCurrentSizeKey(false);
+      setViewMode('librarian');
+      setLibrarianImmersive(shouldRestoreLibrarianImmersive(localStorage));
+    });
+
     const unsubscribeShowTranscriptHistory = window.clipboardAPI.onShowTranscriptHistory?.(() => {
       setSearchQuery('');
       setDebouncedSearchQuery('');
@@ -2079,18 +2205,28 @@ export default function ClipboardHistory() {
       rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
-    const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
-    if (syncStatusPromise) {
-      syncStatusPromise.then(status => {
-        setFieldTheorySyncEnabled(status.enabled);
-        if (!status.enabled) {
-          setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
-        }
-      }).catch(() => setFieldTheorySyncEnabled(false));
+    if (FEATURE_MOBILE_SYNC_ENABLED) {
+      const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
+      if (syncStatusPromise) {
+        syncStatusPromise.then(status => {
+          setFieldTheorySyncEnabled(status.enabled);
+          if (!status.enabled) {
+            setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+          }
+        }).catch(() => setFieldTheorySyncEnabled(false));
+      }
+    } else {
+      setFieldTheorySyncEnabled(false);
+      setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
     }
 
     // Listen for todo view switch event (triggered when Cmd+Shift+T enables Tasks tab).
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
+      if (!FEATURE_MOBILE_SYNC_ENABLED) {
+        setFieldTheorySyncEnabled(false);
+        setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+        return;
+      }
       void (async () => {
         const status = await window.fieldTheorySyncAPI?.getStatus?.();
         if (!status?.enabled) return;
@@ -2180,6 +2316,7 @@ export default function ClipboardHistory() {
 
     return () => {
       unsubscribeShowHistory();
+      unsubscribeShowLibrary?.();
       unsubscribeShowTranscriptHistory?.();
       unsubscribeShowSettings?.();
       unsubscribeCollapseImmersive?.();
@@ -2207,16 +2344,28 @@ export default function ClipboardHistory() {
     const unsubscribe = window.commandsAPI?.onOpenMarkdownFromLauncher?.((target) => {
       setShowSettings(false);
       if (target.kind === 'command') {
-        setSelectedCommandPath(target.path);
-        setPendingCommandPath(target.path);
-        setViewMode('commands');
+        openCommandPathInLibrary(target.path);
         return;
       }
       if (target.kind === 'commands') {
-        setViewMode('commands');
+        setPendingLibraryOpenTarget(null);
+        setLibraryKeepsCurrentSizeKey(false);
+        setViewMode('librarian');
         return;
       }
       if (target.kind === 'clipboard') {
+        const clipboardSearch = target.clipboardSearch ?? '';
+        setSearchQuery(clipboardSearch);
+        setDebouncedSearchQuery(clipboardSearch);
+        setSelectedIds(new Set());
+        setIsMultiSelect(false);
+        setFilter('all');
+        setSourceFilter('all');
+        if (target.clipboardStackId) {
+          setPendingStackSelection(target.clipboardStackId);
+        } else if (typeof target.clipboardItemId === 'number') {
+          setPendingItemSelection(target.clipboardItemId);
+        }
         setViewMode('clipboard');
         return;
       }
@@ -2237,7 +2386,7 @@ export default function ClipboardHistory() {
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [openCommandPathInLibrary]);
 
   // Hotkey-driven scratchpad create → jump straight into Library and preserve
   // the target in case LibrarianView mounts after the one-shot IPC event.
@@ -2249,7 +2398,11 @@ export default function ClipboardHistory() {
         const page = await window.wikiAPI?.getPage(relPath);
         if (page) dispatchLocalWikiAdded(page);
       })();
-      setPendingLibraryOpenTarget({ kind: 'wiki', path: relPath, contentMode: 'markdown' });
+      setPendingLibraryOpenTarget({
+        kind: 'wiki',
+        path: relPath,
+        contentMode: 'rendered',
+      });
       setLibraryKeepsCurrentSizeKey(false);
       setNavSidebarCollapsed(true);
       setViewMode('librarian');
@@ -2549,6 +2702,12 @@ export default function ClipboardHistory() {
     return () => window.clearTimeout(timeout);
   }, [agentImproveStatus]);
 
+  useEffect(() => {
+    return window.agentKickoffAPI?.onStatus?.((event) => {
+      setLocalCommandStatus(getAgentKickoffFooterStatus(event));
+    });
+  }, [setLocalCommandStatus]);
+
   const openAgentImproveDialog = useCallback(() => {
     const context = getAgentImproveContext();
     if (!context) {
@@ -2615,17 +2774,23 @@ export default function ClipboardHistory() {
       const activeElement = document.activeElement;
       const isTypingInTextEntry = isTextEntryElement(activeElement);
 
-      // Cmd+Shift+I: improve selected text, or the whole open markdown file.
+      // Cmd+Shift+I: improve selected text with the configured Auto-improve provider.
       if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
         e.preventDefault();
-        openAgentImproveDialog();
+        void window.commandsAPI?.runGlobalImproveSelection?.();
         return;
       }
 
       // Shift+Cmd+L to toggle light/dark mode.
       if (isThemeToggleShortcut(e)) {
         e.preventDefault();
+        const terminalDarkMode = readStoredCodexTerminalDarkMode(theme.isDark);
+        const nextTerminalDarkMode = getLinkedCodexTerminalDarkModeUpdate(theme.isDark, terminalDarkMode);
         toggleDarkMode();
+        if (nextTerminalDarkMode !== null) {
+          writeStoredCodexTerminalDarkMode(nextTerminalDarkMode);
+          dispatchCodexTerminalDarkModeSync(nextTerminalDarkMode);
+        }
         return;
       }
 
@@ -2639,6 +2804,15 @@ export default function ClipboardHistory() {
 
       // Let Cmd+H pass through to menu for app hiding.
       if (key === 'h' && hasMeta) return;
+
+      const appNavigationDirection = showSettings || librarianSurfaceVisible
+        ? null
+        : getAppBracketNavigationDirection(e);
+      if (appNavigationDirection !== null && navigateAppHistory(appNavigationDirection)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       
       // Prevent default for navigation keys.
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
@@ -2648,34 +2822,17 @@ export default function ClipboardHistory() {
         }
       }
 
-      // Control+Tab/Shift+Control+Tab cycles through the left-group top-nav tabs.
-      // Plain Tab is left to focused surfaces such as the Library sidebar.
-      if (key === 'Tab' && hasCtrl && !hasAlt && !hasMeta) {
-        if (!shouldCycleTopNavWithControlTab(activeElement)) {
-          traceTopNav('top-nav-tab-native', {
-            activeTag: document.activeElement?.tagName ?? null,
-          });
-          return; // Let fields keep native Tab behavior.
-        }
+      const numberTabSurface = getAppNumberTabSurface(e);
+      if (numberTabSurface) {
         e.preventDefault();
-
-        if (activeElement === inputRef.current) {
-          setSearchQuery('');
-          setDebouncedSearchQuery('');
-        }
-        if (activeElement instanceof HTMLElement) {
-          activeElement.blur();
-        }
-
         setShowSettings(false);
-        const delta = hasShift ? -1 : 1;
-        switchTopNavView(delta);
+        selectTopNavView(numberTabSurface);
         return;
       }
 
       // When not in clipboard view, let other views handle their own navigation.
       if (viewMode !== 'clipboard') {
-        // In sketch mode, let SketchView handle Escape (returns to clipboard view).
+        // In sketch mode, let SketchView handle Escape (returns to the previous surface).
         // Don't close the window - SketchView's handler calls handleSketchClose.
         if (viewMode === 'sketch' && key === 'Escape') {
           return;
@@ -2960,7 +3117,7 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
-        // If in settings, return to clipboard view (like commands tab)
+        // If in settings, return to the previous Field Theory surface.
         if (showSettings) {
           e.preventDefault();
           setShowSettings(false);
@@ -3508,7 +3665,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, theme.isDark, toggleDarkMode, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -3612,13 +3769,6 @@ export default function ClipboardHistory() {
         ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
         : targetAppInfo.previousApp?.bundleId;
       
-      if (!pasteBundleId) {
-        window.clipboardAPI?.copyItem?.(item.id, item.useImprovedVersion);
-        window.clipboardAPI?.showNoTargetError?.('Copied to clipboard');
-        window.clipboardAPI?.closeWindow();
-        return;
-      }
-
       window.clipboardAPI?.pasteItem(item.id, pasteBundleId, item.useImprovedVersion);
     }
   };
@@ -3660,6 +3810,13 @@ export default function ClipboardHistory() {
     setLastClickedIndex(null);
     loadItems(true);
   };
+
+  const handleWindowBoundaryMouseLeave = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!isClientPointOutsideBounds(event.clientX, event.clientY, bounds)) return;
+    setFocusChromeGroupOpacity(0);
+    setThemeToggleProximityVisible(false);
+  }, []);
 
   if (!isVisible) {
     return null;
@@ -3715,43 +3872,196 @@ export default function ClipboardHistory() {
   };
 
   const renderThemeToggleButton = () => (
-    <button
-      onClick={toggleDarkMode}
-      title={`${theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'} (⇧⌘L)`}
-      aria-label={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-      style={{
-        width: '18px',
-        height: '18px',
-        padding: 0,
-        backgroundColor: 'transparent',
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'all 0.15s ease',
-      }}
-    >
-      {theme.isDark ? (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
-          <circle cx="12" cy="12" r="4" />
-          <rect x="11" y="1" width="2" height="4" rx="1" />
-          <rect x="11" y="19" width="2" height="4" rx="1" />
-          <rect x="19" y="11" width="4" height="2" rx="1" />
-          <rect x="1" y="11" width="4" height="2" rx="1" />
-          <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
-          <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
-          <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
-          <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
-        </svg>
-      ) : (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-        </svg>
-      )}
-    </button>
+    <LibraryFooterThemeToggleButton theme={theme} onToggle={toggleDarkMode} />
   );
+
+  const renderMaxwellHistoryButton = (extraStyle: React.CSSProperties = {}) => (
+    <LibraryFooterMaxwellHistoryButton
+      theme={theme}
+      open={maxwellHistoryOpen}
+      onToggle={() => setMaxwellHistoryOpen((open) => !open)}
+      style={extraStyle}
+    />
+  );
+
+  const renderPriorityMicControl = () => {
+    if (audioDevices.length === 0) return null;
+    return (
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+        }}
+        data-mic-dropdown
+      >
+        <button
+          onClick={() => setShowMicDropdown(!showMicDropdown)}
+          title="Priority Mic"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '6px 7px',
+            fontSize: '10px',
+            color: theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: 'none',
+            borderRadius: '3px',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            maxWidth: '132px',
+            overflow: 'hidden',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {priorityDeviceId
+              ? formatCompactPriorityMicName(audioDevices.find(d => d.id === priorityDeviceId)?.name)
+              : 'None'}
+          </span>
+          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+
+        {showMicDropdown && (
+          <>
+            <div
+              onClick={() => setShowMicDropdown(false)}
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 199,
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '4px',
+                backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                zIndex: 200,
+                minWidth: '180px',
+                maxWidth: '240px',
+                padding: '4px 0',
+              }}
+            >
+              <button
+                onClick={() => {
+                  window.audioAPI?.setPriorityDevice(null);
+                  setShowMicDropdown(false);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  width: '100%',
+                  padding: '6px 10px',
+                  fontSize: '11px',
+                  color: !priorityDeviceId ? theme.accent : theme.text,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'background-color 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                {!priorityDeviceId && <span style={{ color: theme.accent }}>✓</span>}
+                <span style={{ marginLeft: !priorityDeviceId ? 0 : '16px' }}>None</span>
+              </button>
+
+              <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
+
+              {audioDevices.map(device => (
+                <button
+                  key={device.id}
+                  onClick={() => {
+                    if (!priorityMicQuotaExhausted) {
+                      window.audioAPI?.setPriorityDevice(device.id);
+                      setShowMicDropdown(false);
+                    }
+                  }}
+                  disabled={priorityMicQuotaExhausted}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    width: '100%',
+                    padding: '6px 10px',
+                    fontSize: '11px',
+                    color: priorityMicQuotaExhausted
+                      ? theme.textSecondary
+                      : priorityDeviceId === device.id
+                        ? theme.accent
+                        : theme.text,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: priorityMicQuotaExhausted ? 'not-allowed' : 'pointer',
+                    textAlign: 'left',
+                    overflow: 'hidden',
+                    opacity: priorityMicQuotaExhausted ? 0.5 : 1,
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!priorityMicQuotaExhausted) {
+                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!priorityMicQuotaExhausted) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
+                >
+                  {priorityDeviceId === device.id && <span style={{ color: theme.accent }}>✓</span>}
+                  <span style={{
+                    marginLeft: priorityDeviceId === device.id ? 0 : '16px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {formatCompactPriorityMicName(device.name)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const footerStatusLabel = localCommandStatus
+    ? localCommandFooterStatusLabel
+    : agentImproveStatus;
+  const showFocusStatusOverlay = focusChromeOverlayActive && !footerChromeInteractive && !!footerStatusLabel;
 
   // Window fills the entire BrowserWindow now (no overlay).
   // Native macOS vibrancy handles the blur effect at the window level.
@@ -3783,11 +4093,16 @@ export default function ClipboardHistory() {
           from { opacity: 0; }
           to { opacity: 0.62; }
         }
+        @keyframes localStatusFadeOut {
+          0%, 68% { opacity: 0.9; }
+          100% { opacity: 0; }
+        }
       `}</style>
 
 
       <div
         ref={dialogRef}
+        onMouseLeave={handleWindowBoundaryMouseLeave}
         style={{
           width: '100%',
           height: '100%',
@@ -3806,6 +4121,20 @@ export default function ClipboardHistory() {
           transition: 'opacity 140ms ease, filter 140ms ease',
         }}
       >
+      <div
+        data-field-theory-top-chrome-drag-layer
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: `${FIELD_THEORY_CHROME_TABS_TOP_PX}px`,
+          zIndex: 1,
+          cursor: 'grab',
+          ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
+        }}
+      />
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
@@ -3853,451 +4182,44 @@ export default function ClipboardHistory() {
           WebkitAppRegion: 'drag',
           cursor: 'grab',
           borderBottom: 'none',
-          opacity: appChromeHidden ? 0 : 1,
-          pointerEvents: appChromeHidden ? 'none' : 'auto',
-          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 0.18s ease',
+          opacity: appChromeOpacity,
+          pointerEvents: appChromeInteractive ? 'auto' : 'none',
+          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 90ms linear',
         }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            top: `${chromeLogoTopPx}px`,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            alignItems: 'center',
-            maxWidth: '220px',
-            overflow: 'hidden',
-            pointerEvents: 'none',
-          }}
-        >
-          <img
-            src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"}
-            alt="Field Theory"
-            style={{
-              height: '20px',
-              width: 'auto',
-              maxWidth: '120px',
-              objectFit: 'contain',
-              flex: '0 0 auto',
-            }}
-          />
-        </div>
-
-        {audioDevices.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: `${chromeMicTopPx}px`,
-              right: '28px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              // @ts-ignore - prevent drag on dropdown
-              WebkitAppRegion: 'no-drag',
-            }}
-          >
-            <span style={{
-              fontSize: '9px',
-              color: theme.textSecondary,
-              opacity: 0.6,
-            }}>
-              Priority Mic:
-            </span>
-
-            {/* Mic Lock dropdown - visible in all views */}
-            <div
-              style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
-              data-mic-dropdown
-            >
-            <button
-              onClick={() => setShowMicDropdown(!showMicDropdown)}
-              title="Priority Mic"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '3px',
-                padding: '6px 8px',
-                fontSize: '9px',
-                color: theme.textSecondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                borderRadius: '3px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                maxWidth: '112px',
-                overflow: 'hidden',
-              }}
-            >
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                <line x1="12" y1="19" x2="12" y2="23"/>
-                <line x1="8" y1="23" x2="16" y2="23"/>
-              </svg>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {priorityDeviceId
-                  ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
-                  : 'None'}
-              </span>
-              <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-            
-            {/* Dropdown menu */}
-            {showMicDropdown && (
-              <>
-                {/* Overlay to catch clicks outside dropdown */}
-                <div
-                  onClick={() => setShowMicDropdown(false)}
-                  style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    zIndex: 199,
-                  }}
-                />
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    right: 0,
-                    marginTop: '4px',
-                    backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '6px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                    zIndex: 200,
-                    minWidth: '180px',
-                    maxWidth: '240px',
-                    padding: '4px 0',
-                  }}
-                >
-                {/* None option (no priority mic) */}
-                <button
-                  onClick={() => {
-                    window.audioAPI?.setPriorityDevice(null);
-                    setShowMicDropdown(false);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    width: '100%',
-                    padding: '6px 10px',
-                    fontSize: '11px',
-                    color: !priorityDeviceId ? theme.accent : theme.text,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
-                >
-                  {!priorityDeviceId && <span style={{ color: theme.accent }}>✓</span>}
-                  <span style={{ marginLeft: !priorityDeviceId ? 0 : '16px' }}>None</span>
-                </button>
-                
-                <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
-                
-                {/* Device list */}
-                {audioDevices.map(device => (
-                  <button
-                    key={device.id}
-                    onClick={() => {
-                      if (!priorityMicQuotaExhausted) {
-                        window.audioAPI?.setPriorityDevice(device.id);
-                        setShowMicDropdown(false);
-                      }
-                    }}
-                    disabled={priorityMicQuotaExhausted}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      width: '100%',
-                      padding: '6px 10px',
-                      fontSize: '11px',
-                      color: priorityMicQuotaExhausted
-                        ? theme.textSecondary
-                        : priorityDeviceId === device.id
-                          ? theme.accent
-                          : theme.text,
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: priorityMicQuotaExhausted ? 'not-allowed' : 'pointer',
-                      textAlign: 'left',
-                      overflow: 'hidden',
-                      opacity: priorityMicQuotaExhausted ? 0.5 : 1,
-                    }}
-                  >
-                    {priorityDeviceId === device.id && <span style={{ color: theme.accent }}>✓</span>}
-                    <span style={{
-                      marginLeft: priorityDeviceId === device.id ? 0 : '16px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {device.name}
-                    </span>
-                  </button>
-                ))}
-
-              </div>
-              </>
-            )}
-            </div>
-          </div>
-        )}
-
       </div>
 
       {showFocusChromeIcon && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: focusChromeIconTop,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 20,
-            height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-            opacity: 0.62,
-            animation: 'focusLogoFadeIn 0.18s ease-out',
-          }}
-        >
-          <img
-            src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
-            alt=""
-            style={{
-              height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
-              width: 'auto',
-              display: 'block',
-            }}
-          />
-        </div>
+        <LibraryFocusChromeIcon
+          isDark={theme.isDark}
+          top={focusChromeIconTop}
+          contentCenterX={focusChromeContentCenterX}
+          opacity={focusChromeIconOpacity}
+        />
       )}
 
       {/* View mode tabs - collapses in Librarian immersive mode */}
       {viewMode !== 'sketch' && (
-        <div
-          ref={tabsRef}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: `${chromeTabsTopPx}px 28px 0 20px`,
-            marginTop: 0,
-            marginBottom: `${FIELD_THEORY_CHROME_TABS_BOTTOM_PX}px`,
-            height: 'auto',
-            minHeight: '32px',
-            overflow: 'hidden',
-            opacity: appChromeHidden ? 0 : 1,
-            pointerEvents: appChromeHidden ? 'none' : 'auto',
-            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 0.18s ease',
-          }}>
-          {(['clipboard'] as ViewMode[]).map((mode) => {
-            const isSelected = viewMode === mode && !showSettings;
-            const bgColor = isSelected ? theme.accent : 'transparent';
-
-            return (
-              <button
-                key={mode}
-                onClick={() => {
-                  selectTopNavView(mode as TopNavMode);
-                }}
-                data-top-nav-mode={mode}
-                tabIndex={0}
-                style={{
-                  position: 'relative',
-                  padding: '6px 8px',
-                  fontSize: '11px',
-                  fontWeight: 400,
-                  backgroundColor: bgColor,
-                  color: isSelected ? '#fff' : theme.textSecondary,
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  transition: 'none',
-                  outline: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }
-                }}
-              >
-                {TAB_LABELS[mode]}
-                {/* New reading indicator for Librarian tab */}
-                {mode === 'librarian' && hasNewReading && viewMode !== 'librarian' && (
-                  <span style={{
-                    position: 'absolute',
-                    top: '-2px',
-                    right: '-2px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: theme.info,
-                  }} />
-                )}
-              </button>
-            );
-          })}
-          {/* Librarian button */}
-          <button
-            onClick={() => {
-              selectTopNavView('librarian');
-            }}
-            data-top-nav-mode="librarian"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              position: 'relative',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'librarian' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'librarian' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Personal wiki"
-          >
-            Library
-            {/* New reading indicator */}
-            {hasNewReading && viewMode !== 'librarian' && (
-              <span style={{
-                position: 'absolute',
-                top: '-2px',
-                right: '-2px',
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                backgroundColor: theme.info,
-              }} />
-            )}
-          </button>
-
-          {/* Commands button — sits alongside Fields / Library in the left
-              group. Matches their typography so the three read as peers. */}
-          <button
-            onClick={() => {
-              selectTopNavView('commands');
-            }}
-            data-top-nav-mode="commands"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Portable commands"
-          >
-            Commands
-          </button>
-
-          <button
-            onClick={() => {
-              selectTopNavView('possible');
-            }}
-            data-top-nav-mode="possible"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'possible' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'possible' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'possible' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'possible' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Possible ideas"
-          >
-            Possible
-          </button>
-
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {actionFeedback && (
-              <span 
-                style={{ 
-                  fontSize: '9px', 
-                  fontWeight: 500,
-                  color: theme.textSecondary,
-                }}
-              >
-                {actionFeedback}
-              </span>
-            )}
+        <div ref={tabsRef}>
+          <LibrarySurfaceTopTabs
+            theme={theme}
+            tabs={[
+              {
+                id: 'librarian',
+                label: 'Library',
+                title: 'Personal wiki',
+                indicator: hasNewReading && viewMode !== 'librarian',
+              },
+              { id: 'clipboard', label: TAB_LABELS.clipboard },
+            ]}
+            selectedId={!showSettings ? viewMode : ''}
+            onSelect={(mode) => selectTopNavView(mode as TopNavMode)}
+            topPaddingPx={chromeTabsTopPx}
+            opacity={appChromeOpacity}
+            interactive={appChromeInteractive}
+            rightSlot={(
+              <>
+            <LibraryTopChromeActionFeedback message={actionFeedback} theme={theme} />
             
             {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
               <div 
@@ -4306,6 +4228,7 @@ export default function ClipboardHistory() {
                   alignItems: 'center', 
                   gap: '4px',
                   position: 'relative',
+                  ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
                 }}
                 onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
                 onMouseLeave={() => setShowRecordingTooltip(false)}
@@ -4379,8 +4302,8 @@ export default function ClipboardHistory() {
             }}
             tabIndex={0}
             style={{
-              padding: '5px 6px',
-              fontSize: '9px',
+              padding: '6px 7px',
+              fontSize: '10px',
               fontWeight: 500,
               backgroundColor: 'transparent',
               color: theme.textSecondary,
@@ -4391,7 +4314,8 @@ export default function ClipboardHistory() {
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
+              gap: '4px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
@@ -4401,12 +4325,58 @@ export default function ClipboardHistory() {
             }}
             title="Create a new drawing"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19l7-7 3 3-7 7-3-3z" />
               <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
               <path d="M2 2l7.586 7.586" />
             </svg>
             Draw
+          </button>
+
+          {renderPriorityMicControl()}
+
+          {/* Auto Improve toggle */}
+          <button
+            onClick={() => void handleToggleAutoImprove()}
+            disabled={!autoImproveAvailable}
+            tabIndex={0}
+            aria-pressed={autoImproveEnabled}
+            style={{
+              padding: '5px',
+              width: '24px',
+              height: '24px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: '3px',
+              cursor: autoImproveAvailable ? 'pointer' : 'not-allowed',
+              transition: 'background-color 0.15s ease, opacity 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: autoImproveAvailable ? (autoImproveEnabled ? 1 : 0.46) : 0.28,
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+            }}
+            onMouseEnter={(e) => {
+              if (autoImproveAvailable) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            title={autoImproveEnabled ? 'Auto Improve on' : 'Auto Improve off'}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z" />
+              <path d="M20 3v4" />
+              <path d="M22 5h-4" />
+              <path d="M4 17v2" />
+              <path d="M5 18H3" />
+            </svg>
           </button>
 
           {/* Feedback button */}
@@ -4417,20 +4387,23 @@ export default function ClipboardHistory() {
             }}
             tabIndex={0}
             style={{
-              padding: '5px 6px',
+              padding: '5px',
+              width: '24px',
+              height: '24px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: viewMode === 'feedback' && !showSettings ? theme.accent : 'transparent',
               color: viewMode === 'feedback' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
+              border: `1px solid ${viewMode === 'feedback' && !showSettings ? theme.accent : theme.border}`,
               borderRadius: '3px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
+              justifyContent: 'center',
               position: 'relative',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (viewMode !== 'feedback' || showSettings) {
@@ -4444,10 +4417,9 @@ export default function ClipboardHistory() {
             }}
             title="Send feedback (F)"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            Feedback
             {/* Notification dot for new feedback - only when authenticated */}
             {hasUnreadFeedback && viewMode !== 'feedback' && authSession?.user?.email && (
               <span style={{
@@ -4467,19 +4439,22 @@ export default function ClipboardHistory() {
             onClick={() => { if (!showSettings) setShowSettings(true); }}
             tabIndex={0}
             style={{
-              padding: '5px 6px',
+              padding: '5px',
+              width: '24px',
+              height: '24px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: showSettings ? theme.accent : 'transparent',
               color: showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
+              border: `1px solid ${showSettings ? theme.accent : theme.border}`,
               borderRadius: '3px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
+              justifyContent: 'center',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (!showSettings) {
@@ -4493,14 +4468,14 @@ export default function ClipboardHistory() {
             }}
             title="Settings"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            Settings
           </button>
-
-          </div>
+              </>
+            )}
+          />
         </div>
       )}
 
@@ -4513,6 +4488,8 @@ export default function ClipboardHistory() {
             padding: `${showInDock ? 22 : 14}px 16px 8px 16px`,
             marginBottom: '8px',
             position: 'relative',
+            cursor: 'grab',
+            ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
           }}>
           {/* Left: Back button */}
           <button
@@ -4540,6 +4517,7 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
@@ -4599,6 +4577,7 @@ export default function ClipboardHistory() {
                 cursor: sketchHasChanges ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
                 outline: 'none',
+                ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
               }}
               onMouseEnter={(e) => {
                 if (sketchHasChanges) {
@@ -4631,6 +4610,7 @@ export default function ClipboardHistory() {
                 cursor: sketchHasChanges ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
                 outline: 'none',
+                ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
               }}
               onMouseEnter={(e) => {
                 if (sketchHasChanges) {
@@ -4649,24 +4629,30 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {!showSettings && (librarianEverRendered || viewMode === 'librarian') && (
+      {keepLibrarianMounted && (
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            display: viewMode === 'librarian' ? 'flex' : 'none',
+            display: librarianSurfaceVisible ? 'flex' : 'none',
             flexDirection: 'column',
+            borderTop: focusChromeOverlayActive ? 'none' : `1px solid ${getSettingsDividerColor(theme)}`,
           }}
         >
           <LibrarianView
-            active={viewMode === 'librarian'}
+            active={librarianSurfaceVisible}
             onSwitchToClipboard={handleLibrarianSwitchToClipboard}
             onSwitchToSettings={handleLibrarianSwitchToSettings}
+            onNavigateToSignIn={() => {
+              window.onboardingAPI?.showSignIn();
+            }}
             onFullScreenChange={setLibrarianImmersive}
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
             onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
             onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
-            onSelectedItemTypeChange={setLibrarySelectedItemType}
+            focusChromeGroupOpacity={focusChromeGroupOpacity}
+            focusChromeEnabled={focusChromeGlobalEnabled}
+            onFocusChromeEnabledChange={handleGlobalFocusChromeChange}
             initialReadingPath={pendingReadingPath}
             initialOpenTarget={pendingLibraryOpenTarget}
             initialFullScreen={librarianImmersive}
@@ -4675,10 +4661,11 @@ export default function ClipboardHistory() {
             autoPopArtifactPath={autoPopArtifactPath}
             onAutoPopArtifactSuperseded={handleAutoPopArtifactSuperseded}
             onOpenCommandPath={handleLibrarianOpenCommandPath}
-            onFocusChromeShortcut={collapseSidebarForFocusChrome}
-            onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
+            onFocusChromeShortcut={enableGlobalFocusChrome}
+            onFocusChromeContentCenterChange={setFocusChromeContentCenterX}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
+            sidebarToggleRequestKey={librarySidebarToggleRequestKey}
           />
         </div>
       )}
@@ -4706,7 +4693,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
         sessionInitialized && authSession?.user?.email ? (
-          <FeedbackView onSwitchToClipboard={() => setViewMode('clipboard')} />
+          <DMsView feedbackOnly onSwitchToClipboard={() => setViewMode('clipboard')} />
         ) : sessionInitialized ? (
           <div style={{
             flex: 1,
@@ -4759,20 +4746,6 @@ export default function ClipboardHistory() {
             Loading...
           </div>
         )
-      ) : viewMode === 'commands' ? (
-        <CommandsView
-          onSwitchToClipboard={() => setViewMode('clipboard')}
-          sidebarCollapsed={navSidebarCollapsed}
-          onFocusChromeActiveChange={handleFocusChromeActiveChange}
-          initialCommandPath={pendingCommandPath}
-          onInitialCommandConsumed={() => setPendingCommandPath(null)}
-          onFocusChromeShortcut={collapseSidebarForFocusChrome}
-          canNavigateBack={canNavigateFieldTheoryBack}
-          canNavigateForward={canNavigateFieldTheoryForward}
-          onNavigateBack={() => navigateFieldTheoryHistory(-1)}
-          onNavigateForward={() => navigateFieldTheoryHistory(1)}
-          onSelectedCommandPathChange={setSelectedCommandPath}
-        />
       ) : viewMode === 'possible' ? (
         <PossibleGraphView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'sketch' ? (
@@ -4801,7 +4774,8 @@ export default function ClipboardHistory() {
             display: 'flex', 
             flexDirection: 'column', 
             overflow: 'hidden', 
-            padding: '0 16px 16px 16px',
+            padding: '12px 10px 16px',
+            borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
           }}
         >
           {/* Screen Recording Permission Banner */}
@@ -4857,13 +4831,14 @@ export default function ClipboardHistory() {
               data-fieldtheory-top-nav-search="true"
               style={{
                 width: '100%',
-                padding: '7px 10px',
+                height: '30px',
+                padding: '0 10px',
                 border: `1px solid ${theme.border}`,
                 borderRadius: '6px',
                 fontSize: '11px',
                 outline: 'none',
                 boxSizing: 'border-box',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.55)',
                 color: theme.text,
                 // @ts-ignore - prevent drag on input
                 WebkitAppRegion: 'no-drag',
@@ -6702,41 +6677,24 @@ export default function ClipboardHistory() {
           })
         )}
         
-        {/* Load more - gated for free users */}
+        {/* Load more */}
         {hasMore && listRows.length > 0 && (
-          cachedTier === 'pro' ? (
-            <button
-              onClick={handleLoadMore}
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.text,
-                cursor: loading ? 'wait' : 'pointer',
-                fontSize: '12px',
-              }}
-            >
-              {loading ? 'Loading...' : 'Load More'}
-            </button>
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.textSecondary,
-                fontSize: '12px',
-                textAlign: 'center',
-              }}
-            >
-              Load More <span style={{ opacity: 0.7 }}>(Full history available with Pro plan)</span>
-            </div>
-          )
+          <button
+            onClick={handleLoadMore}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: 'none',
+              borderTop: `1px solid ${theme.border}`,
+              backgroundColor: theme.bgSecondary,
+              color: theme.text,
+              cursor: loading ? 'wait' : 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {loading ? 'Loading...' : 'Load More'}
+          </button>
         )}
         </div>
         </div>
@@ -6801,17 +6759,41 @@ export default function ClipboardHistory() {
         </div>
       )}
 
+      <LibraryFooterMaxwellHistoryPopover
+        open={maxwellHistoryOpen && !bookmarksCanvasChromeActive}
+        onClose={() => setMaxwellHistoryOpen(false)}
+        footerRef={footerRef}
+      />
+
+      {showFocusStatusOverlay && (
+        <LibraryFooterStatusOverlay
+          theme={theme}
+          label={footerStatusLabel}
+          status={localCommandStatus}
+        />
+      )}
+
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       {/* Fades in focus mode; the theme toggle floats separately. */}
       <div
+        ref={footerRef}
         style={{
+          position: focusChromeOverlayActive ? 'absolute' : 'relative',
+          left: focusChromeOverlayActive ? 0 : undefined,
+          right: focusChromeOverlayActive ? 0 : undefined,
+          bottom: focusChromeOverlayActive ? 0 : undefined,
+          zIndex: focusChromeOverlayActive ? 20 : undefined,
+          boxSizing: 'border-box',
           padding: '8px 16px',
           height: 'auto',
           overflow: 'hidden',
           borderTop: `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
-          display: footerChromeHidden ? 'none' : 'flex',
+          display: bookmarksCanvasChromeActive ? 'none' : 'flex',
+          opacity: footerChromeOpacity,
+          pointerEvents: footerChromeInteractive ? 'auto' : 'none',
+          transition: 'opacity 90ms linear',
           alignItems: 'center',
           justifyContent: 'space-between',
           fontSize: '11px',
@@ -6830,66 +6812,49 @@ export default function ClipboardHistory() {
             color: theme.textSecondary,
             userSelect: 'none',
             flex: 1,
+            minWidth: 0,
           }}
         >
           {/* Sidebar collapse toggle — actionable in Library (non-immersive)
               and Commands views. In other views it stays visible but disabled
               so the footer layout doesn't jump. */}
-          {(() => {
-            const collapseEnabled = navSidebarToggleEnabled;
-            const collapseTitle = forceLibrarySidebarOpen
-              ? 'Select a Library file before hiding the sidebar'
-              : collapseEnabled
-                ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)`
-                : 'Sidebar toggle';
-            return (
-              <button
-                onClick={toggleNavSidebarCollapsed}
-                disabled={!collapseEnabled}
-                title={collapseTitle}
-                aria-label="Toggle sidebar"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  background: 'transparent',
-                  color: theme.textSecondary,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  cursor: collapseEnabled ? 'pointer' : 'default',
-                  opacity: collapseEnabled ? 1 : 0.5,
-                  transition: 'background 0.15s ease, opacity 0.15s ease',
-                }}
-                onMouseEnter={(e) => {
-                  if (!collapseEnabled) return;
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                }}
-                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-              >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{
-                    transform: collapseEnabled && navSidebarCollapsed ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.15s ease',
-                  }}
-                >
-                  <path d="M10 4L6 8l4 4" />
-                </svg>
-              </button>
-            );
-          })()}
+          <LibraryFooterSidebarToggle
+            theme={theme}
+            collapsed={navSidebarCollapsed}
+            enabled={navSidebarToggleEnabled}
+            onToggle={toggleNavSidebarCollapsed}
+            shortcutLabel="⌘."
+          />
+          {renderMaxwellHistoryButton()}
+          {shouldShowFooterLoginButton && (
+            <button
+              type="button"
+              onClick={() => setShowSyncLoginPrompt(true)}
+              style={{
+                height: '22px',
+                padding: '0 8px',
+                borderRadius: '5px',
+                border: `1px solid ${theme.border}`,
+                backgroundColor: theme.bg,
+                color: theme.textSecondary,
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 600,
+                lineHeight: 1,
+              }}
+            >
+              Log in
+            </button>
+          )}
           {/* Plan info - always show for logged in users */}
-          {authSession && cachedTier === 'pro' ? (
+          {localCommandStatus ? (
+                <LibraryFooterLocalCommandStatusControls
+                  theme={theme}
+                  status={localCommandStatus}
+                  label={footerStatusLabel}
+                  onCancel={() => void cancelLocalCommandRun()}
+                />
+              ) : authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click
                 <>
                   <span style={{ fontWeight: 500 }}>Pro:</span>
@@ -6914,53 +6879,38 @@ export default function ClipboardHistory() {
               ) : null}
         </div>
 
-        {agentImproveStatus && (
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-            <span
-              style={{
-                fontSize: '9px',
-                color: theme.textSecondary,
-                opacity: 0.85,
-              }}
-            >
-              {agentImproveStatus}
-            </span>
-          </div>
-        )}
-
-        {/* Center: Bookmarks sync time, active Library timestamp, or fieldtheory.dev link */}
-        {(() => {
-          const showCenterLabel = !agentImproveStatus &&
-            (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
-          const centerLabel = showCenterLabel
-            ? (bookmarksFooterSyncLabel ?? libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
-            : null;
-          const centerLabelOpensSite = centerLabel === 'fieldtheory.dev';
-          const centerLabelTitle = bookmarksFooterSyncLabel && xBookmarksLastSyncedAt && Number.isFinite(Date.parse(xBookmarksLastSyncedAt))
-            ? `bookmarks last synced from X ${new Date(xBookmarksLastSyncedAt).toLocaleString()}`
-            : libraryFooterUpdatedLabel && libraryActiveFileUpdated
-              ? libraryActiveFileUpdated.title
-              : undefined;
-
-          return centerLabel ? (
-            <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+        {agentImproveStatus && !localCommandStatus && (
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, maxWidth: 'min(620px, 54vw)' }}>
               <span
-                onClick={() => {
-                  if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
-                }}
-                title={centerLabelTitle}
                 style={{
                   fontSize: '9px',
                   color: theme.textSecondary,
-                  cursor: centerLabelOpensSite ? 'pointer' : 'default',
-                  opacity: 0.7,
-                  transition: 'opacity 0.15s',
+                  opacity: 0.85,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
               >
-                {centerLabel}
+                {footerStatusLabel}
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* Center: Field Theory logo */}
+        {(() => {
+          const showFooterLogo = !localCommandStatus && !agentImproveStatus &&
+            (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
+
+          return showFooterLogo ? (
+            <div
+              style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}
+            >
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0 }}>
+                <LibraryFooterLogo theme={theme} />
+              </div>
             </div>
           ) : null;
         })()}
@@ -7064,7 +7014,7 @@ export default function ClipboardHistory() {
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1, minHeight: '18px' }}>
           {/* Update notification (when active) or version number */}
-          {updateStatus !== 'idle' && updateStatus !== 'uptodate' ? (
+          {updateStatus !== 'idle' && updateStatus !== 'uptodate' && updateStatus !== 'error' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               {/* Gift icon + text with shimmer overlay */}
               <div style={{
@@ -7081,8 +7031,8 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '9px', color: updateStatus === 'error' ? theme.error : theme.text }}>
-                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'Update available'}
+                <span style={{ fontSize: '9px', color: theme.text }}>
+                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'installing' ? 'Installing...' : 'Update available'}
                 </span>
                 {/* Shimmer overlay */}
                 <div style={{
@@ -7096,12 +7046,12 @@ export default function ClipboardHistory() {
                   pointerEvents: 'none',
                 }} />
               </div>
-              {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'error' && (
+              {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'installing' && (
                 <>
                   <button
                     onClick={() => {
                       window.updaterAPI?.dismissUpdate();
-                      setUpdateStatus('idle');
+                      setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle', { force: true }));
                     }}
                     style={{
                       padding: '2px 5px',
@@ -7118,8 +7068,10 @@ export default function ClipboardHistory() {
                   <button
                     onClick={() => {
                       if (updateStatus === 'ready') {
+                        setUpdateStatus('installing');
                         window.updaterAPI?.installUpdate();
                       } else {
+                        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'downloading'));
                         window.updaterAPI?.downloadUpdate();
                       }
                     }}
@@ -7146,28 +7098,9 @@ export default function ClipboardHistory() {
                       e.currentTarget.style.opacity = '1';
                     }}
                   >
-                    {updateStatus === 'ready' ? 'Install' : 'Update'}
+                    {updateStatus === 'ready' ? 'Restart & Install' : 'Update'}
                   </button>
                 </>
-              )}
-              {updateStatus === 'error' && (
-                <button
-                  onClick={() => {
-                    setUpdateError(null);
-                    setUpdateStatus('idle');
-                  }}
-                  style={{
-                    padding: '2px 6px',
-                    fontSize: '9px',
-                    color: theme.text,
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Dismiss
-                </button>
               )}
             </div>
           ) : (
@@ -7178,7 +7111,7 @@ export default function ClipboardHistory() {
                 onMouseLeave={() => setVersionHovered(false)}
                 style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
               >
-                {versionHovered ? (
+                {versionHovered && updaterEnabled ? (
                   updateStatus === 'uptodate' ? (
                     <span style={{ color: theme.success, fontSize: '9px' }}>
                       Up to date ✓
@@ -7203,14 +7136,7 @@ export default function ClipboardHistory() {
                   )
                 ) : (
                   <>
-                    {footerFps !== null && (
-                      <span
-                        title="Renderer frames per second"
-                        style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', opacity: 0.72 }}
-                      >
-                        {footerFps}fps
-                      </span>
-                    )}
+                    <FooterFpsCounter active={isWindowVisible && !footerChromeHidden} color={theme.textSecondary} />
                     {userCallsign && (
                       <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
                         {userCallsign}
@@ -7219,6 +7145,30 @@ export default function ClipboardHistory() {
                     <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
                       {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                     </span>
+                    {updateError && updateStatus === 'error' && (
+                      <button
+                        onClick={() => setShowUpdateErrorModal(true)}
+                        title="Update check failed"
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          padding: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          opacity: 0.65,
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -7274,13 +7224,13 @@ export default function ClipboardHistory() {
               ? { top: `${FIELD_THEORY_CHROME_OVERLAY_TOP_PX + appTitlebarOffsetPx}px` }
               : { bottom: '8px' }),
             zIndex: 20,
-            pointerEvents: 'auto',
+            pointerEvents: focusChromeOverlayActive ? 'none' : 'auto',
             width: '34px',
             height: '34px',
             display: 'flex',
             alignItems: 'flex-end',
             justifyContent: 'flex-end',
-            opacity: appChromeHidden && !themeToggleProximityVisible ? 0 : 1,
+            opacity: focusChromeOverlayActive || (appChromeHidden && !themeToggleProximityVisible) ? 0 : 1,
             transition: 'opacity 180ms ease',
           }}
         >
@@ -7496,6 +7446,85 @@ export default function ClipboardHistory() {
                 }}
               >
                 Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSyncLoginPrompt && (
+        <div
+          onClick={() => setShowSyncLoginPrompt(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.45)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sync-login-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '10px',
+              padding: '22px',
+              maxWidth: '340px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.28)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 id="sync-login-title" style={{ margin: '0 0 10px 0', fontSize: '16px', color: theme.text, fontWeight: 650 }}>
+              Log in to authenticate
+            </h3>
+            <p style={{ margin: '0 0 18px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              Log in to reconnect your Field Theory account. River and shared files will sync when a connection is available.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowSyncLoginPrompt(false)}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSyncLoginPrompt(false);
+                  window.onboardingAPI?.showSignIn();
+                }}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Log in
               </button>
             </div>
           </div>
@@ -7839,40 +7868,15 @@ export default function ClipboardHistory() {
           }}
         >
           {preview.type === 'image' ? (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '16px',
-                cursor: 'default',
+            <ImagePreviewFrame
+              src={`data:image/png;base64,${preview.data}`}
+              alt="Preview"
+              label={preview.figureLabel ? `figure ${preview.figureLabel}` : null}
+              labelStyle={{
+                color: theme.text,
+                backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
               }}
             >
-              {preview.figureLabel && (
-                <div style={{
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  color: theme.text,
-                  opacity: 0.7,
-                  padding: '4px 12px',
-                  borderRadius: '4px',
-                  backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                }}>
-                  figure {preview.figureLabel}
-                </div>
-              )}
-              <img
-                src={`data:image/png;base64,${preview.data}`}
-                alt="Preview"
-                style={{
-                  maxWidth: '90vw',
-                  maxHeight: 'calc(90vh - 60px)',
-                  objectFit: 'contain',
-                  borderRadius: '8px',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-                }}
-              />
               {/* Action bar - compact buttons with no background */}
               <div style={{
                 display: 'flex',
@@ -7979,7 +7983,7 @@ export default function ClipboardHistory() {
                   </button>
                 ))}
               </div>
-            </div>
+            </ImagePreviewFrame>
           ) : (
             <div
               onClick={(e) => e.stopPropagation()}
@@ -8037,6 +8041,88 @@ export default function ClipboardHistory() {
     </div>
 
     <PerformanceHud enabled={performanceHudEnabled} />
+
+    {showUpdateErrorModal && updateError && (
+      <div
+        onClick={() => setShowUpdateErrorModal(false)}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: theme.isDark ? 'rgba(0,0,0,0.42)' : 'rgba(255,255,255,0.58)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          zIndex: 10000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+        }}
+      >
+        <div
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            width: 'min(420px, 100%)',
+            backgroundColor: theme.bg,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '8px',
+            boxShadow: theme.isDark ? '0 18px 48px rgba(0,0,0,0.45)' : '0 18px 48px rgba(0,0,0,0.14)',
+            padding: '18px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div style={{ color: theme.text, fontSize: '14px', fontWeight: 600 }}>
+              Update check failed
+            </div>
+          </div>
+          <div style={{ color: theme.textSecondary, fontSize: '13px', lineHeight: 1.45, marginBottom: '16px', wordBreak: 'break-word' }}>
+            {updateError}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              onClick={() => {
+                setUpdateError(null);
+                setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle', { force: true }));
+                setShowUpdateErrorModal(false);
+              }}
+              style={{
+                padding: '6px 10px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => {
+                setShowUpdateErrorModal(false);
+                setUpdateError(null);
+                window.updaterAPI?.checkForUpdates?.();
+              }}
+              style={{
+                padding: '6px 10px',
+                color: '#fff',
+                backgroundColor: theme.accent,
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (

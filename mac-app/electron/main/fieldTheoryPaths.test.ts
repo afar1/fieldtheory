@@ -7,9 +7,13 @@ import {
   canonicalBookmarkDataDir,
   canonicalLibraryDir,
   commandsDir,
+  ideasDir,
   legacyLibraryDir,
   libraryDir,
+  sharedFilesCacheDir,
+  sharedFilesRootDir,
 } from './fieldTheoryPaths';
+import { createFieldTheoryTestEnv } from './testSupport/fieldTheoryTestEnv';
 
 describe('Field Theory path contract', () => {
   const homeDir = '/Users/tester';
@@ -19,7 +23,10 @@ describe('Field Theory path contract', () => {
 
     expect(canonicalBookmarkDataDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'bookmarks'));
     expect(canonicalLibraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
-    expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'commands'));
+    expect(sharedFilesRootDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'shared'));
+    expect(sharedFilesCacheDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'River (shared)'));
+    expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'Commands'));
+    expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
   });
 
   it('honors explicit env overrides', () => {
@@ -28,13 +35,31 @@ describe('Field Theory path contract', () => {
       env: {
         FT_DATA_DIR: '/tmp/ft-data',
         FT_LIBRARY_DIR: '/tmp/ft-library',
+        FT_SHARED_FILES_ROOT_DIR: '/tmp/ft-shared',
+        FT_SHARED_FILES_CACHE_DIR: '/tmp/ft-shared-cache',
         FT_COMMANDS_DIR: '/tmp/ft-commands',
+        FT_IDEAS_DIR: '/tmp/ft-ideas',
       },
     };
 
     expect(bookmarkDataDir(options)).toBe('/tmp/ft-data');
     expect(libraryDir(options)).toBe('/tmp/ft-library');
+    expect(sharedFilesRootDir(options)).toBe('/tmp/ft-shared');
+    expect(sharedFilesCacheDir(options)).toBe('/tmp/ft-shared-cache');
     expect(commandsDir(options)).toBe('/tmp/ft-commands');
+    expect(ideasDir(options)).toBe('/tmp/ft-ideas');
+  });
+
+  it('places default commands inside a custom Library root', () => {
+    const options = {
+      homeDir,
+      env: {
+        FT_LIBRARY_DIR: '/tmp/ft-library',
+      },
+    };
+
+    expect(commandsDir(options)).toBe(path.join('/tmp/ft-library', 'Commands'));
+    expect(sharedFilesCacheDir(options)).toBe(path.join('/tmp/ft-library', 'River (shared)'));
   });
 
   it('uses canonical bookmark data when neither bookmark data root exists', () => {
@@ -101,5 +126,26 @@ describe('Field Theory path contract', () => {
 
     expect(legacyLibraryDir(options)).toBe('/tmp/custom-data/md');
     expect(libraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
+  });
+
+  it('provides an isolated test fixture for local Field Theory data paths', () => {
+    const fixture = createFieldTheoryTestEnv();
+
+    try {
+      const options = { homeDir: fixture.homeDir, env: fixture.env };
+
+      expect(bookmarkDataDir(options)).toBe(fixture.bookmarkDataDir);
+      expect(libraryDir(options)).toBe(fixture.libraryDir);
+      expect(commandsDir(options)).toBe(fixture.commandsDir);
+      expect(sharedFilesRootDir(options)).toBe(fixture.sharedFilesRootDir);
+      expect(sharedFilesCacheDir(options)).toBe(fixture.sharedFilesCacheDir);
+      expect(ideasDir(options)).toBe(fixture.ideasDir);
+
+      fixture.assertInsideTestRoot(libraryDir(options));
+      fixture.assertInsideTestRoot(commandsDir(options));
+      expect(() => fixture.assertNoRealFieldTheoryPath(path.join(os.homedir(), '.fieldtheory', 'library'))).toThrow(/real Field Theory data path/);
+    } finally {
+      fixture.cleanup();
+    }
   });
 });

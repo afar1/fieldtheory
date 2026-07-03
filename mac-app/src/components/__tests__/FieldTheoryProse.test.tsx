@@ -1,12 +1,20 @@
 import { readFileSync } from 'node:fs';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
+import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 
 const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 
 describe('FieldTheoryProse', () => {
+  afterEach(() => {
+    delete window.fieldTheoryLocalImageAPI;
+    delete window.fieldTheoryBookmarkMediaAPI;
+    delete window.bookmarksAPI;
+    resetBookmarksCacheForTests();
+  });
+
   it('renders GFM tables, task lists, and line breaks', () => {
     render(
       <FieldTheoryProse remarkLineBreaks>
@@ -74,6 +82,23 @@ describe('FieldTheoryProse', () => {
     expect((container.firstElementChild as HTMLElement).style.getPropertyValue('--ft-prose-paragraph-spacing')).toBe('1.08em');
   });
 
+  it('styles prose links as inherited text with only a subtle underline', () => {
+    const proseCss = readFileSync('src/prose.css', 'utf-8');
+    const linkRule = proseCss.match(/\.ft-prose a\s*\{[^}]*\}/)?.[0] ?? '';
+    const linkHoverRule = proseCss.match(/\.ft-prose a:hover\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(linkRule).toContain('color: inherit;');
+    expect(linkRule).toContain('text-decoration: underline;');
+    expect(linkRule).toContain('text-decoration-color: color-mix(in srgb, currentColor 24%, transparent);');
+    expect(linkRule).toContain('text-decoration-thickness: 1px;');
+    expect(linkRule).toContain('text-underline-offset: 2px;');
+    expect(linkRule).not.toContain('background');
+    expect(linkRule).not.toContain('padding');
+    expect(linkRule).not.toContain('border-bottom');
+    expect(linkHoverRule).toContain('text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);');
+    expect(linkHoverRule).not.toContain('background');
+  });
+
   it('renders markdown text without source offset annotations', () => {
     render(
       <FieldTheoryProse>
@@ -92,6 +117,17 @@ describe('FieldTheoryProse', () => {
     expect(preCodeRule).toContain('overflow-wrap: anywhere;');
   });
 
+  it('uses a hanging layout for rendered task-list text', () => {
+    const proseCss = readFileSync('src/prose.css', 'utf-8');
+    const taskRule = proseCss.match(/\.ft-prose li\.task-list-item\s*\{[^}]*\}/)?.[0] ?? '';
+    const taskCheckboxRule = proseCss.match(/\.ft-prose li\.task-list-item > input\[type='checkbox'\]\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(taskRule).toContain('display: grid;');
+    expect(taskRule).toContain('grid-template-columns: max-content minmax(0, 1fr);');
+    expect(taskRule).toContain('align-items: start;');
+    expect(taskCheckboxRule).toContain('top: calc(((var(--ft-prose-line-height) * 1em) - 0.88em) / 2);');
+  });
+
   it('renders local screenshot image URLs inline', () => {
     render(
       <FieldTheoryProse>
@@ -103,8 +139,62 @@ describe('FieldTheoryProse', () => {
     expect(image.getAttribute('src')).toBe(LOCAL_SCREENSHOT_RENDER_URL);
   });
 
+  it('routes local screenshot images through the browser helper when available', () => {
+    window.fieldTheoryLocalImageAPI = {
+      localImageUrl: (url) => `/native/local-image?url=${encodeURIComponent(url)}`,
+    };
+
+    render(
+      <FieldTheoryProse>
+        {`![Figure A](<${LOCAL_SCREENSHOT_URL}>)`}
+      </FieldTheoryProse>
+    );
+
+    const image = screen.getByRole('img', { name: 'Figure A' });
+    expect(image.getAttribute('src')).toBe('/native/local-image?url=ftlocalfile%3A%2F%2F%2FUsers%2Fafar%2FLibrary%2FApplication%2520Support%2Ffieldtheory-mac%2Fusers%2Fu%2Ffigures%2FScreenshot%25201.png');
+  });
+
   it('routes file image URLs through the Field Theory local-file protocol', () => {
     expect(localFileUrlToFieldTheoryUrl(LOCAL_SCREENSHOT_URL)).toBe(LOCAL_SCREENSHOT_RENDER_URL);
+  });
+
+  it('renders bookmark image markdown as a native bookmark card', async () => {
+    window.fieldTheoryBookmarkMediaAPI = {
+      mediaUrl: (filename) => `/native/bookmarks/media/${filename}`,
+    };
+    window.bookmarksAPI = {
+      getAll: vi.fn(async () => ({
+        bookmarks: [{
+          id: 'bookmark-1',
+          sourceType: 'x',
+          text: 'Bookmark text with native media.',
+          url: 'https://x.com/afar/status/1',
+          authorHandle: 'afar',
+          authorName: 'Afar',
+          authorAvatar: '',
+          postedAt: '2026-01-01T00:00:00Z',
+          images: [{ url: '', localFilename: 'media-1.jpg', width: 640, height: 360, type: 'photo' }],
+          mediaCount: 1,
+          likeCount: 0,
+          repostCount: 0,
+          bookmarkCount: 0,
+          folders: [],
+        }],
+        folders: [],
+        xLastSyncedAt: null,
+      })),
+      onChanged: vi.fn(() => () => {}),
+    } as unknown as Window['bookmarksAPI'];
+
+    render(
+      <FieldTheoryProse>
+        {'![Saved post](bookmark://bookmark-1)'}
+      </FieldTheoryProse>
+    );
+
+    await waitFor(() => expect(screen.getByText('Bookmark text with native media.')).toBeTruthy());
+    expect(screen.getByText('Afar')).toBeTruthy();
+    expect(document.querySelector('img[src="/native/bookmarks/media/media-1.jpg"]')).toBeTruthy();
   });
 
   it('keeps unsafe image URLs stripped', () => {
@@ -115,5 +205,45 @@ describe('FieldTheoryProse', () => {
     );
 
     expect(screen.getByRole('img', { name: 'Unsafe' }).getAttribute('src')).toBe('');
+  });
+
+  it('renders fenced ft-html blocks as sandboxed inline previews', () => {
+    const { container } = render(
+      <FieldTheoryProse documentPath="/tmp/Field Theory/report.md">
+        {'Prose above\n\n```ft-html\n<section>Widget</section>\n```\n\nProse below'}
+      </FieldTheoryProse>
+    );
+
+    expect(screen.getByText('Prose above')).toBeTruthy();
+    expect(screen.getByText('Prose below')).toBeTruthy();
+    const iframe = container.querySelector('iframe[data-ft-inline-html-preview="true"]') as HTMLIFrameElement | null;
+    expect(iframe?.getAttribute('sandbox')).toBe('');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<base href="file:///tmp/Field%20Theory/">');
+    expect(iframe?.getAttribute('srcdoc')).toContain('<section>Widget</section>');
+  });
+
+  it('keeps raw markdown HTML escaped outside explicit ft-html fences', () => {
+    const { container } = render(
+      <FieldTheoryProse>
+        {'<section>Raw HTML</section>'}
+      </FieldTheoryProse>
+    );
+
+    expect(container.querySelector('section')).toBeNull();
+    expect(screen.getByText('<section>Raw HTML</section>')).toBeTruthy();
+  });
+
+  it('toggles inline HTML blocks between contained and expanded display', () => {
+    const { container } = render(
+      <FieldTheoryProse>
+        {'```ft-html\n<section>Widget</section>\n```'}
+      </FieldTheoryProse>
+    );
+
+    const block = container.querySelector('[data-ft-inline-html-block="true"]');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand HTML block' }));
+    expect(block?.classList.contains('ft-inline-html-block-expanded')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse HTML block' }));
+    expect(block?.classList.contains('ft-inline-html-block-expanded')).toBe(false);
   });
 });

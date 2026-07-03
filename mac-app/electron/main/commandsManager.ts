@@ -26,8 +26,43 @@ import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { existingPathInsideRoots, isMarkdownDocumentPath, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
+import { parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
+import { inferSharedFileType, parseSharedFileFrontmatter, sharedFilesRoot, SHARED_FILES_UI_LABEL } from './sharedFiles';
 
 const log = createLogger('Commands');
+
+export const DEFAULT_IMPROVE_COMMAND_CONTENT = "Improve the selected text for clarity while preserving meaning, tone, markdown formatting, links, filenames, screenshots, and checkbox state. Return only the improved replacement text.\n";
+
+const SHARED_COMMAND_SOURCE_LABEL = SHARED_FILES_UI_LABEL;
+
+function yamlQuoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+function withCommandFrontmatter(content: string, title: string): string {
+  const parsed = parseMarkdownFrontmatter(content);
+  const commandLines = [
+    'kind: command',
+    `title: ${yamlQuoted(title)}`,
+    parsed.meta.enabled ? null : 'enabled: true',
+  ].filter((line): line is string => Boolean(line));
+
+  if (parsed.raw !== null) {
+    const frontmatterLines = parsed.raw.trim().length > 0
+      ? parsed.lines.filter((line) => !/^\s*(kind|type|title)\s*:/i.test(line))
+      : [];
+    return `---\n${[
+      ...frontmatterLines,
+      ...commandLines,
+    ].join('\n')}\n---\n\n${parsed.body}`;
+  }
+
+  return `---\n${commandLines.join('\n')}\n---\n\n${content.replace(/^\n+/, '')}`;
+}
+
+function commandTitleFromFileName(fileName: string): string {
+  return fileName.replace(/\.(md|markdown)$/i, '');
+}
 
 const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string }> = [
   {
@@ -41,6 +76,10 @@ const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string 
   {
     name: 'questions',
     content: "Ask me as many questions as you may need until you have a full comprehension of my intent and what I'm trying to do and any important dependencies. I'm happy to answer as many questions as you'd like, even after I've answered some of your first sets of questions.\n",
+  },
+  {
+    name: 'improve',
+    content: DEFAULT_IMPROVE_COMMAND_CONTENT,
   },
   {
     name: 'commit',
@@ -117,6 +156,32 @@ export interface PortableCommand {
   filePath: string;       // Full path to the markdown file
   displayName: string;    // Human-readable name (e.g., "Debug" from "debug.md")
   lastModified: number;   // File modification time for cache invalidation
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
+}
+
+export interface PortableCommandDirectory {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
+}
+
+interface CommandSourceContext {
+  source: 'private' | 'shared';
+  sourceLabel?: string;
+  sourceRootPath?: string;
+}
+
+interface SharedCommandMetadata {
+  type: ReturnType<typeof inferSharedFileType>;
+  title?: string;
+  authorCallsign?: string;
 }
 
 /**
@@ -156,6 +221,11 @@ export interface CommandsManagerEvents {
   directoryChanged: (directoryPath: string | null) => void;
 }
 
+export interface CommandsManagerIndexHooks {
+  indexCommandContent?: (filePath: string, content: string) => void;
+  removeCommandIndex?: (filePath: string) => void;
+}
+
 /**
  * Manages portable commands from user-configured directories.
  * Scans for markdown files and provides lookup/loading functionality.
@@ -167,13 +237,16 @@ export class CommandsManager extends EventEmitter {
   private commands: Map<string, PortableCommand> = new Map();
   private watchers: Map<string, AbortController> = new Map();
   private userDataManager: UserDataManager | null = null;
+  private indexHooks: CommandsManagerIndexHooks;
+  private commandLinkIndexFreshness: Map<string, { mtimeMs: number; size: number }> = new Map();
 
   // Legacy single directory support (for migration)
   private directoryPath: string | null = null;
   private watcherAbort: AbortController | null = null;
 
-  constructor() {
+  constructor(indexHooks: CommandsManagerIndexHooks = {}) {
     super();
+    this.indexHooks = indexHooks;
 
     // Settings file path (legacy - will be updated when user logs in)
     const userDataPath = app.getPath('userData');
@@ -181,6 +254,10 @@ export class CommandsManager extends EventEmitter {
 
     // Load settings
     this.loadSettings();
+  }
+
+  setIndexHooks(indexHooks: CommandsManagerIndexHooks): void {
+    this.indexHooks = indexHooks;
   }
 
   /**
@@ -219,10 +296,6 @@ export class CommandsManager extends EventEmitter {
     this.commands.clear();
 
     this.loadSettings();
-
-    if (this.settings.watchedDirs.length === 0) {
-      await this.createDefaultDirectory();
-    }
 
     // Rescan all directories
     await this.initialize();
@@ -283,11 +356,15 @@ export class CommandsManager extends EventEmitter {
    * Initialize the manager - scan all watched directories.
    */
   async initialize(): Promise<void> {
+    await this.createDefaultDirectory();
+
     // Scan all watched directories
     for (const dirPath of this.settings.watchedDirs) {
       await this.scanDirectory(dirPath);
       this.watchDirectory(dirPath);
     }
+    await this.scanSharedCommandSources();
+    this.watchSharedCommandSources();
 
     this.emit('commandsChanged', this.getCommands());
   }
@@ -303,9 +380,143 @@ export class CommandsManager extends EventEmitter {
     for (const command of DEFAULT_INTERNAL_COMMAND_TEMPLATES) {
       const filePath = path.join(defaultDir, `${command.name}.md`);
       if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, command.content);
+        fs.writeFileSync(filePath, withCommandFrontmatter(command.content, command.name));
       }
     }
+  }
+
+  private legacyCommandsDirectoryForDefault(defaultDir: string): string | null {
+    const parentDir = path.dirname(defaultDir);
+    if (path.basename(defaultDir) !== 'Commands' || path.basename(parentDir) !== 'library') {
+      return null;
+    }
+    return path.join(path.dirname(parentDir), 'commands');
+  }
+
+  private legacyCommandsDirectory(): string | null {
+    return this.legacyCommandsDirectoryForDefault(this.getDefaultDirectory());
+  }
+
+  private sharedCommandCacheRoot(): string {
+    return this.normalizePath(sharedFilesRoot());
+  }
+
+  private sharedCommandSourceForPath(filePath: string): CommandSourceContext | null {
+    const normalizedRoot = this.sharedCommandCacheRoot();
+    const normalizedFilePath = this.normalizePath(this.expandPath(filePath));
+    if (!isPathInside(normalizedRoot, normalizedFilePath)) return null;
+
+    return {
+      source: 'shared',
+      sourceLabel: SHARED_COMMAND_SOURCE_LABEL,
+      sourceRootPath: normalizedRoot,
+    };
+  }
+
+  private sharedCommandSources(): CommandSourceContext[] {
+    const normalizedRoot = this.sharedCommandCacheRoot();
+    try {
+      if (!fs.statSync(normalizedRoot).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+
+    return [{
+      source: 'shared',
+      sourceLabel: SHARED_COMMAND_SOURCE_LABEL,
+      sourceRootPath: normalizedRoot,
+    }];
+  }
+
+  private sharedCommandMetadata(filePath: string): SharedCommandMetadata | null {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const shared = parseSharedFileFrontmatter(content);
+      return {
+        type: shared?.type ?? inferSharedFileType({ filePath, content }),
+        title: shared?.title,
+        authorCallsign: shared?.authorCallsign,
+      };
+    } catch (error) {
+      log.warn(`Failed to read shared command metadata for ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  private sharedCommandRelPath(
+    filePath: string,
+    source: CommandSourceContext,
+  ): string | undefined {
+    if (!source.sourceRootPath) return undefined;
+    return path.relative(source.sourceRootPath, filePath).replace(/\\/g, '/');
+  }
+
+  private isSharedCommandFile(
+    filePath: string,
+    source: CommandSourceContext,
+    metadata: SharedCommandMetadata | null,
+  ): boolean {
+    if (metadata?.type === 'command') return true;
+
+    const relPath = this.sharedCommandRelPath(filePath, source);
+    if (relPath?.split('/').some(part => part.toLowerCase() === 'commands')) {
+      return true;
+    }
+    return false;
+  }
+
+  private isLegacyCommandsDirectoryPath(dirPath: string): boolean {
+    const legacyDir = this.legacyCommandsDirectory();
+    if (!legacyDir) return false;
+    return isPathInside(this.normalizePath(legacyDir), this.normalizePath(this.expandPath(dirPath)));
+  }
+
+  private isLegacyCommandPath(filePath: string): boolean {
+    const legacyDir = this.legacyCommandsDirectory();
+    if (!legacyDir) return false;
+    return isPathInside(this.normalizePath(legacyDir), this.normalizePath(this.expandPath(filePath)));
+  }
+
+  private removeLegacyCommandsDirectoryFromSettings(defaultDir: string): void {
+    const legacyDir = this.legacyCommandsDirectoryForDefault(defaultDir);
+    if (!legacyDir || this.normalizePath(legacyDir) === this.normalizePath(defaultDir)) return;
+
+    const normalizedLegacyDir = this.normalizePath(legacyDir);
+    const beforeWatched = this.settings.watchedDirs.length;
+    const removedWatchedDirs = this.settings.watchedDirs.filter(dirPath =>
+      isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
+    this.settings.watchedDirs = this.settings.watchedDirs.filter(dirPath =>
+      !isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
+
+    const beforeMobileSync = this.settings.mobileSyncDirs.length;
+    this.settings.mobileSyncDirs = this.settings.mobileSyncDirs.filter(dirPath =>
+      !isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
+
+    for (const removedDir of removedWatchedDirs) {
+      this.unwatchDirectory(this.normalizePath(this.expandPath(removedDir)));
+    }
+    for (const [name, command] of this.commands) {
+      if (isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(command.filePath)))) {
+        this.removeCommandIndexPath(command.filePath);
+        this.commands.delete(name);
+      }
+    }
+
+    if (this.settings.watchedDirs.length !== beforeWatched || this.settings.mobileSyncDirs.length !== beforeMobileSync) {
+      this.saveSettings();
+    }
+  }
+
+  private preferWatchedDir(dirPath: string): void {
+    const normalizedPath = this.normalizePath(dirPath);
+    const index = this.settings.watchedDirs.indexOf(normalizedPath);
+    if (index <= 0) return;
+    this.settings.watchedDirs.splice(index, 1);
+    this.settings.watchedDirs.unshift(normalizedPath);
+    this.saveSettings();
   }
 
   /**
@@ -334,6 +545,8 @@ export class CommandsManager extends EventEmitter {
         await this.scanDirectory(defaultDir);
         this.emit('commandsChanged', this.getCommands());
       }
+      this.preferWatchedDir(defaultDir);
+      this.removeLegacyCommandsDirectoryFromSettings(defaultDir);
       if (result) {
         return defaultDir;
       }
@@ -368,12 +581,21 @@ export class CommandsManager extends EventEmitter {
       expandedPath = process.env.HOME || process.env.USERPROFILE || '';
     }
 
+    if (expandedPath && this.isLegacyCommandsDirectoryPath(expandedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      this.directoryPath = null;
+      this.emit('directoryChanged', null);
+      this.emit('commandsChanged', this.getCommands());
+      return;
+    }
+
     this.directoryPath = expandedPath;
     this.commands.clear();
 
     if (expandedPath) {
       try {
         await this.scanDirectory();
+        await this.scanSharedCommandSources();
       } catch (error) {
         log.error('Error scanning directory:', error);
       }
@@ -401,21 +623,78 @@ export class CommandsManager extends EventEmitter {
    * Get all available commands.
    */
   getCommands(): PortableCommand[] {
-    return Array.from(this.commands.values());
+    return Array.from(this.commands.values()).filter(command => !this.isLegacyCommandPath(command.filePath));
+  }
+
+  getCommandDirectories(): PortableCommandDirectory[] {
+    const items: PortableCommandDirectory[] = [];
+    const seen = new Set<string>();
+
+    const addDirectory = (rootPath: string, directoryPath: string) => {
+      const normalizedRoot = this.normalizePath(rootPath);
+      const normalizedDirectory = this.normalizePath(directoryPath);
+      if (seen.has(normalizedDirectory)) return;
+      seen.add(normalizedDirectory);
+
+      let stats: fs.Stats;
+      try {
+        stats = fs.statSync(normalizedDirectory);
+        if (!stats.isDirectory()) return;
+      } catch {
+        return;
+      }
+
+      const relPath = path.relative(normalizedRoot, normalizedDirectory);
+      const cleanRelPath = relPath === '.' ? '' : relPath.replace(/\\/g, '/');
+      const rootName = path.basename(normalizedRoot);
+      const name = cleanRelPath ? path.basename(normalizedDirectory) : rootName;
+      items.push({
+        name,
+        displayName: cleanRelPath || rootName,
+        rootPath: normalizedRoot,
+        directoryPath: normalizedDirectory,
+        directoryRelPath: cleanRelPath,
+        lastModified: stats.mtimeMs,
+      });
+    };
+
+    const visit = (rootPath: string, dirPath: string) => {
+      addDirectory(rootPath, dirPath);
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        visit(rootPath, path.join(dirPath, entry.name));
+      }
+    };
+
+    for (const rootPath of this.watchedRootPaths()) {
+      if (this.isLegacyCommandsDirectoryPath(rootPath)) continue;
+      visit(rootPath, rootPath);
+    }
+
+    return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 
   /**
    * Get a command by name (case-insensitive).
    */
   getCommand(name: string): PortableCommand | null {
-    return this.commands.get(name.toLowerCase()) || null;
+    const command = this.commands.get(name.toLowerCase()) || null;
+    if (command && this.isLegacyCommandPath(command.filePath)) return null;
+    return command;
   }
 
   /**
    * Check if a command exists.
    */
   hasCommand(name: string): boolean {
-    return this.commands.has(name.toLowerCase());
+    return this.getCommand(name) !== null;
   }
 
   /**
@@ -439,7 +718,9 @@ export class CommandsManager extends EventEmitter {
   }
 
   private watchedRootPaths(): string[] {
-    return this.settings.watchedDirs.map(dirPath => this.normalizePath(this.expandPath(dirPath)));
+    return this.settings.watchedDirs
+      .filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath))
+      .map(dirPath => this.normalizePath(this.expandPath(dirPath)));
   }
 
   private isInsideWatchedRoot(filePath: string): boolean {
@@ -471,6 +752,18 @@ export class CommandsManager extends EventEmitter {
     return markdownFileNameFromUserInput(name);
   }
 
+  private syncCommandFrontmatterTitle(filePath: string, title: string): void {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const nextContent = withCommandFrontmatter(content, title);
+      if (nextContent !== content) {
+        fs.writeFileSync(filePath, nextContent, 'utf-8');
+      }
+    } catch (error) {
+      log.warn(`Failed to sync command frontmatter title for ${filePath}:`, error);
+    }
+  }
+
   /**
    * Scan a specific directory for markdown files and add to the commands index.
    * If no path provided, scans all watched directories.
@@ -478,6 +771,8 @@ export class CommandsManager extends EventEmitter {
   private async scanDirectory(dirPath?: string): Promise<void> {
     // If specific path provided, scan that directory
     if (dirPath) {
+      if (this.isLegacyCommandsDirectoryPath(dirPath)) return;
+
       try {
         // Check if directory exists
         if (!fs.existsSync(dirPath)) {
@@ -518,10 +813,23 @@ export class CommandsManager extends EventEmitter {
     }
   }
 
+  private async scanSharedCommandSources(): Promise<void> {
+    for (const source of this.sharedCommandSources()) {
+      if (!source.sourceRootPath) continue;
+      await this.scanDirectoryRecursive(source.sourceRootPath, source);
+    }
+  }
+
+  private watchSharedCommandSources(): void {
+    for (const source of this.sharedCommandSources()) {
+      if (source.sourceRootPath) this.watchDirectory(source.sourceRootPath);
+    }
+  }
+
   /**
    * Recursively scan a directory for markdown files.
    */
-  private async scanDirectoryRecursive(dirPath: string): Promise<void> {
+  private async scanDirectoryRecursive(dirPath: string, source?: CommandSourceContext): Promise<void> {
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
@@ -533,12 +841,14 @@ export class CommandsManager extends EventEmitter {
 
         if (entry.isDirectory()) {
           // Recursively scan subdirectories
-          await this.scanDirectoryRecursive(fullPath);
+          await this.scanDirectoryRecursive(fullPath, source);
         } else if (entry.isFile() && this.isMarkdownFile(entry.name)) {
           // Add markdown file as a command
-          const command = this.createCommandFromFile(fullPath);
-          if (command) {
+          const command = this.createCommandFromFile(fullPath, source);
+          const existing = command ? this.commands.get(command.name) : null;
+          if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
             this.commands.set(command.name, command);
+            this.indexCommandFile(command.filePath);
           }
         }
       }
@@ -557,26 +867,77 @@ export class CommandsManager extends EventEmitter {
   /**
    * Create a PortableCommand from a file path.
    */
-  private createCommandFromFile(filePath: string): PortableCommand | null {
+  private createCommandFromFile(filePath: string, sourceContext?: CommandSourceContext): PortableCommand | null {
     try {
+      const source = sourceContext ?? this.sharedCommandSourceForPath(filePath) ?? { source: 'private' as const };
+      const sharedMetadata = source.source === 'shared' ? this.sharedCommandMetadata(filePath) : null;
+      if (source.source === 'shared' && !this.isSharedCommandFile(filePath, source, sharedMetadata)) {
+        return null;
+      }
+
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-
-      // Preserve original filename as displayName (respecting casing)
-      // e.g., "camelCase.md" -> "camelCase", "Best.md" -> "Best"
-      const displayName = nameWithoutExt;
+      const sharedTitle = source.source === 'shared' ? sharedMetadata?.title?.trim() : '';
+      const displayName = sharedTitle || (source.source === 'shared' ? 'Untitled' : nameWithoutExt);
+      const name = sharedTitle || nameWithoutExt;
 
       return {
-        name: nameWithoutExt.toLowerCase(),
+        name: name.toLowerCase(),
         filePath,
         displayName,
         lastModified: stats.mtimeMs,
+        source: source.source,
+        sourceLabel: source.sourceLabel,
+        sharedAuthorCallsign: sharedMetadata?.authorCallsign,
+        sourceRootPath: source.sourceRootPath,
+        sourceRelPath: source.source === 'shared' ? this.sharedCommandRelPath(filePath, source) : undefined,
       };
     } catch (error) {
       log.error(`Error creating command from ${filePath}:`, error);
       return null;
     }
+  }
+
+  private shouldReplaceCommand(existing: PortableCommand, next: PortableCommand): boolean {
+    return existing.source === 'shared' && next.source !== 'shared';
+  }
+
+  private updateCachedCommandFromFile(filePath: string): PortableCommand | null {
+    const normalizedFilePath = this.normalizePath(filePath);
+    for (const [name, command] of this.commands) {
+      if (this.normalizePath(command.filePath) === normalizedFilePath) {
+        this.commands.delete(name);
+      }
+    }
+
+    const command = this.createCommandFromFile(filePath);
+    const existing = command ? this.commands.get(command.name) : null;
+    if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
+      this.commands.set(command.name, command);
+      this.indexCommandFile(command.filePath);
+    }
+    return command;
+  }
+
+  private indexCommandFile(filePath: string): void {
+    if (!this.indexHooks.indexCommandContent) return;
+    try {
+      const normalizedPath = this.normalizePath(filePath);
+      const stats = fs.statSync(normalizedPath);
+      const cached = this.commandLinkIndexFreshness.get(normalizedPath);
+      if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return;
+      this.indexHooks.indexCommandContent(filePath, fs.readFileSync(filePath, 'utf-8'));
+      this.commandLinkIndexFreshness.set(normalizedPath, { mtimeMs: stats.mtimeMs, size: stats.size });
+    } catch (error) {
+      log.warn(`Error indexing command ${filePath}:`, error);
+    }
+  }
+
+  private removeCommandIndexPath(filePath: string): void {
+    const normalizedPath = this.normalizePath(filePath);
+    this.commandLinkIndexFreshness.delete(normalizedPath);
+    this.indexHooks.removeCommandIndex?.(normalizedPath);
   }
 
   /**
@@ -597,12 +958,12 @@ export class CommandsManager extends EventEmitter {
         { recursive: true, signal: this.watcherAbort.signal },
         async (eventType, filename) => {
           try {
-            if (filename && this.isMarkdownFile(filename)) {
-              // Rescan the directory to update commands
-              this.commands.clear();
-              await this.scanDirectory();
-              this.emit('commandsChanged', this.getCommands());
-            }
+            // File saves, file renames, and folder renames can all affect
+            // launcher labels, paths, and folder rows.
+            if (!filename) return;
+            this.commands.clear();
+            await this.scanDirectory();
+            this.emit('commandsChanged', this.getCommands());
           } catch (error) {
             log.error('Error handling file change:', error);
           }
@@ -991,6 +1352,7 @@ End of User Commands
    * Refresh the commands list by rescanning all directories.
    */
   async refresh(): Promise<void> {
+    const previousCommandPaths = new Set(Array.from(this.commands.values()).map((command) => this.normalizePath(command.filePath)));
     this.commands.clear();
 
     // Scan all watched directories
@@ -1001,6 +1363,16 @@ End of User Commands
     // Legacy: also scan single directory if set
     if (this.directoryPath) {
       await this.scanDirectory();
+    }
+
+    await this.scanSharedCommandSources();
+    this.watchSharedCommandSources();
+
+    for (const command of this.commands.values()) {
+      previousCommandPaths.delete(this.normalizePath(command.filePath));
+    }
+    for (const removedPath of previousCommandPaths) {
+      this.removeCommandIndexPath(removedPath);
     }
 
     this.emit('commandsChanged', this.getCommands());
@@ -1050,10 +1422,9 @@ End of User Commands
         { recursive: true, signal: abort.signal },
         async (eventType, filename) => {
           try {
-            if (filename && this.isMarkdownFile(filename)) {
-              // Rescan all directories to update commands
-              await this.refresh();
-            }
+            // Folder renames do not always report a markdown filename, but
+            // they still change launcher folder rows and command paths.
+            if (filename) await this.refresh();
           } catch (error) {
             log.error('Error handling file change:', error);
           }
@@ -1086,7 +1457,7 @@ End of User Commands
    * Get all watched directories.
    */
   getWatchedDirs(): WatchedDir[] {
-    return this.settings.watchedDirs.map(dirPath => ({
+    return this.settings.watchedDirs.filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath)).map(dirPath => ({
       path: dirPath,
       enabled: true,
       mobileSyncEnabled: this.settings.mobileSyncDirs.includes(dirPath),
@@ -1100,6 +1471,12 @@ End of User Commands
   async addWatchedDir(dirPath: string): Promise<WatchedDir | null> {
     const expandedPath = this.expandPath(dirPath);
     const normalizedPath = this.normalizePath(expandedPath);
+
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      this.emit('commandsChanged', this.getCommands());
+      return null;
+    }
 
     // Check if directory exists
     if (!fs.existsSync(normalizedPath)) {
@@ -1148,7 +1525,8 @@ End of User Commands
 
     // Remove cached commands from this directory
     for (const [name, command] of this.commands) {
-      if (command.filePath.startsWith(normalizedPath)) {
+      if (isPathInside(normalizedPath, this.normalizePath(command.filePath))) {
+        this.removeCommandIndexPath(command.filePath);
         this.commands.delete(name);
       }
     }
@@ -1177,8 +1555,6 @@ End of User Commands
       const stats = fs.statSync(safePath);
       const filename = path.basename(safePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-
-      // Preserve original filename as displayName (respecting casing)
       const displayName = nameWithoutExt;
 
       return {
@@ -1203,7 +1579,11 @@ End of User Commands
       const safePath = this.resolveWatchedCommandFile(filePath);
       if (!safePath) return { ok: false, reason: 'not-found' };
       const result = writeTextFileWithConflictGuard(safePath, content, expectedVersion);
-      if (result.ok) log.info(`Saved command: ${safePath}`);
+      if (result.ok) {
+        this.updateCachedCommandFromFile(safePath);
+        this.emit('commandsChanged', this.getCommands());
+        log.info(`Saved command: ${safePath}`);
+      }
       return result;
     } catch (error) {
       log.error(`Error saving command ${filePath}:`, error);
@@ -1230,17 +1610,18 @@ End of User Commands
       }
 
       // Create the file
-      fs.writeFileSync(filePath, content, 'utf-8');
+      fs.writeFileSync(filePath, withCommandFrontmatter(content, commandTitleFromFileName(fileName)), 'utf-8');
 
       // Add to commands map immediately (don't wait for file watcher)
       const command = this.createCommandFromFile(filePath);
       if (command) {
         this.commands.set(command.name, command);
+        this.indexCommandFile(command.filePath);
         this.emit('commandsChanged', this.getCommands());
       }
 
       log.info(`Created command: ${filePath}`);
-      return { path: filePath, name: fileName.replace('.md', '') };
+      return { path: filePath, name: commandTitleFromFileName(fileName) };
     } catch (error) {
       log.error('Error creating command:', error);
       return null;
@@ -1263,6 +1644,7 @@ End of User Commands
       const command = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safePath));
       if (command) {
         this.commands.delete(command.name);
+        this.removeCommandIndexPath(command.filePath);
         this.emit('commandsChanged', this.getCommands());
       }
 
@@ -1295,17 +1677,16 @@ End of User Commands
 
       // Rename the file
       fs.renameSync(safeOldPath, newFilePath);
+      this.syncCommandFrontmatterTitle(newFilePath, commandTitleFromFileName(newFileName));
 
       // Update commands map
       const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));
       if (oldCommand) {
         this.commands.delete(oldCommand.name);
-        const newCommand = this.createCommandFromFile(newFilePath);
-        if (newCommand) {
-          this.commands.set(newCommand.name, newCommand);
-        }
-        this.emit('commandsChanged', this.getCommands());
+        this.removeCommandIndexPath(oldCommand.filePath);
       }
+      this.updateCachedCommandFromFile(newFilePath);
+      this.emit('commandsChanged', this.getCommands());
 
       log.info(`Renamed command: ${oldFilePath} -> ${newFilePath}`);
       return newFilePath;
@@ -1326,6 +1707,11 @@ End of User Commands
    */
   setMobileSyncEnabled(dirPath: string, enabled: boolean): boolean {
     const normalizedPath = this.normalizePath(dirPath);
+
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      return false;
+    }
 
     // Check if this directory is watched
     if (!this.settings.watchedDirs.includes(normalizedPath)) {
@@ -1360,6 +1746,7 @@ End of User Commands
    */
   isMobileSyncEnabled(dirPath: string): boolean {
     const normalizedPath = this.normalizePath(dirPath);
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) return false;
     return this.settings.mobileSyncDirs.includes(normalizedPath);
   }
 
@@ -1367,7 +1754,7 @@ End of User Commands
    * Get all directories with mobile sync enabled.
    */
   getMobileSyncDirs(): string[] {
-    return [...this.settings.mobileSyncDirs];
+    return this.settings.mobileSyncDirs.filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath));
   }
 
   /**
@@ -1386,9 +1773,12 @@ End of User Commands
 
     // Only include commands from directories with mobile sync enabled
     for (const command of this.commands.values()) {
+      if (this.isLegacyCommandPath(command.filePath)) continue;
+      if (command.source === 'shared') continue;
+
       // Check if this command's directory has mobile sync enabled
       const commandDir = path.dirname(command.filePath);
-      const isMobileSynced = this.settings.mobileSyncDirs.some(syncDir =>
+      const isMobileSynced = this.getMobileSyncDirs().some(syncDir =>
         commandDir.startsWith(syncDir)
       );
 
@@ -1422,7 +1812,7 @@ End of User Commands
    * Used for fetching command content when needed.
    */
   async getCommandWithContent(name: string): Promise<SyncableCommand | null> {
-    const command = this.commands.get(name.toLowerCase());
+    const command = this.getCommand(name);
     if (!command) {
       return null;
     }

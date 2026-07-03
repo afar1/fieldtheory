@@ -44,67 +44,63 @@ vi.mock('./transcriberTrace', () => ({
 }));
 
 import { clipboard, globalShortcut } from 'electron';
-import { TranscriberManager } from './transcriberManager';
+import { formatWhisperSpeakerTurnTranscript, TranscriberManager } from './transcriberManager';
 
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
 // since both engines use the shared StdioJsonServer class.
 
+describe('formatWhisperSpeakerTurnTranscript', () => {
+  it('removes whisper.cpp tinydiarize markers without inventing speakers', () => {
+    const text = formatWhisperSpeakerTurnTranscript([
+      '[00:00:00.000 --> 00:00:03.800] Hello there. [SPEAKER_TURN]',
+      '[00:00:03.800 --> 00:00:06.200] Hi, can you hear me? [SPEAKER_TURN]',
+      '[00:00:06.200 --> 00:00:08.260] Third voice joining. [SPEAKER_TURN]',
+      '[00:00:08.260 --> 00:00:10.120] Yes, sounds good.',
+    ].join('\n'));
+
+    expect(text).toBe([
+      'Hello there.',
+      'Hi, can you hear me?',
+      'Third voice joining.',
+      'Yes, sounds good.',
+    ].join('\n\n'));
+  });
+});
+
 function createWarmupHarness(prefValues: Record<string, unknown>) {
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
     },
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
-  return { manager, startMlxWhisperServer, startParakeetServer, startWhisperServer };
+  return { manager, startParakeetServer };
 }
 
 function createRestartHarness(prefValues: Record<string, unknown>) {
-  const stopMlxWhisperServer = vi.fn();
   const stopParakeetServer = vi.fn();
-  const stopWhisperServer = vi.fn();
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
     },
     stopParakeetServer,
-    stopMlxWhisperServer,
-    stopWhisperServer,
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
   return {
     manager,
-    stopMlxWhisperServer,
     stopParakeetServer,
-    stopWhisperServer,
-    startMlxWhisperServer,
     startParakeetServer,
-    startWhisperServer,
   };
 }
 
 function createHotMicWarmupHarness(prefValues: Record<string, unknown>) {
-  const startMlxWhisperServer = vi.fn(async () => {});
   const startParakeetServer = vi.fn(async () => {});
-  const startWhisperServer = vi.fn(async () => {});
   const manager: any = {
     preferences: {
       getPreference: (key: string) => prefValues[key],
@@ -113,14 +109,10 @@ function createHotMicWarmupHarness(prefValues: Record<string, unknown>) {
       getSelectedModel: () => 'small',
     },
     startParakeetServer,
-    startMlxWhisperServer,
-    startWhisperServer,
     isParakeetInstalled: () => true,
-    isMlxWhisperInstalled: () => true,
-    isWhisperServerAvailable: () => true,
   };
   Object.setPrototypeOf(manager, TranscriberManager.prototype);
-  return { manager, startMlxWhisperServer, startParakeetServer, startWhisperServer };
+  return { manager, startParakeetServer };
 }
 
 describe('TranscriberManager warmup', () => {
@@ -128,128 +120,48 @@ describe('TranscriberManager warmup', () => {
     vi.clearAllMocks();
   });
 
-  it('warms MLX Whisper when primary transcription engine is mlx-whisper', async () => {
-    const { manager, startMlxWhisperServer } = createWarmupHarness({
+  it('normalizes legacy MLX Whisper and warms Parakeet', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'mlx-whisper',
       hotMicTranscriptionEngine: 'default',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('ignores legacy Hot Mic override values and warms only the global engine', async () => {
-    const { manager, startMlxWhisperServer, startWhisperServer } = createWarmupHarness({
+  it('ignores legacy Hot Mic override values and warms only Parakeet', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-    expect(startWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('ignores Hot Mic MLX override and uses global whisper warmup path', async () => {
-    const { manager, startMlxWhisperServer, startWhisperServer } = createWarmupHarness({
+  it('ignores Hot Mic MLX override and uses Parakeet warmup path', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'mlx-whisper',
     });
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-    expect(startWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('skips all server warmups when engine is whisper and no server binary', async () => {
-    const { manager, startMlxWhisperServer } = createWarmupHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'whisper',
+  it('skips warmup when Parakeet is not installed', async () => {
+    const { manager, startParakeetServer } = createWarmupHarness({
+      transcriptionEngine: 'parakeet',
     });
-    manager.isWhisperServerAvailable = () => false;
-    manager.isMlxWhisperInstalled = () => false;
+    manager.isParakeetInstalled = () => false;
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).not.toHaveBeenCalled();
-  });
-});
-
-describe('TranscriberManager whisper-server shutdown', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
-
-  it('waits for the tracked process to exit before clearing the reference', async () => {
-    const proc = new EventEmitter() as any;
-    proc.exitCode = null;
-    proc.signalCode = null;
-    proc.kill = vi.fn(() => true);
-
-    const manager: any = {
-      whisperServerProcess: proc,
-      whisperServerReady: true,
-      whisperServerReadyPromise: Promise.resolve(),
-      whisperServerShutdownPromise: null,
-      whisperServerLifecycleGeneration: 0,
-      whisperServerPort: 1234,
-      whisperServerModelPath: '/tmp/model.bin',
-      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const stopPromise = manager.stopWhisperServer();
-
-    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(manager.whisperServerProcess).toBe(proc);
-    expect(manager.whisperServerReady).toBe(false);
-
-    proc.exitCode = 0;
-    proc.emit('close', 0);
-    await stopPromise;
-
-    expect(manager.whisperServerProcess).toBeNull();
-    expect(manager.whisperServerShutdownPromise).toBeNull();
-    expect(manager.whisperServerPort).toBe(0);
-    expect(manager.whisperServerModelPath).toBeNull();
-  });
-
-  it('escalates to SIGKILL when the tracked process ignores SIGTERM', async () => {
-    vi.useFakeTimers();
-
-    const proc = new EventEmitter() as any;
-    proc.exitCode = null;
-    proc.signalCode = null;
-    proc.kill = vi.fn((signal: string) => {
-      if (signal === 'SIGKILL') {
-        proc.signalCode = 'SIGKILL';
-      }
-      return true;
-    });
-
-    const manager: any = {
-      whisperServerProcess: proc,
-      whisperServerReady: true,
-      whisperServerReadyPromise: Promise.resolve(),
-      whisperServerShutdownPromise: null,
-      whisperServerLifecycleGeneration: 0,
-      whisperServerPort: 1234,
-      whisperServerModelPath: '/tmp/model.bin',
-      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const stopPromise = manager.stopWhisperServer();
-    await vi.advanceTimersByTimeAsync(TranscriberManager['WHISPER_SERVER_STOP_TIMEOUT_MS']);
-
-    expect(proc.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
-    expect(proc.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
-
-    proc.emit('close', null);
-    await stopPromise;
+    expect(startParakeetServer).not.toHaveBeenCalled();
   });
 });
 
@@ -314,13 +226,13 @@ describe('TranscriberManager hot mic warmup', () => {
     vi.clearAllMocks();
   });
 
-  it('awaits MLX Whisper startup before resolving', async () => {
+  it('awaits Parakeet startup before resolving', async () => {
     let releaseStart!: () => void;
-    const { manager, startMlxWhisperServer } = createHotMicWarmupHarness({
-      transcriptionEngine: 'mlx-whisper',
+    const { manager, startParakeetServer } = createHotMicWarmupHarness({
+      transcriptionEngine: 'parakeet',
     });
 
-    startMlxWhisperServer.mockImplementationOnce(
+    startParakeetServer.mockImplementationOnce(
       () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
     );
 
@@ -331,31 +243,7 @@ describe('TranscriberManager hot mic warmup', () => {
 
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
-
-    releaseStart();
-    await warmupPromise;
-    expect(settled).toBe(true);
-  });
-
-  it('awaits Whisper server startup before resolving', async () => {
-    let releaseStart!: () => void;
-    const { manager, startWhisperServer } = createHotMicWarmupHarness({
-      transcriptionEngine: 'whisper',
-    });
-
-    startWhisperServer.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
-    );
-
-    let settled = false;
-    const warmupPromise = manager.warmupForHotMic().then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(startWhisperServer).toHaveBeenCalledWith('small');
+    expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
 
     releaseStart();
     await warmupPromise;
@@ -363,12 +251,11 @@ describe('TranscriberManager hot mic warmup', () => {
   });
 
   it('defaults Hot Mic warmup to Parakeet when no engine is saved and Parakeet is installed', async () => {
-    const { manager, startParakeetServer, startWhisperServer } = createHotMicWarmupHarness({});
+    const { manager, startParakeetServer } = createHotMicWarmupHarness({});
 
     await manager.warmupForHotMic();
 
     expect(startParakeetServer).toHaveBeenCalledWith('parakeet');
-    expect(startWhisperServer).not.toHaveBeenCalled();
   });
 });
 
@@ -377,7 +264,7 @@ describe('TranscriberManager runtime restart', () => {
     vi.clearAllMocks();
   });
 
-  it('restarts only the global engine and ignores Hot Mic override', async () => {
+  it('restarts only Parakeet and ignores legacy Hot Mic override', async () => {
     const h = createRestartHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
@@ -385,29 +272,23 @@ describe('TranscriberManager runtime restart', () => {
 
     await h.manager.restartTranscriptionRuntime();
 
-    // All servers should be stopped on restart.
-    expect(h.stopMlxWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.stopWhisperServer).toHaveBeenCalledTimes(1);
-
-    // Only the active engines should be re-started.
-    expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.startMlxWhisperServer).not.toHaveBeenCalled();
+    expect(h.stopParakeetServer).toHaveBeenCalledTimes(1);
+    expect(h.startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 
-  it('stops all servers without restarting when both engines are whisper and no server binary', async () => {
+  it('stops Parakeet without restarting when Parakeet is not installed', async () => {
     const h = createRestartHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'whisper',
+      transcriptionEngine: 'parakeet',
     });
-    h.manager.isWhisperServerAvailable = () => false;
+    h.manager.isParakeetInstalled = () => false;
 
     await h.manager.restartTranscriptionRuntime();
 
-    expect(h.stopMlxWhisperServer).toHaveBeenCalledTimes(1);
-    expect(h.startMlxWhisperServer).not.toHaveBeenCalled();
+    expect(h.stopParakeetServer).toHaveBeenCalledTimes(1);
+    expect(h.startParakeetServer).not.toHaveBeenCalled();
   });
 
-  it('restarts mlx-whisper when it is the active engine', async () => {
+  it('normalizes legacy MLX Whisper to Parakeet on restart', async () => {
     const h = createRestartHarness({
       transcriptionEngine: 'mlx-whisper',
       hotMicTranscriptionEngine: 'default',
@@ -415,33 +296,7 @@ describe('TranscriberManager runtime restart', () => {
 
     await h.manager.restartTranscriptionRuntime();
 
-    expect(h.startMlxWhisperServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('waits for whisper shutdown before starting a replacement runtime', async () => {
-    let releaseStop!: () => void;
-    const h = createRestartHarness({
-      transcriptionEngine: 'whisper',
-      hotMicTranscriptionEngine: 'default',
-    });
-    h.stopWhisperServer.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseStop = resolve; })
-    );
-
-    let settled = false;
-    const restartPromise = h.manager.restartTranscriptionRuntime().then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(h.startWhisperServer).not.toHaveBeenCalled();
-    expect(settled).toBe(false);
-
-    releaseStop();
-    await restartPromise;
-
-    expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
-    expect(settled).toBe(true);
+    expect(h.startParakeetServer).toHaveBeenCalledWith('parakeet');
   });
 });
 
@@ -450,7 +305,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
     vi.clearAllMocks();
   });
 
-  it('respects disabled whisper fallback for hot mic transcriptions', async () => {
+  it('normalizes legacy MLX Whisper to Parakeet for Hot Mic transcriptions', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'ok');
     const manager: any = {
       preferences: {
@@ -471,13 +326,10 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'mlx-whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
-  it('disables whisper fallback by default for Hot Mic', async () => {
+  it('uses Parakeet by default for Hot Mic', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'ok');
     const manager: any = {
       preferences: {
@@ -497,10 +349,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'mlx-whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
   it('uses the global engine for Hot Mic even when override is set', async () => {
@@ -508,7 +357,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
     const manager: any = {
       preferences: {
         getPreference: (key: string) => {
-          if (key === 'transcriptionEngine') return 'whisper';
+          if (key === 'transcriptionEngine') return 'parakeet';
           if (key === 'hotMicTranscriptionEngine') return 'qwen';
           return undefined;
         },
@@ -522,10 +371,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'whisper', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 
   it('defaults Hot Mic transcription to Parakeet when no engine is saved and Parakeet is installed', async () => {
@@ -544,10 +390,7 @@ describe('TranscriberManager hot mic fallback behavior', () => {
 
     await manager.transcribeAudioForHotMic('/tmp/test.wav');
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet', {
-      allowWhisperFallback: false,
-      whisperModelOverride: 'small',
-    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'parakeet');
   });
 });
 
@@ -556,104 +399,60 @@ describe('TranscriberManager Hot Mic engine status', () => {
     vi.clearAllMocks();
   });
 
-  it('reports not-downloaded when global Whisper model is missing', () => {
+  it('reports not-installed when Parakeet runtime is missing', () => {
     const manager: any = {
       preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'missing' }),
       },
+      getParakeetStatus: () => ({ engines: [] }),
+      isParakeetInstalled: () => false,
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     const status = manager.getHotMicEngineStatus();
-    expect(status.selectedEngine).toBe('whisper');
-    expect(status.readiness).toBe('not-downloaded');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('not-installed');
   });
 
-  it('reports corrupt when global Whisper model is incomplete', () => {
+  it('reports ready when Parakeet server is ready', () => {
     const manager: any = {
       preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'corrupt' }),
       },
+      getParakeetStatus: () => ({ engines: [{ engine: 'parakeet' }] }),
+      isParakeetInstalled: () => true,
+      parakeetServer: { isReady: true },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     const status = manager.getHotMicEngineStatus();
-    expect(status.selectedEngine).toBe('whisper');
-    expect(status.readiness).toBe('corrupt');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('ready');
   });
 
-  it('reports unsupported-arch for mlx-whisper on non-Apple Silicon', () => {
+  it('normalizes legacy MLX Whisper status to Parakeet', () => {
     const manager: any = {
       preferences: {
         getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
       },
       modelManager: {
         getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
       },
+      getParakeetStatus: () => ({ engines: [] }),
+      isParakeetInstalled: () => false,
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64');
     const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
 
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('unsupported-arch');
-    expect(status.fallbackAvailable).toBe(true);
-  });
-
-  it('reports warming when mlx-whisper server is starting', () => {
-    const manager: any = {
-      preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
-      },
-      modelManager: {
-        getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
-      },
-      isMlxWhisperInstalled: () => true,
-      mlxWhisperServer: { isStarting: true, isReady: false },
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
-    const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
-
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('warming');
-  });
-
-  it('reports disabled when mlx-whisper runtime has fatal session disable reason', () => {
-    const manager: any = {
-      preferences: {
-        getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
-      },
-      modelManager: {
-        getSelectedModel: () => 'small',
-        getModelHealthForSizeSync: () => ({ status: 'ready' }),
-      },
-      isMlxWhisperInstalled: () => true,
-      mlxWhisperServer: { disabledReason: 'ImportError: mlx_whisper not installed' },
-    };
-    Object.setPrototypeOf(manager, TranscriberManager.prototype);
-
-    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
-    const status = manager.getHotMicEngineStatus();
-    archSpy.mockRestore();
-
-    expect(status.selectedEngine).toBe('mlx-whisper');
-    expect(status.readiness).toBe('disabled');
-    expect(status.detail).toContain('ImportError');
+    expect(status.selectedEngine).toBe('parakeet');
+    expect(status.readiness).toBe('not-installed');
   });
 });
 
@@ -662,19 +461,61 @@ describe('TranscriberManager auto-improve toggle', () => {
     vi.clearAllMocks();
   });
 
-  it('keeps auto-improve disabled even when setAutoImprove(true) is requested', async () => {
+  it('persists auto-improve when setAutoImprove(true) is requested', async () => {
     const save = vi.fn(async () => undefined);
+    const prefs: Record<string, unknown> = {};
     const manager: any = {
       preferences: {
         save,
+        getPreference: (key: string) => prefs[key],
       },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.setAutoImprove(true);
+    prefs.autoImproveTranscripts = true;
 
-    expect(manager.getAutoImprove()).toBe(false);
-    expect(save).toHaveBeenCalledWith({ autoImproveTranscripts: false });
+    expect(manager.getAutoImprove()).toBe(true);
+    expect(save).toHaveBeenCalledWith({ autoImproveTranscripts: true });
+  });
+
+  it('defaults auto-improve to local provider and persists valid providers', async () => {
+    const save = vi.fn(async () => undefined);
+    const manager: any = {
+      preferences: {
+        save,
+        getPreference: (key: string) => key === 'autoImproveProvider' ? 'unexpected' : undefined,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.getAutoImproveProvider()).toBe('local');
+    await manager.setAutoImproveProvider('codex');
+
+    expect(save).toHaveBeenCalledWith({ autoImproveProvider: 'codex' });
+  });
+
+  it('runs the transcript improve runner only when enabled and above the word threshold', async () => {
+    const runner = vi.fn(async () => 'cleaned transcript');
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => {
+          if (key === 'autoImproveTranscripts') return true;
+          if (key === 'autoImproveMinWords') return 3;
+          if (key === 'autoImproveProvider') return 'local';
+          return undefined;
+        },
+      },
+      transcriptImproveRunner: runner,
+      cursorStatusManager: { showRecordingNote: vi.fn() },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await expect(manager.improveTranscriptForPaste('too short')).resolves.toBeNull();
+    await expect(manager.improveTranscriptForPaste('this is long enough')).resolves.toBe('cleaned transcript');
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner).toHaveBeenCalledWith({ text: 'this is long enough', provider: 'local' });
   });
 });
 
@@ -827,6 +668,50 @@ describe('TranscriberManager standard paste target fallback', () => {
     );
   });
 
+  it('inserts recording text into a focused Field Theory terminal when Field Theory is frontmost', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const insertText = vi.fn(() => true);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn(() => ({ id: 1, type: 'transcript', content: 'ask cursor this' })),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      fieldTheoryMarkdownInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText: vi.fn(() => true),
+      },
+      fieldTheoryTerminalInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'ask cursor this',
+      skipNextPasteFailedNotification: false,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(insertText).toHaveBeenCalledWith('ask cursor this ');
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.fieldTheoryMarkdownInsertionTarget.insertText).not.toHaveBeenCalled();
+    expect(manager.skipNextPasteFailedNotification).toBe(true);
+    expect(manager.emit).not.toHaveBeenCalledWith(
+      'paste-failed',
+      'Field Theory has focus - press Cmd+V in your target app',
+      expect.any(String),
+    );
+  });
+
   it('inserts text and screenshot stacks as markdown into a focused Field Theory editor', async () => {
     const typeIntoApp = vi.fn(async () => ({ success: true }));
     const insertText = vi.fn(() => true);
@@ -870,6 +755,52 @@ describe('TranscriberManager standard paste target fallback', () => {
     expect(insertText).toHaveBeenCalledWith([
       'compare these',
       '![figure A](<file:///tmp/shot%202.png>) ',
+    ].join('\n\n'));
+    expect(typeIntoApp).not.toHaveBeenCalled();
+  });
+
+  it('keeps Field Theory markdown insertion text before images even when the image is first in the stack', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const insertText = vi.fn(() => true);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => {
+          if (id === 1) return {
+            id: 1,
+            type: 'screenshot',
+            content: null,
+            imageData: Buffer.from([1, 2, 3]),
+            figureLabel: 'A',
+          };
+          if (id === 2) return { id: 2, type: 'transcript', content: 'later transcript' };
+          return null;
+        }),
+        exportImageToCache: vi.fn(async () => '/tmp/shot 1.png'),
+      },
+      currentStack: [1, 2],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      fieldTheoryMarkdownInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'later transcript',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(insertText).toHaveBeenCalledWith([
+      'later transcript',
+      '![figure A](<file:///tmp/shot%201.png>) ',
     ].join('\n\n'));
     expect(typeIntoApp).not.toHaveBeenCalled();
   });
@@ -1044,6 +975,127 @@ describe('TranscriberManager standard real-time chunking', () => {
     vi.clearAllMocks();
   });
 
+  it('cancels standard recording without taking the normal transcribe-and-paste path', async () => {
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      nativeHelper: {
+        cancelRecording: vi.fn(async () => undefined),
+      },
+      detachStandardChunkListener: vi.fn(),
+      clearStandardLiveTranscript: vi.fn(),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showStatus: vi.fn(),
+      },
+      unregisterAbandonHotkey: vi.fn(),
+      currentStack: [1],
+      screenshotMetadata: [{ itemId: 1 }],
+      detectedCommands: [{ name: 'debug', filePath: '/tmp/debug.md' }],
+      pasteStack,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.cancelActiveSession();
+
+    expect(manager.nativeHelper.cancelRecording).toHaveBeenCalledTimes(1);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+    expect(manager.currentStack).toEqual([]);
+    expect(manager.screenshotMetadata).toEqual([]);
+    expect(manager.detectedCommands).toEqual([]);
+    expect(manager.emit).toHaveBeenCalledWith('stackChanged', 0);
+  });
+
+  it('discard-cancels an in-flight transcription before it stores or pastes text', async () => {
+    let resolveTranscribe: (text: string) => void = () => {};
+    const transcribePromise = new Promise<string>((resolve) => {
+      resolveTranscribe = resolve;
+    });
+    const storeText = vi.fn(async () => 1);
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn(() => ({ status: 'missing' })),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(() => transcribePromise),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const finishPromise = manager.stopRecordingAndTranscribe();
+    for (let i = 0; i < 10 && manager.transcribeWithEngineFallback.mock.calls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(manager.transcribeWithEngineFallback).toHaveBeenCalled();
+
+    await manager.cancelActiveSession();
+    resolveTranscribe('finished text');
+    await finishPromise;
+
+    expect(storeText).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+  });
+
   it('keeps Escape on the recording session before the Field Theory window can dismiss', () => {
     const manager: any = {
       abandonHotkeyRegistered: false,
@@ -1078,6 +1130,378 @@ describe('TranscriberManager standard real-time chunking', () => {
     escapeHandler();
     expect(manager.overlay.hideConfirmation).toHaveBeenCalledTimes(1);
     expect(manager.cancelRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures meeting audio without clipboard storage or paste', async () => {
+    const storeText = vi.fn(async () => 1);
+    const pasteStack = vi.fn(async () => {});
+    const pasteText = vi.fn(async () => {});
+    const transcribeWithEngineFallback = vi.fn(async () => 'Alice: Hello.\nBob: Hi.');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'idle',
+      hotMicDelegate: null,
+      nativeHelper: {
+        startRecording: vi.fn(async () => undefined),
+        stopRecording: vi.fn(async () => '/tmp/meeting.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        setHarvestMode: vi.fn(),
+      },
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'onboardingComplete') return true;
+          if (key === 'transcriptionEngine') return 'whisper';
+          return undefined;
+        }),
+      },
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn(() => ({ status: 'missing' })),
+      },
+      overlay: {
+        showRecording: vi.fn(),
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      soundManager: { play: vi.fn() },
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      currentStack: [],
+      screenshotMetadata: [],
+      detectedCommands: [],
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkReadyListener: null,
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'off',
+      transcribeWithEngineFallback,
+      pasteStack,
+      pasteText,
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    vi.mocked(clipboard.writeText).mockClear();
+    vi.mocked(clipboard.writeImage).mockClear();
+
+    const session = await manager.startMeetingCapture();
+    const result = await manager.stopMeetingCapture();
+
+    expect(session).toMatchObject({
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
+    });
+    expect(manager.nativeHelper.startRecording).toHaveBeenCalledWith('microphone');
+    expect(manager.nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'parakeet');
+    expect(result).toMatchObject({
+      transcriptText: 'Alice: Hello.\nBob: Hi.',
+      audioPath: '/tmp/meeting.wav',
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
+    });
+    expect(storeText).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(pasteText).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(clipboard.writeImage).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+  });
+
+  it('keeps meeting capture on Parakeet without speaker diarization', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'Speaker 1: Hello.\nSpeaker 2: Hi.');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'idle',
+      hotMicDelegate: null,
+      nativeHelper: {
+        startRecording: vi.fn(async () => undefined),
+        stopRecording: vi.fn(async () => '/tmp/meeting.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        setHarvestMode: vi.fn(),
+      },
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'onboardingComplete') return true;
+          if (key === 'transcriptionEngine') return 'parakeet';
+          return undefined;
+        }),
+      },
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn((size: string) => ({ status: size === 'small-tdrz' ? 'ready' : 'missing' })),
+      },
+      overlay: {
+        showRecording: vi.fn(),
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      soundManager: { play: vi.fn() },
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText: vi.fn(),
+      },
+      currentStack: [],
+      screenshotMetadata: [],
+      detectedCommands: [],
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkReadyListener: null,
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'off',
+      transcribeWithEngineFallback,
+      pasteStack: vi.fn(),
+      pasteText: vi.fn(),
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const session = await manager.startMeetingCapture();
+    const result = await manager.stopMeetingCapture();
+
+    expect(session).toMatchObject({
+      transcriptionEngine: 'parakeet',
+      whisperModelOverride: null,
+      speakerDiarizationSupported: false,
+    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'parakeet');
+    expect(result).toMatchObject({
+      transcriptText: 'Speaker 1: Hello.\nSpeaker 2: Hi.',
+      speakerDiarizationSupported: false,
+    });
+  });
+
+  it('uses the normal dictation hotkey to stop active meeting capture', async () => {
+    const pasteStack = vi.fn(async () => {});
+    const stopRecordingAndTranscribe = vi.fn(async () => {});
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {});
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'parakeet',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: false,
+      pasteStack,
+      stopRecordingAndTranscribe,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(meetingCaptureHotkeyHandler).toHaveBeenCalledOnce();
+    expect(manager.meetingCaptureHotkeyStopInFlight).toBe(false);
+    expect(stopRecordingAndTranscribe).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+  });
+
+  it('runs the pre-toggle cleanup before handling the dictation hotkey', async () => {
+    const order: string[] = [];
+    const beforeRecordingToggleHandler = vi.fn(async () => {
+      order.push('cleanup');
+    });
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {
+      order.push('meeting-stop');
+    });
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'parakeet',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      beforeRecordingToggleHandler,
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: false,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(beforeRecordingToggleHandler).toHaveBeenCalledOnce();
+    expect(meetingCaptureHotkeyHandler).toHaveBeenCalledOnce();
+    expect(order).toEqual(['cleanup', 'meeting-stop']);
+  });
+
+  it('ignores duplicate meeting stop hotkeys while a stop is already running', async () => {
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {});
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'parakeet',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: true,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(meetingCaptureHotkeyHandler).not.toHaveBeenCalled();
+  });
+
+  it('keeps normal dictation on the store-and-paste path', async () => {
+    const storeText = vi.fn(async () => 42);
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'dictated text'),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(storeText).toHaveBeenCalledWith('dictated text', 'transcript', undefined, undefined);
+    expect(manager.currentStack).toContain(42);
+    expect(pasteStack).toHaveBeenCalledWith(false);
+    expect(manager.emit).toHaveBeenCalledWith('transcriptRecorded', { wordCount: 2 });
+    expect(manager.emit).toHaveBeenCalledWith('result', 'dictated text');
+  });
+
+  it('does not run auto-improve after a standard session is cancelled post-store', async () => {
+    const improveRunner = vi.fn(async () => 'cleaned text');
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText: vi.fn(async () => {
+          manager.standardSessionCancelRequested = true;
+          return 42;
+        }),
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'dictated text with enough words'),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      transcriptImproveRunner: improveRunner,
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'autoImproveTranscripts') return true;
+          if (key === 'autoImproveMinWords') return 3;
+          if (key === 'autoImproveProvider') return 'local';
+          return undefined;
+        }),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(improveRunner).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.emit).not.toHaveBeenCalledWith('transcriptRecorded', { wordCount: 5 });
+    expect(manager.emit).not.toHaveBeenCalledWith('result', expect.any(String));
   });
 
   it('runs full-file transcription even when real-time transcript text exists', async () => {
@@ -1119,13 +1543,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.processStandardChunkQueue).toHaveBeenCalledTimes(1);
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
     expect(manager.emit).toHaveBeenCalledWith('result', 'full file text');
@@ -1182,7 +1606,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1205,6 +1629,60 @@ describe('TranscriberManager standard real-time chunking', () => {
     await finishPromise;
 
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps the full recording file when no live transcript exists yet', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'full recording text');
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: '',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {}),
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(manager.nativeHelper.snapshotRecording).not.toHaveBeenCalled();
+    expect(manager.nativeHelper.stopRecording).toHaveBeenCalled();
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'full recording text');
   });
 
   it('does not wait for priority mic usage tracking before pasting', async () => {
@@ -1253,7 +1731,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1264,6 +1742,66 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     resolveUsage();
     await Promise.resolve();
+  });
+
+  it('waits for paste-starting listeners before pasting', async () => {
+    const order: string[] = [];
+    const transcribeWithEngineFallback = vi.fn(async () => 'finished text');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: '',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {
+        order.push('paste');
+      }),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.on('paste-starting', async () => {
+      order.push('fade-start');
+      await Promise.resolve();
+      order.push('fade-done');
+    });
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(order).toEqual(['fade-start', 'fade-done', 'paste']);
   });
 
   it('resets quietly when the helper has no active recording to stop', async () => {
@@ -1331,13 +1869,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
     expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
   });
@@ -1409,7 +1947,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: '',
       standardLiveSegments: [],
       standardChunkCommandTriggered: false,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
       transcribeWithEngineFallback: vi.fn(async () => 'draft tile'),
       sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
       squaresManager: {
@@ -1485,7 +2023,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: '',
       standardLiveSegments: [],
       standardChunkCommandTriggered: false,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
       transcribeWithEngineFallback: vi
         .fn()
         .mockResolvedValueOnce('hello [Figure 1]')
@@ -1503,6 +2041,322 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.standardLiveTranscript).toBe('hello again');
     expect(manager.emit).toHaveBeenCalledWith('standardLiveTranscript', 'hello');
     expect(manager.emit).toHaveBeenCalledWith('standardLiveTranscript', 'hello again');
+  });
+
+  it('allows live typing to target Field Theory when a Field Theory document is frontmost', async () => {
+    const insertTextSegment = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      preferences: { getPreference: vi.fn((key: string) => key === 'liveTypingEnabled') },
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app' })),
+        insertTextSegment,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.startLiveTypingSessionIfEligible('microphone');
+    manager.liveTypingCoordinator.enqueueSegment('hello field theory');
+    await manager.liveTypingCoordinator.finish();
+
+    expect(manager.liveTypingTargetBundleId).toBe('com.fieldtheory.app');
+    expect(insertTextSegment).toHaveBeenCalledWith('com.fieldtheory.app', 'hello field theory ');
+  });
+
+  it('enqueues finalized chunks for live typing and skips Squares tail parsing', async () => {
+    const enqueueSegment = vi.fn();
+    const parseVoiceCommandFromTail = vi.fn(() => ({ action: 'grid', remainingText: 'draft' }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft tile'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: { parseVoiceCommandFromTail },
+      liveTypingCoordinator: { enqueueSegment },
+      nativeHelper: { setHarvestMode: vi.fn() },
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledWith('draft tile');
+    expect(parseVoiceCommandFromTail).not.toHaveBeenCalled();
+    expect(manager.pendingImmediateSquaresAction).toBeNull();
+  });
+
+  it('submits the live typing target when a Hot Mic submit phrase is spoken', async () => {
+    const enqueueSegment = vi.fn();
+    const drain = vi.fn(async () => ({ typedSegmentCount: 1, bufferedSegmentCount: 0 }));
+    const submitTextTarget = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingTargetBundleId: 'com.mitchellh.ghostty',
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft the response go ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      liveTypingCoordinator: { enqueueSegment, drain },
+      nativeHelper: { setHarvestMode: vi.fn(), submitTextTarget },
+      emit: vi.fn(),
+      clipboardManager: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledWith('draft the response');
+    expect(drain).toHaveBeenCalled();
+    expect(submitTextTarget).toHaveBeenCalledWith('com.mitchellh.ghostty', 'enter');
+    expect(manager.liveTypingOutputSegments).toEqual(['draft the response']);
+  });
+
+  it('does not run Hot Mic submit phrases during non-live standard transcription', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi.fn(async () => 'draft the response go ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      nativeHelper: { setHarvestMode: vi.fn(), typeIntoApp },
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/fake-chunk.wav');
+
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.standardLiveTranscript).toBe('draft the response go ahead');
+  });
+
+  it('holds a possible live submit prefix until the next chunk completes it', async () => {
+    const enqueueSegment = vi.fn();
+    const drain = vi.fn(async () => ({ typedSegmentCount: 1, bufferedSegmentCount: 0 }));
+    const submitTextTarget = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      status: 'recording',
+      pendingImmediateSquaresAction: null,
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkCommandTriggered: false,
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingTargetBundleId: 'com.mitchellh.ghostty',
+      preferences: {
+        getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined),
+      },
+      transcribeWithEngineFallback: vi
+        .fn()
+        .mockResolvedValueOnce('draft go')
+        .mockResolvedValueOnce('ahead'),
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      squaresManager: null,
+      liveTypingCoordinator: { enqueueSegment, drain },
+      nativeHelper: { setHarvestMode: vi.fn(), submitTextTarget },
+      emit: vi.fn(),
+      clipboardManager: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.onStandardChunkReady('/tmp/chunk-1.wav');
+    await manager.onStandardChunkReady('/tmp/chunk-2.wav');
+
+    expect(enqueueSegment).toHaveBeenCalledTimes(1);
+    expect(enqueueSegment).toHaveBeenCalledWith('draft');
+    expect(manager.liveTypingPendingCommandText).toBe('');
+    expect(submitTextTarget).toHaveBeenCalledWith('com.mitchellh.ghostty', 'enter');
+  });
+
+  it('flushes a held live command prefix as text when it never becomes a command', async () => {
+    const enqueueSegment = vi.fn();
+    const manager: any = {
+      liveTypingPendingCommandText: '',
+      liveTypingOutputSegments: [],
+      liveTypingCoordinator: { enqueueSegment },
+      preferences: { getPreference: vi.fn(() => undefined) },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.handleLiveTypingChunk('ready go');
+    manager.flushLiveTypingPendingCommandText();
+
+    expect(enqueueSegment).toHaveBeenCalledWith('ready');
+    expect(enqueueSegment).toHaveBeenCalledWith('go');
+    expect(manager.liveTypingOutputSegments).toEqual(['ready', 'go']);
+  });
+
+  it('pastes only the live typing remainder and avoids pasteStack when no screenshots exist', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-live-typing-'));
+    const wavPath = path.join(tempDir, 'tail.wav');
+    writeFileSync(wavPath, 'tiny');
+
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const handleVoiceCommand = vi.fn(async () => false);
+    const detectCommands = vi.fn(() => ({ detected: false }));
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      activeRecordingSource: 'microphone',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => path.join(tempDir, 'chunk.wav')),
+        stopRecording: vi.fn(async () => wavPath),
+        checkFocusedTextInput: vi.fn(async () => true),
+        typeIntoApp,
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardLiveTranscript: 'hello later',
+      standardLiveSegments: [
+        { text: 'hello', endMs: 500 },
+        { text: 'later', endMs: 1000 },
+      ],
+      liveTypingCoordinator: {
+        finish: vi.fn(async () => ({ typedSegmentCount: 1 })),
+        cancel: vi.fn(),
+      },
+      liveTypingTargetBundleId: 'com.apple.TextEdit',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: { showTranscribing: vi.fn() },
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+        manager.standardLiveSegments = [];
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: { handleVoiceCommand },
+      commandsManager: { detectCommands },
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'full text'),
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    try {
+      await manager.stopRecordingAndTranscribe();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.apple.TextEdit', 'later ', false);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(handleVoiceCommand).not.toHaveBeenCalled();
+    expect(detectCommands).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalledWith('later ');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'hello later');
+  });
+
+  it('pastes stop-time ASR tail when all live segments were already typed', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-live-typing-tail-'));
+    const wavPath = path.join(tempDir, 'tail.wav');
+    writeFileSync(wavPath, Buffer.alloc(100_000));
+
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      activeRecordingSource: 'microphone',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => path.join(tempDir, 'chunk.wav')),
+        stopRecording: vi.fn(async () => wavPath),
+        checkFocusedTextInput: vi.fn(async () => true),
+        typeIntoApp,
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardLiveTranscript: 'hello',
+      standardLiveSegments: [{ text: 'hello', endMs: 500 }],
+      liveTypingCoordinator: {
+        finish: vi.fn(async () => ({ typedSegmentCount: 1 })),
+        cancel: vi.fn(),
+      },
+      liveTypingTargetBundleId: 'com.apple.TextEdit',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: { showTranscribing: vi.fn() },
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+        manager.standardLiveSegments = [];
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: { handleVoiceCommand: vi.fn(async () => false) },
+      commandsManager: { detectCommands: vi.fn(() => ({ detected: false })) },
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'tail words'),
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    try {
+      await manager.stopRecordingAndTranscribe();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.apple.TextEdit', 'tail words ', false);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.emit).toHaveBeenCalledWith('result', 'tail words');
   });
 
   it('keeps standard finalization on full-file transcription even when figure metadata exists', async () => {
@@ -1544,13 +2398,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.emit).toHaveBeenCalledWith('result', 'full file transcript [figure 1]');
   });
 
@@ -1601,13 +2455,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'parakeet');
     expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript [figure 1] [figure 2] [figure 3]');
   });
 
@@ -1651,7 +2505,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       skipNextPasteFailedNotification: false,
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
-      preferences: { getPreference: vi.fn(() => 'whisper') },
+      preferences: { getPreference: vi.fn(() => 'parakeet') },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1904,14 +2758,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('reverts qwen engine to whisper when parakeet is not installed', async () => {
+  it('reverts qwen engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'qwen',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -1926,14 +2780,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('reverts mlx-whisper engine to whisper when parakeet is not installed', async () => {
+  it('reverts mlx-whisper engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'mlx-whisper',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -1959,14 +2813,14 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('does not revert whisper engine when parakeet is not installed', async () => {
+  it('reverts whisper engine to parakeet even when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'whisper',
       selectedModel: 'small',
     }, { parakeetInstalled: false });
     await manager.init();
-    expect(save).not.toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -2076,7 +2930,7 @@ describe('TranscriberManager hotkey clearing', () => {
 });
 
 describe('TranscriberManager parakeet uninstall', () => {
-  it('reverts engine to whisper when using parakeet and venv does not exist', async () => {
+  it('keeps engine on parakeet when uninstalling Parakeet', async () => {
     const save = vi.fn(async () => {});
     const manager: any = {
       stopParakeetServer: vi.fn(),
@@ -2093,7 +2947,7 @@ describe('TranscriberManager parakeet uninstall', () => {
     expect(result).toEqual({ success: true });
     expect(manager.stopParakeetServer).toHaveBeenCalled();
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptionEngine: 'whisper' })
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -2272,7 +3126,11 @@ describe('TranscriberManager parakeet uninstall', () => {
     const result = await manager.setupParakeet('parakeet-multilingual');
 
     expect(result).toEqual({ success: true });
-    expect(manager.installParakeetRuntime).toHaveBeenCalledWith('/tmp/build-parakeet/venv', expect.any(Function));
+    expect(manager.installParakeetRuntime).toHaveBeenCalledWith(
+      '/tmp/build-parakeet/venv',
+      expect.any(String),
+      expect.any(Function)
+    );
     expect(manager.prefetchParakeetModel).toHaveBeenCalledWith(
       'parakeet-multilingual',
       900000,

@@ -7,6 +7,7 @@ type DeleteConfirmationRequest = {
   title: string;
   message: string;
   confirmLabel?: string;
+  force?: boolean;
   onConfirm: () => void | Promise<void>;
 };
 
@@ -24,7 +25,7 @@ export function useDeleteConfirmation() {
   const [dontShowAgain, setDontShowAgain] = useState(false);
 
   const confirmDelete = useCallback((nextRequest: DeleteConfirmationRequest) => {
-    if (!shouldShowDeleteConfirmation()) {
+    if (!nextRequest.force && !shouldShowDeleteConfirmation()) {
       void nextRequest.onConfirm();
       return;
     }

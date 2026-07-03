@@ -22,7 +22,25 @@ export const FEATURE_MESSAGE_SHORTCUT_ENABLED = false;
 export const FEATURE_SHARING_ENABLED = false;
 
 /**
+ * Mobile task/command sync surfaces.
+ * Hidden for the main app until the mobile path is ready.
+ */
+export const FEATURE_MOBILE_SYNC_ENABLED = false;
+
+/**
+ * Cloud-backed command discovery.
+ * Hidden for users until team/cloud features are ready.
+ */
+export const FEATURE_CLOUD_COMMANDS_ENABLED = false;
+
+/**
  * Narration feature - text-to-speech for Librarian readings.
  * Disabled by default. Uses ElevenLabs API.
  */
 export const FEATURE_NARRATION_ENABLED = false;
+
+/**
+ * Typedown editor spike - hidden native/AppKit Markdown editor viability path.
+ * Disabled until the native bridge is proven against the existing editor contract.
+ */
+export const FEATURE_TYPEDOWN_ENABLED = false;

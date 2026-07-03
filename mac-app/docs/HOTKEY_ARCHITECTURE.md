@@ -1,14 +1,14 @@
-# Hotkey Architecture Documentation
+# Hotkey Architecture Notes
 
-> **Status**: Pre-refactor documentation
+> **Status**: Reference documentation
 > **Date**: 2026-01-15
-> **Purpose**: Document current state before consolidation refactor
+> **Purpose**: Document current state, known issues, and consolidation direction
 
 ---
 
 ## Overview
 
-The app currently manages hotkeys across multiple systems with no centralized management. This document captures the current architecture, known issues, and serves as a reference for the upcoming refactor.
+The app currently manages hotkeys across multiple systems with no centralized management. This document captures the current architecture, known issues, and serves as a reference for consolidation work.
 
 ---
 
@@ -26,7 +26,7 @@ The app currently manages hotkeys across multiple systems with no centralized ma
 | Transcription | `Cmd+\` | `transcriptionHotkey` | TranscriberManager |
 | Secondary Transcription | (none) | `transcriptionSecondaryHotkey` | TranscriberManager |
 | Abandon Recording | `Escape` | `abandonRecordingHotkey` | TranscriberManager |
-| TODO List | `Cmd+Shift+T` | `todoHotkey` | Direct registration |
+| Tasks List | `Cmd+Shift+T` | `todoHotkey` | Direct registration |
 
 ### Hardcoded Hotkeys (not customizable)
 
@@ -134,7 +134,7 @@ private abandonHotkey: string = 'Escape';
       ├─ clipboardManager.registerFullScreenHotkey()
       ├─ clipboardManager.registerActiveWindowHotkey()
       ├─ clipboardManager.registerHistoryHotkey()
-      ├─ Register hardcoded hotkeys (TODO, SuperPaste, etc.)
+      ├─ Register hardcoded hotkeys (Tasks, SuperPaste, etc.)
       └─ If continuous context enabled: register its hotkey
 ```
 
@@ -170,12 +170,12 @@ private abandonHotkey: string = 'Escape';
 
 ## Known Issues
 
-### Issue #1: TODO Hotkey Dual Registration (BUG)
+### Issue #1: Tasks Hotkey Dual Registration (BUG)
 
 **Severity**: High
 
 **Problem**:
-- TODO hotkey is hardcoded at startup (line 279): `Cmd+Shift+T`
+- Tasks hotkey is hardcoded at startup (line 279): `Cmd+Shift+T`
 - User can change it via settings (IPC handler at line 2768)
 - But the IPC handler only saves to preferences, doesn't unregister old hotkey
 - Result: Both hotkeys registered, old one never unregistered

@@ -7,6 +7,7 @@ import {
   LIBRARIAN_TYPOGRAPHY_STORAGE_KEY,
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
+  resolveLibrarianDocumentMaxWidth,
   resolveLibrarianLineHeight,
   resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
@@ -18,6 +19,16 @@ describe('librarian typography presets', () => {
     expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.id)).toEqual(['book', 'note', 'draft']);
   });
 
+  it('uses Source families for Book and Note', () => {
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'book')?.fontFamily).toContain('"Source Serif 4"');
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'note')?.fontFamily).toContain('"Source Sans 3"');
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === 'draft')?.fontFamily).toContain('"Source Code Pro"');
+  });
+
+  it('labels font choices by type category', () => {
+    expect(LIBRARIAN_TYPOGRAPHY_PRESETS.map((preset) => preset.label)).toEqual(['Serif', 'Sans Serif', 'Mono']);
+  });
+
   it('restores a saved typography preset', () => {
     const storage = {
       getItem: (key: string) => key === LIBRARIAN_TYPOGRAPHY_STORAGE_KEY ? 'draft' : null,
@@ -26,12 +37,32 @@ describe('librarian typography presets', () => {
     expect(restoreLibrarianTypographyPreset(storage)).toBe('draft');
   });
 
+  it('restores any selectable typography preset', () => {
+    for (const preset of LIBRARIAN_TYPOGRAPHY_PRESETS) {
+      const storage = {
+        getItem: (key: string) => key === LIBRARIAN_TYPOGRAPHY_STORAGE_KEY ? preset.id : null,
+      };
+
+      expect(restoreLibrarianTypographyPreset(storage)).toBe(preset.id);
+    }
+  });
+
   it('falls back to the default preset for unknown values', () => {
     const storage = {
       getItem: () => 'papyrus',
     };
 
     expect(restoreLibrarianTypographyPreset(storage)).toBe(DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET);
+  });
+
+  it('falls back to the default preset for removed values', () => {
+    for (const removedPreset of ['literata', 'atkinson', 'plex-mono']) {
+      const storage = {
+        getItem: () => removedPreset,
+      };
+
+      expect(restoreLibrarianTypographyPreset(storage)).toBe(DEFAULT_LIBRARIAN_TYPOGRAPHY_PRESET);
+    }
   });
 
   it('persists the selected preset', () => {
@@ -69,5 +100,13 @@ describe('librarian typography presets', () => {
     expect(resolveLibrarianParagraphSpacing('tight')).toBe('0.36em');
     expect(resolveLibrarianParagraphSpacing('normal')).toBe('0.52em');
     expect(resolveLibrarianParagraphSpacing('loose')).toBe('0.78em');
+  });
+
+  it('scales document width with text size shortcuts', () => {
+    const maxWidth = LIBRARIAN_TYPOGRAPHY_PRESETS[0].maxWidth;
+
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'small')).toBe(`calc(${maxWidth} - 72px)`);
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'normal')).toBe(maxWidth);
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'large')).toBe(`calc(${maxWidth} + 90px)`);
   });
 });

@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import { useTheme } from '../contexts/ThemeContext';
-import '@excalidraw/excalidraw/index.css';
 
 type TranscriptItem = {
   id: number;
@@ -31,6 +30,26 @@ interface SketchViewProps {
 
 export interface SketchViewHandle {
   save: (andCopy?: boolean) => Promise<void>;
+}
+
+export const SKETCH_EXPORT_PADDING = 48;
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function getImageDataUrlDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height });
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
 }
 
 const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange, associatedTranscripts, onUnstackTranscript }, ref) => {
@@ -187,26 +206,23 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         files: excalidrawAPI.getFiles(),
         mimeType: 'image/png',
         quality: 1,
+        exportPadding: SKETCH_EXPORT_PADDING,
       });
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        const appState = excalidrawAPI.getAppState();
+      try {
+        const dataUrl = await readBlobAsDataUrl(blob);
+        const dimensions = await getImageDataUrlDimensions(dataUrl);
         // pendingSketch already cleared synchronously at start of handleSave
-        // Dimensions must account for exportScale since blob is exported at that scale
         onSave({
           dataUrl,
-          width: Math.round((appState.width || 800) * exportScale),
-          height: Math.round((appState.height || 600) * exportScale),
+          width: dimensions.width,
+          height: dimensions.height,
         }, andCopy);
-      };
-      reader.onerror = () => {
-        console.error('Failed to read blob');
+      } catch (error) {
+        console.error('Failed to read exported sketch:', error);
         alert('Failed to save sketch. Please try again.');
         setIsSaving(false);
-      };
-      reader.readAsDataURL(blob);
+      }
     } catch (error) {
       console.error('Failed to export sketch:', error);
       alert('Failed to save sketch. Please try again.');
@@ -300,14 +316,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           }
         }
       });
-
-      const allElements = document.querySelectorAll('.excalidraw *');
-      allElements.forEach((el) => {
-        const text = el.textContent || '';
-        if (text === 'Excalidraw links' || (text.includes('GitHub') && text.includes('Discord') && text.includes('Follow'))) {
-          (el as HTMLElement).style.display = 'none';
-        }
-      });
       
       // Hide Library button and diamond tool.
       const buttons = document.querySelectorAll('.excalidraw button');
@@ -338,16 +346,9 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const timer = setTimeout(hideFooterLinks, 500);
     const timer2 = setTimeout(hideFooterLinks, 1000);
 
-    const observer = new MutationObserver(hideFooterLinks);
-    const excalidrawContainer = document.querySelector('.excalidraw');
-    if (excalidrawContainer) {
-      observer.observe(excalidrawContainer, { childList: true, subtree: true });
-    }
-
     return () => {
       clearTimeout(timer);
       clearTimeout(timer2);
-      observer.disconnect();
     };
   }, [excalidrawAPI]);
 
@@ -515,10 +516,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           .excalidraw-library-menu,
           .excalidraw [class*="library"],
           .excalidraw [class*="Library"],
-          .excalidraw .mobile-misc-tools-container,
-          .excalidraw [class*="mobile"],
           .excalidraw .App-toolbar-container button[aria-label*="Library" i],
-          .excalidraw .shapes-section button[aria-label*="shapes" i],
           .excalidraw .Island .ToolIcon__library,
           .excalidraw button.ToolIcon_type_button[aria-label*="Library" i] {
             display: none !important;
@@ -542,7 +540,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           .excalidraw button[title*="rhombus" i],
           .excalidraw button[data-testid="toolbar-diamond"],
           .excalidraw .ToolIcon_type_diamond,
-          .excalidraw .App-toolbar__extra-tools-trigger,
           .excalidraw [class*="diamond"],
           .excalidraw .layer-ui__wrapper__top-right,
           .excalidraw [class*="top-right"],

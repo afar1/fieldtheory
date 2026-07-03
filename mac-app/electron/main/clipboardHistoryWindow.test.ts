@@ -97,7 +97,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window = new ClipboardHistoryWindow({
-      get: vi.fn(() => ({})),
+      get: vi.fn(() => ({ fieldTheoryWindowMode: 'panel', clickAwayToDismiss: true })),
       getPreference: vi.fn((key: string) => {
         if (key === 'clickAwayToDismiss') return true;
         return false;
@@ -125,7 +125,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
       bundleId: 'com.apple.Safari',
       name: 'Safari',
     });
-    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false, 'clipboard');
   });
 
   it('shows immediately while previous-app capture continues in background when cache is unavailable', async () => {
@@ -149,10 +149,147 @@ describe('ClipboardHistoryWindow helper methods', () => {
     window.capturePreviousAppAndShow(bounds, false, true, true, false);
 
     expect(callOrder).toEqual(['capture-start', 'show']);
-    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false, 'clipboard');
 
     resolveCapture();
     await Promise.resolve();
+  });
+
+  it('waits for pending previous-app capture before resolving a paste target', async () => {
+    let resolveCapture!: (app: { bundleId: string; name: string }) => void;
+    vi.spyOn(window as any, 'getFrontmostExternalApp').mockImplementation(async () => (
+      new Promise((resolve) => {
+        resolveCapture = resolve;
+      })
+    ));
+    vi.spyOn(window, 'show').mockImplementation(() => {});
+
+    window.capturePreviousAppAndShow(undefined, false, true, false, true);
+    const targetPromise = window.getTargetAppForPaste();
+
+    resolveCapture({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' });
+
+    await expect(targetPromise).resolves.toEqual({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+  });
+
+  it('sends target app info after async previous-app capture updates', async () => {
+    const send = vi.fn();
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+    vi.spyOn(window as any, 'getFrontmostExternalApp').mockResolvedValue({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+
+    await window.capturePreviousApp();
+
+    expect(send).toHaveBeenCalledWith('clipboard:targetAppInfo', {
+      previousApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      targetApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      runningApps: [],
+    });
+  });
+
+  it('queues view switch events until the renderer has finished loading', () => {
+    const send = vi.fn();
+    const didFinishLoadCallbacks: Array<() => void> = [];
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      webContents: {
+        isLoadingMainFrame: vi.fn(() => true),
+        once: vi.fn((event: string, callback: () => void) => {
+          if (event === 'did-finish-load') {
+            didFinishLoadCallbacks.push(callback);
+          }
+        }),
+        send,
+      },
+    };
+
+    (window as any).sendRendererEvent('clipboard:showLibrary');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(didFinishLoadCallbacks).toHaveLength(1);
+    didFinishLoadCallbacks[0]();
+    expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
+  });
+
+  it('temporarily suppresses blur dismissal', () => {
+    vi.useFakeTimers();
+    try {
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+
+      window.suppressBlurDismiss(1500);
+
+      expect(window.shouldAutoHideOnBlur()).toBe(false);
+
+      vi.advanceTimersByTime(1501);
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes the default paste target when a visible app window sees a new external app', () => {
+    const appWindow = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({ fieldTheoryWindowMode: 'app', clickAwayToDismiss: true })),
+      getPreference: vi.fn((key: string) => {
+        if (key === 'clickAwayToDismiss') return true;
+        return false;
+      }),
+    } as any);
+    const send = vi.fn();
+    (appWindow as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+
+    appWindow.rememberExternalApp({ bundleId: 'com.tinyspeck.slackmacgap', name: 'Slack' });
+    appWindow.rememberExternalApp({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' });
+
+    expect(appWindow.getPreviousApp()).toEqual({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+    expect(send).toHaveBeenLastCalledWith('clipboard:targetAppInfo', {
+      previousApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      targetApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      runningApps: [],
+    });
+  });
+
+  it('does not remember Dock as a paste target', () => {
+    const send = vi.fn();
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+
+    window.rememberExternalApp({ bundleId: 'com.apple.dock', name: 'Dock' });
+
+    expect(window.getPreviousApp()).toBeNull();
+    expect(window.getTargetApp()).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('skips Dock when falling back to the running-app list', () => {
+    (window as any).runningApps = [
+      { bundleId: 'com.apple.dock', name: 'Dock' },
+      { bundleId: 'com.apple.TextEdit', name: 'TextEdit' },
+    ];
+
+    expect(window.getTargetApp()).toEqual({
+      bundleId: 'com.apple.TextEdit',
+      name: 'TextEdit',
+    });
   });
 
   it('uses one shared blur-dismiss rule for panel mode', () => {
@@ -226,6 +363,8 @@ describe('ClipboardHistoryWindow helper methods', () => {
     const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
     (window as any).currentSizeKey = 'library';
     (window as any).preferencesManager.get.mockReturnValue({
+      fieldTheoryWindowMode: 'panel',
+      clickAwayToDismiss: true,
       clipboardHistoryBoundsByView: {
         library: { x: 100, y: 100, width: 900, height: 600 },
       },
@@ -287,7 +426,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(setBounds).not.toHaveBeenCalled();
   });
 
-  it('uses draw mechanics for the canvas size key', () => {
+  it('persists the draw size key without resizing the current window', () => {
     const save = vi.fn().mockResolvedValue(undefined);
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({})),
@@ -302,15 +441,10 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.getCurrentSizeKey()).toBe('draw');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'draw' });
     expect(animateBounds).not.toHaveBeenCalled();
-    expect(setBounds).toHaveBeenCalledWith({
-      x: 100,
-      y: 100,
-      width: 1180,
-      height: 760,
-    });
+    expect(setBounds).not.toHaveBeenCalled();
   });
 
-  it('restores the target size profile when leaving draw', () => {
+  it('persists the target size key when leaving draw without resizing', () => {
     const save = vi.fn().mockResolvedValue(undefined);
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({
@@ -329,12 +463,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     expect(window.getCurrentSizeKey()).toBe('fields');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'fields' });
-    expect(setBounds).toHaveBeenCalledWith({
-      x: 100,
-      y: 100,
-      width: 940,
-      height: 620,
-    });
+    expect(setBounds).not.toHaveBeenCalled();
   });
 
   it('hides the window and restores the previous app when one is known', async () => {
@@ -383,16 +512,18 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
-  it('keeps the app-mode window visible after paste', () => {
+  it('hides the app-mode window after paste so the target keeps focus', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const hide = vi.spyOn(window, 'hide').mockImplementation(() => {});
+    const disableFocus = vi.spyOn(window, 'temporarilyDisableAppWindowFocus').mockReturnValue(true);
 
     window.hideAfterPaste('paste-item');
 
-    expect(hide).not.toHaveBeenCalled();
+    expect(disableFocus).toHaveBeenCalledWith('hide-after-paste:paste-item');
+    expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
-  it('keeps the Dock visible when hiding the app-mode window', () => {
+  it('keeps the Dock and application visible when hiding the app-mode window', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const existingWindow = attachExistingWindow(window, vi.fn());
 
@@ -400,7 +531,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     expect(existingWindow.hide).toHaveBeenCalled();
     expect(mockApp.dock.hide).not.toHaveBeenCalled();
-    expect(mockApp.hide).toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
   it('skips activation when no previous app is known', async () => {
@@ -478,6 +609,48 @@ describe('ClipboardHistoryWindow helper methods', () => {
     ]);
   });
 
+  it('showLibrary opens library mode when reusing an existing window', () => {
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.showLibrary(undefined, true);
+
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showLibrary',
+    ]);
+  });
+
+  it('showLibrary opens library mode in app-window mode', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.showLibrary(undefined, true);
+
+    expect(mockApp.show).toHaveBeenCalled();
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showLibrary',
+    ]);
+  });
+
+  it('capturePreviousAppAndShowLibrary forwards the library initial mode', () => {
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    vi.spyOn(window, 'capturePreviousAppAndShow').mockImplementation(() => {});
+
+    window.capturePreviousAppAndShowLibrary(bounds, true, false);
+
+    expect(window.capturePreviousAppAndShow).toHaveBeenCalledWith(bounds, false, true, false, false, 'library');
+  });
+
+  it('preloads with the requested initial view mode', () => {
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    const createWindow = vi.spyOn(window as any, 'createWindow').mockImplementation(() => {});
+
+    window.preload(bounds, 'library');
+
+    expect(createWindow).toHaveBeenCalledWith(bounds, false, true, false, true, 'library');
+  });
+
   it('activates panel mode with app.focus instead of app.show', () => {
     attachExistingWindow(window, vi.fn());
 
@@ -501,18 +674,61 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('focuses a hidden app-mode window without resetting renderer state', () => {
+  it('does not focus a hidden app-mode window through the visible-window shortcut', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const send = vi.fn();
     const windowRef = attachExistingWindow(window, send);
     windowRef.isVisible.mockReturnValue(false);
 
-    expect(window.focusExistingWindow()).toBe(true);
+    expect(window.focusExistingWindow()).toBe(false);
 
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(windowRef.focus).not.toHaveBeenCalled();
+    expect(mockApp.show).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('restores a hidden app-mode window with an explicit library view', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+    windowRef.isVisible.mockReturnValue(false);
+
+    expect(window.restoreExistingAppWindow('app-activate', 'library')).toBe(true);
+
+    expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
     expect(windowRef.show).toHaveBeenCalled();
     expect(windowRef.moveTop).toHaveBeenCalled();
     expect(windowRef.focus).toHaveBeenCalled();
     expect(mockApp.show).toHaveBeenCalled();
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(windowRef.show.mock.invocationCallOrder[0]);
+  });
+
+  it('does not restore a hidden panel-mode window through app activation', () => {
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+    windowRef.isVisible.mockReturnValue(false);
+
+    expect(window.restoreExistingAppWindow('app-activate')).toBe(false);
+
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(windowRef.focus).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('quietly focuses a visible app-mode window without revealing it again', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+
+    expect(window.focusVisibleWindow('floating-recording-focus-restore')).toBe(true);
+
+    expect(windowRef.focus).toHaveBeenCalled();
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(mockApp.show).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 

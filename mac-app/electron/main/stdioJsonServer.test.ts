@@ -167,6 +167,21 @@ describe('StdioJsonServer', () => {
     expect(server.isReady).toBe(false);
   });
 
+  it('stop() resolves an in-flight command as stopped', async () => {
+    const server = createServer();
+
+    const startPromise = server.start();
+    proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+    await startPromise;
+
+    const sendPromise = server.send({ cmd: 'generate' });
+    await flushMicrotasks();
+
+    server.stop();
+
+    await expect(sendPromise).resolves.toEqual({ ok: false, error: 'Test server stopped' });
+  });
+
   it('stop() is safe to call when not running', () => {
     const server = createServer();
     expect(() => server.stop()).not.toThrow();
@@ -192,6 +207,32 @@ describe('StdioJsonServer', () => {
     proc.stdout.emit('data', Buffer.from('{"ok":true,"text":"hello world"}\n'));
 
     await expect(sendPromise).resolves.toEqual({ ok: true, text: 'hello world' });
+  });
+
+  it('emits progress events without resolving the pending response', async () => {
+    const events: Record<string, unknown>[] = [];
+    const server = createServer();
+
+    const startPromise = server.start();
+    proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+    await startPromise;
+
+    const sendPromise = server.send({ cmd: 'generate' }, {
+      onEvent: (event) => events.push(event),
+    });
+    const responseSpy = vi.fn();
+    void sendPromise.then(responseSpy);
+    await flushMicrotasks();
+
+    proc.stdout.emit('data', Buffer.from('{"event":"progress","kind":"status","message":"warming"}\n'));
+    await flushMicrotasks();
+
+    expect(events).toEqual([{ event: 'progress', kind: 'status', message: 'warming' }]);
+    expect(responseSpy).not.toHaveBeenCalled();
+
+    proc.stdout.emit('data', Buffer.from('{"ok":true,"text":"done"}\n'));
+
+    await expect(sendPromise).resolves.toEqual({ ok: true, text: 'done' });
   });
 
   it('rejects send() when server is not running', async () => {

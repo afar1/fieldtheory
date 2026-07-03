@@ -102,6 +102,6 @@ describe('AudioLevelRingBuffer', () => {
   });
 
   it('has the expected default bar count', () => {
-    expect(WAVEFORM_BAR_COUNT).toBe(5);
+    expect(WAVEFORM_BAR_COUNT).toBe(7);
   });
 });

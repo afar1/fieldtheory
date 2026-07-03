@@ -19,7 +19,6 @@ vi.mock('electron', () => ({
 import { shell } from 'electron';
 import {
   buildEffectiveArtifactRuleContent,
-  buildFieldTheoryMarkdownCommandContent,
   defaultScratchpadName,
   defaultScratchpadNameWithTime,
   extractArtifactModelSignature,
@@ -33,15 +32,22 @@ import {
   normalizeSeededReadmes,
   parseMarkdownHeader,
   parseMarkdownTodoState,
+  type CommandBacklinkSourceLoader,
+  type LibraryBacklinkRelationDocument,
   type ReadingMeta,
   type WikiNode,
 } from './librarianManager';
+import { hasExistingLibraryContent, inferLibrarianSetupComplete } from './librarianSetupState';
+import type { LibraryIndexStore } from './libraryIndexStore';
 import { readDocumentVersion } from './documentSaveGuard';
+import { parseMarkdownContentEditedAt, parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -51,6 +57,17 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-wiki-tree-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function makeLibraryIndexStoreMock(removePaths = vi.fn()): LibraryIndexStore {
+  return {
+    getMetadata: vi.fn(() => null),
+    setMetadata: vi.fn(),
+    replaceLinkHits: vi.fn(),
+    removePath: vi.fn(),
+    removePaths,
+    close: vi.fn(),
+  } as unknown as LibraryIndexStore;
 }
 
 describe('defaultScratchpadName', () => {
@@ -203,22 +220,6 @@ describe('artifact signature helpers', () => {
   });
 });
 
-describe('Field Theory Markdown command content', () => {
-  it('codifies the plain, tidy writing conventions for Field Theory notes', () => {
-    const content = buildFieldTheoryMarkdownCommandContent();
-
-    expect(content).toContain('plain, practical English');
-    expect(content).toContain('It does not apply to Librarian artifacts');
-    expect(content).toContain('prefer bold section labels instead of more heading levels');
-    expect(content).toContain('Keep most text at the same visual size');
-    expect(content).toContain('Prefer prose');
-    expect(content).toContain('Use ordered lists only for real sequence, priority, or steps');
-    expect(content).toContain('- [ ] One action per line');
-    expect(content).toContain('[[Page Name]]');
-    expect(content).toContain('**Sources**');
-  });
-});
-
 describe('wiki tree visibility helpers', () => {
   it('hides underscore transcript sidecars from the visible wiki tree', () => {
     expect(isHiddenWikiFileName('_2026-04-15-wiki-entries-initial-debate-transcript.md')).toBe(true);
@@ -228,6 +229,9 @@ describe('wiki tree visibility helpers', () => {
   it('hides dot and underscore prefixed folders from the visible wiki tree', () => {
     expect(isHiddenWikiFolderName('_transcripts')).toBe(true);
     expect(isHiddenWikiFolderName('.system')).toBe(true);
+    expect(isHiddenWikiFolderName('.assets')).toBe(true);
+    expect(isHiddenWikiFolderName('Brief.assets')).toBe(true);
+    expect(isHiddenWikiFolderName('Codex Context')).toBe(true);
     expect(isHiddenWikiFolderName('debates')).toBe(false);
   });
 });
@@ -249,6 +253,8 @@ describe('recursive wiki tree scan', () => {
     fs.mkdirSync(path.join(root, 'entries', 'nested'), { recursive: true });
     fs.mkdirSync(path.join(root, 'empty'), { recursive: true });
     fs.mkdirSync(path.join(root, '_drafts'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'Field theory fn.assets'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'entries', 'Teams in Field theory.assets'), { recursive: true });
     fs.writeFileSync(path.join(root, 'entries', 'zeta.md'), '# Zeta\n');
     fs.writeFileSync(path.join(root, 'entries', 'alpha.md'), '# Alpha\n');
     fs.writeFileSync(path.join(root, 'entries', 'nested', 'beta.md'), '# Beta\n');
@@ -280,23 +286,133 @@ describe('recursive wiki tree scan', () => {
     expect(entries.children.map((node) => node.name)).toEqual(['README', 'alpha', 'zeta']);
   });
 
-  it('adds todo state metadata to markdown file nodes', () => {
+  it('adds todo and archive metadata to markdown file nodes', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
     fs.writeFileSync(path.join(root, 'scratchpad', 'open.md'), '---\ntodo: true\ntodo_state: open\n---\n# Open Task\n');
     fs.writeFileSync(path.join(root, 'scratchpad', 'done.md'), '---\ntask: done\n---\n# Done Task\n');
-    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '# Note\n');
+    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '---\narchived: true\n---\n# Note\n');
 
     const tree = scan(root);
     const scratchpad = tree.find((node) => node.kind === 'dir' && node.name === 'scratchpad');
     expect(scratchpad?.kind).toBe('dir');
     if (scratchpad?.kind !== 'dir') return;
     const files = scratchpad.children.filter((node): node is Extract<WikiNode, { kind: 'file' }> => node.kind === 'file');
-    expect(files.map((file) => [file.name, file.todoState])).toEqual([
-      ['done', 'done'],
-      ['note', undefined],
-      ['open', 'open'],
+    expect(files.map((file) => [file.name, file.todoState, file.archived])).toEqual([
+      ['done', 'done', undefined],
+      ['note', undefined, true],
+      ['open', 'open', undefined],
     ]);
+  });
+
+  it('uses content edit metadata for wiki file sort timestamps', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '---\ncontent_edited_at: 1234\narchived: true\n---\n# Note\n');
+
+    const tree = scan(root);
+    const scratchpad = tree.find((node) => node.kind === 'dir' && node.name === 'scratchpad');
+    expect(scratchpad?.kind).toBe('dir');
+    if (scratchpad?.kind !== 'dir') return;
+    const note = scratchpad.children[0];
+    expect(note.kind).toBe('file');
+    if (note.kind !== 'file') return;
+    expect(note.lastUpdated).toBe(1234);
+    expect(note.archived).toBe(true);
+  });
+
+  it('uses shared frontmatter title and full callsign for River cache nodes', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    const updatedAt = '2026-05-28T12:00:00.000Z';
+    fs.writeFileSync(path.join(root, 'River (shared)', 'plain AM.md'), [
+      '---',
+      'title: plain',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: command',
+      'shared_original_source_path: Commands/plain.md',
+      'shared_author_initials: AM',
+      'shared_author_callsign: afar',
+      `shared_updated_at: "${updatedAt}"`,
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const tree = scan(root);
+    const river = tree.find((node) => node.kind === 'dir' && node.name === 'River (shared)');
+    expect(river?.kind).toBe('dir');
+    if (river?.kind !== 'dir') return;
+    const shared = river.children[0];
+    expect(shared.kind).toBe('file');
+    if (shared.kind !== 'file') return;
+    expect(shared.name).toBe('plain AM');
+    expect(shared.title).toBe('plain');
+    expect(shared.lastUpdated).toBe(Date.parse(updatedAt));
+    expect(shared.sharedOriginalSourcePath).toBe('Commands/plain.md');
+    expect(shared.sharedAuthorCallsign).toBe('afar');
+  });
+
+  it('uses shared updated metadata when opening a River cache page', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    const updatedAt = '2026-05-28T12:00:00.000Z';
+    fs.writeFileSync(path.join(root, 'River (shared)', 'plain AM.md'), [
+      '---',
+      'title: plain',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: command',
+      'shared_original_source_path: Commands/plain.md',
+      'shared_author_callsign: afar',
+      `shared_updated_at: "${updatedAt}"`,
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiPage: (relPath: string) => {
+        lastUpdated: number;
+        sharedOriginalSourcePath?: string;
+        sharedAuthorCallsign?: string;
+      } | null;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    expect(manager.getWikiPage('River (shared)/plain AM')).toEqual(expect.objectContaining({
+      lastUpdated: Date.parse(updatedAt),
+      sharedOriginalSourcePath: 'Commands/plain.md',
+      sharedAuthorCallsign: 'afar',
+    }));
+  });
+
+  it('does not derive River cache titles from initials-suffixed filenames', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'River (shared)', 'field theory fnc AM.md'), [
+      '---',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: document',
+      'shared_original_source_path: scratchpad/field theory fnc.md',
+      'shared_author_callsign: AMB-MAC',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const tree = scan(root);
+    const river = tree.find((node) => node.kind === 'dir' && node.name === 'River (shared)');
+    expect(river?.kind).toBe('dir');
+    if (river?.kind !== 'dir') return;
+    const shared = river.children[0];
+    expect(shared.kind).toBe('file');
+    if (shared.kind !== 'file') return;
+    expect(shared.name).toBe('field theory fnc AM');
+    expect(shared.title).toBe('Untitled');
+    expect(shared.sharedAuthorCallsign).toBe('AMB-MAC');
   });
 
   it('includes .markdown files in the library tree', () => {
@@ -311,6 +427,49 @@ describe('recursive wiki tree scan', () => {
     if (entries?.kind !== 'dir') return;
     expect(entries.children.map((node) => node.name)).toEqual(['alpha']);
     expect(flatten(tree)).toEqual(['entries/alpha']);
+  });
+
+  it('keeps wiki scans markdown-only but includes html and css in library roots', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'reports', 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(root, 'reports', 'summary.html'), '<h1>Summary</h1>\n');
+    fs.writeFileSync(path.join(root, 'reports', 'styles.css'), 'h1 { color: red; }\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      scanMarkdownTree: (rootPath: string, currentDir?: string, seenRealPaths?: Set<string>, includeLibraryTextDocuments?: boolean) => WikiNode[];
+    };
+
+    expect(flatten(manager.scanMarkdownTree(root))).toEqual(['reports/alpha']);
+    expect(flatten(manager.scanMarkdownTree(root, root, new Set<string>(), true))).toEqual([
+      'reports/alpha',
+      'reports/styles.css',
+      'reports/summary.html',
+    ]);
+  });
+
+  it('keeps portable command files visible in Library but out of the wiki tree', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Commands'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Commands', 'workflow.md'), '# Workflow\n');
+    fs.writeFileSync(path.join(root, 'entries', 'note.md'), '# Note\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string }> }>;
+      getLibraryRoots: () => Array<{ path: string; tree: WikiNode[] }>;
+      getWikiPage: (relPath: string) => unknown;
+      startWikiWatcher: () => void;
+      settings: { libraryRoots: string[] };
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.settings = { libraryRoots: [] };
+    manager.startWikiWatcher = vi.fn();
+
+    expect(flatten(manager.getLibraryRoots()[0]?.tree ?? [])).toEqual(['Commands/workflow', 'entries/note']);
+    expect(manager.getWikiTree().map((folder) => folder.name)).toEqual(['entries']);
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/note']);
+    expect(manager.getWikiPage('Commands/workflow')).toBeNull();
   });
 
   it('reuses the wiki tree until a wiki change invalidates it', () => {
@@ -342,6 +501,8 @@ describe('recursive wiki tree scan', () => {
     fs.mkdirSync(wikiRoot, { recursive: true });
     fs.mkdirSync(externalRoot, { recursive: true });
     fs.writeFileSync(path.join(externalRoot, 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(externalRoot, 'report.html'), '<h1>Report</h1>\n');
+    fs.writeFileSync(path.join(externalRoot, 'styles.css'), 'body { color: red; }\n');
 
     const manager = Object.create(LibrarianManager.prototype) as {
       settings: { libraryRoots: string[] };
@@ -354,16 +515,436 @@ describe('recursive wiki tree scan', () => {
     manager.startWikiWatcher = vi.fn();
 
     const externalPages = () => flatten(manager.getLibraryRoots().find((root) => root.path === externalRoot)?.tree ?? []);
-    expect(externalPages()).toEqual(['alpha']);
+    expect(externalPages()).toEqual(['alpha', 'report.html', 'styles.css']);
 
     fs.writeFileSync(path.join(externalRoot, 'beta.md'), '# Beta\n');
-    expect(externalPages()).toEqual(['alpha']);
+    expect(externalPages()).toEqual(['alpha', 'report.html', 'styles.css']);
 
     manager.emit('library:changed', externalRoot);
-    expect(externalPages()).toEqual(['alpha', 'beta']);
+    expect(externalPages()).toEqual(['alpha', 'beta', 'report.html', 'styles.css']);
   });
 
-  it('emits wiki:changed immediately after saving a wiki page', () => {
+  it('reuses parsed markdown metadata across repair reloads when mtime and size are unchanged', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const notePath = path.join(root, 'entries', 'note.md');
+    fs.writeFileSync(notePath, '---\narchived: true\ncontent_edited_at: 1234\n---\nSee [[Target]].\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string; title: string }> }>;
+      emit: (eventName: string) => boolean;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    const readFileSync = vi.spyOn(fs, 'readFileSync');
+    const readsForNote = () => readFileSync.mock.calls.filter(([filePath]) => filePath === notePath).length;
+
+    expect(manager.getWikiTree()[0]?.files[0]).toMatchObject({ relPath: 'entries/note', archived: true, lastUpdated: 1234 });
+    expect(readsForNote()).toBe(1);
+
+    manager.emit('wiki:changed');
+    expect(manager.getWikiTree()[0]?.files[0]).toMatchObject({ relPath: 'entries/note', archived: true, lastUpdated: 1234 });
+    expect(readsForNote()).toBe(1);
+
+    fs.writeFileSync(notePath, '---\narchived: false\ncontent_edited_at: 5678\n---\nBody changed\n');
+    manager.emit('wiki:changed');
+    expect(manager.getWikiTree()[0]?.files[0]).toMatchObject({ relPath: 'entries/note', archived: undefined, lastUpdated: 5678 });
+    expect(readsForNote()).toBe(2);
+  });
+
+  it('uses persisted metadata on repair reloads after the in-memory metadata cache is empty', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const notePath = path.join(root, 'entries', 'note.md');
+    fs.writeFileSync(notePath, '---\narchived: true\ncontent_edited_at: 1234\n---\nBody\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string; archived?: boolean; lastUpdated: number }> }>;
+      emit: (eventName: string) => boolean;
+      wikiFileMetadataCache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    const persistedMetadata = new Map<string, { mtimeMs: number; size: number; metadata: Parameters<LibraryIndexStore['setMetadata']>[3] }>();
+    const replaceLinkHits = vi.fn<LibraryIndexStore['replaceLinkHits']>();
+    const makeStore = (): Pick<LibraryIndexStore, 'getMetadata' | 'setMetadata' | 'removePath' | 'removePaths' | 'replaceLinkHits' | 'close'> => ({
+      getMetadata: (filePath, mtimeMs, size) => {
+        const entry = persistedMetadata.get(filePath);
+        if (!entry || entry.mtimeMs !== mtimeMs || entry.size !== size) return null;
+        return entry.metadata;
+      },
+      setMetadata: (filePath, mtimeMs, size, metadata) => {
+        persistedMetadata.set(filePath, { mtimeMs, size, metadata });
+      },
+      removePath: (filePath) => {
+        persistedMetadata.delete(filePath);
+      },
+      removePaths: (filePaths) => {
+        for (const filePath of filePaths) persistedMetadata.delete(filePath);
+      },
+      replaceLinkHits,
+      close: vi.fn(),
+    } as Pick<LibraryIndexStore, 'getMetadata' | 'setMetadata' | 'removePath' | 'removePaths' | 'replaceLinkHits' | 'close'>);
+    manager.wikiFileMetadataCache = new Map();
+    manager.libraryIndexStore = makeStore() as LibraryIndexStore;
+
+    const readFileSync = vi.spyOn(fs, 'readFileSync');
+    const readsForNote = () => readFileSync.mock.calls.filter(([filePath]) => filePath === notePath).length;
+
+    expect(manager.getWikiTree()[0]?.files[0]).toMatchObject({ relPath: 'entries/note', archived: true, lastUpdated: 1234 });
+    expect(readsForNote()).toBe(1);
+    expect(replaceLinkHits).toHaveBeenCalledWith(notePath, expect.any(Array));
+
+    manager.libraryIndexStore.close();
+    manager.libraryIndexStore = makeStore() as LibraryIndexStore;
+    manager.wikiFileMetadataCache = new Map();
+    manager.emit('wiki:changed');
+
+    expect(manager.getWikiTree()[0]?.files[0]).toMatchObject({ relPath: 'entries/note', archived: true, lastUpdated: 1234 });
+    expect(readsForNote()).toBe(1);
+    expect(replaceLinkHits).toHaveBeenCalledTimes(1);
+    manager.libraryIndexStore.close();
+  });
+
+  it('returns indexed wiki backlink relation documents without scanning the whole tree', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const sourcePath = path.join(root, 'entries', 'source.md');
+    const relPathSourcePath = path.join(root, 'entries', 'rel-source.md');
+    const basenameSourcePath = path.join(root, 'entries', 'basename-source.md');
+    const staleSourcePath = path.join(root, 'entries', 'missing-source.md');
+    const targetPath = path.join(root, 'entries', 'target.md');
+    fs.writeFileSync(sourcePath, 'See [[Target]].\n');
+    fs.writeFileSync(relPathSourcePath, 'See [[entries/target]].\n');
+    fs.writeFileSync(basenameSourcePath, 'See [[target]].\n');
+    fs.writeFileSync(targetPath, '# Target\n');
+
+    const hitFor = (sourcePath: string, rawTarget: string): ReturnType<LibraryIndexStore['findWikiLinkHitsByRawTarget']>[number] => ({
+      sourcePath,
+      hit: {
+        kind: 'wikilink',
+        rawTarget,
+        href: null,
+        start: 4,
+        end: 14,
+        displayStart: 6,
+        displayEnd: 12,
+        displayText: rawTarget,
+      },
+    });
+    const findWikiLinkHitsByRawTarget = vi.fn<LibraryIndexStore['findWikiLinkHitsByRawTarget']>((rawTarget) => {
+      switch (rawTarget.trim().toLowerCase()) {
+        case 'target':
+          return [
+            hitFor(sourcePath, 'Target'),
+            hitFor(sourcePath, 'Target'),
+            hitFor(basenameSourcePath, 'target'),
+            hitFor(targetPath, 'target'),
+            hitFor(staleSourcePath, 'target'),
+          ];
+        case 'entries/target':
+          return [hitFor(relPathSourcePath, 'entries/target')];
+        default:
+          return [];
+      }
+    });
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiBacklinkRelationDocuments: (relPath: string) => Array<{ target: { kind: 'wiki'; relPath: string }; title: string; content: string }>;
+      libraryIndexStore: LibraryIndexStore;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.libraryIndexStore = {
+      findWikiLinkHitsByRawTarget,
+    } as unknown as LibraryIndexStore;
+
+    expect(manager.getWikiBacklinkRelationDocuments('entries/target')).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'entries/basename-source' },
+        title: 'basename-source',
+        content: 'See [[target]].\n',
+      },
+      {
+        target: { kind: 'wiki', relPath: 'entries/rel-source' },
+        title: 'rel-source',
+        content: 'See [[entries/target]].\n',
+      },
+      {
+        target: { kind: 'wiki', relPath: 'entries/source' },
+        title: 'source',
+        content: 'See [[Target]].\n',
+      },
+    ]);
+    expect(findWikiLinkHitsByRawTarget).toHaveBeenCalledWith('entries/target');
+    expect(findWikiLinkHitsByRawTarget).toHaveBeenCalledWith('entries/target.md');
+    expect(findWikiLinkHitsByRawTarget).toHaveBeenCalledWith('target');
+  });
+
+  it('returns indexed artifact backlink relation documents from wiki, artifact, and command sources', async () => {
+    const wikiRoot = makeTempDir();
+    const artifactRoot = makeTempDir();
+    const commandRoot = makeTempDir();
+    fs.mkdirSync(path.join(wikiRoot, 'entries'), { recursive: true });
+    fs.mkdirSync(commandRoot, { recursive: true });
+    const wikiSourcePath = path.join(wikiRoot, 'entries', 'source.md');
+    const artifactTargetPath = path.join(artifactRoot, 'artifact.md');
+    const artifactSourcePath = path.join(artifactRoot, 'artifact-source.md');
+    const commandSourcePath = path.join(commandRoot, 'refactor.md');
+    const staleSourcePath = path.join(artifactRoot, 'missing.md');
+    fs.writeFileSync(wikiSourcePath, '# Source Wiki\nSee [[Artifact One]].\n');
+    fs.writeFileSync(artifactTargetPath, '# Artifact One\n');
+    fs.writeFileSync(artifactSourcePath, `# Artifact Source\nSee [Artifact One](artifact://${encodeURIComponent(artifactTargetPath)}).\n`);
+    fs.writeFileSync(commandSourcePath, '# Refactor\nSee [[Artifact One]].\n');
+
+    const hitFor = (sourcePath: string, rawTarget: string): ReturnType<LibraryIndexStore['findWikiLinkHitsByRawTarget']>[number] => ({
+      sourcePath,
+      hit: {
+        kind: 'wikilink',
+        rawTarget,
+        href: null,
+        start: 4,
+        end: 20,
+        displayStart: 6,
+        displayEnd: 18,
+        displayText: rawTarget,
+      },
+    });
+    const hrefHitFor = (sourcePath: string, href: string): ReturnType<LibraryIndexStore['findLinkHitsByHref']>[number] => ({
+      sourcePath,
+      hit: {
+        kind: 'markdown-link',
+        rawTarget: null,
+        href,
+        start: 4,
+        end: 48,
+        displayStart: 5,
+        displayEnd: 17,
+        displayText: 'Artifact One',
+      },
+    });
+    const findWikiLinkHitsByRawTarget = vi.fn<LibraryIndexStore['findWikiLinkHitsByRawTarget']>((rawTarget) => (
+      rawTarget === 'Artifact One'
+        ? [
+          hitFor(wikiSourcePath, 'Artifact One'),
+          hitFor(commandSourcePath, 'Artifact One'),
+          hitFor(artifactTargetPath, 'Artifact One'),
+          hitFor(staleSourcePath, 'Artifact One'),
+        ]
+        : []
+    ));
+    const artifactHref = `artifact://${encodeURIComponent(artifactTargetPath)}`;
+    const artifactSourceContent = `# Artifact Source\nSee [Artifact One](${artifactHref}).`;
+    const findLinkHitsByHref = vi.fn<LibraryIndexStore['findLinkHitsByHref']>((href) => (
+      href === artifactHref ? [hrefHitFor(artifactSourcePath, href)] : []
+    ));
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getLibraryBacklinkRelationDocuments: LibrarianManager['getLibraryBacklinkRelationDocuments'];
+      settings: { watchedDirs: string[] };
+      cache: Map<string, ReadingMeta>;
+      libraryIndexStore: LibraryIndexStore;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    manager.settings = { watchedDirs: [artifactRoot] };
+    manager.cache = new Map<string, ReadingMeta>([
+      [artifactTargetPath, {
+        path: artifactTargetPath,
+        title: 'Artifact One',
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: 1,
+        mtime: 1,
+      }],
+      [artifactSourcePath, {
+        path: artifactSourcePath,
+        title: 'Artifact Source',
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: 1,
+        mtime: 1,
+      }],
+    ]);
+    manager.libraryIndexStore = {
+      findWikiLinkHitsByRawTarget,
+      findLinkHitsByHref,
+    } as unknown as LibraryIndexStore;
+    const loadCommandByPath = vi.fn<CommandBacklinkSourceLoader>(async (filePath) => (
+      filePath === commandSourcePath
+        ? {
+          filePath: commandSourcePath,
+          displayName: 'Refactor',
+          name: 'refactor',
+          content: '# Refactor\nSee [[Artifact One]].\n',
+        }
+        : null
+    ));
+
+    await expect(manager.getLibraryBacklinkRelationDocuments(
+      { kind: 'artifact', path: artifactTargetPath },
+      loadCommandByPath,
+    )).resolves.toEqual([
+      {
+        target: { kind: 'artifact', path: artifactSourcePath },
+        title: 'Artifact Source',
+        content: artifactSourceContent,
+      },
+      {
+        target: { kind: 'command', path: commandSourcePath },
+        title: 'Refactor',
+        content: '# Refactor\nSee [[Artifact One]].\n',
+      },
+      {
+        target: { kind: 'wiki', relPath: 'entries/source' },
+        title: 'source',
+        content: '# Source Wiki\nSee [[Artifact One]].\n',
+      },
+    ] satisfies LibraryBacklinkRelationDocument[]);
+    expect(findWikiLinkHitsByRawTarget).toHaveBeenCalledWith('Artifact One');
+    expect(findLinkHitsByHref).toHaveBeenCalledWith(artifactHref);
+    expect(findLinkHitsByHref).toHaveBeenCalledWith('Artifact One');
+  });
+
+  it('returns indexed command backlink relation documents from wiki and artifact sources', async () => {
+    const wikiRoot = makeTempDir();
+    const artifactRoot = makeTempDir();
+    const commandRoot = makeTempDir();
+    fs.mkdirSync(path.join(wikiRoot, 'entries'), { recursive: true });
+    fs.mkdirSync(commandRoot, { recursive: true });
+    const wikiSourcePath = path.join(wikiRoot, 'entries', 'source.md');
+    const artifactSourcePath = path.join(artifactRoot, 'artifact-source.md');
+    const commandTargetPath = path.join(commandRoot, 'refactor.md');
+    fs.writeFileSync(wikiSourcePath, '# Source Wiki\nRun [[Refactor]].\n');
+    fs.writeFileSync(artifactSourcePath, '# Artifact Source\nRun [[Refactor]].\n');
+    fs.writeFileSync(commandTargetPath, '# Refactor\n');
+
+    const hitFor = (sourcePath: string, rawTarget: string): ReturnType<LibraryIndexStore['findWikiLinkHitsByRawTarget']>[number] => ({
+      sourcePath,
+      hit: {
+        kind: 'wikilink',
+        rawTarget,
+        href: null,
+        start: 4,
+        end: 16,
+        displayStart: 6,
+        displayEnd: 14,
+        displayText: rawTarget,
+      },
+    });
+    const commandHref = `command://${encodeURIComponent(commandTargetPath)}`;
+    const findWikiLinkHitsByRawTarget = vi.fn<LibraryIndexStore['findWikiLinkHitsByRawTarget']>((rawTarget) => (
+      rawTarget === 'Refactor' ? [hitFor(wikiSourcePath, 'Refactor'), hitFor(artifactSourcePath, 'Refactor')] : []
+    ));
+    const findLinkHitsByHref = vi.fn<LibraryIndexStore['findLinkHitsByHref']>(() => []);
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getLibraryBacklinkRelationDocuments: LibrarianManager['getLibraryBacklinkRelationDocuments'];
+      settings: { watchedDirs: string[] };
+      cache: Map<string, ReadingMeta>;
+      libraryIndexStore: LibraryIndexStore;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    manager.settings = { watchedDirs: [artifactRoot] };
+    manager.cache = new Map<string, ReadingMeta>([
+      [artifactSourcePath, {
+        path: artifactSourcePath,
+        title: 'Artifact Source',
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: 1,
+        mtime: 1,
+      }],
+    ]);
+    manager.libraryIndexStore = {
+      findWikiLinkHitsByRawTarget,
+      findLinkHitsByHref,
+    } as unknown as LibraryIndexStore;
+    const loadCommandByPath = vi.fn<CommandBacklinkSourceLoader>(async (filePath) => (
+      filePath === commandTargetPath
+        ? {
+          filePath: commandTargetPath,
+          displayName: 'Refactor',
+          name: 'refactor',
+          content: '# Refactor\n',
+        }
+        : null
+    ));
+
+    await expect(manager.getLibraryBacklinkRelationDocuments(
+      { kind: 'command', path: commandTargetPath },
+      loadCommandByPath,
+    )).resolves.toEqual([
+      {
+        target: { kind: 'artifact', path: artifactSourcePath },
+        title: 'Artifact Source',
+        content: '# Artifact Source\nRun [[Refactor]].',
+      },
+      {
+        target: { kind: 'wiki', relPath: 'entries/source' },
+        title: 'source',
+        content: '# Source Wiki\nRun [[Refactor]].\n',
+      },
+    ] satisfies LibraryBacklinkRelationDocument[]);
+    expect(findWikiLinkHitsByRawTarget).toHaveBeenCalledWith('Refactor');
+    expect(findLinkHitsByHref).toHaveBeenCalledWith(commandHref);
+    expect(findLinkHitsByHref).toHaveBeenCalledWith('Refactor');
+  });
+
+  it('refreshes wiki link-hit rows before indexed backlinks are read after save', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const sourcePath = path.join(root, 'entries', 'source.md');
+    fs.writeFileSync(sourcePath, 'Old body\n');
+
+    const replaceLinkHits = vi.fn<LibraryIndexStore['replaceLinkHits']>();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      saveWikiPage: LibrarianManager['saveWikiPage'];
+      libraryIndexStore: LibraryIndexStore;
+      wikiFileMetadataCache: Map<string, unknown>;
+      emit: (eventName: string, event?: unknown) => boolean;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.libraryIndexStore = {
+      getMetadata: vi.fn(() => null),
+      setMetadata: vi.fn(),
+      replaceLinkHits,
+    } as unknown as LibraryIndexStore;
+    manager.wikiFileMetadataCache = new Map();
+    manager.emit = vi.fn(() => true);
+
+    const result = manager.saveWikiPage('entries/source', 'See [[Target]].\n');
+
+    expect(result.ok).toBe(true);
+    expect(replaceLinkHits).toHaveBeenCalledWith(sourcePath, [
+      expect.objectContaining({
+        kind: 'wikilink',
+        rawTarget: 'Target',
+      }),
+    ]);
+  });
+
+  it('returns library root paths without scanning root trees', () => {
+    const tempDir = makeTempDir();
+    const wikiRoot = path.join(tempDir, 'wiki');
+    const externalRoot = path.join(tempDir, 'external');
+    fs.mkdirSync(path.join(wikiRoot, 'entries'), { recursive: true });
+    fs.mkdirSync(path.join(externalRoot, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(wikiRoot, 'entries', 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(externalRoot, 'reports', 'beta.md'), '# Beta\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      getLibraryRootPaths: () => string[];
+      scanMarkdownTree: () => WikiNode[];
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    manager.settings = { libraryRoots: [externalRoot, wikiRoot] };
+    manager.scanMarkdownTree = vi.fn();
+
+    expect(manager.getLibraryRootPaths()).toEqual([wikiRoot, externalRoot]);
+    expect(manager.scanMarkdownTree).not.toHaveBeenCalled();
+  });
+
+  it('emits a file change delta immediately after saving a wiki page', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
     const filePath = path.join(root, 'entries', 'note.md');
@@ -378,8 +959,22 @@ describe('recursive wiki tree scan', () => {
     manager.emit = emit;
 
     expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
-    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    const saved = fs.readFileSync(filePath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# New title\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
+    expect(emit).toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-changed',
+      rootPath: root,
+      relPath: 'entries/note',
+      absPath: filePath,
+      builtin: true,
+      source: 'app',
+      page: expect.objectContaining({
+        relPath: 'entries/note',
+        absPath: filePath,
+        title: 'note',
+      }),
+    }));
   });
 
   it('saves existing .markdown wiki pages without creating a duplicate .md file', () => {
@@ -397,9 +992,22 @@ describe('recursive wiki tree scan', () => {
     manager.emit = emit;
 
     expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
+    const saved = fs.readFileSync(filePath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# New title\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
-    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-changed',
+      rootPath: root,
+      relPath: 'entries/note',
+      absPath: filePath,
+      builtin: true,
+      source: 'app',
+      page: expect.objectContaining({
+        relPath: 'entries/note',
+        absPath: filePath,
+      }),
+    }));
   });
 
   it('reports a conflict when a wiki page changed since it was opened', () => {
@@ -451,6 +1059,25 @@ describe('recursive wiki tree scan', () => {
     }));
     expect(emit).not.toHaveBeenCalledWith('wiki:changed', root);
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
+  });
+
+  it('removes old link-index rows when a wiki page is renamed', () => {
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'note.md');
+    fs.writeFileSync(oldPath, '# Note\n');
+
+    const removePaths = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      libraryIndexStore: LibraryIndexStore;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.libraryIndexStore = makeLibraryIndexStoreMock(removePaths);
+    manager.emit = vi.fn();
+
+    expect(manager.renameWikiPage('note', 'Better Note')).toBe('Better Note');
+    expect(removePaths).toHaveBeenCalledWith([oldPath]);
   });
 
   it('patches the cached wiki tree when a wiki page is renamed', () => {
@@ -531,7 +1158,14 @@ describe('recursive wiki tree scan', () => {
     expect(page?.absPath).toBe(path.join(root, 'Team Notes', 'Meeting Notes.md'));
     expect(page?.content).toBe('');
     expect(fs.readFileSync(path.join(root, 'Team Notes', 'Meeting Notes.md'), 'utf-8')).toBe('');
-    expect(emit).toHaveBeenCalledWith('library:changed', root);
+    expect(emit).toHaveBeenCalledWith('library:changed', root, expect.objectContaining({
+      type: 'file-added',
+      rootPath: root,
+      relPath: 'Team Notes/Meeting Notes',
+      absPath: path.join(root, 'Team Notes', 'Meeting Notes.md'),
+      source: 'app',
+      page: expect.objectContaining({ relPath: 'Team Notes/Meeting Notes', title: 'Meeting Notes' }),
+    }));
   });
 
   it('creates wiki files inside the requested folder without slugging the folder path', () => {
@@ -551,7 +1185,15 @@ describe('recursive wiki tree scan', () => {
     expect(page?.relPath).toBe('Shared Markdown/Testing');
     expect(page?.absPath).toBe(path.join(root, 'Shared Markdown', 'Testing.md'));
     expect(fs.existsSync(path.join(root, 'shared-markdown', 'Testing.md'))).toBe(false);
-    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-added',
+      rootPath: root,
+      relPath: 'Shared Markdown/Testing',
+      absPath: path.join(root, 'Shared Markdown', 'Testing.md'),
+      builtin: true,
+      source: 'app',
+      page: expect.objectContaining({ relPath: 'Shared Markdown/Testing', title: 'Testing' }),
+    }));
   });
 
   it('rejects hidden or path-like wiki file names before slugging', () => {
@@ -709,18 +1351,119 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Client Notes/note');
   });
 
-  it('does not delete FT-created wiki folders', async () => {
+  it('coalesces external wiki file moves across folders from watcher events', () => {
+    vi.useFakeTimers();
     const root = makeTempDir();
-    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
-    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+    const oldPath = path.join(root, 'scratchpad', 'Moved.md');
+    const newPath = path.join(root, 'archive', 'Moved.md');
+    fs.mkdirSync(path.dirname(oldPath), { recursive: true });
+    fs.mkdirSync(path.dirname(newPath), { recursive: true });
+    fs.writeFileSync(newPath, '# Moved\n');
 
+    const emit = vi.fn();
+    const removePath = vi.fn();
     const manager = Object.create(LibrarianManager.prototype) as {
-      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      pendingWikiUnlinks: Map<string, ReturnType<typeof setTimeout>>;
+      wikiFileMetadataCache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      scheduleWikiUnlink: (absPath: string) => void;
+      handleWikiAdd: (absPath: string) => void;
+      emit: typeof emit;
     };
     Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.pendingWikiUnlinks = new Map();
+    manager.wikiFileMetadataCache = new Map();
+    manager.libraryIndexStore = makeLibraryIndexStoreMock();
+    manager.libraryIndexStore.removePath = removePath;
+    manager.emit = emit;
 
-    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(false);
-    expect(trashItem).not.toHaveBeenCalled();
+    manager.scheduleWikiUnlink(oldPath);
+    manager.handleWikiAdd(newPath);
+    vi.advanceTimersByTime(400);
+
+    expect(emit).toHaveBeenCalledWith('wiki:renamed', expect.objectContaining({
+      oldRelPath: 'scratchpad/Moved',
+      newRelPath: 'archive/Moved',
+      oldAbsPath: oldPath,
+      newAbsPath: newPath,
+      builtin: true,
+      source: 'watcher',
+    }));
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'scratchpad/Moved');
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-deleted',
+      relPath: 'scratchpad/Moved',
+    }));
+    expect(removePath).not.toHaveBeenCalledWith(oldPath);
+  });
+
+  it('removes child link-index rows when a wiki folder is deleted', async () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Client Notes', 'Nested'), { recursive: true });
+    const firstPath = path.join(root, 'Client Notes', 'note.md');
+    const nestedPath = path.join(root, 'Client Notes', 'Nested', 'deep.md');
+    fs.writeFileSync(firstPath, '# Note\n');
+    fs.writeFileSync(nestedPath, '# Deep\n');
+    vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const removePaths = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      libraryIndexStore: LibraryIndexStore;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.libraryIndexStore = makeLibraryIndexStoreMock(removePaths);
+    manager.emit = vi.fn();
+
+    expect(await manager.deleteLibraryDir(root, 'Client Notes')).toBe(true);
+    expect(removePaths).toHaveBeenCalledWith(expect.arrayContaining([firstPath, nestedPath]));
+  });
+
+  it('moves FT-created wiki folders to Trash', async () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Shared Markdown', 'note.md'), '# Note\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Shared Markdown'));
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Shared Markdown/note');
+  });
+
+  it('moves wiki files to Trash and emits a file delete delta', async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'note.md'), '# Note\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteWikiPage: (relPath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(await manager.deleteWikiPage('note')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'note.md'));
+    expect(emit).toHaveBeenCalledWith('wiki:changed', expect.objectContaining({
+      type: 'file-deleted',
+      rootPath: root,
+      relPath: 'note',
+      absPath: path.join(root, 'note.md'),
+      builtin: true,
+      source: 'app',
+    }));
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
   });
 
   it('moves external library folders to Trash and emits a library change', async () => {
@@ -742,6 +1485,106 @@ describe('recursive wiki tree scan', () => {
     expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Client Notes'));
     expect(emit).toHaveBeenCalledWith('library:changed', root);
     expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('moves external library files to Trash and emits a file delete delta', async () => {
+    const root = makeTempDir();
+    const filePath = path.join(root, 'hello-yolo-.md');
+    fs.writeFileSync(filePath, '# Hello\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      deleteExternalLibraryFile: (filePath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(await manager.deleteExternalLibraryFile(filePath)).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(fs.realpathSync(filePath));
+    expect(emit).toHaveBeenCalledWith('library:changed', root, expect.objectContaining({
+      type: 'file-deleted',
+      rootPath: root,
+      relPath: 'hello-yolo-',
+      absPath: fs.realpathSync(filePath),
+      builtin: false,
+      source: 'app',
+    }));
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('coalesces external library file moves across folders from watcher events', () => {
+    vi.useFakeTimers();
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'Projects', 'Moved.md');
+    const newPath = path.join(root, 'Archive', 'Moved.md');
+    fs.mkdirSync(path.dirname(oldPath), { recursive: true });
+    fs.mkdirSync(path.dirname(newPath), { recursive: true });
+    fs.writeFileSync(newPath, '# Moved\n');
+
+    const emit = vi.fn();
+    const removePath = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      pendingLibraryUnlinks: Map<string, { rootPath: string; timer: ReturnType<typeof setTimeout> }>;
+      wikiFileMetadataCache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      scheduleLibraryRootUnlink: (rootPath: string, absPath: string) => void;
+      handleLibraryRootAdd: (rootPath: string, absPath: string) => void;
+      recordWatchedReadingRename: (oldPath: string, newPath: string) => void;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.pendingLibraryUnlinks = new Map();
+    manager.wikiFileMetadataCache = new Map();
+    manager.libraryIndexStore = makeLibraryIndexStoreMock();
+    manager.libraryIndexStore.removePath = removePath;
+    manager.recordWatchedReadingRename = vi.fn();
+    manager.emit = emit;
+
+    manager.scheduleLibraryRootUnlink(root, oldPath);
+    manager.handleLibraryRootAdd(root, newPath);
+    vi.advanceTimersByTime(400);
+
+    expect(emit).toHaveBeenCalledWith('library:renamed', expect.objectContaining({
+      rootPath: root,
+      oldRelPath: 'Projects/Moved',
+      newRelPath: 'Archive/Moved',
+      oldAbsPath: oldPath,
+      newAbsPath: newPath,
+      builtin: false,
+      source: 'watcher',
+    }));
+    expect(emit).not.toHaveBeenCalledWith('library:changed', root, expect.objectContaining({
+      type: 'file-deleted',
+      relPath: 'Projects/Moved',
+    }));
+    expect(removePath).not.toHaveBeenCalledWith(oldPath);
+    expect(manager.recordWatchedReadingRename).toHaveBeenCalledWith(oldPath, newPath);
+  });
+
+  it('does not delete external files outside registered library roots', async () => {
+    const root = makeTempDir();
+    const outside = makeTempDir();
+    const filePath = path.join(outside, 'outside.md');
+    fs.writeFileSync(filePath, '# Outside\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      deleteExternalLibraryFile: (filePath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(await manager.deleteExternalLibraryFile(filePath)).toBe(false);
+    expect(trashItem).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('does not delete a library root as a folder', async () => {
@@ -782,9 +1625,42 @@ describe('recursive wiki tree scan', () => {
     expect(fs.readFileSync(outsidePath, 'utf-8')).toBe('# Outside\n');
 
     expect(manager.saveReading(readingPath, '# Changed\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# Changed\n');
+    const saved = fs.readFileSync(readingPath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# Changed\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
     expect(manager.cache.has(readingPath)).toBe(true);
     expect(emit).toHaveBeenCalledWith('reading-updated', expect.objectContaining({ path: readingPath, title: 'Changed' }));
+  });
+
+  it('refreshes artifact link-hit rows after saving a watched reading', () => {
+    const root = makeTempDir();
+    const readingPath = path.join(root, 'reading.md');
+    fs.writeFileSync(readingPath, '# Reading\n');
+
+    const replaceLinkHits = vi.fn<LibraryIndexStore['replaceLinkHits']>();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      saveIndex: () => void;
+      saveReading: (filePath: string, content: string) => unknown;
+      emit: (eventName: string, event?: unknown) => boolean;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map();
+    manager.libraryIndexStore = {
+      replaceLinkHits,
+    } as unknown as LibraryIndexStore;
+    manager.saveIndex = vi.fn();
+    manager.emit = vi.fn(() => true);
+
+    expect(manager.saveReading(readingPath, 'See [[Target]].\n')).toEqual(expect.objectContaining({ ok: true }));
+    expect(replaceLinkHits).toHaveBeenCalledWith(readingPath, [
+      expect.objectContaining({
+        kind: 'wikilink',
+        rawTarget: 'Target',
+      }),
+    ]);
   });
 
   it('reports a conflict when a watched reading changed since it was opened', () => {
@@ -847,6 +1723,68 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('reading-removed', readingPath);
   });
 
+  it('removes artifact link-hit rows after deleting a watched reading', async () => {
+    const root = makeTempDir();
+    const readingPath = path.join(root, 'reading.md');
+    fs.writeFileSync(readingPath, '# Reading\n');
+    vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const removePath = vi.fn<LibraryIndexStore['removePath']>();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      saveIndex: () => void;
+      deleteReading: (filePath: string) => Promise<boolean>;
+      emit: (eventName: string, event?: unknown) => boolean;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[readingPath, { path: readingPath }]]);
+    manager.libraryIndexStore = {
+      removePath,
+    } as unknown as LibraryIndexStore;
+    manager.saveIndex = vi.fn();
+    manager.emit = vi.fn(() => true);
+
+    await expect(manager.deleteReading(readingPath)).resolves.toBe(true);
+    expect(removePath).toHaveBeenCalledWith(readingPath);
+  });
+
+  it('removes old artifact link-hit rows after a watched reading rename', () => {
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'old.md');
+    const newPath = path.join(root, 'new.md');
+    fs.writeFileSync(newPath, 'See [[Target]].\n');
+
+    const removePath = vi.fn<LibraryIndexStore['removePath']>();
+    const replaceLinkHits = vi.fn<LibraryIndexStore['replaceLinkHits']>();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      libraryIndexStore: LibraryIndexStore;
+      saveIndex: () => void;
+      recordWatchedReadingRename: (oldAbsPath: string, newAbsPath: string) => ReadingMeta | null;
+      emit: (eventName: string, event?: unknown) => boolean;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[oldPath, { path: oldPath }]]);
+    manager.libraryIndexStore = {
+      removePath,
+      replaceLinkHits,
+    } as unknown as LibraryIndexStore;
+    manager.saveIndex = vi.fn();
+    manager.emit = vi.fn(() => true);
+
+    expect(manager.recordWatchedReadingRename(oldPath, newPath)).toMatchObject({ path: newPath });
+    expect(removePath).toHaveBeenCalledWith(oldPath);
+    expect(replaceLinkHits).toHaveBeenCalledWith(newPath, [
+      expect.objectContaining({
+        kind: 'wikilink',
+        rawTarget: 'Target',
+      }),
+    ]);
+  });
+
   it('updates the watched reading cache when a reading is renamed', () => {
     const root = makeTempDir();
     const oldPath = path.join(root, 'reading.md');
@@ -903,8 +1841,40 @@ describe('recursive wiki tree scan', () => {
     expect(manager.moveLibraryItem(root, 'file', 'entries/note', 'scratchpad')).toBe('scratchpad/note');
     expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'scratchpad', 'note.md'), 'utf-8')).toBe('# Note\n');
+    expect(emit).toHaveBeenCalledWith('wiki:renamed', expect.objectContaining({
+      rootPath: root,
+      oldRelPath: 'entries/note',
+      newRelPath: 'scratchpad/note',
+      oldAbsPath: path.join(root, 'entries', 'note.md'),
+      newAbsPath: path.join(root, 'scratchpad', 'note.md'),
+      builtin: true,
+      source: 'app',
+    }));
     expect(emit).toHaveBeenCalledWith('wiki:changed');
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'entries/note');
+  });
+
+  it('removes child link-index rows when a wiki folder is moved', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Client Notes', 'Nested'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    const firstPath = path.join(root, 'Client Notes', 'note.md');
+    const nestedPath = path.join(root, 'Client Notes', 'Nested', 'deep.md');
+    fs.writeFileSync(firstPath, '# Note\n');
+    fs.writeFileSync(nestedPath, '# Deep\n');
+
+    const removePaths = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => string | null;
+      libraryIndexStore: LibraryIndexStore;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.libraryIndexStore = makeLibraryIndexStoreMock(removePaths);
+    manager.emit = vi.fn();
+
+    expect(manager.moveLibraryItem(root, 'dir', 'Client Notes', 'scratchpad')).toBe('scratchpad/Client Notes');
+    expect(removePaths).toHaveBeenCalledWith(expect.arrayContaining([firstPath, nestedPath]));
   });
 
   it('moves wiki files into registered external library roots', () => {
@@ -987,11 +1957,12 @@ describe('recursive wiki tree scan', () => {
 
 describe('hidden default library folders', () => {
   it('normalizes persisted folder ids to FT folders first, then custom folders', () => {
-    expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'artifacts', 'Shared Markdown'])).toEqual([
+    expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'bookmarks-shortcut', 'artifacts', 'Shared Markdown'])).toEqual([
       'artifacts',
-      'Shared Markdown',
+      'bookmarks-shortcut',
       'entries',
       'Client Notes',
+      'Shared Markdown',
     ]);
     expect(normalizeHiddenDefaultFolders('entries')).toEqual([]);
   });
@@ -1007,7 +1978,7 @@ describe('hidden default library folders', () => {
       emit: typeof emit;
       wikiDir: string;
     };
-    manager.settings = { hiddenDefaultFolders: ['entries', '../bad'] };
+    manager.settings = { hiddenDefaultFolders: ['entries', 'River (shared)', '../bad'] };
     manager.saveSettings = saveSettings;
     manager.emit = emit;
     Object.defineProperty(manager, 'wikiDir', { value: '/wiki' });
@@ -1057,12 +2028,12 @@ describe('default folder readmes', () => {
       expect(readme).toContain('Command+Shift+K');
       expect(readme).toContain('Control+Option+Command+Space');
       expect(readme).toContain('Command+N');
-      expect(readme).toContain("Field Theory's Commands tab");
+      expect(readme).toContain('watched commands folder');
     }
     expect(fs.existsSync(path.join(root, 'artifacts', 'README.md'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'scratchpad', 'README.md'), 'utf-8')).toContain('Create a Scratchpad note from anywhere');
-    expect(fs.readFileSync(path.join(root, 'debates', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/debate.md');
-    expect(fs.readFileSync(path.join(root, 'Plans', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/plan.md');
+    expect(fs.readFileSync(path.join(root, 'debates', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/library/Commands/debate.md');
+    expect(fs.readFileSync(path.join(root, 'Plans', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/library/Commands/plan.md');
     expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
     expect(manager.settings.readmesSeeded).toEqual([
       'scratchpad',
@@ -1087,6 +2058,60 @@ describe('default folder readmes', () => {
     const readme = fs.readFileSync(path.join(artifactsDir, 'README.md'), 'utf-8');
     expect(readme).toContain('~/.fieldtheory/librarian/artifacts/');
     expect(readme).toContain('Show in Finder');
+  });
+
+  it('migrates user-scoped artifacts back to the central artifacts directory', () => {
+    const homeDir = makeTempDir();
+    vi.stubEnv('HOME', homeDir);
+    const centralArtifacts = path.join(homeDir, '.fieldtheory', 'librarian', 'artifacts');
+    const sessionArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'session-user', 'librarian', 'artifacts');
+    const userArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'current-user', 'librarian', 'artifacts');
+    fs.mkdirSync(sessionArtifacts, { recursive: true });
+    fs.mkdirSync(userArtifacts, { recursive: true });
+    fs.writeFileSync(path.join(sessionArtifacts, 'artifact.md'), '# From session user\n', 'utf-8');
+    fs.writeFileSync(path.join(userArtifacts, 'artifact.md'), '# From current user\n', 'utf-8');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      settingsPath: string;
+      ensureCentralArtifactsDir: () => void;
+    };
+    manager.settings = { watchedDirs: [sessionArtifacts, userArtifacts] };
+    manager.settingsPath = path.join(homeDir, 'librarian-settings.json');
+
+    manager.ensureCentralArtifactsDir();
+
+    const migratedContents = fs.readdirSync(centralArtifacts)
+      .filter((fileName) => fileName !== 'README.md')
+      .map((fileName) => fs.readFileSync(path.join(centralArtifacts, fileName), 'utf-8'))
+      .sort();
+    expect(migratedContents).toEqual([
+      '# From current user\n',
+      '# From session user\n',
+    ]);
+    expect(fs.existsSync(path.join(centralArtifacts, 'README.md'))).toBe(true);
+    expect(manager.settings.watchedDirs).toEqual([centralArtifacts]);
+  });
+
+  it('keeps user-scoped artifact folders watched when migration fails', () => {
+    const homeDir = makeTempDir();
+    vi.stubEnv('HOME', homeDir);
+    const centralArtifacts = path.join(homeDir, '.fieldtheory', 'librarian', 'artifacts');
+    const userArtifacts = path.join(homeDir, '.fieldtheory', 'users', 'current-user', 'librarian', 'artifacts');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      settingsPath: string;
+      ensureCentralArtifactsDir: () => void;
+      migrateUserScopedArtifactsToCentral: () => boolean;
+    };
+    manager.settings = { watchedDirs: [userArtifacts] };
+    manager.settingsPath = path.join(homeDir, 'librarian-settings.json');
+    manager.migrateUserScopedArtifactsToCentral = () => false;
+
+    manager.ensureCentralArtifactsDir();
+
+    expect(manager.settings.watchedDirs).toEqual([userArtifacts, centralArtifacts]);
   });
 
   it('does not overwrite an existing README and still marks the folder handled', () => {
@@ -1143,23 +2168,147 @@ describe('default folder readmes', () => {
 });
 
 describe('librarian watcher cleanup', () => {
-  it('closes both reading watchers and library root watchers on destroy', () => {
-    const readingClose = vi.fn();
-    const libraryClose = vi.fn();
+  it('closes both reading watchers and library root watchers on destroy', async () => {
+    const readingClose = vi.fn(async () => undefined);
+    const libraryClose = vi.fn(async () => undefined);
     const manager = Object.create(LibrarianManager.prototype) as {
-      watchers: Map<string, { close: () => void }>;
-      libraryRootWatchers: Map<string, { close: () => void }>;
-      destroy: () => void;
+      watchers: Map<string, { close: () => Promise<void> }>;
+      libraryRootWatchers: Map<string, { close: () => Promise<void> }>;
+      destroy: () => Promise<void>;
     };
     manager.watchers = new Map([['/readings', { close: readingClose }]]);
     manager.libraryRootWatchers = new Map([['/library', { close: libraryClose }]]);
 
-    manager.destroy();
+    await manager.destroy();
 
     expect(readingClose).toHaveBeenCalledTimes(1);
     expect(libraryClose).toHaveBeenCalledTimes(1);
     expect(manager.watchers.size).toBe(0);
     expect(manager.libraryRootWatchers.size).toBe(0);
+  });
+});
+
+describe('librarian user data', () => {
+  it('answers setup status from per-user settings as soon as a logged-in user data manager is attached', () => {
+    const rootDir = makeTempDir();
+    const userDir = path.join(rootDir, 'users', 'current-user');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: false }),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(userDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: true }),
+      'utf-8',
+    );
+
+    const loadIndex = vi.fn();
+    const invalidateWikiTreeCache = vi.fn();
+    const invalidateLibraryRootsCache = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      userDataManager: unknown;
+      settingsPath: string;
+      indexPath: string;
+      settings: unknown;
+      setUserDataManager: LibrarianManager['setUserDataManager'];
+      isSetupComplete: LibrarianManager['isSetupComplete'];
+      loadIndex: typeof loadIndex;
+      invalidateWikiTreeCache: typeof invalidateWikiTreeCache;
+      invalidateLibraryRootsCache: typeof invalidateLibraryRootsCache;
+    };
+    manager.settingsPath = path.join(rootDir, 'librarian-settings.json');
+    manager.indexPath = path.join(rootDir, 'librarian-index.json');
+    manager.settings = { librarianSetupComplete: false };
+    manager.loadIndex = loadIndex;
+    manager.invalidateWikiTreeCache = invalidateWikiTreeCache;
+    manager.invalidateLibraryRootsCache = invalidateLibraryRootsCache;
+
+    manager.setUserDataManager({
+      isLoggedIn: () => true,
+      getUserDataPath: (subpath?: string) => subpath ? path.join(userDir, subpath) : userDir,
+    } as any);
+
+    expect(loadIndex).toHaveBeenCalledTimes(1);
+    expect(manager.isSetupComplete()).toBe(true);
+    expect(manager.settingsPath).toBe(path.join(userDir, 'librarian-settings.json'));
+    expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
+    expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('repairs stale root settings before answering setup status', () => {
+    const rootDir = makeTempDir();
+    const userDir = path.join(rootDir, 'users', 'current-user');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: true }),
+      'utf-8',
+    );
+
+    const loadIndex = vi.fn();
+    const invalidateWikiTreeCache = vi.fn();
+    const invalidateLibraryRootsCache = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      userDataManager: unknown;
+      settingsPath: string;
+      indexPath: string;
+      settings: unknown;
+      isSetupComplete: LibrarianManager['isSetupComplete'];
+      loadIndex: typeof loadIndex;
+      invalidateWikiTreeCache: typeof invalidateWikiTreeCache;
+      invalidateLibraryRootsCache: typeof invalidateLibraryRootsCache;
+    };
+    manager.userDataManager = {
+      isLoggedIn: () => true,
+      getUserDataPath: (subpath?: string) => subpath ? path.join(userDir, subpath) : userDir,
+    };
+    manager.settingsPath = path.join(rootDir, 'librarian-settings.json');
+    manager.indexPath = path.join(rootDir, 'librarian-index.json');
+    manager.settings = { librarianSetupComplete: false };
+    manager.loadIndex = loadIndex;
+    manager.invalidateWikiTreeCache = invalidateWikiTreeCache;
+    manager.invalidateLibraryRootsCache = invalidateLibraryRootsCache;
+
+    expect(manager.isSetupComplete()).toBe(true);
+    expect(manager.settingsPath).toBe(path.join(userDir, 'librarian-settings.json'));
+    expect(loadIndex).toHaveBeenCalledTimes(1);
+    expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
+    expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('librarian setup inference', () => {
+  it('treats saved setup completion as complete without scanning content', () => {
+    const rootDir = makeTempDir();
+    const settingsPath = path.join(rootDir, 'librarian-settings.json');
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.writeFileSync(settingsPath, JSON.stringify({ librarianSetupComplete: true }), 'utf-8');
+
+    expect(inferLibrarianSetupComplete({ settingsPath, libraryPath })).toBe(true);
+  });
+
+  it('treats existing visible library documents as setup completion', () => {
+    const rootDir = makeTempDir();
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.mkdirSync(path.join(libraryPath, 'Plans'), { recursive: true });
+    fs.writeFileSync(path.join(libraryPath, 'Plans', 'launch-plan.md'), '# Launch plan\n', 'utf-8');
+
+    expect(hasExistingLibraryContent(libraryPath)).toBe(true);
+    expect(inferLibrarianSetupComplete({ libraryPath })).toBe(true);
+  });
+
+  it('does not count app-seeded readmes or hidden asset folders as setup content', () => {
+    const rootDir = makeTempDir();
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.mkdirSync(path.join(libraryPath, 'scratchpad'), { recursive: true });
+    fs.mkdirSync(path.join(libraryPath, '.assets'), { recursive: true });
+    fs.writeFileSync(path.join(libraryPath, 'scratchpad', 'README.md'), '# Scratchpad\n', 'utf-8');
+    fs.writeFileSync(path.join(libraryPath, '.assets', 'hidden.md'), '# Hidden\n', 'utf-8');
+
+    expect(hasExistingLibraryContent(libraryPath)).toBe(false);
+    expect(inferLibrarianSetupComplete({ libraryPath })).toBe(false);
   });
 });
 

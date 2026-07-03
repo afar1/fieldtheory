@@ -1,25 +1,45 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import {
+  COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+  COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+  DEFAULT_SHARED_FILE_TOGGLE_HOTKEY,
+  DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY,
+  RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY,
   RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isCopyFilePathShortcut,
+  isHotkeyEvent,
+  getMarkdownFormattingShortcut,
+  getMarkdownListShortcutKind,
+  getCollapsedSidebarAffordanceOpacity,
+  isFadedLineNumbersShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
+  isLineNumbersToggleShortcut,
   isMarkdownModeToggleShortcut,
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isNavSidebarToggleEnabled,
   isSearchFocusShortcut,
+  isSharedFileToggleShortcut,
   isSidebarToggleShortcut,
   isThemeToggleShortcut,
   LIBRARIAN_KEYBOARD_SHORTCUTS,
+  persistSharedFileToggleHotkey,
+  persistRenderedBlockCursorOpacity,
   persistRenderedEditClickMode,
+  persistRenderedTextCursorStyle,
   persistTextCursorBlink,
+  restoreSharedFileToggleHotkey,
+  restoreRenderedBlockCursorOpacity,
   restoreRenderedEditClickMode,
+  restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
-  shouldForceLibrarySidebarOpen,
   shouldRevealFooterChrome,
 } from '../utils/editorShortcuts';
 
@@ -30,6 +50,16 @@ function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
 afterEach(() => {
   document.body.innerHTML = '';
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+});
+
+describe('isCopyFilePathShortcut', () => {
+  it('accepts shifted Cmd+C as an uppercase key event', () => {
+    expect(isCopyFilePathShortcut(mkKey({ key: 'C', code: 'KeyC', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects plain Cmd+C so normal copy can keep working', () => {
+    expect(isCopyFilePathShortcut(mkKey({ key: 'c', code: 'KeyC', metaKey: true }))).toBe(false);
+  });
 });
 
 describe('isSearchFocusShortcut', () => {
@@ -108,19 +138,36 @@ describe('isImmersiveToggleShortcut', () => {
   });
 });
 
+describe('line number shortcuts', () => {
+  it('accepts Cmd+Shift+K for toggling line numbers', () => {
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: '˚', code: 'KeyK', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true }))).toBe(false);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+  });
+
+  it('accepts Cmd+Option+R for faded line numbers', () => {
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true, altKey: true }))).toBe(true);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: '®', code: 'KeyR', metaKey: true, altKey: true }))).toBe(true);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true }))).toBe(false);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true, altKey: true, shiftKey: true }))).toBe(false);
+  });
+});
+
 describe('isMarkdownModeToggleShortcut', () => {
-  it('accepts Cmd+Period', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Semicolon', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true }))).toBe(true);
   });
 
-  it('rejects Cmd+Shift+Period and unrelated modifiers', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects Cmd+Shift+Semicolon and unrelated modifiers', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ':', code: 'Semicolon', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 
-  it('rejects bare period and Cmd+Comma', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+  it('rejects bare semicolon, Cmd+Period, and Cmd+Comma', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon' }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
     expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(false);
   });
 });
@@ -155,6 +202,37 @@ describe('isMarkdownTaskToggleShortcut', () => {
   });
 });
 
+describe('getMarkdownListShortcutKind', () => {
+  it('maps Shift+Cmd+7 and Shift+Cmd+8 to ordered and unordered list actions', () => {
+    expect(getMarkdownListShortcutKind(mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }))).toBe('ordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }))).toBe('unordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '7', code: '', metaKey: true, shiftKey: true }))).toBe('ordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '8', code: '', metaKey: true, shiftKey: true }))).toBe('unordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '•', code: '', metaKey: true, shiftKey: true }))).toBe('unordered');
+  });
+
+  it('rejects unshifted or unrelated modified list chords', () => {
+    expect(getMarkdownListShortcutKind(mkKey({ key: '7', code: 'Digit7', metaKey: true }))).toBeNull();
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true, altKey: true }))).toBeNull();
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true, ctrlKey: true }))).toBeNull();
+  });
+});
+
+describe('getMarkdownFormattingShortcut', () => {
+  it('maps plain Cmd+B, Cmd+I, and Cmd+U to markdown formatting actions', () => {
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'b', metaKey: true }))).toBe('bold');
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'I', metaKey: true }))).toBe('italic');
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'u', metaKey: true }))).toBe('underline');
+  });
+
+  it('rejects shifted or unrelated modified formatting chords', () => {
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'b', metaKey: true, shiftKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'i', metaKey: true, altKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'u', metaKey: true, ctrlKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'x', metaKey: true }))).toBeNull();
+  });
+});
+
 describe('isSidebarToggleShortcut', () => {
   it('accepts Cmd+Comma', () => {
     expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(true);
@@ -174,47 +252,26 @@ describe('isSidebarToggleShortcut', () => {
 });
 
 describe('Library sidebar collapse availability', () => {
-  it('forces the Library sidebar open when no file is selected', () => {
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(true);
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
-    })).toBe(false);
-  });
-
   it('allows collapse for Library with an active file, Bookmarks, or Commands', () => {
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(false);
-    expect(isNavSidebarToggleEnabled({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: true,
+      librarianImmersive: true,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
+    })).toBe(true);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'commands',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
     })).toBe(true);
   });
 });
@@ -225,7 +282,10 @@ describe('shortcut reference rows', () => {
       expect.arrayContaining([
         { keys: 'Command+/', label: 'Toggle focus mode' },
         { keys: 'Command+,', label: 'Toggle sidebar' },
-        { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+        { keys: 'Command+.', label: 'Toggle terminal panel' },
+        { keys: 'Command+;', label: 'Toggle rendered/markdown' },
+        { keys: 'Command+Shift+S', label: 'Toggle River sharing' },
+        { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
       ])
     );
   });
@@ -242,6 +302,28 @@ describe('footer chrome proximity', () => {
 
   it('rejects invalid viewport geometry', () => {
     expect(shouldRevealFooterChrome(10, 0, 96)).toBe(false);
+  });
+});
+
+describe('collapsed sidebar reveal', () => {
+  it('fades the edge affordance in as the cursor approaches the strip', () => {
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: 120,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBe(0);
+
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBe(1);
+
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: 63,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBeCloseTo(0.5);
   });
 });
 
@@ -273,6 +355,64 @@ describe('isThemeToggleShortcut', () => {
   });
 });
 
+describe('shared file toggle shortcut', () => {
+  it('accepts Command+Shift+S by default without matching Command+S', () => {
+    expect(isSharedFileToggleShortcut(mkKey({ key: 'S', code: 'KeyS', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isSharedFileToggleShortcut(mkKey({ key: 's', code: 'KeyS', metaKey: true }))).toBe(false);
+  });
+
+  it('supports a custom hotkey string', () => {
+    expect(isHotkeyEvent(mkKey({ key: 'R', code: 'KeyR', metaKey: true, shiftKey: true }), 'Command+Shift+R')).toBe(true);
+    expect(isHotkeyEvent(mkKey({ key: 'R', code: 'KeyR', metaKey: true, shiftKey: true }), 'Command+Shift+S')).toBe(false);
+  });
+
+  it('restores and persists the configurable River shortcut', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreSharedFileToggleHotkey(storage)).toBe(DEFAULT_SHARED_FILE_TOGGLE_HOTKEY);
+    persistSharedFileToggleHotkey(storage, 'Command+Shift+R');
+    expect(store.get(SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY)).toBe('Command+Shift+R');
+    expect(restoreSharedFileToggleHotkey(storage)).toBe('Command+Shift+R');
+  });
+
+  it('restores and persists the rendered text cursor style', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('block');
+    persistRenderedTextCursorStyle(storage, 'bar');
+    expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('bar');
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('bar');
+    persistRenderedTextCursorStyle(storage, 'block');
+    expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('block');
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('block');
+  });
+
+  it('restores, clamps, and persists rendered block cursor opacity', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(DEFAULT_RENDERED_BLOCK_CURSOR_OPACITY);
+    persistRenderedBlockCursorOpacity(storage, 0.75);
+    expect(store.get(RENDERED_BLOCK_CURSOR_OPACITY_STORAGE_KEY)).toBe('0.75');
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(0.75);
+    persistRenderedBlockCursorOpacity(storage, 3);
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(1);
+    persistRenderedBlockCursorOpacity(storage, 0);
+    expect(restoreRenderedBlockCursorOpacity(storage)).toBe(0.2);
+  });
+});
+
 describe('isKeyboardShortcutsHelpShortcut', () => {
   it('accepts Shift+?', () => {
     expect(isKeyboardShortcutsHelpShortcut(mkKey({ key: '?', code: 'Slash', shiftKey: true }))).toBe(true);
@@ -286,11 +426,11 @@ describe('isKeyboardShortcutsHelpShortcut', () => {
 });
 
 describe('shouldEnterEditOnClick', () => {
-  it('allows a plain click on text by default', () => {
+  it('rejects a plain click on text by default', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
-    expect(shouldEnterEditOnClick({ target: p })).toBe(true);
+    expect(shouldEnterEditOnClick({ target: p })).toBe(false);
   });
 
   it('allows a Cmd-click on text by default', () => {
@@ -298,6 +438,13 @@ describe('shouldEnterEditOnClick', () => {
     p.textContent = 'hi';
     document.body.appendChild(p);
     expect(shouldEnterEditOnClick({ target: p, metaKey: true })).toBe(true);
+  });
+
+  it('allows a plain click when click mode is explicitly enabled', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(shouldEnterEditOnClick({ target: p }, 'click')).toBe(true);
   });
 
   it('rejects a plain click when Command-click mode is enabled', () => {
@@ -349,14 +496,19 @@ describe('shouldEnterEditOnClick', () => {
 });
 
 describe('rendered edit click mode persistence', () => {
-  it('defaults to click mode', () => {
+  it('defaults to Command-click mode', () => {
     const storage = { getItem: () => null };
-    expect(restoreRenderedEditClickMode(storage)).toBe('click');
+    expect(restoreRenderedEditClickMode(storage)).toBe('command-click');
   });
 
   it('restores Command-click mode', () => {
     const storage = { getItem: (key: string) => key === RENDERED_EDIT_CLICK_MODE_STORAGE_KEY ? 'command-click' : null };
     expect(restoreRenderedEditClickMode(storage)).toBe('command-click');
+  });
+
+  it('restores click mode', () => {
+    const storage = { getItem: (key: string) => key === RENDERED_EDIT_CLICK_MODE_STORAGE_KEY ? 'click' : null };
+    expect(restoreRenderedEditClickMode(storage)).toBe('click');
   });
 
   it('persists the selected mode', () => {

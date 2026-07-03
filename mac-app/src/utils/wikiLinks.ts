@@ -3,14 +3,18 @@
 // targets get a sentinel href (wiki://!/<title>) so the renderer can style them
 // differently and create the page on click.
 
+import { getRawMarkdownLinkHits } from '../../electron/shared/wikiLinkParser';
+
 export type WikiIndex = {
   byTitle: Map<string, WikiLinkTarget>;
   byRelPath: Set<string>;
+  byFilePath?: Map<string, MarkdownWikiLinkPasteTarget>;
 };
 
 export type WikiIndexInput = {
   relPath: string;
   title: string;
+  absPath?: string;
   artifactPath?: string;
   commandPath?: string;
 };
@@ -18,7 +22,12 @@ export type WikiIndexInput = {
 export type WikiLinkTarget =
   | { kind: 'wiki'; relPath: string }
   | { kind: 'artifact'; path: string }
-  | { kind: 'command'; path: string };
+  | { kind: 'command'; path: string }
+  | { kind: 'bookmarks' };
+
+export type MarkdownWikiLinkPasteTarget = {
+  title: string;
+};
 
 /** Canonical form for a wiki relPath: trimmed, no leading slashes, no .md
  *  extension. Every caller that persists or compares a relPath should route
@@ -27,42 +36,152 @@ export function normalizeWikiRelPath(input: string): string {
   return input.trim().replace(/^\/+/, '').replace(/\.md$/i, '');
 }
 
+function stripPastedFilePathWrapper(input: string): string {
+  let clean = input.trim();
+  while (clean.length >= 2) {
+    const first = clean[0];
+    const last = clean[clean.length - 1];
+    if ((first === '<' && last === '>')
+      || (first === '"' && last === '"')
+      || (first === "'" && last === "'")
+      || (first === '`' && last === '`')) {
+      clean = clean.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return clean;
+}
+
+function fileUrlToPath(input: string): string | null {
+  if (!/^file:\/\//i.test(input)) return null;
+  try {
+    const url = new URL(input);
+    if (url.protocol !== 'file:') return null;
+    return decodeURIComponent(url.pathname);
+  } catch {
+    return input.replace(/^file:\/\//i, '');
+  }
+}
+
+function normalizeWikiFilePathKey(input: string): string {
+  const clean = stripPastedFilePathWrapper(input);
+  if (!clean) return '';
+  const filePath = fileUrlToPath(clean) ?? clean;
+  try {
+    return decodeURIComponent(filePath).replace(/\/+$/g, '');
+  } catch {
+    return filePath.replace(/\/+$/g, '');
+  }
+}
+
+function addWikiFilePathTarget(
+  byFilePath: Map<string, MarkdownWikiLinkPasteTarget>,
+  path: string | undefined,
+  title: string,
+): void {
+  if (!path || !title.trim()) return;
+  const key = normalizeWikiFilePathKey(path);
+  if (key && !byFilePath.has(key)) byFilePath.set(key, { title: title.trim() });
+}
+
+function addWikiTitleTarget(
+  byTitle: Map<string, WikiLinkTarget>,
+  title: string | undefined,
+  target: WikiLinkTarget,
+): void {
+  const key = title?.trim().toLowerCase();
+  if (key && !byTitle.has(key)) byTitle.set(key, target);
+}
+
+function wikiRelPathBasename(relPath: string): string {
+  const normalized = normalizeWikiRelPath(relPath);
+  return normalized.split('/').pop()?.trim() ?? '';
+}
+
 export function buildWikiIndex(pages: WikiIndexInput[]): WikiIndex {
   const byTitle = new Map<string, WikiLinkTarget>();
   const byRelPath = new Set<string>();
+  const byFilePath = new Map<string, MarkdownWikiLinkPasteTarget>();
   for (const page of pages) {
-    if (!page.artifactPath && !page.commandPath) byRelPath.add(page.relPath);
-    const key = page.title.trim().toLowerCase();
-    if (key && !byTitle.has(key)) {
-      byTitle.set(key, page.artifactPath
-        ? { kind: 'artifact', path: page.artifactPath }
-        : page.commandPath
-          ? { kind: 'command', path: page.commandPath }
-          : { kind: 'wiki', relPath: page.relPath });
-    }
+    const isWikiPage = !page.artifactPath && !page.commandPath;
+    if (isWikiPage) byRelPath.add(page.relPath);
+    const target: WikiLinkTarget = page.artifactPath
+      ? { kind: 'artifact', path: page.artifactPath }
+      : page.commandPath
+        ? { kind: 'command', path: page.commandPath }
+        : { kind: 'wiki', relPath: page.relPath };
+    addWikiTitleTarget(byTitle, page.title, target);
+    if (isWikiPage) addWikiTitleTarget(byTitle, wikiRelPathBasename(page.relPath), target);
+    addWikiFilePathTarget(byFilePath, page.absPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.artifactPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.commandPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.relPath, page.title);
+    if (!page.relPath.endsWith('.md')) addWikiFilePathTarget(byFilePath, `${page.relPath}.md`, page.title);
   }
-  return { byTitle, byRelPath };
+  return { byTitle, byRelPath, byFilePath };
 }
 
 export function resolveWikiLink(
   target: string,
   index: WikiIndex,
-): { relPath: string | null; artifactPath: string | null; commandPath: string | null } {
+): { relPath: string | null; artifactPath: string | null; commandPath: string | null; bookmarks: boolean } {
   const clean = target.trim();
-  if (!clean) return { relPath: null, artifactPath: null, commandPath: null };
+  if (!clean) return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
+  if (clean.toLowerCase() === '@bookmark' || clean.toLowerCase() === '@bookmarks') {
+    return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  }
   const relKey = normalizeWikiRelPath(clean);
-  if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null };
+  if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
+  if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null, bookmarks: false };
   const hit = index.byTitle.get(clean.toLowerCase());
-  if (hit?.kind === 'wiki') return { relPath: hit.relPath, artifactPath: null, commandPath: null };
-  if (hit?.kind === 'artifact') return { relPath: null, artifactPath: hit.path, commandPath: null };
-  if (hit?.kind === 'command') return { relPath: null, artifactPath: null, commandPath: hit.path };
-  return { relPath: null, artifactPath: null, commandPath: null };
+  if (hit?.kind === 'wiki') return { relPath: hit.relPath, artifactPath: null, commandPath: null, bookmarks: false };
+  if (hit?.kind === 'artifact') return { relPath: null, artifactPath: hit.path, commandPath: null, bookmarks: false };
+  if (hit?.kind === 'command') return { relPath: null, artifactPath: null, commandPath: hit.path, bookmarks: false };
+  if (hit?.kind === 'bookmarks') return { relPath: null, artifactPath: null, commandPath: null, bookmarks: true };
+  return { relPath: null, artifactPath: null, commandPath: null, bookmarks: false };
+}
+
+function getPastedFilePathCandidates(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  return lines.length > 1 ? lines : [trimmed];
+}
+
+function formatPastedWikiLinkTitle(title: string): string | null {
+  const clean = title.trim();
+  if (!clean || /[\r\n\[\]]/.test(clean)) return null;
+  return `[[${clean}]]`;
+}
+
+export function getMarkdownWikiLinkPasteText(
+  pastedText: string,
+  index: WikiIndex,
+): string | null {
+  const byFilePath = index.byFilePath;
+  if (!byFilePath) return null;
+
+  const links: string[] = [];
+  for (const candidate of getPastedFilePathCandidates(pastedText)) {
+    const target = byFilePath.get(normalizeWikiFilePathKey(candidate));
+    if (!target) return null;
+    const link = formatPastedWikiLinkTitle(target.title);
+    if (!link) return null;
+    links.push(link);
+  }
+
+  return links.length > 0 ? links.join('\n') : null;
 }
 
 const UNRESOLVED_PREFIX = 'wiki://!/';
 const RESOLVED_PREFIX = 'wiki://';
 const ARTIFACT_PREFIX = 'artifact://';
 const COMMAND_PREFIX = 'command://';
+const BOOKMARKS_PREFIX = 'bookmarks://';
 
 export function isUnresolvedWikiHref(href: string | undefined): boolean {
   return !!href && href.startsWith(UNRESOLVED_PREFIX);
@@ -77,6 +196,7 @@ export type LinkAction =
   | { kind: 'wiki'; relPath: string }
   | { kind: 'artifact'; path: string }
   | { kind: 'command'; path: string }
+  | { kind: 'bookmarks' }
   | { kind: 'external'; href: string }
   | { kind: 'noop' };
 
@@ -102,6 +222,10 @@ export type MarkdownWikiLinkCompletionEdit = {
   selectionStart: number;
   selectionEnd: number;
 };
+
+export type MarkdownWikiLinkCompletionDeleteKey = 'Backspace' | 'Delete';
+
+export type MarkdownMentionCompletion = MarkdownWikiLinkCompletion;
 
 export type WikiBacklinkInput = {
   relPath: string;
@@ -182,6 +306,7 @@ export function classifyLinkHref(
       : '';
     return path ? { kind: 'command', path } : { kind: 'noop' };
   }
+  if (href.startsWith(BOOKMARKS_PREFIX)) return { kind: 'bookmarks' };
   // Bare relative-looking hrefs — no protocol, no leading /, #, ? — may be
   // plain markdown links that reference wiki pages by relPath. Try the index
   // before handing off to the browser.
@@ -191,10 +316,11 @@ export function classifyLinkHref(
     !href.startsWith('#') &&
     !href.startsWith('?');
   if (looksRelative) {
-    const { relPath, artifactPath, commandPath } = resolveWikiLink(href, index);
+    const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(href, index);
     if (relPath) return { kind: 'wiki', relPath };
     if (artifactPath) return { kind: 'artifact', path: artifactPath };
     if (commandPath) return { kind: 'command', path: commandPath };
+    if (bookmarks) return { kind: 'bookmarks' };
   }
   return { kind: 'external', href };
 }
@@ -206,25 +332,16 @@ function offsetInMatch(offset: number, start: number, text: string): boolean {
 function wikiLinkActionFromTarget(target: string, index: WikiIndex): LinkAction {
   const clean = target.trim();
   if (!clean) return { kind: 'noop' };
-  const { relPath, artifactPath, commandPath } = resolveWikiLink(clean, index);
+  const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(clean, index);
   if (relPath) return { kind: 'wiki', relPath };
   if (artifactPath) return { kind: 'artifact', path: artifactPath };
   if (commandPath) return { kind: 'command', path: commandPath };
+  if (bookmarks) return { kind: 'bookmarks' };
   return { kind: 'create', title: clean };
 }
 
 function trimBareHref(href: string): string {
   return href.replace(/[.,;:!?]+$/g, '');
-}
-
-function getTrimmedRange(start: number, raw: string): { start: number; end: number; text: string } {
-  const leading = raw.match(/^\s*/)?.[0].length ?? 0;
-  const text = raw.trim();
-  return {
-    start: start + leading,
-    end: start + leading + text.length,
-    text,
-  };
 }
 
 function escapeMarkdownLinkText(text: string): string {
@@ -271,77 +388,50 @@ function transformBareExternalUrls(markdown: string): string {
   return cursor === 0 ? markdown : `${out}${markdown.slice(cursor)}`;
 }
 
+function transformBookmarkMentions(markdown: string): string {
+  const protectedRanges = getProtectedMarkdownLinkRanges(markdown);
+  let protectedIndex = 0;
+  let cursor = 0;
+  let out = '';
+
+  for (const match of markdown.matchAll(/(^|[^\w@])@(bookmarks?)\b/gi)) {
+    const fullStart = match.index ?? -1;
+    if (fullStart < 0) continue;
+    const prefix = match[1] ?? '';
+    const mention = `@${match[2] ?? ''}`;
+    const start = fullStart + prefix.length;
+    while (protectedIndex < protectedRanges.length && protectedRanges[protectedIndex].end <= start) {
+      protectedIndex += 1;
+    }
+    const protectedRange = protectedRanges[protectedIndex];
+    if (protectedRange && start >= protectedRange.start && start < protectedRange.end) {
+      continue;
+    }
+
+    out += markdown.slice(cursor, start);
+    out += `[${mention}](${BOOKMARKS_PREFIX}root)`;
+    cursor = start + mention.length;
+  }
+
+  return cursor === 0 ? markdown : `${out}${markdown.slice(cursor)}`;
+}
+
 export function getMarkdownEditorLinkHits(
   markdown: string,
   index: WikiIndex,
 ): MarkdownEditorLinkHit[] {
-  const hits: MarkdownEditorLinkHit[] = [];
-
-  for (const match of markdown.matchAll(/\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const targetStart = start + 2;
-    const targetRange = getTrimmedRange(targetStart, match[1]);
-    const alias = match[2];
-    const displayRange = alias === undefined
-      ? targetRange
-      : getTrimmedRange(targetStart + match[1].length + 1, alias);
-    const displayText = displayRange.text || targetRange.text;
-    const displayStart = displayRange.text ? displayRange.start : targetRange.start;
-    hits.push({
-      action: wikiLinkActionFromTarget(match[1], index),
-      start,
-      end: start + match[0].length,
-      displayStart,
-      displayEnd: displayStart + displayText.length,
-      displayText,
-    });
-  }
-
-  for (const match of markdown.matchAll(/!?\[([^\]\n]*)\]\(([^)\n]*)\)/g)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const href = match[2].trim() || match[1].trim();
-    const labelStart = start + (match[0].startsWith('!') ? 2 : 1);
-    const labelRange = getTrimmedRange(labelStart, match[1]);
-    hits.push({
-      action: classifyLinkHref(href, index),
-      start,
-      end: start + match[0].length,
-      displayStart: labelRange.start,
-      displayEnd: labelRange.end,
-      displayText: labelRange.text,
-    });
-  }
-
-  for (const match of markdown.matchAll(/<([a-z][a-z0-9+.-]*:[^<>\s]+)>/gi)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    hits.push({
-      action: classifyLinkHref(match[1], index),
-      start,
-      end: start + match[0].length,
-      displayStart: start + 1,
-      displayEnd: start + 1 + match[1].length,
-      displayText: match[1],
-    });
-  }
-
-  for (const match of markdown.matchAll(/\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)[^\s<>()]+/gi)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const href = trimBareHref(match[0]);
-    hits.push({
-      action: classifyLinkHref(href, index),
-      start,
-      end: start + href.length,
-      displayStart: start,
-      displayEnd: start + href.length,
-      displayText: href,
-    });
-  }
-
-  return hits.filter((hit) => hit.action.kind !== 'noop');
+  return getRawMarkdownLinkHits(markdown)
+    .map((hit): MarkdownEditorLinkHit => ({
+      action: hit.kind === 'wikilink'
+        ? wikiLinkActionFromTarget(hit.rawTarget, index)
+        : classifyLinkHref(hit.href, index),
+      start: hit.start,
+      end: hit.end,
+      displayStart: hit.displayStart,
+      displayEnd: hit.displayEnd,
+      displayText: hit.displayText,
+    }))
+    .filter((hit) => hit.action.kind !== 'noop');
 }
 
 function getMarkdownLinkRelationDocumentHits(
@@ -367,7 +457,71 @@ export function getWikiLinkTargetKey(target: WikiLinkTarget): string {
       return `artifact:${target.path}`;
     case 'command':
       return `command:${target.path}`;
+    case 'bookmarks':
+      return 'bookmarks:root';
   }
+}
+
+export function getMarkdownLinkRelationMetadataDocuments(
+  pages: WikiIndexInput[],
+): MarkdownLinkRelationDocument[] {
+  return mergeMarkdownLinkRelationDocuments(pages.map((page) => {
+    const target: WikiLinkTarget = page.artifactPath
+      ? { kind: 'artifact', path: page.artifactPath }
+      : page.commandPath
+        ? { kind: 'command', path: page.commandPath }
+        : { kind: 'wiki', relPath: page.relPath };
+    return {
+      target,
+      title: page.title,
+      content: '',
+      linkHits: [],
+    };
+  }));
+}
+
+export function mergeMarkdownLinkRelationDocuments(
+  ...documentGroups: MarkdownLinkRelationDocument[][]
+): MarkdownLinkRelationDocument[] {
+  const byTargetKey = new Map<string, MarkdownLinkRelationDocument>();
+  for (const documents of documentGroups) {
+    for (const document of documents) {
+      byTargetKey.set(getWikiLinkTargetKey(document.target), document);
+    }
+  }
+  return Array.from(byTargetKey.values());
+}
+
+export function refreshMarkdownLinkRelationDocumentHits(
+  documents: MarkdownLinkRelationDocument[],
+  index: WikiIndex,
+): MarkdownLinkRelationDocument[] {
+  return documents.map((document) => ({
+    ...document,
+    linkHits: getMarkdownEditorLinkHits(document.content, index),
+  }));
+}
+
+export function upsertMarkdownLinkRelationDocument(
+  documents: MarkdownLinkRelationDocument[],
+  document: MarkdownLinkRelationDocument,
+): MarkdownLinkRelationDocument[] {
+  const targetKey = getWikiLinkTargetKey(document.target);
+  let found = false;
+  const next = documents.map((existing) => {
+    if (getWikiLinkTargetKey(existing.target) !== targetKey) return existing;
+    found = true;
+    return document;
+  });
+  return found ? next : [...next, document];
+}
+
+export function removeMarkdownLinkRelationDocument(
+  documents: MarkdownLinkRelationDocument[],
+  target: WikiLinkTarget,
+): MarkdownLinkRelationDocument[] {
+  const targetKey = getWikiLinkTargetKey(target);
+  return documents.filter((existing) => getWikiLinkTargetKey(existing.target) !== targetKey);
 }
 
 function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {
@@ -378,6 +532,8 @@ function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {
       return { kind: 'artifact', path: action.path };
     case 'command':
       return { kind: 'command', path: action.path };
+    case 'bookmarks':
+      return { kind: 'bookmarks' };
     default:
       return null;
   }
@@ -626,6 +782,93 @@ export function getMarkdownWikiLinkCompletionReplacement(
   };
 }
 
+export function getMarkdownWikiLinkCompletionCommitEdit(
+  markdown: string,
+  completion: MarkdownWikiLinkCompletion,
+): MarkdownWikiLinkCompletionEdit | null {
+  const currentTitle = markdown.slice(completion.queryStart, completion.replaceEnd).trim();
+  return getMarkdownWikiLinkCompletionReplacement(markdown, completion, currentTitle);
+}
+
+export function getMarkdownWikiLinkCompletionDeleteEdit(
+  markdown: string,
+  completion: MarkdownWikiLinkCompletion,
+  key: MarkdownWikiLinkCompletionDeleteKey,
+): MarkdownWikiLinkCompletionEdit | null {
+  const caret = Math.max(completion.openStart, Math.min(completion.queryEnd, markdown.length));
+  const replaceEnd = Math.max(completion.queryStart, Math.min(completion.replaceEnd, markdown.length));
+  if (key === 'Backspace') {
+    if (caret <= completion.openStart) return null;
+    if (
+      caret === completion.queryStart
+      && completion.queryStart === completion.replaceEnd
+      && markdown.slice(completion.openStart, completion.queryStart) === '[['
+      && markdown.slice(completion.replaceEnd, completion.replaceEnd + 2) === ']]'
+    ) {
+      const selection = completion.openStart + 1;
+      return {
+        nextValue: `${markdown.slice(0, selection)}${markdown.slice(completion.replaceEnd + 2)}`,
+        selectionStart: selection,
+        selectionEnd: selection,
+      };
+    }
+    return {
+      nextValue: `${markdown.slice(0, caret - 1)}${markdown.slice(caret)}`,
+      selectionStart: caret - 1,
+      selectionEnd: caret - 1,
+    };
+  }
+
+  if (caret >= replaceEnd) return null;
+  return {
+    nextValue: `${markdown.slice(0, caret)}${markdown.slice(caret + 1)}`,
+    selectionStart: caret,
+    selectionEnd: caret,
+  };
+}
+
+export function getActiveMarkdownMentionCompletion(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownMentionCompletion | null {
+  if (selectionStart !== selectionEnd) return null;
+  const caret = Math.max(0, Math.min(selectionStart, markdown.length));
+  const lineStart = markdown.lastIndexOf('\n', Math.max(0, caret - 1)) + 1;
+  const beforeCaret = markdown.slice(lineStart, caret);
+  const match = beforeCaret.match(/(^|[^\w@])@([\w-]{0,64})$/);
+  if (!match) return null;
+  const openStart = lineStart + beforeCaret.length - (match[2]?.length ?? 0) - 1;
+  const previousChar = markdown[openStart - 1] ?? '';
+  if (previousChar === '@' || /[\w]/.test(previousChar)) return null;
+  return {
+    openStart,
+    queryStart: openStart + 1,
+    queryEnd: caret,
+    replaceEnd: caret,
+    query: match[2] ?? '',
+  };
+}
+
+export function getMarkdownMentionCompletionReplacement(
+  markdown: string,
+  completion: MarkdownMentionCompletion,
+  title: string,
+  href: string,
+): MarkdownWikiLinkCompletionEdit | null {
+  const cleanTitle = title.trim();
+  const cleanHref = href.trim();
+  if (!cleanTitle || !cleanHref) return null;
+  const display = cleanTitle.startsWith('@') ? cleanTitle : `@${cleanTitle}`;
+  const inserted = `[${escapeMarkdownLinkText(display)}](${cleanHref})`;
+  const selection = completion.openStart + inserted.length;
+  return {
+    nextValue: `${markdown.slice(0, completion.openStart)}${inserted}${markdown.slice(completion.replaceEnd)}`,
+    selectionStart: selection,
+    selectionEnd: selection,
+  };
+}
+
 export function getMarkdownWikiLinkAutoCloseEdit(
   markdown: string,
   selectionStart: number,
@@ -678,18 +921,20 @@ export function transformWikiLinks(body: string, index: WikiIndex): string {
           if (!target) return _m;
           const display = (rawAlias ?? target).trim() || target;
           const escapedDisplay = escapeMarkdownLinkText(display);
-          const { relPath, artifactPath, commandPath } = resolveWikiLink(target, index);
+          const { relPath, artifactPath, commandPath, bookmarks } = resolveWikiLink(target, index);
           const href = relPath
             ? `${RESOLVED_PREFIX}${encodeURI(relPath)}`
             : artifactPath
               ? `${ARTIFACT_PREFIX}${encodeURIComponent(artifactPath)}`
               : commandPath
                 ? `${COMMAND_PREFIX}${encodeURIComponent(commandPath)}`
-                : `${UNRESOLVED_PREFIX}${encodeURIComponent(target)}`;
+                : bookmarks
+                  ? `${BOOKMARKS_PREFIX}root`
+                  : `${UNRESOLVED_PREFIX}${encodeURIComponent(target)}`;
           return `[${escapedDisplay}](${href})`;
         },
       );
-      return transformBareExternalUrls(withWikiLinks);
+      return transformBookmarkMentions(transformBareExternalUrls(withWikiLinks));
     })
     .join('');
 }

@@ -17,7 +17,7 @@ if [ -z "$UNTRACKED_FILES" ]; then
 fi
 
 # Block packaging when source-like files are untracked, while allowing docs/notes.
-BLOCKING_PATTERN='^(electron/.*\.(ts|tsx|js|mjs|cjs|json|swift)|src/.*\.(ts|tsx|js|jsx|css|html)|scripts/.*\.(sh|py|js)|package\.json|package-lock\.json|dynamic-island\.html|electron-builder.*\.json)$'
+BLOCKING_PATTERN='^(electron/.*\.(ts|tsx|js|mjs|cjs|json|swift)|src/.*\.(ts|tsx|js|jsx|css|html)|scripts/.*\.(sh|py|js|mjs)|package\.json|package-lock\.json|dynamic-island\.html|electron-builder.*\.json)$'
 if command -v rg >/dev/null 2>&1; then
   BLOCKING_FILES="$(
     printf '%s\n' "$UNTRACKED_FILES" | rg --no-line-number "$BLOCKING_PATTERN" || true

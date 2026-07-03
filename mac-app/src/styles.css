@@ -43,6 +43,40 @@ input, textarea, [contenteditable="true"] {
   -webkit-user-select: text;
 }
 
+.linked-documents-section {
+  opacity: 0.65;
+  transition: opacity 140ms ease;
+}
+
+.linked-documents-section:hover,
+.linked-documents-section:focus-within {
+  opacity: 1;
+}
+
+.bookmarks-sync-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.bookmarks-sync-dot--syncing {
+  animation: bookmarks-sync-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes bookmarks-sync-breathe {
+  0%,
+  100% {
+    opacity: 0.58;
+    transform: scale(0.86);
+    box-shadow: 0 0 0 rgba(10, 123, 220, 0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+    box-shadow: 0 0 8px rgba(10, 123, 220, 0.42);
+  }
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: gray transparent;

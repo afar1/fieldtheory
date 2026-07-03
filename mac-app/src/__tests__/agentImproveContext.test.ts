@@ -16,6 +16,8 @@ describe('getAgentImproveContext', () => {
       content: 'beta',
       filePath: '/tmp/note.md',
       title: null,
+      selectionStart: 6,
+      selectionEnd: 10,
     });
 
     textarea.remove();

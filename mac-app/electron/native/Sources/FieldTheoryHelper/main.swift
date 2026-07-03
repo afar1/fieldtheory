@@ -9,6 +9,7 @@ import AudioToolbox
 import AVFoundation
 import ApplicationServices
 import AppKit
+import Carbon.HIToolbox
 
 // MARK: - Data Models
 
@@ -42,6 +43,8 @@ enum MessageType: String, Codable {
     case stopSounds
     // Text injection
     case typeIntoApp
+    case insertTextSegment
+    case submitTextTarget
     // Window focus by title
     case focusWindowByTitle
     // Silence detection harvest mode
@@ -65,6 +68,8 @@ struct IncomingMessage: Codable {
     let bundleId: String?       // For typeIntoApp, focusWindowByTitle
     let text: String?           // For typeIntoApp
     let pressEnter: Bool?       // For typeIntoApp
+    let submitMode: String?     // For typeIntoApp ("none", "enter", "command-enter")
+    let targetWindowBounds: WindowBoundsInput? // For typeIntoApp window disambiguation
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
     let silenceMs: Int?         // For setHarvestMode — optional silence override (nil = use default)
@@ -80,6 +85,13 @@ struct IncomingMessage: Codable {
     let sourceWidth: Int?       // Optional source frame for disambiguating duplicate titles
     let sourceHeight: Int?      // Optional source frame for disambiguating duplicate titles
     let targetFps: Int?         // For startGazeTracking
+}
+
+struct WindowBoundsInput: Codable {
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
 }
 
 // MARK: - Outgoing Message Types
@@ -238,11 +250,69 @@ struct TypeIntoAppResultMessage: Codable {
     let type = "typeIntoAppResult"
     let success: Bool
     let error: String?
+    let accessibilityTrusted: Bool?
+    let targetFrontmost: Bool?
+    let focusedTextInput: Bool?
+    let pasteboardWritten: Bool?
+    let eventTarget: String?
+
+    init(
+        success: Bool,
+        error: String?,
+        accessibilityTrusted: Bool? = nil,
+        targetFrontmost: Bool? = nil,
+        focusedTextInput: Bool? = nil,
+        pasteboardWritten: Bool? = nil,
+        eventTarget: String? = nil
+    ) {
+        self.success = success
+        self.error = error
+        self.accessibilityTrusted = accessibilityTrusted
+        self.targetFrontmost = targetFrontmost
+        self.focusedTextInput = focusedTextInput
+        self.pasteboardWritten = pasteboardWritten
+        self.eventTarget = eventTarget
+    }
 
     enum CodingKeys: String, CodingKey {
         case type
         case success
         case error
+        case accessibilityTrusted
+        case targetFrontmost
+        case focusedTextInput
+        case pasteboardWritten
+        case eventTarget
+    }
+}
+
+/// Result of live-typing one text segment into an app.
+struct InsertTextSegmentResultMessage: Codable {
+    let type = "insertTextSegmentResult"
+    let success: Bool
+    let reason: String?
+    let accessibilityTrusted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+        case reason
+        case accessibilityTrusted
+    }
+}
+
+/// Result of submitting the focused live-typing target.
+struct SubmitTextTargetResultMessage: Codable {
+    let type = "submitTextTargetResult"
+    let success: Bool
+    let reason: String?
+    let accessibilityTrusted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+        case reason
+        case accessibilityTrusted
     }
 }
 
@@ -2199,7 +2269,34 @@ final class MessageHandler {
                 return
             }
             let pressEnter = message.pressEnter ?? false
-            typeIntoApp(bundleId: bundleId, text: text, pressEnter: pressEnter)
+            let submitMode = message.submitMode ?? (pressEnter ? "enter" : "none")
+            typeIntoApp(bundleId: bundleId, text: text, submitMode: submitMode, targetWindowBounds: message.targetWindowBounds)
+
+        case .insertTextSegment:
+            guard let bundleId = message.bundleId, let text = message.text else {
+                sendError("insertTextSegment requires bundleId and text")
+                let result = InsertTextSegmentResultMessage(
+                    success: false,
+                    reason: "missing-bundle-id-or-text",
+                    accessibilityTrusted: AXIsProcessTrusted()
+                )
+                sendJSON(result)
+                return
+            }
+            insertTextSegment(bundleId: bundleId, text: text)
+
+        case .submitTextTarget:
+            guard let bundleId = message.bundleId, let submitMode = message.submitMode else {
+                sendError("submitTextTarget requires bundleId and submitMode")
+                let result = SubmitTextTargetResultMessage(
+                    success: false,
+                    reason: "missing-bundle-id-or-submit-mode",
+                    accessibilityTrusted: AXIsProcessTrusted()
+                )
+                sendJSON(result)
+                return
+            }
+            submitTextTarget(bundleId: bundleId, submitMode: submitMode)
 
         case .focusWindowByTitle:
             guard let bundleId = message.bundleId, let titleSubstring = message.titleSubstring else {
@@ -2274,57 +2371,408 @@ final class MessageHandler {
     }
 
     /// Type text into a target application using pasteboard + CGEvent key simulation.
-    /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally Enter.
-    private func typeIntoApp(bundleId: String, text: String, pressEnter: Bool) {
-        // Find the running app by bundle ID.
-        guard let targetApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) else {
-            let result = TypeIntoAppResultMessage(success: false, error: "App not running: \(bundleId)")
+    /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally submit.
+    private func typeIntoApp(bundleId: String, text: String, submitMode: String, targetWindowBounds: WindowBoundsInput?) {
+        let accessibilityTrusted = AXIsProcessTrusted()
+
+        func sendTypeResult(
+            success: Bool,
+            error: String?,
+            targetFrontmost: Bool? = nil,
+            focusedTextInput: Bool? = nil,
+            pasteboardWritten: Bool? = nil,
+            eventTarget: String? = nil
+        ) {
+            let result = TypeIntoAppResultMessage(
+                success: success,
+                error: error,
+                accessibilityTrusted: accessibilityTrusted,
+                targetFrontmost: targetFrontmost,
+                focusedTextInput: focusedTextInput,
+                pasteboardWritten: pasteboardWritten,
+                eventTarget: eventTarget
+            )
             sendJSON(result)
+        }
+
+        guard accessibilityTrusted else {
+            sendTypeResult(
+                success: false,
+                error: "Accessibility permission not granted",
+                targetFrontmost: false
+            )
             return
         }
 
-        // Write text to pasteboard (don't save/restore — simpler, avoids races with ClipboardManager).
+        // Find the running app by bundle ID.
+        guard let targetApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) else {
+            sendTypeResult(
+                success: false,
+                error: "App not running: \(bundleId)",
+                targetFrontmost: false
+            )
+            return
+        }
+
+        // Write text to pasteboard (restore is coordinated by Electron).
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        let pasteboardWritten = pasteboard.setString(text, forType: .string)
+        guard pasteboardWritten else {
+            sendTypeResult(
+                success: false,
+                error: "Failed to write text to pasteboard",
+                targetFrontmost: false,
+                pasteboardWritten: false
+            )
+            return
+        }
 
-        // Activate the target app.
+        // Activate the target app, preferring the exact window that launched the command.
+        if let targetWindowBounds = targetWindowBounds {
+            _ = focusWindowByBounds(app: targetApp, targetBounds: targetWindowBounds)
+        }
         targetApp.activate(options: .activateIgnoringOtherApps)
 
-        // Brief delay for app activation.
-        usleep(100_000) // 100ms
-
-        // Simulate Cmd+V (paste).
-        let source = CGEventSource(stateID: .combinedSessionState)
-
-        // Key down: V with Command modifier
-        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) {
-            keyDown.flags = .maskCommand
-            keyDown.post(tap: .cghidEventTap)
+        let targetFrontmost = waitForFrontmostApp(bundleId: bundleId, timeoutMs: 750)
+        let focusedTextInput = KeyboardMonitor.shared.checkFocusedTextInput()
+        guard targetFrontmost else {
+            sendTypeResult(
+                success: false,
+                error: "Target app did not become frontmost: \(bundleId)",
+                targetFrontmost: false,
+                focusedTextInput: focusedTextInput,
+                pasteboardWritten: pasteboardWritten
+            )
+            return
         }
-        // Key up: V with Command modifier
-        if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) {
-            keyUp.flags = .maskCommand
-            keyUp.post(tap: .cghidEventTap)
+        guard focusedTextInput else {
+            sendTypeResult(
+                success: false,
+                error: "No focused text input in target app: \(bundleId)",
+                targetFrontmost: targetFrontmost,
+                focusedTextInput: false,
+                pasteboardWritten: pasteboardWritten
+            )
+            return
+        }
+
+        // Simulate Cmd+V (paste) directly to the target process.
+        let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)
+        let targetPid = targetApp.processIdentifier
+
+        let pastePosted = postCommandVToPid(source: source, pid: targetPid)
+        guard pastePosted else {
+            sendTypeResult(
+                success: false,
+                error: "Failed to create paste key events",
+                targetFrontmost: targetFrontmost,
+                focusedTextInput: focusedTextInput,
+                pasteboardWritten: pasteboardWritten,
+                eventTarget: "pid"
+            )
+            return
         }
 
         // Delay for paste to complete before pressing Enter.
         usleep(200_000) // 200ms
 
-        // Optionally press Enter (clear flags to avoid Cmd+Enter triggering fullscreen).
-        if pressEnter {
-            if let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true) {
-                enterDown.flags = []
-                enterDown.post(tap: .cghidEventTap)
+        if submitMode == "enter" {
+            let returnDownPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: true, flags: [], pid: targetPid)
+            let returnUpPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: false, flags: [], pid: targetPid)
+            guard returnDownPosted && returnUpPosted else {
+                sendTypeResult(
+                    success: false,
+                    error: "Failed to create enter key events",
+                    targetFrontmost: targetFrontmost,
+                    focusedTextInput: focusedTextInput,
+                    pasteboardWritten: pasteboardWritten,
+                    eventTarget: "pid"
+                )
+                return
             }
-            if let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) {
-                enterUp.flags = []
-                enterUp.post(tap: .cghidEventTap)
+        } else if submitMode == "command-enter" {
+            let commandReturnPosted = postCommandReturnToPid(source: source, pid: targetPid)
+            guard commandReturnPosted else {
+                sendTypeResult(
+                    success: false,
+                    error: "Failed to create command-enter key events",
+                    targetFrontmost: targetFrontmost,
+                    focusedTextInput: focusedTextInput,
+                    pasteboardWritten: pasteboardWritten,
+                    eventTarget: "pid"
+                )
+                return
             }
         }
 
-        let result = TypeIntoAppResultMessage(success: true, error: nil)
-        sendJSON(result)
+        sendTypeResult(
+            success: true,
+            error: nil,
+            targetFrontmost: targetFrontmost,
+            focusedTextInput: focusedTextInput,
+            pasteboardWritten: pasteboardWritten,
+            eventTarget: "pid"
+        )
+    }
+
+    private func resolveFocusedTextTarget(
+        bundleId: String,
+        accessibilityTrusted: Bool,
+        sendFailure: (String) -> Void
+    ) -> NSRunningApplication? {
+        guard accessibilityTrusted else {
+            sendFailure("accessibility-denied")
+            return nil
+        }
+
+        guard let targetApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) else {
+            sendFailure("app-not-running")
+            return nil
+        }
+
+        guard waitForFrontmostApp(bundleId: bundleId, timeoutMs: 0) else {
+            sendFailure("not-frontmost")
+            return nil
+        }
+
+        guard !IsSecureEventInputEnabled() else {
+            sendFailure("secure-input")
+            return nil
+        }
+
+        guard KeyboardMonitor.shared.checkFocusedTextInput() else {
+            sendFailure("no-focused-text-input")
+            return nil
+        }
+
+        return targetApp
+    }
+
+    private func insertTextSegment(bundleId: String, text: String) {
+        let accessibilityTrusted = AXIsProcessTrusted()
+
+        func sendInsertResult(success: Bool, reason: String?) {
+            let result = InsertTextSegmentResultMessage(
+                success: success,
+                reason: reason,
+                accessibilityTrusted: accessibilityTrusted
+            )
+            sendJSON(result)
+        }
+
+        guard let targetApp = resolveFocusedTextTarget(
+            bundleId: bundleId,
+            accessibilityTrusted: accessibilityTrusted,
+            sendFailure: { reason in sendInsertResult(success: false, reason: reason) }
+        ) else {
+            return
+        }
+
+        let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)
+        guard postUnicodeTextToPid(source: source, text: text, pid: targetApp.processIdentifier) else {
+            sendInsertResult(success: false, reason: "post-failed")
+            return
+        }
+
+        sendInsertResult(success: true, reason: nil)
+    }
+
+    private func submitTextTarget(bundleId: String, submitMode: String) {
+        let accessibilityTrusted = AXIsProcessTrusted()
+
+        func sendSubmitResult(success: Bool, reason: String?) {
+            let result = SubmitTextTargetResultMessage(
+                success: success,
+                reason: reason,
+                accessibilityTrusted: accessibilityTrusted
+            )
+            sendJSON(result)
+        }
+
+        guard let targetApp = resolveFocusedTextTarget(
+            bundleId: bundleId,
+            accessibilityTrusted: accessibilityTrusted,
+            sendFailure: { reason in sendSubmitResult(success: false, reason: reason) }
+        ) else {
+            return
+        }
+
+        let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)
+        let targetPid = targetApp.processIdentifier
+        let submitted: Bool
+        if submitMode == "command-enter" {
+            submitted = postCommandReturnToPid(source: source, pid: targetPid)
+        } else {
+            let returnDownPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: true, flags: [], pid: targetPid)
+            let returnUpPosted = postKeyEventToPid(source: source, virtualKey: 0x24, keyDown: false, flags: [], pid: targetPid)
+            submitted = returnDownPosted && returnUpPosted
+        }
+
+        guard submitted else {
+            sendSubmitResult(success: false, reason: "post-failed")
+            return
+        }
+
+        sendSubmitResult(success: true, reason: nil)
+    }
+
+    private func focusWindowByBounds(app targetApp: NSRunningApplication, targetBounds: WindowBoundsInput) -> Bool {
+        let appElement = AXUIElementCreateApplication(targetApp.processIdentifier)
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue)
+        guard windowsResult == .success, let windows = windowsValue as? [AXUIElement] else {
+            return false
+        }
+
+        for window in windows {
+            guard let frame = axWindowFrame(window) else {
+                continue
+            }
+            if windowFrameMatches(frame, targetBounds) {
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window)
+                targetApp.activate(options: .activateIgnoringOtherApps)
+                usleep(50_000)
+                return true
+            }
+        }
+        return false
+    }
+
+    private func axWindowFrame(_ window: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let position = positionValue,
+              let size = sizeValue else {
+            return nil
+        }
+
+        var point = CGPoint.zero
+        var windowSize = CGSize.zero
+        guard CFGetTypeID(position) == AXValueGetTypeID(),
+              CFGetTypeID(size) == AXValueGetTypeID(),
+              AXValueGetValue(position as! AXValue, .cgPoint, &point),
+              AXValueGetValue(size as! AXValue, .cgSize, &windowSize) else {
+            return nil
+        }
+
+        return CGRect(origin: point, size: windowSize)
+    }
+
+    private func windowFrameMatches(_ frame: CGRect, _ targetBounds: WindowBoundsInput) -> Bool {
+        let tolerance: CGFloat = 24
+        return abs(frame.origin.x - CGFloat(targetBounds.x)) <= tolerance
+            && abs(frame.origin.y - CGFloat(targetBounds.y)) <= tolerance
+            && abs(frame.size.width - CGFloat(targetBounds.width)) <= tolerance
+            && abs(frame.size.height - CGFloat(targetBounds.height)) <= tolerance
+    }
+
+    private func waitForFrontmostApp(bundleId: String, timeoutMs: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.caseInsensitiveCompare(bundleId) == .orderedSame {
+                return true
+            }
+            usleep(25_000)
+        }
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.caseInsensitiveCompare(bundleId) == .orderedSame
+    }
+
+    private func postKeyEventToPid(
+        source: CGEventSource?,
+        virtualKey: CGKeyCode,
+        keyDown: Bool,
+        flags: CGEventFlags,
+        pid: pid_t
+    ) -> Bool {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: keyDown) else {
+            return false
+        }
+        event.flags = flags
+        event.postToPid(pid)
+        return true
+    }
+
+    private func postCommandVToPid(source: CGEventSource?, pid: pid_t) -> Bool {
+        let commandKey: CGKeyCode = 0x37
+        let vKey: CGKeyCode = 0x09
+
+        let commandDownPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let pasteKeyDownPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let pasteKeyUpPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: false, flags: .maskCommand, pid: pid)
+        let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
+
+        return commandDownPosted && pasteKeyDownPosted && pasteKeyUpPosted && commandUpPosted
+    }
+
+    private func postUnicodeTextToPid(source: CGEventSource?, text: String, pid: pid_t) -> Bool {
+        for run in unicodeRuns(text, maxUTF16CodeUnits: 20) {
+            guard postUnicodeRunToPid(source: source, run: run, pid: pid) else {
+                return false
+            }
+            usleep(2_000)
+        }
+        return true
+    }
+
+    private func postUnicodeRunToPid(source: CGEventSource?, run: String, pid: pid_t) -> Bool {
+        let units = Array(run.utf16)
+        guard !units.isEmpty else {
+            return true
+        }
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+            return false
+        }
+
+        units.withUnsafeBufferPointer { pointer in
+            if let baseAddress = pointer.baseAddress {
+                keyDown.keyboardSetUnicodeString(stringLength: units.count, unicodeString: baseAddress)
+                keyUp.keyboardSetUnicodeString(stringLength: units.count, unicodeString: baseAddress)
+            }
+        }
+        keyDown.flags = []
+        keyUp.flags = []
+        keyDown.postToPid(pid)
+        keyUp.postToPid(pid)
+        return true
+    }
+
+    private func unicodeRuns(_ text: String, maxUTF16CodeUnits: Int) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        var currentLength = 0
+
+        for character in text {
+            let characterLength = character.utf16.count
+            if !current.isEmpty && currentLength + characterLength > maxUTF16CodeUnits {
+                runs.append(current)
+                current = ""
+                currentLength = 0
+            }
+            current.append(character)
+            currentLength += characterLength
+        }
+
+        if !current.isEmpty {
+            runs.append(current)
+        }
+        return runs
+    }
+
+    private func postCommandReturnToPid(source: CGEventSource?, pid: pid_t) -> Bool {
+        let commandKey: CGKeyCode = 0x37
+        let returnKey: CGKeyCode = 0x24
+
+        let commandDownPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let returnKeyDownPosted = postKeyEventToPid(source: source, virtualKey: returnKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let returnKeyUpPosted = postKeyEventToPid(source: source, virtualKey: returnKey, keyDown: false, flags: .maskCommand, pid: pid)
+        let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
+
+        return commandDownPosted && returnKeyDownPosted && returnKeyUpPosted && commandUpPosted
     }
 
     /// Focus a specific window of an app by matching a substring in its title.

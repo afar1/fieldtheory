@@ -349,6 +349,85 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('submits buffered text into the focused Field Theory terminal', async () => {
+    const { manager, nativeHelper } = createManager();
+    const insertTerminalText = vi.fn(() => true);
+    const submitTerminalText = vi.fn(() => true);
+    const insertMarkdownText = vi.fn(() => true);
+    (manager as any).state = 'listening';
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+    manager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertTerminalText,
+      submitText: submitTerminalText,
+    });
+    manager.setFieldTheoryMarkdownInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertMarkdownText,
+    });
+
+    await (manager as any).processListeningChunk('alpha beta go ahead');
+
+    expect(submitTerminalText).toHaveBeenCalledWith('alpha beta', 'enter');
+    expect(insertTerminalText).not.toHaveBeenCalled();
+    expect(insertMarkdownText).not.toHaveBeenCalled();
+    expect(nativeHelper.typeIntoApp).not.toHaveBeenCalled();
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('submits buffered text with Command-Enter when command-enter phrase is spoken', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('alpha beta command enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      'alpha beta',
+      true,
+      'command-enter'
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('submits with Command-Enter when command-enter phrase is split across chunk boundary', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('alpha beta command');
+    await (manager as any).processListeningChunk('enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      'alpha beta',
+      true,
+      'command-enter'
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('sends Command-Enter by itself when command-enter phrase has no buffered text', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('command enter');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      '',
+      true,
+      'command-enter'
+    );
+
+    manager.destroy();
+  });
+
   it('dedupes overlapping boundary words across adjacent chunks', async () => {
     const { manager } = createManager();
     (manager as any).state = 'listening';
@@ -770,7 +849,7 @@ describe('HotMicManager transcript dismissal', () => {
     expect((manager as any).transcriptBuffer).toEqual([]);
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
     expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 0, '');
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
 
     manager.destroy();
   });
@@ -1174,16 +1253,25 @@ describe('HotMicManager transcriber handoff', () => {
 
 describe('HotMicManager Escape dismissal', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
   it('requires two Escape presses before dismissing Hot Mic and releasing Escape', () => {
     const { manager } = createManager();
     const cursorStatusManager = { showRecordingNote: vi.fn() };
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
+    };
     const deactivated = vi.fn();
     const inputModeResetRequested = vi.fn();
 
     manager.setCursorStatusManager(cursorStatusManager as any);
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
     manager.on('deactivated', deactivated);
     manager.on('inputModeResetRequested', inputModeResetRequested);
     vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
@@ -1198,13 +1286,93 @@ describe('HotMicManager Escape dismissal', () => {
     expect(cursorStatusManager.showRecordingNote).toHaveBeenCalledWith(
       'Press Esc again to stop Hot Mic'
     );
+    expect(dynamicIslandManager.showEscapeHint).toHaveBeenCalledTimes(1);
     expect(deactivated).not.toHaveBeenCalled();
     expect(inputModeResetRequested).not.toHaveBeenCalled();
 
     escapeHandler();
     expect(deactivated).toHaveBeenCalledTimes(1);
     expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
+    expect(dynamicIslandManager.updateStackCount).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
     expect(globalShortcut.unregister).toHaveBeenCalledWith('Escape');
+    manager.destroy();
+  });
+
+  it('clears screenshot UI state when the second Escape dismisses Hot Mic', () => {
+    const { manager, clipboardItems } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
+    };
+    const screenshotStackChanged = vi.fn();
+
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+    manager.on('screenshotStackChanged', screenshotStackChanged);
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+
+    (manager as any).setState('listening');
+    (manager as any).hotMicSessionStartMs = Date.now() - 1000;
+    clipboardItems.set(801, { id: 801, type: 'screenshot', imageData: Buffer.from([1]), createdAt: Date.now() - 500 });
+    manager.addScreenshotToSession(801);
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls.find(
+      ([accelerator]) => accelerator === 'Escape'
+    )?.[1] as () => void;
+
+    escapeHandler();
+    escapeHandler();
+
+    expect((manager as any).hotMicScreenshotMetadata).toEqual([]);
+    expect((manager as any).hotMicSessionItemIds).toEqual([]);
+    expect(screenshotStackChanged).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateStackCount).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
+    manager.destroy();
+  });
+
+  it('lets the first Escape warning expire without dismissing Hot Mic', () => {
+    vi.useFakeTimers();
+    const { manager } = createManager();
+    const cursorStatusManager = { showRecordingNote: vi.fn() };
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
+    };
+    const deactivated = vi.fn();
+    const inputModeResetRequested = vi.fn();
+
+    manager.setCursorStatusManager(cursorStatusManager as any);
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+    manager.on('deactivated', deactivated);
+    manager.on('inputModeResetRequested', inputModeResetRequested);
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+    vi.mocked(globalShortcut.unregister).mockClear();
+
+    (manager as any).setState('listening');
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls.find(
+      ([accelerator]) => accelerator === 'Escape'
+    )?.[1] as () => void;
+
+    escapeHandler();
+    vi.advanceTimersByTime(1_700);
+    escapeHandler();
+
+    expect(cursorStatusManager.showRecordingNote).toHaveBeenCalledTimes(2);
+    expect(dynamicIslandManager.showEscapeHint).toHaveBeenCalledTimes(2);
+    expect(deactivated).not.toHaveBeenCalled();
+    expect(inputModeResetRequested).not.toHaveBeenCalled();
+
+    escapeHandler();
+    expect(deactivated).toHaveBeenCalledTimes(1);
+    expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
     manager.destroy();
   });
 });
@@ -1270,6 +1438,19 @@ describe('HotMicManager runtime condition', () => {
     await (manager as any).startListening();
 
     expect(manager.getCondition()).toBe('ready');
+    manager.destroy();
+  });
+
+  it('activates without a current target and resolves the target later', async () => {
+    const { manager, nativeHelper } = createManager();
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+
+    manager.activate();
+    await flushAsyncWork();
+
+    expect(manager.getState()).toBe('listening');
+    expect(manager.getCondition()).toBe('ready');
+    expect(nativeHelper.startRecording).toHaveBeenCalled();
     manager.destroy();
   });
 
@@ -1412,7 +1593,7 @@ describe('HotMicManager runtime status', () => {
     const status = manager.getRuntimeStatus();
 
     expect(status.engine).toMatchObject({
-      selectedEngine: 'mlx-whisper',
+      selectedEngine: 'parakeet',
       source: 'global',
       readiness: 'disabled',
       fallbackAvailable: false,
@@ -1576,7 +1757,7 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', 0);
     manager.destroy();
   });
 
@@ -1587,7 +1768,7 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).setRealtimeHarvestMode();
 
     expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
     manager.destroy();
   });
 
@@ -1602,8 +1783,8 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).chunkProcessingInFlight = false;
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', undefined);
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', 0);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', 0);
     manager.destroy();
   });
 
@@ -1641,11 +1822,11 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
-  it('uses longer forced snapshot interval for mlx and under queue pressure', () => {
+  it('uses longer forced snapshot interval under queue pressure', () => {
     const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
     const queue = (manager as any).pendingChunkQueue;
 
-    expect((manager as any).getForcedSnapshotMaxMs()).toBe(1000);
+    expect((manager as any).getForcedSnapshotMaxMs()).toBe(700);
 
     queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
     expect((manager as any).getForcedSnapshotMaxMs()).toBe(1400);

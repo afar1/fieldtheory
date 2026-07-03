@@ -23,10 +23,13 @@ import { PillSlot, PILL_SLOT_CONTENT_FADE_MS } from './PillSlot';
 import {
   computeLeftPillWidth,
   computeRightPillWidth,
+  FLOATING_WAVEFORM_STACK_GAP,
+  floatingPipeSlotWidthForCount,
   pipeSlotWidthForCount,
+  WAVEFORM_WIDTH,
 } from './pillWidths';
 
-type IslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
+type IslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'completing' | 'showing-transcript' | 'improving';
 
 interface HistoryItem {
   id: number;
@@ -99,6 +102,13 @@ const HISTORY_PREVIEW_TRAILING_WORDS = 5;
 const HISTORY_PREVIEW_MAX_LINES = 3;
 const HISTORY_PILL_OFFSET_PX = 82;
 const HISTORY_LAYOUT_MIN_WIDTH_PX = 120;
+const FLOATING_CANCEL_FADE_MS = 180;
+const FLOATING_COMPLETE_SETTLE_MS = 60;
+const FLOATING_CONTENT_FALLBACK_WIDTH = WAVEFORM_WIDTH;
+const FLOATING_BUTTON_EDGE_INSET_PX = 6;
+const ESCAPE_HINT_DISPLAY_MS = 1_600;
+const ESCAPE_HINT_WIDTH = 56;
+const STATIC_WAVEFORM_LEVELS = new Array(WAVEFORM_BAR_COUNT).fill(0);
 const DRAWER_TEXT_SIZE_DEFAULT = 14;
 const DRAWER_TEXT_SIZE_MIN = 11;
 const DRAWER_TEXT_SIZE_MAX = 22;
@@ -158,8 +168,9 @@ interface RightPillProps {
   sectionWidth?: number;
   onSlotSumChange?: (sum: number) => void;
   sectionTransitionDelay?: string;
+  floating?: boolean;
 }
-function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: RightPillProps = {}) {
+function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floating }: RightPillProps = {}) {
   const [pipeCount, setPipeCount] = useState(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [state, setState] = useState<IslandState>('idle');
@@ -167,15 +178,37 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
   const [standardAudioLevel, setStandardAudioLevel] = useState(0);
   const [filterMeterRawLevel, setFilterMeterRawLevel] = useState(0);
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
+  const stackAnimationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const escapeHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
-  const waveformActive = hotMicActive || state === 'recording';
+  const [escapeHintVisible, setEscapeHintVisible] = useState(false);
+  const waveformSettled = state === 'completing';
+  const waveformActive = hotMicActive || state === 'recording' || waveformSettled;
   const resetWaveform = useCallback(() => {
     waveformBufferRef.current.reset();
     setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
   }, []);
+  const clearEscapeHintTimer = useCallback(() => {
+    if (escapeHintTimeoutRef.current) {
+      clearTimeout(escapeHintTimeoutRef.current);
+      escapeHintTimeoutRef.current = null;
+    }
+  }, []);
+  const hideEscapeHint = useCallback(() => {
+    clearEscapeHintTimer();
+    setEscapeHintVisible(false);
+  }, [clearEscapeHintTimer]);
+  const showEscapeHint = useCallback(() => {
+    clearEscapeHintTimer();
+    setEscapeHintVisible(true);
+    escapeHintTimeoutRef.current = setTimeout(() => {
+      escapeHintTimeoutRef.current = null;
+      setEscapeHintVisible(false);
+    }, ESCAPE_HINT_DISPLAY_MS);
+  }, [clearEscapeHintTimer]);
 
   // Hot-mic waveform = orange, standard recording waveform = white.
-  const waveformColor = hotMicActive
+  const waveformColor = hotMicActive && !waveformSettled
     ? 'rgba(249, 115, 22, 0.95)'
     : 'rgba(255, 255, 255, 0.92)';
 
@@ -192,6 +225,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
     });
     api.onHotMicUpdate?.((data: { active: boolean }) => setHotMicActive(Boolean(data?.active)));
     api.onStandardAudioLevel?.((level: number) => setStandardAudioLevel(level));
+    api.onEscapeHint?.(showEscapeHint);
     api.onHotMicFilterMeter?.((data: { rawLevel: number }) => setFilterMeterRawLevel(data.rawLevel));
 
     api.onStackChanged?.((count: number) => {
@@ -201,7 +235,11 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
           return count;
         }
         if (count > prev) {
-          setTimeout(() => {
+          if (stackAnimationTimeoutRef.current) {
+            clearTimeout(stackAnimationTimeoutRef.current);
+          }
+          stackAnimationTimeoutRef.current = setTimeout(() => {
+            stackAnimationTimeoutRef.current = null;
             setAnimatedPipes((animPrev) => {
               const next = new Set(animPrev);
               for (let i = prev; i < count; i++) {
@@ -216,40 +254,74 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
     });
 
     return () => {
+      if (stackAnimationTimeoutRef.current) {
+        clearTimeout(stackAnimationTimeoutRef.current);
+        stackAnimationTimeoutRef.current = null;
+      }
+      clearEscapeHintTimer();
       api.removeAllListeners('dynamic-island-state');
       api.removeAllListeners('dynamic-island-hotmic');
       api.removeAllListeners('dynamic-island-standard-audio-level');
+      api.removeAllListeners('dynamic-island-escape-hint');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-stack-changed');
     };
-  }, [resetWaveform]);
+  }, [clearEscapeHintTimer, resetWaveform, showEscapeHint]);
+
+  useEffect(() => {
+    if (!waveformActive) {
+      hideEscapeHint();
+    }
+  }, [hideEscapeHint, waveformActive]);
 
   // Update waveform ring buffer when audio levels arrive.
   useEffect(() => {
+    if (waveformSettled) return;
     const level = state === 'recording' ? standardAudioLevel : filterMeterRawLevel;
     if (state !== 'recording' && !hotMicActive) return;
     const buf = waveformBufferRef.current;
     buf.push(level);
     setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
-  }, [filterMeterRawLevel, standardAudioLevel, hotMicActive, state]);
+  }, [filterMeterRawLevel, standardAudioLevel, hotMicActive, state, waveformSettled]);
 
-  const WAVEFORM_SLOT_WIDTH = 22;
-  const waveformSlotMargin = pipeCount > 0 ? 8 : 0;
-  const pipeSlotWidth = pipeSlotWidthForCount(pipeCount);
+  const waveformSlotMargin = pipeCount > 0 ? (floating ? FLOATING_WAVEFORM_STACK_GAP : 8) : 0;
+  const pipeSlotWidth = floating ? floatingPipeSlotWidthForCount(pipeCount) : pipeSlotWidthForCount(pipeCount);
+  const displayedWaveformLevels = waveformSettled
+    ? STATIC_WAVEFORM_LEVELS
+    : waveformLevels;
+  const escapeHintActive = waveformActive && escapeHintVisible;
+  const waveformSlotWidth = escapeHintActive ? ESCAPE_HINT_WIDTH : WAVEFORM_WIDTH;
 
-  const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount });
+  const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount, waveformWidth: waveformSlotWidth });
   useEffect(() => {
     onSlotSumChange?.(rightSlotSum);
   }, [rightSlotSum, onSlotSumChange]);
 
   return (
     <div
-      className="di-section di-section--right"
-      style={{ width: sectionWidth, height: 38, transitionDelay: sectionTransitionDelay }}
+      className={`di-section di-section--right${floating ? ' di-section--floating' : ''}`}
+      style={{
+        width: sectionWidth,
+        height: 38,
+        transitionDelay: sectionTransitionDelay,
+        WebkitAppRegion: floating ? 'drag' : undefined,
+      } as React.CSSProperties}
     >
-      <PillSlot visible={waveformActive} width={WAVEFORM_SLOT_WIDTH} marginRight={waveformSlotMargin}>
-        <div aria-hidden="true" style={rightStyles.waveformContainer}>
-          <WaveformBars levels={waveformLevels} color={waveformColor} />
+      <PillSlot
+        visible={waveformActive}
+        width={waveformSlotWidth}
+        marginRight={waveformSlotMargin}
+        style={floating ? { justifyContent: 'center' } : undefined}
+      >
+        <div
+          aria-hidden="true"
+          style={escapeHintActive ? rightStyles.escapeHintContainer : rightStyles.waveformContainer}
+        >
+          {escapeHintActive ? (
+            <span data-dynamic-island-escape-hint="true" style={rightStyles.escapeHintText}>Esc</span>
+          ) : (
+            <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
+          )}
         </div>
       </PillSlot>
       <PillSlot visible={pipeCount > 0} width={pipeSlotWidth} marginRight={0}>
@@ -279,6 +351,23 @@ const rightStyles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '1.5px',
     height: '14px',
+  },
+  escapeHintContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '14px',
+  },
+  escapeHintText: {
+    maxWidth: '100%',
+    fontSize: '11px',
+    fontWeight: 600,
+    lineHeight: 1,
+    letterSpacing: 0,
+    whiteSpace: 'nowrap',
+    color: 'rgba(255, 255, 255, 0.88)',
+    animation: `escapeHintFade ${ESCAPE_HINT_DISPLAY_MS}ms ease-out forwards`,
   },
   pipeGroup: {
     display: 'flex',
@@ -613,7 +702,7 @@ const drawerStyles: Record<string, React.CSSProperties> = {
 };
 
 // =============================================================================
-/** Renders the 5-bar real-time waveform driven by audio level data. */
+/** Renders the real-time waveform driven by audio level data. */
 function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
   return (
     <>
@@ -628,6 +717,7 @@ function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
             opacity: 0.5 + 0.5 * level,
             transition: 'height 0.08s ease-out, opacity 0.08s ease-out',
           }}
+          data-waveform-bar="true"
         />
       ))}
     </>
@@ -1553,6 +1643,10 @@ styleSheet.textContent = `
     0%, 100% { transform: scaleY(0.15); }
     50% { transform: scaleY(1); }
   }
+  @keyframes escapeHintFade {
+    0%, 72% { opacity: 1; }
+    100% { opacity: 0; }
+  }
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1702,6 +1796,137 @@ function UnifiedIsland() {
   );
 }
 
+function FloatingPill() {
+  const initParams = new URLSearchParams(window.location.search);
+  const initRightW = parseInt(initParams.get('rightWidth') || String(FLOATING_CONTENT_FALLBACK_WIDTH), 10);
+  const [rightWidth, setRightWidth] = useState(Number.isFinite(initRightW) ? initRightW : FLOATING_CONTENT_FALLBACK_WIDTH);
+  const [hovered, setHovered] = useState(false);
+  const [fadingOut, setFadingOut] = useState(false);
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const api = (window as any).dynamicIslandAPI;
+    api?.onResize?.((data: { leftWidth: number; rightWidth: number }) => {
+      setRightWidth(data.rightWidth ?? data.leftWidth ?? FLOATING_CONTENT_FALLBACK_WIDTH);
+    });
+
+    api?.onStateChange?.((state: string) => {
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+      if (state === 'completing') {
+        completeTimerRef.current = setTimeout(() => {
+          completeTimerRef.current = null;
+          setFadingOut(true);
+        }, FLOATING_COMPLETE_SETTLE_MS);
+      } else if (state !== 'idle') {
+        setFadingOut(false);
+      }
+    });
+    api?.onHotMicUpdate?.((data: { active: boolean }) => {
+      if (data?.active) {
+        setFadingOut(false);
+      }
+    });
+    return () => {
+      api?.removeAllListeners('dynamic-island-resize');
+      api?.removeAllListeners('dynamic-island-state');
+      api?.removeAllListeners('dynamic-island-hotmic');
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (cancelTimerRef.current) {
+        clearTimeout(cancelTimerRef.current);
+        cancelTimerRef.current = null;
+      }
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const cancelSession = useCallback(() => {
+    if (cancelTimerRef.current) return;
+    setFadingOut(true);
+    cancelTimerRef.current = setTimeout(() => {
+      cancelTimerRef.current = null;
+      (window as any).dynamicIslandAPI?.cancelSession?.();
+    }, FLOATING_CANCEL_FADE_MS);
+  }, []);
+
+  return (
+    <div
+      className="di-floating-shell"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+        padding: 0,
+        boxSizing: 'border-box',
+        borderRadius: '19px',
+        background: '#000',
+        opacity: fadingOut ? 0 : 1,
+        pointerEvents: fadingOut ? 'none' : 'auto',
+        transition: `opacity ${FLOATING_CANCEL_FADE_MS}ms ease`,
+        WebkitAppRegion: 'drag',
+      } as React.CSSProperties}
+    >
+      <button
+        type="button"
+        className="di-floating-button di-floating-cancel"
+        title="cancel session"
+        aria-label="cancel session"
+        disabled={fadingOut}
+        onClick={cancelSession}
+        style={{
+          ...floatingButtonStyle,
+          position: 'absolute',
+          left: FLOATING_BUTTON_EDGE_INSET_PX,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          opacity: hovered ? 1 : 0,
+          pointerEvents: hovered && !fadingOut ? 'auto' : 'none',
+        }}
+      >
+        <svg width="8" height="8" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M1.75 1.75L8.25 8.25M8.25 1.75L1.75 8.25" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        </svg>
+      </button>
+      <RightPill sectionWidth={rightWidth} floating />
+    </div>
+  );
+}
+
+const floatingButtonStyle = {
+  width: '22px',
+  height: '22px',
+  flex: '0 0 22px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  transition: 'opacity 140ms ease',
+  color: 'rgba(255,255,255,0.78)',
+  WebkitAppRegion: 'no-drag',
+} as React.CSSProperties;
+
 // =============================================================================
 // Root — delegates to left or right pill based on query param
 // =============================================================================
@@ -1713,6 +1938,7 @@ export default function DynamicIsland() {
   if (side === 'right') return <RightPill />;
   if (side === 'filler') return <GapFill />;
   if (side === 'unified') return <UnifiedIsland />;
+  if (side === 'floating') return <FloatingPill />;
   return <LeftPill />;
 }
 
@@ -1731,6 +1957,7 @@ declare global {
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
       onHotMicRuntimeStatus?: (cb: (status: HotMicRuntimeStatus) => void) => void;
+      onEscapeHint?: (cb: () => void) => void;
       onStackChanged?: (cb: (count: number) => void) => void;
       onInputMode?: (cb: (mode: 'hot-mic' | 'standard') => void) => void;
       getInputMode?: () => Promise<'hot-mic' | 'standard'>;

@@ -20,10 +20,21 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
+import { hardenWindow } from './windowHardening';
+import {
+  isExternalCommandTargetBundleId,
+  isFieldTheoryCommandTargetBundleId,
+  type CommandLauncherFieldTheoryLaunchSurface,
+  type CommandLauncherLaunchOrigin,
+} from './commandLauncherTarget';
+import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrace';
 
 const log = createLogger('CommandLauncher');
 
 const execFileAsync = promisify(execFile);
+const COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS = 35;
+const COMMAND_LAUNCHER_PREVIEW_BLUR_SUPPRESSION_MS = 150;
+const COMMAND_LAUNCHER_CENTER_Y_OFFSET = -50;
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -31,6 +42,7 @@ const execFileAsync = promisify(execFile);
 export interface RunningApp {
   bundleId: string;
   name: string;
+  windowBounds?: AnchorBounds | null;
 }
 
 type AnchorBounds = {
@@ -42,6 +54,19 @@ type AnchorBounds = {
 
 type CommandLauncherWindowOptions = {
   getInitialDarkMode?: () => boolean;
+  getFieldTheoryLaunchSurface?: () => CommandLauncherFieldTheoryLaunchSurface;
+};
+
+type CommandLauncherShowOptions = {
+  anchorBounds?: AnchorBounds | null;
+  launcherSessionId?: string;
+  qualityScenario?: string;
+  suppressBlurHideMs?: number;
+};
+
+type CommandLauncherCloseOptions = {
+  skipActivation?: boolean;
+  generation?: number;
 };
 
 /**
@@ -52,13 +77,18 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
 
+  // Be specific about dev Electron; many real target apps also include
+  // "electron" in their bundle id and still need to receive command pastes.
   return (
-    bundleIdLower.includes('fieldtheory') ||
-    bundleIdLower.includes('electron') ||
+    isFieldTheoryCommandTargetBundleId(bundleId) ||
     appNameLower.includes('field theory') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
   );
+}
+
+function isExternalCommandTargetApp(bundleId: string, appName: string): boolean {
+  return isExternalCommandTargetBundleId(bundleId) && !isElectronApp(bundleId, appName);
 }
 
 /**
@@ -68,22 +98,27 @@ export class CommandLauncherWindow {
   private window: BrowserWindow | null = null;
   private nativeHelper: NativeHelper | null = null;
   private getInitialDarkMode: () => boolean;
+  private getFieldTheoryLaunchSurface: () => CommandLauncherFieldTheoryLaunchSurface;
 
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
   private fieldTheoryActiveOnShow = false;
+  private launchOrigin: CommandLauncherLaunchOrigin = { kind: 'none' };
 
   // Track when show() is in progress (before window.show() is called).
   // This closes the race window where isVisible() returns false during async setup.
   private _isShowing: boolean = false;
-  private suppressActivationUntilHidden = false;
-  private suppressActivationUntilMs = 0;
-  private readonly SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS = 3000;
+  private externalInvocationSuppressionTokens = new Set<number>();
+  private nextExternalInvocationSuppressionToken = 1;
+  private showGeneration = 0;
+  private launcherSessionId: string | null = null;
+  private querySessionId: string | null = null;
+  private qualityScenario: string | null = null;
 
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 366;
-  private readonly WINDOW_HEIGHT_COLLAPSED = 43;
-  private readonly WINDOW_HEIGHT_RESULTS = 354;
+  private readonly WINDOW_WIDTH = 520;
+  private readonly WINDOW_HEIGHT_COLLAPSED = 52;
+  private readonly WINDOW_HEIGHT_RESULTS = 430;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
   private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;
@@ -96,10 +131,13 @@ export class CommandLauncherWindow {
   private previewWindow: BrowserWindow | null = null;
   private previewPayload: Record<string, unknown> | null = null;
   private previewAnchorBounds: AnchorBounds | null = null;
+  private suppressPreviewBlurUntil = 0;
+  private suppressBlurHideUntil = 0;
 
   constructor(nativeHelper?: NativeHelper, options: CommandLauncherWindowOptions = {}) {
     this.nativeHelper = nativeHelper || null;
     this.getInitialDarkMode = options.getInitialDarkMode ?? (() => false);
+    this.getFieldTheoryLaunchSurface = options.getFieldTheoryLaunchSurface ?? (() => ({ kind: 'none' }));
     appendCommandLauncherTrace('launcher-constructed', {
       hasNativeHelper: Boolean(this.nativeHelper),
     });
@@ -113,6 +151,8 @@ export class CommandLauncherWindow {
         const nextHeight = Math.min(height, this.WINDOW_HEIGHT_RESULTS);
         if (nextHeight !== height) {
           appendCommandLauncherTrace('renderer-resize-clamped', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             requestedHeight: height,
             appliedHeight: nextHeight,
             maxHeight: this.WINDOW_HEIGHT_RESULTS,
@@ -126,6 +166,8 @@ export class CommandLauncherWindow {
         });
       } else {
         appendCommandLauncherTrace('renderer-resize-ignored', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
           requestedHeight: height,
           reason: 'window-missing',
         });
@@ -133,12 +175,29 @@ export class CommandLauncherWindow {
     });
     
     // Listen for close requests from renderer.
-    ipcMain.on('command-launcher:close', (_event, options?: { skipActivation?: boolean }) => {
+    ipcMain.on('command-launcher:close', (_event, options?: CommandLauncherCloseOptions) => {
       const skipActivation = options?.skipActivation === true;
+      const closeGeneration = options?.generation;
+      if (typeof closeGeneration === 'number' && closeGeneration !== this.showGeneration) {
+        appendCommandLauncherTrace('renderer-close-request-ignored-stale', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
+          visible: this.isVisible(),
+          isShowing: this._isShowing,
+          skipActivation,
+          closeGeneration,
+          currentGeneration: this.showGeneration,
+        });
+        return;
+      }
       appendCommandLauncherTrace('renderer-close-request', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         visible: this.isVisible(),
         isShowing: this._isShowing,
         skipActivation,
+        closeGeneration: closeGeneration ?? null,
+        currentGeneration: this.showGeneration,
       });
       this.hide(skipActivation);
     });
@@ -158,7 +217,21 @@ export class CommandLauncherWindow {
     ipcMain.on('command-launcher:trace', (_event, event: string, details: Record<string, unknown> = {}) => {
       if (!event || typeof event !== 'string') return;
       const safeDetails = details && typeof details === 'object' ? details : { value: details };
-      appendCommandLauncherTrace(`renderer-${event.slice(0, 80)}`, safeDetails);
+      const rendererEvent = event.slice(0, 80);
+      const enrichedDetails: Record<string, unknown> = { ...safeDetails };
+      if (!enrichedDetails.launcherSessionId && this.launcherSessionId) {
+        enrichedDetails.launcherSessionId = this.launcherSessionId;
+      }
+      if (!enrichedDetails.qualityScenario && this.qualityScenario) {
+        enrichedDetails.qualityScenario = this.qualityScenario;
+      }
+      if (rendererEvent === 'first-input' && !enrichedDetails.querySessionId && this.launcherSessionId) {
+        this.querySessionId = `${this.launcherSessionId}:query-${Date.now().toString(36)}`;
+      }
+      if (!enrichedDetails.querySessionId && this.querySessionId) {
+        enrichedDetails.querySessionId = this.querySessionId;
+      }
+      appendCommandLauncherTrace(`renderer-${rendererEvent}`, enrichedDetails);
     });
   }
   
@@ -184,15 +257,24 @@ export class CommandLauncherWindow {
    * Uses fresh frontmost window bounds when possible so the launcher follows
    * same-app window moves across displays.
    */
-  async show(options: { anchorBounds?: AnchorBounds | null } = {}): Promise<void> {
+  async show(options: CommandLauncherShowOptions = {}): Promise<void> {
     // Mark as showing BEFORE any async work to close the race window.
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
-    this.suppressActivationUntilHidden = false;
-    this.suppressActivationUntilMs = 0;
+    this.showGeneration += 1;
+    this.launcherSessionId = options.launcherSessionId ?? `launcher-${Date.now().toString(36)}-${this.showGeneration}`;
+    this.querySessionId = null;
+    this.qualityScenario = options.qualityScenario ?? null;
+    this.launchOrigin = { kind: 'none' };
+    if (typeof options.suppressBlurHideMs === 'number' && options.suppressBlurHideMs > 0) {
+      this.suppressBlurHideUntil = Math.max(this.suppressBlurHideUntil, Date.now() + options.suppressBlurHideMs);
+    }
     appendCommandLauncherTrace('show-start', {
       hasWindow: Boolean(this.window),
       windowVisible: this.isVisible(),
+      generation: this.showGeneration,
+      launcherSessionId: this.launcherSessionId,
+      qualityScenario: this.qualityScenario,
     });
 
     try {
@@ -216,21 +298,40 @@ export class CommandLauncherWindow {
 
       // Store previous app for paste-back feature.
       if (frontmostApp?.bundleId && frontmostApp?.name) {
-        if (!isElectronApp(frontmostApp.bundleId, frontmostApp.name)) {
+        if (isExternalCommandTargetApp(frontmostApp.bundleId, frontmostApp.name)) {
           this.previousApp = {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
+            ...(frontmostApp.windowBounds ? { windowBounds: frontmostApp.windowBounds } : {}),
+          };
+          this.launchOrigin = {
+            kind: 'external-app',
+            app: this.previousApp,
           };
           appendCommandLauncherTrace('show-frontmost-app', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
+            windowBounds: frontmostApp.windowBounds ?? null,
           });
         } else {
+          const fieldTheorySurface = this.fieldTheoryActiveOnShow
+            ? this.getFieldTheoryLaunchSurface()
+            : { kind: 'none' as const };
+          this.launchOrigin = this.fieldTheoryActiveOnShow
+            ? { kind: 'field-theory', surface: fieldTheorySurface }
+            : { kind: 'none' };
           appendCommandLauncherTrace('show-frontmost-app-skipped-field-theory', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             previousAppBundleId: this.previousApp?.bundleId ?? null,
+            launchOriginKind: this.launchOrigin.kind,
+            fieldTheorySurface: fieldTheorySurface.kind,
+            fieldTheoryTerminalSessionId: fieldTheorySurface.kind === 'terminal' ? fieldTheorySurface.sessionId : null,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
           });
         }
@@ -241,15 +342,29 @@ export class CommandLauncherWindow {
 
       let freshWindowBounds: AnchorBounds | null = null;
       if (!options.anchorBounds && this.nativeHelper) {
+        const boundsStartedAt = Date.now();
         try {
-          freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds();
+          freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds(COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS);
+          appendCommandLauncherTrace('show-frontmost-window-bounds-complete', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
+            elapsedMs: Date.now() - boundsStartedAt,
+            hasWindowBounds: Boolean(freshWindowBounds),
+          });
         } catch (error) {
-          appendCommandLauncherTrace('show-frontmost-window-bounds-error', { error });
+          appendCommandLauncherTrace('show-frontmost-window-bounds-error', {
+            launcherSessionId: this.launcherSessionId,
+            qualityScenario: this.qualityScenario,
+            elapsedMs: Date.now() - boundsStartedAt,
+            error,
+          });
         }
       }
 
       const windowBounds = options.anchorBounds ?? freshWindowBounds ?? frontmostApp?.windowBounds ?? null;
       appendCommandLauncherTrace('show-position-source', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         usedWindowBounds: Boolean(windowBounds),
         usedAnchorBounds: Boolean(options.anchorBounds),
         usedFreshWindowBounds: Boolean(!options.anchorBounds && freshWindowBounds),
@@ -260,14 +375,14 @@ export class CommandLauncherWindow {
         this.previewAnchorBounds = windowBounds;
         // Center on the current frontmost window.
         x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
+        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET);
       } else {
         // Fallback: center on active display.
         const cursorPoint = screen.getCursorScreenPoint();
         const display = screen.getDisplayNearestPoint(cursorPoint);
         this.previewAnchorBounds = display.bounds;
         x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
+        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET);
       }
 
       this.window!.setBounds({
@@ -277,6 +392,8 @@ export class CommandLauncherWindow {
         height: this.WINDOW_HEIGHT_COLLAPSED,
       });
       appendCommandLauncherTrace('show-set-bounds', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         x,
         y,
         width: this.WINDOW_WIDTH,
@@ -286,17 +403,38 @@ export class CommandLauncherWindow {
       // Reset before focus so early typed characters are not cleared after show.
       this.window!.webContents.send('command-launcher:reset', {
         isDarkMode: this.getInitialDarkMode(),
+        generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
       });
-      appendCommandLauncherTrace('show-sent-reset');
+      appendCommandLauncherTrace('show-sent-reset', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+        generation: this.showGeneration,
+      });
 
       this.window!.show();
       this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
       this.window!.focus();
+      this.window!.webContents.send('command-launcher:focus-input', {
+        generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
+      appendCommandLauncherTrace('show-sent-focus-input', {
+        generation: this.showGeneration,
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
       this._isShowing = false; // Window is now visible, clear the showing flag
 
       appendCommandLauncherTrace('show-complete', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         windowVisible: this.isVisible(),
         previousAppBundleId: this.previousApp?.bundleId ?? null,
+        launchOriginKind: this.launchOrigin.kind,
+        fieldTheorySurface: this.launchOrigin.kind === 'field-theory' ? this.launchOrigin.surface.kind : null,
       });
 
       this.scheduleProcessMetricsSnapshot('after-show-250ms', 250);
@@ -314,37 +452,40 @@ export class CommandLauncherWindow {
    */
   hide(skipActivation = false): void {
     this._isShowing = false;
-    const now = Date.now();
-    const suppressActivationForThisHide = this.suppressActivationUntilHidden || now < this.suppressActivationUntilMs;
+    const suppressActivationForThisHide = this.isExternalInvocationActivationSuppressed();
     const shouldSkipActivation = skipActivation || suppressActivationForThisHide;
 
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
     if (!isVisible) {
-      if (this.suppressActivationUntilHidden) {
-        this.suppressActivationUntilHidden = false;
-      }
+      this.hidePreview();
       appendCommandLauncherTrace('hide-noop', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         skipActivation,
         suppressActivationForThisHide,
-        suppressActivationRemainingMs: Math.max(0, this.suppressActivationUntilMs - now),
+        externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
         hasWindow: Boolean(this.window),
       });
       return;
     }
 
     appendCommandLauncherTrace('hide', {
+      launcherSessionId: this.launcherSessionId,
+      qualityScenario: this.qualityScenario,
       skipActivation,
       suppressActivationForThisHide,
-      suppressActivationRemainingMs: Math.max(0, this.suppressActivationUntilMs - now),
+      externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
       previousAppBundleId: this.previousApp?.bundleId ?? null,
     });
-    this.window!.hide();
     this.hidePreview();
-    this.suppressActivationUntilHidden = false;
+    this.window!.hide();
 
     if (shouldSkipActivation || this.fieldTheoryActiveOnShow) {
-      appendCommandLauncherTrace('hide-skip-activation');
+      appendCommandLauncherTrace('hide-skip-activation', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
       return;
     }
 
@@ -352,12 +493,21 @@ export class CommandLauncherWindow {
     // This works even when clipboard history is visible in immersive mode.
     if (this.previousApp?.bundleId) {
       appendCommandLauncherTrace('hide-activate-previous-app', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
         bundleId: this.previousApp.bundleId,
       });
       this.activatePreviousApp(this.previousApp.bundleId);
     } else {
       // Fallback to app.hide() if we don't know the previous app
-      appendCommandLauncherTrace('hide-app-hide-fallback');
+      appendCommandLauncherTrace('hide-app-hide-fallback', {
+        launcherSessionId: this.launcherSessionId,
+        qualityScenario: this.qualityScenario,
+      });
+      appendVisibilityTrace('command-launcher.app-hide', {
+        reason: 'hide-no-previous-app',
+        caller: captureVisibilityCaller(),
+      });
       app.hide();
     }
   }
@@ -370,6 +520,10 @@ export class CommandLauncherWindow {
       if (bundleId.includes('"') || bundleId.includes("'")) {
         log.error('Invalid bundleId contains quotes:', bundleId);
         appendCommandLauncherTrace('activate-previous-app-invalid-bundle', { bundleId });
+        appendVisibilityTrace('command-launcher.app-hide', {
+          reason: 'invalid-previous-app-bundle',
+          caller: captureVisibilityCaller(),
+        });
         app.hide();
         return;
       }
@@ -380,6 +534,12 @@ export class CommandLauncherWindow {
     } catch (error) {
       log.error('Failed to activate previous app:', error);
       appendCommandLauncherTrace('activate-previous-app-error', { bundleId, error });
+      appendVisibilityTrace('command-launcher.app-hide', {
+        reason: 'activate-previous-app-error',
+        bundleId,
+        error,
+        caller: captureVisibilityCaller(),
+      });
       app.hide(); // Fallback
     }
   }
@@ -400,14 +560,33 @@ export class CommandLauncherWindow {
     return this._isShowing || this.isVisible();
   }
 
-  suppressActivationForExternalInvocation(): void {
-    this.suppressActivationUntilHidden = true;
-    this.suppressActivationUntilMs = Date.now() + this.SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS;
-    appendCommandLauncherTrace('suppress-activation-for-external-invocation', {
+  beginExternalInvocationSuppression(): number {
+    const token = this.nextExternalInvocationSuppressionToken;
+    this.nextExternalInvocationSuppressionToken += 1;
+    this.externalInvocationSuppressionTokens.add(token);
+    appendCommandLauncherTrace('external-invocation-suppression-begin', {
+      token,
+      activeCount: this.externalInvocationSuppressionTokens.size,
       visible: this.isVisible(),
       isShowing: this._isShowing,
-      durationMs: this.SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS,
     });
+    return token;
+  }
+
+  endExternalInvocationSuppression(token: number | null | undefined): void {
+    if (typeof token !== 'number') return;
+    const removed = this.externalInvocationSuppressionTokens.delete(token);
+    appendCommandLauncherTrace('external-invocation-suppression-end', {
+      token,
+      removed,
+      activeCount: this.externalInvocationSuppressionTokens.size,
+      visible: this.isVisible(),
+      isShowing: this._isShowing,
+    });
+  }
+
+  isExternalInvocationActivationSuppressed(): boolean {
+    return this.externalInvocationSuppressionTokens.size > 0;
   }
 
   /**
@@ -419,6 +598,10 @@ export class CommandLauncherWindow {
 
   wasFieldTheoryActiveOnShow(): boolean {
     return this.fieldTheoryActiveOnShow;
+  }
+
+  getLaunchOrigin(): CommandLauncherLaunchOrigin {
+    return this.launchOrigin;
   }
 
   private getInitialThemeOptions(): { argument: string } {
@@ -435,6 +618,7 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('create-window-start');
     const initialTheme = this.getInitialThemeOptions();
     this.window = new BrowserWindow({
+      title: 'Field Theory Command Launcher',
       width: this.WINDOW_WIDTH,
       height: this.WINDOW_HEIGHT_COLLAPSED,
       frame: false,
@@ -452,6 +636,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.window);
     appendCommandLauncherTrace('create-window-complete');
     
     // Stay on top of everything.
@@ -481,10 +666,37 @@ export class CommandLauncherWindow {
 
     // Hide on blur (clicking away).
     this.window.on('blur', () => {
+      const frontmostApp = this.nativeHelper?.getFrontmostApp() ?? null;
       appendCommandLauncherTrace('window-blur-event', {
         windowVisible: this.isVisible(),
         fieldTheoryActiveOnShow: this.fieldTheoryActiveOnShow,
+        frontmostBundleId: frontmostApp?.bundleId ?? null,
+        frontmostName: frontmostApp?.name ?? null,
       });
+      if (Date.now() < this.suppressPreviewBlurUntil) {
+        appendCommandLauncherTrace('window-blur-ignored-preview-show', {
+          previewVisible: this.previewWindow?.isVisible() ?? false,
+        });
+        this.window?.focus();
+        this.window?.webContents.send('command-launcher:focus-input', {
+          generation: this.showGeneration,
+        });
+        return;
+      }
+      if (Date.now() < this.suppressBlurHideUntil) {
+        appendCommandLauncherTrace('window-blur-ignored-suppressed', {
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
+          suppressBlurHideUntil: this.suppressBlurHideUntil,
+        });
+        this.window?.focus();
+        this.window?.webContents.send('command-launcher:focus-input', {
+          generation: this.showGeneration,
+          launcherSessionId: this.launcherSessionId,
+          qualityScenario: this.qualityScenario,
+        });
+        return;
+      }
       this.hide();
     });
 
@@ -529,6 +741,7 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('preview-create-window-start');
     const initialTheme = this.getInitialThemeOptions();
     this.previewWindow = new BrowserWindow({
+      title: 'Field Theory Command Preview',
       width: this.PREVIEW_WINDOW_WIDTH,
       height: this.PREVIEW_WINDOW_MAX_HEIGHT,
       frame: false,
@@ -547,6 +760,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.previewWindow);
     appendCommandLauncherTrace('preview-create-window-complete');
 
     this.previewWindow.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -611,9 +825,16 @@ export class CommandLauncherWindow {
       ...bounds,
     });
 
+    this.suppressPreviewBlurUntil = Date.now() + COMMAND_LAUNCHER_PREVIEW_BLUR_SUPPRESSION_MS;
     this.previewWindow!.showInactive();
-    this.previewWindow!.moveTop();
     this.previewWindow!.webContents.send('command-launcher-preview:payload', preview);
+    if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
+      this.window.focus();
+      this.window.webContents.send('command-launcher:focus-input', {
+        generation: this.showGeneration,
+      });
+    }
+    this.previewWindow!.moveTop();
   }
 
   private getPreviewBounds(requestedHeight: number): Electron.Rectangle {
@@ -621,14 +842,17 @@ export class CommandLauncherWindow {
       const cursorPoint = screen.getCursorScreenPoint();
       return screen.getDisplayNearestPoint(cursorPoint).bounds;
     })();
+    const centerX = anchor.x + anchor.width / 2;
+    const centerY = anchor.y + anchor.height / 2 + COMMAND_LAUNCHER_CENTER_Y_OFFSET;
+    const width = this.PREVIEW_WINDOW_WIDTH;
     const height = Math.max(
       this.PREVIEW_WINDOW_MIN_HEIGHT,
       Math.min(Math.ceil(requestedHeight), this.PREVIEW_WINDOW_MAX_HEIGHT)
     );
     return {
-      x: Math.round(anchor.x + (anchor.width - this.PREVIEW_WINDOW_WIDTH) / 2),
-      y: Math.round(anchor.y + (anchor.height - height) / 2),
-      width: this.PREVIEW_WINDOW_WIDTH,
+      x: Math.round(centerX - width / 2),
+      y: Math.round(centerY - height / 2),
+      width,
       height,
     };
   }
@@ -663,6 +887,16 @@ export class CommandLauncherWindow {
       this.window.destroy();
       this.window = null;
     }
+  }
+
+  async executeJavaScript<T = unknown>(script: string): Promise<T | null> {
+    if (!this.window || this.window.isDestroyed()) return null;
+    return await this.window.webContents.executeJavaScript(script, true) as T;
+  }
+
+  send(channel: string, ...args: unknown[]): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send(channel, ...args);
   }
 
   private recordResizeRequest(requestedHeight: number): void {

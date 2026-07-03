@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron';
 
 const DEV_SERVER_CONNECTION_REFUSED = -102;
+const DEV_SERVER_LOAD_ABORTED = -2;
 const DEFAULT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 
 type RetryLogger = {
@@ -14,6 +15,11 @@ export function devServerPageUrl(startUrl: string, page: string): string {
 
 export function isDevServerConnectionRefused(errorCode: number): boolean {
   return errorCode === DEV_SERVER_CONNECTION_REFUSED;
+}
+
+export function isDevServerLoadAborted(error: unknown): boolean {
+  const details = error as { errno?: unknown; code?: unknown } | null;
+  return details?.errno === DEV_SERVER_LOAD_ABORTED || details?.code === 'ERR_FAILED';
 }
 
 export function shouldRetryDevServerLoad(input: {
@@ -48,6 +54,8 @@ export function loadDevServerURLWithRetry(
   const load = () => {
     if (win.isDestroyed()) return;
     void win.loadURL(expectedURL).catch((error) => {
+      if (win.isDestroyed()) return;
+      if (isDevServerLoadAborted(error)) return;
       options.logger.warn(`[${options.label}] Failed to request ${expectedURL}:`, error);
     });
   };

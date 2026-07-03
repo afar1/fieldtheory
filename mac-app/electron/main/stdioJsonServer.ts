@@ -17,6 +17,10 @@ import { createLogger } from './logger';
 const log = createLogger('StdioJsonServer');
 
 export type ServerResponse = { ok: boolean; text?: string; error?: string };
+export type ServerEvent = Record<string, unknown>;
+export type ServerSendOptions = {
+  onEvent?: (event: ServerEvent) => void;
+};
 
 type SpawnFn = typeof spawn;
 
@@ -46,6 +50,7 @@ export class StdioJsonServer {
   private ready: boolean = false;
   private readyPromise: Promise<void> | null = null;
   private pendingResolve: ((response: ServerResponse) => void) | null = null;
+  private pendingEventHandler: ((event: ServerEvent) => void) | null = null;
   private commandChain: Promise<void> = Promise.resolve();
   private lifecycleGeneration: number = 0;
   private _disabledReason: string | null = null;
@@ -155,6 +160,7 @@ export class StdioJsonServer {
             if (!line.trim()) continue;
             try {
               const msg = JSON.parse(line);
+              if (this.handleEventMessage(msg)) continue;
               if (msg.ready) {
                 if (invalidated()) {
                   proc.kill('SIGTERM');
@@ -226,6 +232,7 @@ export class StdioJsonServer {
     if (this.pendingResolve) {
       this.pendingResolve({ ok: false, error: `${this.name} server stopped` });
       this.pendingResolve = null;
+      this.pendingEventHandler = null;
     }
     if (this.process) {
       this.process.kill('SIGTERM');
@@ -237,8 +244,8 @@ export class StdioJsonServer {
    * Send a JSON command to the server and wait for the response.
    * Commands are serialized — only one is in-flight at a time.
    */
-  send(cmd: Record<string, unknown>): Promise<ServerResponse> {
-    return this.enqueue(() => this.sendInternal(cmd));
+  send(cmd: Record<string, unknown>, options: ServerSendOptions = {}): Promise<ServerResponse> {
+    return this.enqueue(() => this.sendInternal(cmd, options));
   }
 
   // ---- internals ----
@@ -256,16 +263,18 @@ export class StdioJsonServer {
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (this.pendingResolve) {
-            this.pendingResolve(msg);
-            this.pendingResolve = null;
-          }
-        } catch {
-          log.warn('[%s] Non-JSON stdout: %s', this.name, line);
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (this.handleEventMessage(msg)) continue;
+              if (this.pendingResolve) {
+                this.pendingResolve(msg);
+                this.pendingResolve = null;
+                this.pendingEventHandler = null;
+              }
+            } catch {
+              log.warn('[%s] Non-JSON stdout: %s', this.name, line);
         }
       }
     });
@@ -277,7 +286,20 @@ export class StdioJsonServer {
     return queued;
   }
 
-  private sendInternal(cmd: Record<string, unknown>): Promise<ServerResponse> {
+  private handleEventMessage(msg: unknown): boolean {
+    if (!msg || typeof msg !== 'object') return false;
+    const event = msg as ServerEvent;
+    if (event.event !== 'progress') return false;
+    try {
+      this.pendingEventHandler?.(event);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('[%s] Progress event handler failed: %s', this.name, message);
+    }
+    return true;
+  }
+
+  private sendInternal(cmd: Record<string, unknown>, options: ServerSendOptions): Promise<ServerResponse> {
     return new Promise((resolve, reject) => {
       if (!this.process || !this.ready) {
         reject(new Error(`${this.name} server not running`));
@@ -290,11 +312,14 @@ export class StdioJsonServer {
 
       const timeout = setTimeout(() => {
         this.pendingResolve = null;
+        this.pendingEventHandler = null;
         reject(new Error(`${this.name} server timed out (${this.timeoutMs / 1000}s)`));
       }, this.timeoutMs);
 
+      this.pendingEventHandler = options.onEvent ?? null;
       this.pendingResolve = (response) => {
         clearTimeout(timeout);
+        this.pendingEventHandler = null;
         resolve(response);
       };
 
@@ -303,6 +328,7 @@ export class StdioJsonServer {
         if (err) {
           clearTimeout(timeout);
           this.pendingResolve = null;
+          this.pendingEventHandler = null;
           reject(new Error(`Failed to write to ${this.name} server: ${err.message}`));
         }
       });

@@ -89,7 +89,7 @@ describe('useAuthSessionBridge', () => {
       expect(result.current.initialized).toBe(true);
     });
 
-    expect(result.current.session?.user.email).toBe('main@example.com');
+    expect(result.current.session?.user?.email).toBe('main@example.com');
   });
 
   it('updates mounted renderers when the main process session changes', async () => {
@@ -109,7 +109,7 @@ describe('useAuthSessionBridge', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.session?.user.email).toBe('live-update@example.com');
+      expect(result.current.session?.user?.email).toBe('live-update@example.com');
     });
   });
 
@@ -122,10 +122,10 @@ describe('useAuthSessionBridge', () => {
     );
 
     await waitFor(() => {
-      expect(result.current.session?.user.email).toBe('renderer-fallback@example.com');
+      expect(result.current.session?.user?.email).toBe('renderer-fallback@example.com');
     });
 
-    expect(result.current.session?.user.email).toBe('renderer-fallback@example.com');
+    expect(result.current.session?.user?.email).toBe('renderer-fallback@example.com');
   });
 
   it('calls the signed-out callback only for live sign-out events', async () => {

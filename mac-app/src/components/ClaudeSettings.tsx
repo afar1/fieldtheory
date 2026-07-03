@@ -8,6 +8,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import {
+  SETTINGS_CARD_GAP,
+  getSettingsDividerColor,
   SettingsBadge,
   type SettingsBadgeTone,
   SettingsInsetGroup,
@@ -284,7 +286,7 @@ export default function ClaudeSettings() {
       : 'primary';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       {/* Read Permission Hooks - Auto-approve without prompts */}
       <SettingsInsetGroup theme={theme}>
         <SettingsSectionHeading
@@ -508,7 +510,7 @@ export default function ClaudeSettings() {
                     <div
                       style={{
                         padding: '0 12px 12px 12px',
-                        borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                        borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
                         paddingTop: '10px',
                       }}
                     >

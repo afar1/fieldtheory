@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import {
+  SETTINGS_CARD_GAP,
   getSettingsBadgeStyle,
   SettingsBadge,
   SettingsDisabledBlock,
+  SettingsRow,
 } from '../SettingsPrimitives';
 
 const theme = {
@@ -19,6 +21,12 @@ const theme = {
   warning: '#d97706',
   info: '#2563eb',
 } as any;
+
+describe('SETTINGS_CARD_GAP', () => {
+  it('defines the shared outer spacing between settings cards', () => {
+    expect(SETTINGS_CARD_GAP).toBe('16px');
+  });
+});
 
 describe('SettingsDisabledBlock', () => {
   it('disables nested form controls when disabled', () => {
@@ -75,5 +83,14 @@ describe('SettingsBadge', () => {
     expect(styles.color).toBe(theme.warning);
     expect(styles.borderRadius).toBe('999px');
     expect(styles.padding).toBe('2px 6px');
+  });
+});
+
+describe('SettingsRow', () => {
+  it('can omit its trailing divider for the last row in a card', () => {
+    const { container } = render(<SettingsRow theme={theme} label="Final row" last />);
+
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.style.borderBottom).toBe('0px');
   });
 });

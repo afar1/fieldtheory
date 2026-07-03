@@ -36,3 +36,35 @@ export function getLocalImageContentType(filePath: string): string {
       return 'image/png';
   }
 }
+
+export function getLocalImageCacheHeaders(stat: { mtimeMs: number; size: number }): Record<string, string> {
+  const mtimeMs = Math.trunc(stat.mtimeMs);
+  return {
+    'Cache-Control': 'private, max-age=3600',
+    ETag: `"${mtimeMs.toString(36)}-${stat.size.toString(36)}"`,
+    'Last-Modified': new Date(mtimeMs).toUTCString(),
+  };
+}
+
+export function shouldReturnLocalImageNotModified(
+  stat: { mtimeMs: number; size: number },
+  headers: { ifNoneMatch?: string | string[] | null; ifModifiedSince?: string | string[] | null },
+): boolean {
+  const cacheHeaders = getLocalImageCacheHeaders(stat);
+  const ifNoneMatch = firstHeaderValue(headers.ifNoneMatch);
+  if (ifNoneMatch) {
+    const etags = ifNoneMatch.split(',').map((etag) => etag.trim());
+    if (etags.includes('*') || etags.includes(cacheHeaders.ETag)) return true;
+  }
+
+  const ifModifiedSince = firstHeaderValue(headers.ifModifiedSince);
+  if (!ifModifiedSince) return false;
+  const modifiedSince = Date.parse(ifModifiedSince);
+  if (Number.isNaN(modifiedSince)) return false;
+  return Math.floor(stat.mtimeMs / 1000) * 1000 <= modifiedSince;
+}
+
+function firstHeaderValue(value: string | string[] | null | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}

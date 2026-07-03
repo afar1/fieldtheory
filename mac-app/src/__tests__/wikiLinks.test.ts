@@ -3,19 +3,29 @@ import {
   buildWikiIndex,
   classifyLinkHref,
   decodeUnresolvedWikiHref,
+  getActiveMarkdownMentionCompletion,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownLinkRelationMetadataDocuments,
+  getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionCommitEdit,
+  getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getMarkdownMentionCompletionReplacement,
   getWikiBacklinks,
   getWikiLinkedPages,
   getWikiOutboundLinks,
   isUnresolvedWikiHref,
+  mergeMarkdownLinkRelationDocuments,
   normalizeWikiRelPath,
+  refreshMarkdownLinkRelationDocumentHits,
+  removeMarkdownLinkRelationDocument,
   resolveWikiLink,
   transformWikiLinks,
+  upsertMarkdownLinkRelationDocument,
 } from '../utils/wikiLinks';
 
 const index = buildWikiIndex([
@@ -53,13 +63,25 @@ describe('buildWikiIndex', () => {
     expect(idx.byRelPath.has('debates/b')).toBe(true);
   });
 
-  it('skips pages with an empty title so the empty string never maps anywhere', () => {
+  it('skips empty title keys while still indexing wiki pages by filename', () => {
     const idx = buildWikiIndex([
       { relPath: 'entries/untitled', title: '' },
       { relPath: 'entries/spaces', title: '   ' },
     ]);
-    expect(idx.byTitle.size).toBe(0);
+    expect(idx.byTitle.has('')).toBe(false);
+    expect(idx.byTitle.get('untitled')).toEqual({ kind: 'wiki', relPath: 'entries/untitled' });
+    expect(idx.byTitle.get('spaces')).toEqual({ kind: 'wiki', relPath: 'entries/spaces' });
     expect(idx.byRelPath.size).toBe(2);
+  });
+
+  it('indexes Library markdown pages by filename when display metadata is not the real title', () => {
+    const idx = buildWikiIndex([
+      { relPath: 'briefs/Nebius Three Run Comparison Brief', title: 'Untitled' },
+    ]);
+
+    expect(resolveWikiLink('Nebius Three Run Comparison Brief', idx).relPath).toBe(
+      'briefs/Nebius Three Run Comparison Brief',
+    );
   });
 });
 
@@ -77,9 +99,68 @@ describe('resolveWikiLink', () => {
     expect(resolveWikiLink('/debates/consensus.md', index).relPath).toBe('debates/consensus');
   });
 
+  it('resolves hidden meeting sidecar relPaths without requiring sidebar indexing', () => {
+    expect(resolveWikiLink('.meetings/meeting-1/transcript.md', index).relPath).toBe('.meetings/meeting-1/transcript');
+  });
+
+  it('resolves @bookmarks as a built-in destination', () => {
+    expect(resolveWikiLink('@bookmark', index).bookmarks).toBe(true);
+    expect(resolveWikiLink('@bookmarks', index).bookmarks).toBe(true);
+    expect(resolveWikiLink('bookmarks', index).bookmarks).toBe(false);
+    expect(resolveWikiLink('Bookmarks.md', index).bookmarks).toBe(false);
+  });
+
   it('returns null for unknown targets', () => {
     expect(resolveWikiLink('nothing here', index).relPath).toBeNull();
     expect(resolveWikiLink('', index).relPath).toBeNull();
+  });
+});
+
+describe('getMarkdownWikiLinkPasteText', () => {
+  const pasteIndex = buildWikiIndex([
+    {
+      relPath: 'scratchpad/running-list',
+      absPath: '/Users/afar/.fieldtheory/library/scratchpad/Running list.md',
+      title: 'Running list',
+    },
+    {
+      relPath: '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+      title: 'Review Artifact',
+      artifactPath: '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+    },
+    {
+      relPath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+      title: 'refactor',
+      commandPath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+    },
+  ]);
+
+  it('turns a known pasted Library file path into a wikilink', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      '/Users/afar/.fieldtheory/library/scratchpad/Running list.md',
+      pasteIndex,
+    )).toBe('[[Running list]]');
+  });
+
+  it('accepts file URLs from clipboard uri lists', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      'file:///Users/afar/.fieldtheory/library/scratchpad/Running%20list.md',
+      pasteIndex,
+    )).toBe('[[Running list]]');
+  });
+
+  it('turns known artifact and command paths into wikilinks', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      [
+        '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+        '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+      ].join('\n'),
+      pasteIndex,
+    )).toBe('[[Review Artifact]]\n[[refactor]]');
+  });
+
+  it('leaves unknown pasted paths alone', () => {
+    expect(getMarkdownWikiLinkPasteText('/Users/afar/notes/unknown.md', pasteIndex)).toBeNull();
   });
 });
 
@@ -87,6 +168,17 @@ describe('transformWikiLinks', () => {
   it('rewrites resolved links to wiki:// markdown links', () => {
     const out = transformWikiLinks('See [[My Page]] for context.', index);
     expect(out).toBe('See [My Page](wiki://entries/my-page) for context.');
+  });
+
+  it('rewrites title-only links that match a Library markdown filename', () => {
+    const briefIndex = buildWikiIndex([
+      { relPath: 'briefs/Nebius Three Run Comparison Brief', title: 'Untitled' },
+    ]);
+    const out = transformWikiLinks('All-three comparison: [[Nebius Three Run Comparison Brief]].', briefIndex);
+
+    expect(out).toBe(
+      'All-three comparison: [Nebius Three Run Comparison Brief](wiki://briefs/Nebius%20Three%20Run%20Comparison%20Brief).',
+    );
   });
 
   it('uses the alias as display text when provided', () => {
@@ -97,6 +189,11 @@ describe('transformWikiLinks', () => {
   it('emits an unresolved sentinel href for missing targets', () => {
     const out = transformWikiLinks('Link to [[Brand New]] page.', index);
     expect(out).toBe('Link to [Brand New](wiki://!/Brand%20New) page.');
+  });
+
+  it('rewrites hidden meeting sidecar links to wiki hrefs', () => {
+    const out = transformWikiLinks('Raw: [[.meetings/meeting-1/transcript|Raw transcript]]', index);
+    expect(out).toBe('Raw: [Raw transcript](wiki://.meetings/meeting-1/transcript)');
   });
 
   it('rewrites artifact title links to artifact hrefs', () => {
@@ -115,6 +212,26 @@ describe('transformWikiLinks', () => {
     ]);
     const out = transformWikiLinks('Run [[refactor]].', commandIndex);
     expect(out).toBe('Run [refactor](command://%2Ftmp%2Frefactor.md).');
+  });
+
+  it('rewrites @bookmarks mentions to the built-in bookmarks destination', () => {
+    const out = transformWikiLinks('Open @bookmark or @bookmarks.', index);
+    expect(out).toBe('Open [@bookmark](bookmarks://root) or [@bookmarks](bookmarks://root).');
+  });
+
+  it('does not rewrite bookmarks wikilinks to the built-in bookmarks destination', () => {
+    const out = transformWikiLinks('Open [[bookmarks]].', index);
+    expect(out).toBe('Open [bookmarks](wiki://!/bookmarks).');
+  });
+
+  it('does not rewrite @bookmarks inside existing markdown links', () => {
+    const out = transformWikiLinks('Open [@bookmarks](https://example.com).', index);
+    expect(out).toBe('Open [@bookmarks](https://example.com).');
+  });
+
+  it('leaves @bookmarks mentions inside code untouched', () => {
+    const out = transformWikiLinks('Use `@bookmarks` then @bookmarks.', index);
+    expect(out).toBe('Use `@bookmarks` then [@bookmarks](bookmarks://root).');
   });
 
   it('leaves wikilink syntax inside fenced code blocks untouched', () => {
@@ -229,6 +346,10 @@ describe('classifyLinkHref', () => {
     });
   });
 
+  it('routes bookmarks:// hrefs to the built-in bookmarks destination', () => {
+    expect(classifyLinkHref('bookmarks://root', index)).toEqual({ kind: 'bookmarks' });
+  });
+
   it('treats bare relative hrefs that match the index as wiki links', () => {
     expect(classifyLinkHref('debates/consensus', index)).toEqual({
       kind: 'wiki',
@@ -291,6 +412,13 @@ describe('getMarkdownEditorLinkActionAtOffset', () => {
     expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('Consensus'), index)).toEqual({
       kind: 'wiki',
       relPath: 'debates/consensus',
+    });
+  });
+
+  it('activates built-in @bookmarks markdown links from edit mode', () => {
+    const input = 'Open [@bookmarks](bookmarks://root) now.';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('@bookmarks'), index)).toEqual({
+      kind: 'bookmarks',
     });
   });
 
@@ -526,6 +654,63 @@ describe('getMarkdownLinkedDocuments', () => {
     ]);
   });
 
+  it('uses metadata-only relation documents for immediate outbound links', () => {
+    const metadataDocuments = getMarkdownLinkRelationMetadataDocuments([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: artifactPath, title: 'Artifact One', artifactPath },
+      { relPath: commandPath, title: 'refactor', commandPath },
+    ]);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/source' },
+      'See [[Artifact One]] and [[refactor]].',
+      metadataDocuments,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'artifact', path: artifactPath },
+        title: 'Artifact One',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'outbound',
+      },
+      {
+        target: { kind: 'command', path: commandPath },
+        title: 'refactor',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'outbound',
+      },
+    ]);
+  });
+
+  it('lets hydrated relation documents replace metadata-only entries', () => {
+    const metadataDocuments = getMarkdownLinkRelationMetadataDocuments([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: artifactPath, title: 'Artifact One', artifactPath },
+    ]);
+    const hydratedDocuments = mergeMarkdownLinkRelationDocuments(metadataDocuments, [
+      {
+        target: { kind: 'artifact' as const, path: artifactPath },
+        title: 'Artifact One',
+        content: 'Back to [[Source]].',
+        linkHits: getMarkdownEditorLinkHits('Back to [[Source]].', linkedIndex),
+      },
+    ]);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/source' },
+      'See [[Artifact One]].',
+      hydratedDocuments,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'artifact', path: artifactPath },
+        title: 'Artifact One',
+        excerpt: 'See [[Artifact One]].',
+        direction: 'bidirectional',
+      },
+    ]);
+  });
+
   it('shows backlinks to command documents', () => {
     expect(getMarkdownLinkedDocuments(
       { kind: 'command', path: commandPath },
@@ -577,6 +762,111 @@ describe('getMarkdownLinkedDocuments', () => {
       },
     ]);
   });
+
+  it('refreshes cached relation hits when a new wiki target enters the index', () => {
+    const staleIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+    ]);
+    const freshIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: 'scratchpad/new-target', title: 'New Target' },
+    ]);
+    const staleDocuments = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'See [[New Target]].',
+        linkHits: getMarkdownEditorLinkHits('See [[New Target]].', staleIndex),
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/new-target' },
+        title: 'New Target',
+        content: '',
+      },
+    ];
+
+    const refreshedDocuments = refreshMarkdownLinkRelationDocumentHits(staleDocuments, freshIndex);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/new-target' },
+      '',
+      refreshedDocuments,
+      freshIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'See [[New Target]].',
+        direction: 'inbound',
+      },
+    ]);
+  });
+
+  it('upserts a saved document so backlinks use the latest markdown', () => {
+    const freshIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: 'scratchpad/new-target', title: 'New Target' },
+    ]);
+    const documents = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'No link yet.',
+        linkHits: getMarkdownEditorLinkHits('No link yet.', freshIndex),
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/new-target' },
+        title: 'New Target',
+        content: '',
+      },
+    ];
+    const updatedDocuments = upsertMarkdownLinkRelationDocument(documents, {
+      target: { kind: 'wiki', relPath: 'scratchpad/source' },
+      title: 'Source',
+      content: 'See [[New Target]].',
+      linkHits: getMarkdownEditorLinkHits('See [[New Target]].', freshIndex),
+    });
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/new-target' },
+      '',
+      updatedDocuments,
+      freshIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'See [[New Target]].',
+        direction: 'inbound',
+      },
+    ]);
+  });
+
+  it('removes a relation document by target', () => {
+    const documents = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'See [[Target]].',
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/target' },
+        title: 'Target',
+        content: '',
+      },
+    ];
+
+    expect(removeMarkdownLinkRelationDocument(documents, {
+      kind: 'wiki',
+      relPath: 'scratchpad/source',
+    })).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/target' },
+        title: 'Target',
+        content: '',
+      },
+    ]);
+  });
 });
 
 describe('getActiveMarkdownWikiLinkCompletion', () => {
@@ -620,11 +910,106 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
     });
   });
 
+  it('commits the current unfinished link and moves the caret after closing brackets', () => {
+    const input = 'See [[Brand New today';
+    const caret = input.indexOf(' today');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('commits the current auto-closed link and moves the caret after existing closing brackets', () => {
+    const input = 'See [[Brand New]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
   it('does not complete outside an active simple wikilink target', () => {
     expect(getActiveMarkdownWikiLinkCompletion('See [[Cons]]', 12, 12)).toBeNull();
     expect(getActiveMarkdownWikiLinkCompletion('See [[Con\ns', 10, 10)).toBeNull();
     expect(getActiveMarkdownWikiLinkCompletion('See [[Target|alias', 18, 18)).toBeNull();
     expect(getActiveMarkdownWikiLinkCompletion('See [[Cons', 7, 9)).toBeNull();
+  });
+
+  it('deletes characters inside an active auto-closed link without committing it', () => {
+    const input = 'See [[Brand New]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Backspace')).toEqual({
+      nextValue: 'See [[Brand Ne]] today',
+      selectionStart: 14,
+      selectionEnd: 14,
+    });
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Delete')).toBeNull();
+  });
+
+  it('deletes an empty auto-closed wikilink back to one opening bracket', () => {
+    const input = 'See [[]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Backspace')).toEqual({
+      nextValue: 'See [ today',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
+  });
+});
+
+describe('getActiveMarkdownMentionCompletion', () => {
+  it('returns the active @mention query', () => {
+    const input = 'Open @boo';
+
+    expect(getActiveMarkdownMentionCompletion(input, input.length, input.length)).toEqual({
+      openStart: 5,
+      queryStart: 6,
+      queryEnd: 9,
+      replaceEnd: 9,
+      query: 'boo',
+    });
+  });
+
+  it('replaces a mention query with an exact markdown link target', () => {
+    const input = 'Open @Rob';
+    const completion = getActiveMarkdownMentionCompletion(input, input.length, input.length);
+
+    expect(getMarkdownMentionCompletionReplacement(
+      input,
+      completion!,
+      'Robin Poke-Style Prompt Readable Brief',
+      'wiki://briefs/robin-poke-style',
+    )).toEqual({
+      nextValue: 'Open [@Robin Poke-Style Prompt Readable Brief](wiki://briefs/robin-poke-style)',
+      selectionStart: 78,
+      selectionEnd: 78,
+    });
+  });
+
+  it('keeps @bookmarks as a visible built-in mention', () => {
+    const input = 'Open @boo';
+    const completion = getActiveMarkdownMentionCompletion(input, input.length, input.length);
+
+    expect(getMarkdownMentionCompletionReplacement(input, completion!, 'bookmarks', 'bookmarks://root')).toEqual({
+      nextValue: 'Open [@bookmarks](bookmarks://root)',
+      selectionStart: 35,
+      selectionEnd: 35,
+    });
+  });
+
+  it('does not complete email-like or selected text mentions', () => {
+    expect(getActiveMarkdownMentionCompletion('a@boo', 5, 5)).toBeNull();
+    expect(getActiveMarkdownMentionCompletion('Open @boo', 5, 9)).toBeNull();
   });
 });
 

@@ -394,6 +394,56 @@ describe('Codex hook script generation', () => {
     });
   });
 
+  it('notify abandons existing pending jobs instead of wedging non-blocking mode', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true, stop_on_pending: false });
+      writeJson(join(librarianDir, 'state.json'), { count: 4, threshold: 99 });
+      writeJson(join(librarianDir, '.codex-pending'), { job_file: 'stale', output: 'stale' });
+      writeJson(join(librarianDir, 'jobs', 'job_1.json'), {
+        schema_version: 1,
+        id: 1,
+        status: 'pending',
+        output: '/tmp/stale.md',
+      });
+
+      const stdout = runHook(generateCodexNotifyHookScript(), homeDir);
+      const hooksConfig = JSON.parse(readFileSync(join(homeDir, '.codex', 'hooks.json'), 'utf8'));
+      const state = JSON.parse(readFileSync(join(librarianDir, 'state.json'), 'utf8'));
+      const oldJob = JSON.parse(readFileSync(join(librarianDir, 'jobs', 'job_1.json'), 'utf8'));
+
+      expect(stdout).toBe('');
+      expect(oldJob.status).toBe('abandoned');
+      expect(oldJob.abandoned_reason).toBe('codex_non_blocking_superseded');
+      expect(state.count).toBe(5);
+      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(false);
+      expect(existsSync(join(librarianDir, '.codex-pending'))).toBe(false);
+    });
+  });
+
+  it('notify creates a fresh job after abandoning an existing non-blocking pending job', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true, stop_on_pending: false });
+      writeJson(join(librarianDir, 'state.json'), { count: 0, threshold: 1 });
+      writeJson(join(librarianDir, 'jobs', 'job_1.json'), {
+        schema_version: 1,
+        id: 1,
+        status: 'pending',
+        output: '/tmp/stale.md',
+      });
+
+      const stdout = runHook(generateCodexNotifyHookScript(), homeDir);
+      const oldJob = JSON.parse(readFileSync(join(librarianDir, 'jobs', 'job_1.json'), 'utf8'));
+      const nextJob = JSON.parse(readFileSync(join(librarianDir, 'jobs', 'job_2.json'), 'utf8'));
+
+      expect(stdout).toBe('');
+      expect(oldJob.status).toBe('abandoned');
+      expect(nextJob.status).toBe('pending');
+      expect(nextJob.id).toBe(2);
+    });
+  });
+
   it('notify removes Stop when there is no pending job and the threshold is not reached', () => {
     withTempHome(homeDir => {
       const librarianDir = join(homeDir, '.fieldtheory', 'librarian');

@@ -7,7 +7,7 @@
  */
 
 /** Default number of bars in the waveform display. */
-export const WAVEFORM_BAR_COUNT = 5;
+export const WAVEFORM_BAR_COUNT = 7;
 
 /**
  * Scale a raw RMS audio level (0–1) to a perceptual 0–1 range.

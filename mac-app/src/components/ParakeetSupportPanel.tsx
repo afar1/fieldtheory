@@ -8,6 +8,7 @@ interface ParakeetSupportPanelProps {
   title: string;
   summary?: string | null;
   recoveryMessage?: string | null;
+  recoveryCommand?: string | null;
   detail?: string | null;
   progress?: ParakeetSetupProgress | null;
 }
@@ -17,25 +18,30 @@ export default function ParakeetSupportPanel({
   title,
   summary,
   recoveryMessage,
+  recoveryCommand,
   detail,
   progress,
 }: ParakeetSupportPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [sendingDiagnostics, setSendingDiagnostics] = useState(false);
   const [diagnosticsSent, setDiagnosticsSent] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
 
   const detailText = detail?.trim() || null;
-  if (!summary && !progress) {
-    return null;
-  }
+  const commandText = recoveryCommand?.trim() || null;
 
+  const inFlight = Boolean(
+    progress &&
+    progress.stage !== 'completed' &&
+    progress.stage !== 'failed'
+  );
   const tone = summary
     ? {
-        border: theme.isDark ? 'rgba(239, 68, 68, 0.35)' : '#fecaca',
-        background: theme.isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2',
+        border: theme.isDark ? 'rgba(99, 102, 241, 0.4)' : '#c7d2fe',
+        background: theme.isDark ? 'rgba(99, 102, 241, 0.12)' : '#eef2ff',
       }
     : {
         border: theme.isDark ? 'rgba(59, 130, 246, 0.35)' : '#bfdbfe',
@@ -64,6 +70,29 @@ export default function ParakeetSupportPanel({
       console.error('Failed to copy Parakeet detail:', error);
     }
   }, [detailText]);
+
+  const handleCopyCommand = useCallback(async () => {
+    if (!commandText) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(commandText);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = commandText;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedCommand(true);
+      window.setTimeout(() => setCopiedCommand(false), 1800);
+    } catch (error) {
+      console.error('Failed to copy Parakeet recovery command:', error);
+    }
+  }, [commandText]);
 
   const handleSendDiagnostics = useCallback(async () => {
     setSendingDiagnostics(true);
@@ -97,6 +126,10 @@ export default function ParakeetSupportPanel({
     : null;
   const progressDetail = progress?.detail?.trim() || null;
 
+  if (!summary && !progress) {
+    return null;
+  }
+
   return (
     <>
       <div
@@ -116,6 +149,23 @@ export default function ParakeetSupportPanel({
             <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
               {progress.message}
             </div>
+            {inFlight && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '7px' }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '999px',
+                    backgroundColor: theme.info,
+                    boxShadow: `0 0 0 4px ${theme.isDark ? 'rgba(59, 130, 246, 0.14)' : 'rgba(59, 130, 246, 0.12)'}`,
+                  }}
+                />
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Still working, even if the percent pauses.
+                </span>
+              </div>
+            )}
             {progressPercent != null && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                 <div
@@ -163,6 +213,38 @@ export default function ParakeetSupportPanel({
             {recoveryMessage && (
               <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4, marginTop: '6px' }}>
                 {recoveryMessage}
+              </div>
+            )}
+            {commandText && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginTop: '8px',
+                }}
+              >
+                <code
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    borderRadius: '6px',
+                    border: `1px solid ${theme.border}`,
+                    backgroundColor: theme.isDark ? 'rgba(15, 23, 42, 0.5)' : '#fff',
+                    color: theme.text,
+                    fontSize: '11px',
+                    lineHeight: 1.35,
+                    userSelect: 'text',
+                  }}
+                >
+                  {commandText}
+                </code>
+                <button
+                  onClick={() => void handleCopyCommand()}
+                  style={buttonStyle(theme)}
+                >
+                  {copiedCommand ? 'Copied' : 'Copy command'}
+                </button>
               </div>
             )}
 

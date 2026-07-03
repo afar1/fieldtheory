@@ -10,6 +10,7 @@ export const ClipboardIPCChannels = {
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  SAVE_PASTED_IMAGE_FILE: 'clipboard:savePastedImageFile',
   EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
@@ -43,12 +44,16 @@ export const ClipboardIPCChannels = {
   // Local LLM model management
   GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
   GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_HEALTH: 'clipboard:getLocalLLMHealth',
   GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
   SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
   DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',
   DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
+  GET_MEETING_SUMMARY_PROMPT: 'clipboard:getMeetingSummaryPrompt',
+  SAVE_MEETING_SUMMARY_PROMPT: 'clipboard:saveMeetingSummaryPrompt',
+  RESET_MEETING_SUMMARY_PROMPT: 'clipboard:resetMeetingSummaryPrompt',
 
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
@@ -81,7 +86,7 @@ export const ClipboardIPCChannels = {
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
   CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
-  GET_SYNC_SESSION: 'clipboard:getSyncSession', // Recover session from main process
+  GET_SYNC_SESSION: 'clipboard:getSyncSession',
   SYNC_MOBILE_TRANSCRIPTS: 'clipboard:syncMobileTranscripts',
   FORCE_SYNC_ALL: 'clipboard:forceSyncAll',
   GET_SYNC_ENABLED: 'clipboard:getSyncEnabled',
@@ -293,6 +298,7 @@ export interface ClipboardAPI {
   deleteItem: (id: number) => Promise<void>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;

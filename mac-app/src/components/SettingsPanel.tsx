@@ -4,7 +4,7 @@
 // Styled consistently with the clipboard history window's design language.
 // =============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
@@ -12,33 +12,56 @@ import HotMicSettings from './HotMicSettings';
 import RectangleSettings from './RectangleSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
+import LauncherSettings from './LauncherSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
+import LocalModelSettings from './LocalModelSettings';
+import TeamSettings from './TeamSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import { accentPresets, AccentPreset } from '../design/tokens';
+import { accentPresets, themeStylePresets, AccentPreset, ThemeStylePreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
-import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
+import { buildTeamSettingsState } from '../utils/teamSettingsState';
+import { SETTINGS_CARD_GAP, getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
-import { TEXT_CURSOR_BLINK_CHANGED_EVENT, persistTextCursorBlink, restoreTextCursorBlink } from '../utils/editorShortcuts';
+import {
+  LIBRARIAN_KEYBOARD_SHORTCUTS,
+  RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
+  type RenderedTextCursorStyle,
+  persistRenderedBlockCursorOpacity,
+  persistSharedFileToggleHotkey,
+  restoreRenderedBlockCursorOpacity,
+  restoreSharedFileToggleHotkey,
+  restoreRenderedTextCursorStyle,
+} from '../utils/editorShortcuts';
 
 // Settings sections in alphabetical order
 type SettingsSection =
   | 'account'
   | 'appearance'
+  | 'auto-improve'
   | 'audio'
   | 'keyboard'
+  | 'launcher'
   | 'librarian'
+  | 'local-model'
   | 'commands'
   | 'sounds'
   | 'stats'
+  | 'team'
   | 'terminal-commands'
   | 'hot-mic'
   | 'rectangle';
 
 type FieldTheoryWindowMode = 'panel' | 'app';
+type SettingsStyles = Record<string, CSSProperties>;
+type TeamServiceState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getState']>>;
+type TeamEntitlementState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getEntitlement']>>;
+type TeamMutationResult = Awaited<ReturnType<NonNullable<Window['teamAPI']>['inviteMember']>>;
+const TEAM_SETTINGS_BACKGROUND_REFRESH_MS = 30000;
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -54,21 +77,62 @@ type HotkeyCapture =
   | 'superPaste'
   | 'commandLauncher'
   | 'scratchpad'
+  | 'sharedFileToggle'
   | 'hotMic'
   | null;
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
   'account': 'Account',
   'appearance': 'Appearance & System',
+  'auto-improve': 'Auto Improve',
   'audio': 'Audio & Transcription',
   'keyboard': 'Keyboard Shortcuts',
+  'launcher': 'Launcher',
   'librarian': 'Librarian',
+  'local-model': 'Local model',
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
+  'team': 'Team',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
   'rectangle': 'Window Management',
+};
+
+const SECTION_GLYPHS: Record<SettingsSection, string> = {
+  'account': '◉',
+  'appearance': '◐',
+  'auto-improve': '✦',
+  'audio': '∿',
+  'keyboard': '⌘',
+  'launcher': '⌖',
+  'librarian': '◇',
+  'local-model': '▢',
+  'commands': '/',
+  'sounds': '♪',
+  'stats': '▥',
+  'team': '◎',
+  'terminal-commands': '/',
+  'hot-mic': '⚇',
+  'rectangle': '▣',
+};
+
+const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
+  'account': 'Profile, sign-in, local sync, and support.',
+  'appearance': 'Theme, app behavior, permissions, and retention.',
+  'auto-improve': 'Clean up transcripts before paste using your selected provider.',
+  'audio': 'Microphone, transcription, and word corrections.',
+  'keyboard': 'Global shortcuts and app-local reference bindings.',
+  'launcher': 'What the command launcher surfaces and how it opens.',
+  'librarian': 'What Field Theory watches, captures, and surfaces.',
+  'local-model': 'On-device model setup and maintenance.',
+  'commands': 'Markdown command files Field Theory loads from disk.',
+  'sounds': 'Sound cues for recording and app events.',
+  'stats': 'Usage metrics from this installation.',
+  'team': 'Invite teammates and manage River membership.',
+  'terminal-commands': 'Terminal command allowlist rules.',
+  'hot-mic': 'Always-listening voice controls and hotkey behavior.',
+  'rectangle': 'Window actions, tiling, and spoken window commands.',
 };
 
 // Alphabetically ordered sections for navigation
@@ -76,15 +140,34 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'account',
   'terminal-commands', // Allowlist
   'appearance',
+  'auto-improve',
   'audio',
   'hot-mic', // Hot Mic
   'keyboard',
+  'launcher',
   'librarian',
+  'local-model',
   'commands', // Portable Commands
   'sounds',
   'stats',
+  'team',
   'rectangle', // Window Management
 ];
+
+function SectionHeader({ title, onHiddenReveal, styles }: { title: string; onHiddenReveal?: () => void; styles: SettingsStyles }) {
+  return (
+    <div
+      style={styles.sectionHeader}
+      onClick={(event) => {
+        if (event.altKey) {
+          onHiddenReveal?.();
+        }
+      }}
+    >
+      <span style={styles.sectionTitle}>{title}</span>
+    </div>
+  );
+}
 
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
@@ -95,191 +178,17 @@ interface SettingsPanelProps {
   initialSection?: SettingsSection;
 }
 
-// =============================================================================
-// Island Geometry Sliders — self-contained, renders in the Appearance section.
-// =============================================================================
+const LIBRARY_LOCAL_SHORTCUT_LABELS = [
+  'Toggle focus mode',
+  'Toggle sidebar',
+  'Toggle rendered/markdown',
+  'Toggle River sharing',
+] as const;
 
-interface IslandGeometrySettings {
-  notchWidthOverride: number;
-  pillWidth: number;
-  pillHeight: number;
-  offsetX: number;
-  offsetY: number;
-}
-
-const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
-  notchWidthOverride: 0,
-  pillWidth: 0,
-  pillHeight: 0,
-  offsetX: 0,
-  offsetY: 0,
-};
-
-const ISLAND_GEOMETRY_LIMITS = {
-  notchWidthOverride: { min: 0, max: 320, step: 1 },
-  pillWidth: { min: 0, max: 120, step: 1 },
-  pillHeight: { min: 0, max: 120, step: 1 },
-  offsetX: { min: -240, max: 240, step: 1 },
-  offsetY: { min: -160, max: 160, step: 1 },
-} as const;
-
-const ISLAND_GEOMETRY_FIELDS: Array<{ key: keyof IslandGeometrySettings; label: string; help: string }> = [
-  { key: 'notchWidthOverride', label: 'Notch Width', help: '0 = auto' },
-  { key: 'pillWidth', label: 'Pill Width', help: '0 = auto' },
-  { key: 'pillHeight', label: 'Pill Height', help: '0 = auto' },
-  { key: 'offsetX', label: 'Horizontal Offset', help: '' },
-  { key: 'offsetY', label: 'Vertical Offset', help: '' },
-];
-
-function clampGeometry(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.max(min, Math.min(max, Math.round(value)));
-}
-
-interface ResolvedGeometry extends IslandGeometrySettings {
-  _detected?: { modeWidth: number; scaleFactor: number; menuBarHeight: number; isInternal: boolean };
-}
-
-function IslandGeometrySliders({ theme }: { theme: Theme }) {
-  const [geometry, setGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
-  const [resolved, setResolved] = useState<ResolvedGeometry | null>(null);
-  const [stayOnLaptop, setStayOnLaptop] = useState(false);
-
-  useEffect(() => {
-    window.hotMicAPI?.getIslandGeometry?.().then((g) => {
-      if (g) setGeometry(g);
-    }).catch(() => {});
-    window.hotMicAPI?.getResolvedIslandGeometry?.().then((r: ResolvedGeometry | null) => {
-      if (r) setResolved(r);
-    }).catch(() => {});
-    window.hotMicAPI?.getIslandStayOnLaptop?.().then((v) => {
-      setStayOnLaptop(v);
-    }).catch(() => {});
-  }, []);
-
-  const isAllAuto = geometry.notchWidthOverride === 0 && geometry.pillWidth === 0 && geometry.pillHeight === 0
-    && geometry.offsetX === 0 && geometry.offsetY === 0;
-
-  const handleChange = useCallback((key: keyof IslandGeometrySettings, value: number) => {
-    const limits = ISLAND_GEOMETRY_LIMITS[key];
-    const normalized = clampGeometry(value, limits.min, limits.max);
-    setGeometry((prev) => ({ ...prev, [key]: normalized }));
-    void window.hotMicAPI?.setIslandGeometry({ [key]: normalized });
-  }, []);
-
-  const handleAuto = useCallback(async () => {
-    if (!window.hotMicAPI) return;
-    const reset = await window.hotMicAPI.resetIslandGeometry();
-    setGeometry(reset ?? DEFAULT_ISLAND_GEOMETRY);
-    const r = await window.hotMicAPI.getResolvedIslandGeometry?.();
-    if (r) setResolved(r);
-  }, []);
-
-  const formatValue = (key: keyof IslandGeometrySettings, val: number): string => {
-    const field = ISLAND_GEOMETRY_FIELDS.find((f) => f.key === key);
-    if (val === 0 && field?.help) {
-      return resolved ? `auto (${resolved[key]})` : 'auto';
-    }
-    return String(val);
-  };
-
-  const btnStyle = (active: boolean) => ({
-    padding: '4px 10px',
-    fontSize: '11px',
-    color: active ? theme.text : theme.textSecondary,
-    backgroundColor: active ? (theme.isDark ? theme.surface1 : '#fff') : 'transparent',
-    border: `1px solid ${active ? theme.border : 'transparent'}`,
-    borderRadius: '4px',
-    cursor: active ? 'default' as const : 'pointer' as const,
-    opacity: active ? 1 : 0.7,
-  });
-
-  const displayValues = isAllAuto && resolved
-    ? { ...resolved, _detected: undefined } as IslandGeometrySettings
-    : geometry;
-
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-        <button onClick={() => void handleAuto()} style={btnStyle(isAllAuto)}>
-          Auto
-        </button>
-        <button
-          onClick={() => {
-            if (isAllAuto && resolved) {
-              const custom: IslandGeometrySettings = {
-                notchWidthOverride: resolved.notchWidthOverride,
-                pillWidth: resolved.pillWidth,
-                pillHeight: resolved.pillHeight,
-                offsetX: 0,
-                offsetY: 0,
-              };
-              setGeometry(custom);
-              void window.hotMicAPI?.setIslandGeometry(custom);
-            }
-          }}
-          style={btnStyle(!isAllAuto)}
-        >
-          Custom
-        </button>
-        {resolved?._detected && (
-          <span style={{ marginLeft: '4px', fontSize: '10px', color: theme.textSecondary }}>
-            {resolved._detected.modeWidth}pt {resolved._detected.scaleFactor}x
-            {resolved._detected.isInternal ? ' internal' : ' external'}
-            , menu bar {resolved._detected.menuBarHeight}pt
-          </span>
-        )}
-      </div>
-      {ISLAND_GEOMETRY_FIELDS.map(({ key, label }) => (
-        <div key={key} style={{ padding: '4px 0', opacity: isAllAuto ? 0.35 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-            <span style={{ fontSize: '12px', color: theme.text }}>{label}</span>
-            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              {formatValue(key, geometry[key])}
-            </span>
-          </div>
-          <input
-            type="range"
-            disabled={isAllAuto}
-            min={ISLAND_GEOMETRY_LIMITS[key].min}
-            max={ISLAND_GEOMETRY_LIMITS[key].max}
-            step={ISLAND_GEOMETRY_LIMITS[key].step}
-            value={displayValues[key]}
-            onChange={(e) => handleChange(key, Number(e.target.value))}
-            style={{
-              width: '100%',
-              height: '4px',
-              WebkitAppearance: 'none',
-              appearance: 'none',
-              background: theme.border,
-              borderRadius: '2px',
-              outline: 'none',
-              cursor: isAllAuto ? 'default' : 'pointer',
-            }}
-          />
-        </div>
-      ))}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0 0 0' }}>
-        <div>
-          <span style={{ fontSize: '12px', color: theme.text }}>Stay on laptop display</span>
-          <span style={{ display: 'block', fontSize: '10px', color: theme.textSecondary }}>
-            Keep the island on the built-in display when an external monitor is primary.
-          </span>
-        </div>
-        <input
-          type="checkbox"
-          checked={stayOnLaptop}
-          onChange={(e) => {
-            const next = e.target.checked;
-            setStayOnLaptop(next);
-            void window.hotMicAPI?.setIslandStayOnLaptop?.(next);
-          }}
-          style={{ cursor: 'pointer' }}
-        />
-      </div>
-    </>
-  );
-}
+const LIBRARY_LOCAL_SHORTCUTS = LIBRARY_LOCAL_SHORTCUT_LABELS.map((label) => {
+  const shortcut = LIBRARIAN_KEYBOARD_SHORTCUTS.find((item) => item.label === label);
+  return { label, keys: shortcut?.keys ?? '' };
+}).filter((shortcut) => shortcut.keys);
 
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
@@ -294,7 +203,16 @@ export default function SettingsPanel({
   onPerformanceHudEnabledChange,
   initialSection,
 }: SettingsPanelProps) {
-  const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
+  const {
+    theme,
+    toggleDarkMode,
+    accentPreset,
+    setAccentPreset,
+    themeStylePreset,
+    setThemeStylePreset,
+    darkModeIntensity,
+    setDarkModeIntensity,
+  } = useTheme();
 
   // Selected section state for sidebar navigation
   const [selectedSection, setSelectedSection] = useState<SettingsSection>(() => {
@@ -384,6 +302,12 @@ export default function SettingsPanel({
   const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
   const [scratchpadHotkey, setScratchpadHotkey] = useState('Control+Option+Command+Space');
+  const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
+  const [teamServiceState, setTeamServiceState] = useState<TeamServiceState | null>(null);
+  const [teamEntitlementState, setTeamEntitlementState] = useState<TeamEntitlementState | null>(null);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
 
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
@@ -397,6 +321,50 @@ export default function SettingsPanel({
 
   const [initialAuthLoading, setInitialAuthLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
+
+  const loadSharedFilesAvailability = useCallback(async () => {
+    const availability = await window.sharedFilesAPI?.getAvailability?.();
+    setSharedFilesAvailable(availability?.available === true);
+  }, []);
+
+  const loadTeamEntitlement = useCallback(async () => {
+    const entitlement = await window.teamAPI?.getEntitlement?.();
+    setTeamEntitlementState(entitlement ?? null);
+  }, []);
+
+  const loadTeamState = useCallback(async (options: { showLoading?: boolean } = {}) => {
+    if (!window.teamAPI?.getState) return;
+    const showLoading = options.showLoading ?? true;
+    if (showLoading) setTeamLoading(true);
+    try {
+      const nextState = await window.teamAPI.getState();
+      setTeamServiceState(nextState);
+      setTeamError(null);
+    } catch {
+      setTeamError('Could not load team settings.');
+    } finally {
+      if (showLoading) setTeamLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSharedFilesAvailability().catch(() => {
+      if (!cancelled) setSharedFilesAvailable(false);
+    });
+    void loadTeamEntitlement().catch(() => {
+      if (!cancelled) setTeamEntitlementState(null);
+    });
+    const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
+      void loadSharedFilesAvailability();
+      void loadTeamEntitlement();
+      void loadTeamState();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
 
   const {
     session,
@@ -445,10 +413,22 @@ export default function SettingsPanel({
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
   const [fieldTheorySyncStatus, setFieldTheorySyncStatus] = useState<FieldTheorySyncStatus | null>(null);
   const [showInternalSyncToggle, setShowInternalSyncToggle] = useState(false);
-  const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
+  const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
+    restoreRenderedTextCursorStyle(localStorage)
+  ));
+  const [renderedBlockCursorOpacity, setRenderedBlockCursorOpacity] = useState(() => (
+    restoreRenderedBlockCursorOpacity(localStorage)
+  ));
 
-  // Dynamic Island auto-hide toggle.
-  const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
+  useEffect(() => {
+    const syncRenderedTextCursorStyle = () => setRenderedTextCursorStyle(restoreRenderedTextCursorStyle(localStorage));
+    window.addEventListener('storage', syncRenderedTextCursorStyle);
+    window.addEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
+    return () => {
+      window.removeEventListener('storage', syncRenderedTextCursorStyle);
+      window.removeEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
+    };
+  }, []);
 
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
@@ -553,11 +533,6 @@ export default function SettingsPanel({
 
       refreshFieldTheorySyncStatus().catch(() => {});
 
-      // Load Dynamic Island auto-hide setting.
-      window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
-        setDynamicIslandAutoHide(enabled);
-      }).catch(() => {});
-
       // Load launch at login setting
       window.clipboardAPI.getLaunchAtLogin?.().then(enabled => {
         setLaunchAtLogin(enabled);
@@ -578,8 +553,12 @@ export default function SettingsPanel({
     }
 
     // Load Hot Mic hotkey
+    let unsubscribeHotMicHotkey: (() => void) | undefined;
     if (window.hotMicAPI) {
       window.hotMicAPI.getHotkey().then(hotkey => {
+        setHotMicHotkey(hotkey);
+      });
+      unsubscribeHotMicHotkey = window.hotMicAPI.onHotkeyChanged?.((hotkey) => {
         setHotMicHotkey(hotkey);
       });
     }
@@ -620,6 +599,7 @@ export default function SettingsPanel({
 
     return () => {
       unsubscribeTier?.();
+      unsubscribeHotMicHotkey?.();
     };
   }, [refreshFieldTheorySyncStatus]);
   
@@ -753,10 +733,10 @@ export default function SettingsPanel({
     }
   };
 
-  const handleToggleTextCursorBlink = (enabled: boolean) => {
-    setBlinkTextCursor(enabled);
-    persistTextCursorBlink(localStorage, enabled);
-    window.dispatchEvent(new Event(TEXT_CURSOR_BLINK_CHANGED_EVENT));
+  const handleRenderedBlockCursorOpacityChange = (nextOpacity: number) => {
+    setRenderedBlockCursorOpacity(nextOpacity);
+    persistRenderedBlockCursorOpacity(localStorage, nextOpacity);
+    window.dispatchEvent(new Event(RENDERED_BLOCK_CURSOR_OPACITY_CHANGED_EVENT));
   };
 
   const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
@@ -777,6 +757,29 @@ export default function SettingsPanel({
       setInitialAuthLoading(false);
     }
   }, [authSessionInitialized]);
+
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setTeamServiceState(null);
+      setTeamEntitlementState(null);
+      setTeamError(null);
+      return;
+    }
+    void loadTeamEntitlement();
+    void loadTeamState();
+  }, [loadTeamEntitlement, loadTeamState, session?.user?.id]);
+
+  useEffect(() => {
+    if (selectedSection !== 'team' || !session?.user?.id) return;
+    void loadTeamState();
+    void loadTeamEntitlement();
+    const interval = window.setInterval(() => {
+      void loadTeamState({ showLoading: false });
+      void loadTeamEntitlement();
+      void loadSharedFilesAvailability();
+    }, TEAM_SETTINGS_BACKGROUND_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState, selectedSection, session?.user?.id]);
 
   // Fetch callsign when session changes
   useEffect(() => {
@@ -1120,6 +1123,18 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const handleSetSharedFileToggleHotkey = useCallback((hotkeyString: string) => {
+    setCapturingHotkey(null);
+    setHotkeyError(null);
+    if (isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+    persistSharedFileToggleHotkey(localStorage, hotkeyString);
+    setSharedFileToggleHotkey(hotkeyString);
+    window.dispatchEvent(new Event('fieldtheory:shared-file-toggle-hotkey-changed'));
+  }, []);
+
   // Handler for setting Hot Mic hotkey
   const handleSetHotMicHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1267,6 +1282,8 @@ export default function SettingsPanel({
           handleSetCommandLauncherHotkey(hotkeyString);
         } else if (capturingHotkey === 'scratchpad') {
           handleSetScratchpadHotkey(hotkeyString);
+        } else if (capturingHotkey === 'sharedFileToggle') {
+          handleSetSharedFileToggleHotkey(hotkeyString);
         } else if (capturingHotkey === 'hotMic') {
           handleSetHotMicHotkey(hotkeyString);
         }
@@ -1275,45 +1292,90 @@ export default function SettingsPanel({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetSharedFileToggleHotkey, handleSetHotMicHotkey]);
 
-  // Section header component for consistent divider styling
-  const SectionHeader = ({ title, onHiddenReveal }: { title: string; onHiddenReveal?: () => void }) => (
-    <div
-      style={styles.sectionHeader}
-      onClick={(event) => {
-        if (event.altKey) {
-          onHiddenReveal?.();
-        }
-      }}
-    >
-      <span style={styles.sectionTitle}>{title}</span>
-      <div style={styles.sectionLine} />
-    </div>
-  );
+  const handleTeamMutation = useCallback(async (mutation: () => Promise<TeamMutationResult | undefined> | undefined): Promise<boolean> => {
+    setTeamError(null);
+    const result = await mutation();
+    if (!result) {
+      setTeamError('Team settings are unavailable in this window.');
+      return false;
+    }
+    if (result && !result.ok) {
+      setTeamError(result.error ?? 'Team update failed.');
+      return false;
+    }
+    await loadTeamState();
+    await loadTeamEntitlement();
+    await loadSharedFilesAvailability();
+    return true;
+  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
+
+  const teamSettingsState = buildTeamSettingsState({
+    loading: teamLoading,
+    error: teamError,
+    teamState: teamServiceState,
+    currentUser: {
+      id: session?.user?.id,
+      email: session?.user?.email,
+      displayName: session?.user?.user_metadata?.full_name as string | undefined,
+      initials: callsign,
+    },
+  });
+
+  const teamFeaturesVisible = teamEntitlementState?.allowed === true;
+  const visibleSections = teamFeaturesVisible
+    ? SECTIONS_ORDER
+    : SECTIONS_ORDER.filter((section) => section !== 'team');
+
+  useEffect(() => {
+    if (selectedSection === 'team' && teamEntitlementState && !teamFeaturesVisible) {
+      setSelectedSection('account');
+    }
+  }, [selectedSection, teamEntitlementState, teamFeaturesVisible]);
 
   return (
     <div style={styles.settingsLayout}>
+      <style>{`
+        [data-ft-settings-card] > div:last-child {
+          border-bottom: 0 !important;
+        }
+      `}</style>
       {/* Left Sidebar Navigation */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
-          {SECTIONS_ORDER.map((section) => {
+          {visibleSections.map((section) => {
+            const active = selectedSection === section;
             return (
             <button
               key={section}
               onClick={() => setSelectedSection(section)}
+              aria-current={active ? 'page' : undefined}
               style={{
                 ...styles.sidebarItem,
-                backgroundColor: selectedSection === section ? theme.selectedBg : 'transparent',
-                borderColor: selectedSection === section ? theme.border : 'transparent',
-                color: selectedSection === section ? theme.text : theme.textSecondary,
-                boxShadow: selectedSection === section
-                  ? (theme.isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : '0 1px 1px rgba(15, 23, 42, 0.04)')
+                backgroundColor: active ? theme.selectedBg : 'transparent',
+                color: active ? theme.text : theme.textSecondary,
+                boxShadow: active
+                  ? (theme.isDark ? 'inset 0 1px 0 rgba(255,255,255,0.04)' : '0 1px 0 rgba(60, 40, 20, 0.03)')
                   : 'none',
                 cursor: 'pointer',
               }}
             >
-              {SECTION_LABELS[section]}
+              <span
+                style={{
+                  ...styles.sidebarRail,
+                  backgroundColor: active ? theme.accent : 'transparent',
+                }}
+              />
+              <span
+                style={{
+                  ...styles.sidebarGlyph,
+                  color: active ? theme.accent : theme.textSecondary,
+                }}
+              >
+                {SECTION_GLYPHS[section]}
+              </span>
+              <span style={styles.sidebarLabel}>{SECTION_LABELS[section]}</span>
             </button>
             );
           })}
@@ -1323,11 +1385,16 @@ export default function SettingsPanel({
       {/* Right Content Area */}
       <div style={styles.content}>
       <div style={styles.contentInner}>
+      <header style={styles.contentMasthead}>
+        <div style={styles.contentEyebrow}>Settings · {SECTION_LABELS[selectedSection]}</div>
+        <h2 style={styles.contentTitle}>{SECTION_LABELS[selectedSection]}</h2>
+        <p style={styles.contentSubtitle}>{SECTION_DESCRIPTIONS[selectedSection]}</p>
+      </header>
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
-        <>
-      <div style={styles.section}>
-        <SectionHeader title="Appearance" />
+        <div style={styles.sectionStack}>
+          <div style={styles.section} data-ft-settings-card>
+        <SectionHeader title="Appearance" styles={styles} />
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={styles.rowLabel}>Dark Mode</span>
@@ -1339,24 +1406,97 @@ export default function SettingsPanel({
             onClick={toggleDarkMode}
             style={{ ...styles.toggle, backgroundColor: theme.isDark ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
         <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Blink text cursor</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
+            <span style={styles.rowLabel}>Theme Style</span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Animate the caret in Markdown editing surfaces
+              Choose a palette for both light and dark mode
             </span>
           </div>
-          <button
-            onClick={() => handleToggleTextCursorBlink(!blinkTextCursor)}
-            style={{ ...styles.toggle, backgroundColor: blinkTextCursor ? theme.success : '#d1d5db' }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: blinkTextCursor ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', maxWidth: '306px' }}>
+            {(Object.keys(themeStylePresets) as ThemeStylePreset[]).map((preset) => {
+              const isSelected = preset === themeStylePreset;
+              const previewColors: Record<ThemeStylePreset, { bg: string; surface: string; border: string }> = {
+                default: theme.isDark
+                  ? { bg: '#15181e', surface: '#1c1f26', border: '#2a2d35' }
+                  : { bg: '#faf9f7', surface: '#f5f4f2', border: '#e0e0e0' },
+                soft: theme.isDark
+                  ? { bg: '#1d1b18', surface: '#232120', border: '#37322c' }
+                  : { bg: '#f6f2ec', surface: '#f1ece4', border: '#e2d9cc' },
+                cool: theme.isDark
+                  ? { bg: '#11151b', surface: '#171c24', border: '#283038' }
+                  : { bg: '#f6f7f9', surface: '#eef0f3', border: '#dadfe6' },
+                contrast: theme.isDark
+                  ? { bg: '#0a0c10', surface: '#14171d', border: '#3a414d' }
+                  : { bg: '#ffffff', surface: '#f2f3f5', border: '#c4c9d0' },
+              };
+              return (
+                <button
+                  key={preset}
+                  onClick={() => setThemeStylePreset(preset)}
+                  title={themeStylePresets[preset].description}
+                  style={{
+                    height: '50px',
+                    width: '72px',
+                    borderRadius: '6px',
+                    border: isSelected ? `2px solid ${theme.accent}` : `1px solid ${theme.border}`,
+                    backgroundColor: theme.surface1,
+                    color: theme.text,
+                    cursor: 'pointer',
+                    padding: '5px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    alignItems: 'stretch',
+                    boxShadow: isSelected ? `0 0 0 2px ${theme.selectedBg}` : 'none',
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      height: '18px',
+                      borderRadius: '4px',
+                      background: `linear-gradient(90deg, ${previewColors[preset].bg} 0 45%, ${previewColors[preset].surface} 45% 78%, ${previewColors[preset].border} 78% 100%)`,
+                      border: `1px solid ${previewColors[preset].border}`,
+                    }}
+                  />
+                  <span style={{ fontSize: '11px', lineHeight: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {themeStylePresets[preset].name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
+
+        {renderedTextCursorStyle === 'block' && (
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={styles.rowLabel}>Block cursor opacity</span>
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                Tune how much text shows beneath the block cursor
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '150px' }}>
+              <input
+                type="range"
+                min="20"
+                max="100"
+                step="5"
+                value={Math.round(renderedBlockCursorOpacity * 100)}
+                onChange={(event) => handleRenderedBlockCursorOpacityChange(Number(event.currentTarget.value) / 100)}
+                style={{ width: '116px', accentColor: theme.accent }}
+              />
+              <span style={{ width: '32px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary }}>
+                {Math.round(renderedBlockCursorOpacity * 100)}%
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Accent Color Presets */}
         <div style={styles.row}>
@@ -1437,7 +1577,7 @@ export default function SettingsPanel({
             onClick={() => handleTogglePerformanceHud(!performanceHudEnabled)}
             style={{ ...styles.toggle, backgroundColor: performanceHudEnabled ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
@@ -1453,51 +1593,15 @@ export default function SettingsPanel({
             onClick={() => handleSetFieldTheoryWindowMode(fieldTheoryWindowMode === 'app' ? 'panel' : 'app')}
             style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db', opacity: fieldTheoryWindowMode === null ? 0.6 : 1 }}
           >
-            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
-      </div>
-
-      {/* Dynamic Island */}
-      <div style={styles.section}>
-        <SectionHeader title="Dynamic Island" />
-
-        <div style={styles.row}>
-          <div>
-            <span style={styles.rowLabel}>Auto-hide until active or hovered</span>
-            <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
-              Pills stay hidden until you move your cursor near the notch, or until a recording / hot-mic is active.
-            </span>
-          </div>
-          <button
-            disabled={dynamicIslandAutoHide === null}
-            onClick={async () => {
-              if (dynamicIslandAutoHide === null) return;
-              const next = !dynamicIslandAutoHide;
-              setDynamicIslandAutoHide(next);
-              try {
-                await window.hotMicAPI?.setIslandAutoHide?.(next);
-              } catch (err) {
-                console.error('Failed to toggle Dynamic Island auto-hide:', err);
-                setDynamicIslandAutoHide(!next);
-              }
-            }}
-            style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db', opacity: dynamicIslandAutoHide === null ? 0.6 : 1 }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
-        <p style={{ fontSize: '11px', color: theme.textSecondary, margin: '12px 0 8px 0' }}>
-          Tune notch alignment. Changes apply immediately.
-        </p>
-        <IslandGeometrySliders theme={theme} />
       </div>
 
       {/* System Access Section - Permission status with quick links to settings */}
       {systemPermissions && (
-        <div style={styles.section}>
-          <SectionHeader title="System Access" />
+        <div style={styles.section} data-ft-settings-card>
+          <SectionHeader title="System Access" styles={styles} />
           
           {/* Microphone */}
           <div style={styles.row}>
@@ -1553,8 +1657,8 @@ export default function SettingsPanel({
       )}
 
       {/* Data Retention Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Data Retention" />
+      <div style={styles.section} data-ft-settings-card>
+        <SectionHeader title="Data Retention" styles={styles} />
         <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
           Automatically delete clipboard history older than the selected period.
         </p>
@@ -1582,13 +1686,13 @@ export default function SettingsPanel({
           </p>
         )}
       </div>
-        </>
+        </div>
       )}
 
       {/* Keyboard Shortcuts Section - First for easy access */}
       {selectedSection === 'keyboard' && (
-      <div style={styles.section}>
-        <SectionHeader title="Keyboard Shortcuts" />
+      <div style={styles.section} data-ft-settings-card>
+        <SectionHeader title="Keyboard Shortcuts" styles={styles} />
         
         {/* Open Field Theory - primary action, shown first */}
         <div style={styles.row}>
@@ -1811,6 +1915,29 @@ export default function SettingsPanel({
           </div>
         </div>
 
+        {teamFeaturesVisible && sharedFilesAvailable && (
+          <div style={styles.row}>
+            <span style={styles.rowLabel}>
+              River Sharing
+              <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+                (toggle active file sharing)
+              </span>
+            </span>
+            <div style={styles.rowControls}>
+              <button
+                onClick={() => { setCapturingHotkey('sharedFileToggle'); setHotkeyError(null); }}
+                disabled={capturingHotkey !== null}
+                style={{ ...styles.btn, ...(capturingHotkey === 'sharedFileToggle' ? styles.btnActive : {}) }}
+              >
+                {capturingHotkey === 'sharedFileToggle' ? 'Press keys...' : sharedFileToggleHotkey}
+              </button>
+              {capturingHotkey === 'sharedFileToggle' && (
+                <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Hot Mic */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Toggle Hot Mic</span>
@@ -1836,6 +1963,21 @@ export default function SettingsPanel({
           </div>
         </div>
 
+        <div style={styles.shortcutReferenceGroup}>
+          <div style={styles.shortcutReferenceHeader}>
+            <span style={styles.rowLabel}>Library shortcuts</span>
+            <span style={styles.rowHint}>App-local reference</span>
+          </div>
+          {LIBRARY_LOCAL_SHORTCUTS.map((shortcut) => (
+            <div key={shortcut.label} style={styles.row}>
+              <span style={styles.rowLabel}>{shortcut.label}</span>
+              <div style={styles.rowControls}>
+                <span style={styles.readOnlyShortcut}>{shortcut.keys}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={styles.rowLabel}>Window management</span>
@@ -1850,7 +1992,7 @@ export default function SettingsPanel({
               }}
               style={{ ...styles.toggle, backgroundColor: squaresEnabled ? theme.accent : '#d1d5db' }}
             >
-              <span style={{ ...styles.toggleKnob, transform: squaresEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+              <span style={{ ...styles.toggleKnob, transform: squaresEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>
@@ -1880,163 +2022,165 @@ export default function SettingsPanel({
       </div>
       )}
 
-      {/* Audio & Transcription Section (combined) */}
+      {/* Audio & Transcription Section */}
       {selectedSection === 'audio' && (
-      <>
-      <div style={styles.section}>
-        <SectionHeader title="Microphone" />
+      <div style={styles.sectionStack}>
         <AudioSettingsPanel />
-      </div>
-
-      {/* Transcription Section */}
-      <div style={styles.section}>
         <TranscriptionSettings />
-      </div>
 
-      {/* Word Substitutions Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Word Corrections" />
-        <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
-          Fix common transcription mistakes. Words on the left will be replaced with words on the right.
-        </p>
-
-        {/* Existing substitutions list */}
-        {wordSubstitutions.length > 0 && (
-          <div style={{
-            marginBottom: '12px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-          }}>
-            {wordSubstitutions.map((sub, index) => (
-              <div
-                key={index}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                  border: `1px solid ${theme.border}`,
-                }}
-              >
-                <span style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  color: theme.text,
-                  fontFamily: 'monospace',
-                }}>
-                  {sub.from}
-                </span>
-                <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
-                <span style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  color: theme.text,
-                  fontFamily: 'monospace',
-                }}>
-                  {sub.to || '(remove)'}
-                </span>
-                <button
-                  onClick={() => handleRemoveWordSubstitution(index)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: theme.textSecondary,
-                    cursor: 'pointer',
-                    padding: '4px',
-                    fontSize: '14px',
-                    lineHeight: 1,
-                  }}
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add new substitution form */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-        }}>
-          <input
-            type="text"
-            value={newSubFrom}
-            onChange={(e) => setNewSubFrom(e.target.value)}
-            placeholder="Heard as..."
-            style={{
-              ...styles.input,
-              flex: 1,
-              minWidth: 0,
-              fontFamily: 'monospace',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
-            }}
-          />
-          <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
-          <input
-            type="text"
-            value={newSubTo}
-            onChange={(e) => setNewSubTo(e.target.value)}
-            placeholder="Change to..."
-            style={{
-              ...styles.input,
-              flex: 1,
-              minWidth: 0,
-              fontFamily: 'monospace',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
-            }}
-          />
-          <button
-            onClick={handleAddWordSubstitution}
-            disabled={!newSubFrom.trim()}
-            style={{
-              ...styles.btn,
-              opacity: newSubFrom.trim() ? 1 : 0.5,
-              minWidth: '60px',
-            }}
-          >
-            Add
-          </button>
-        </div>
-
-        {wordSubstitutions.length === 0 && (
-          <p style={{
-            fontSize: '11px',
-            color: theme.textSecondary,
-            marginTop: '8px',
-            fontStyle: 'italic',
-          }}>
-            Example: "main" → "main" (for git branches)
+        {/* Word Substitutions Section */}
+        <div style={styles.section} data-ft-settings-card>
+          <SectionHeader title="Word Corrections" styles={styles} />
+          <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+            Fix common transcription mistakes. Words on the left will be replaced with words on the right.
           </p>
-        )}
+
+          {/* Existing substitutions list */}
+          {wordSubstitutions.length > 0 && (
+            <div style={{
+              marginBottom: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}>
+              {wordSubstitutions.map((sub, index) => (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                    border: `1px solid ${theme.border}`,
+                  }}
+                >
+                  <span style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    color: theme.text,
+                    fontFamily: 'monospace',
+                  }}>
+                    {sub.from}
+                  </span>
+                  <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+                  <span style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    color: theme.text,
+                    fontFamily: 'monospace',
+                  }}>
+                    {sub.to || '(remove)'}
+                  </span>
+                  <button
+                    onClick={() => handleRemoveWordSubstitution(index)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: theme.textSecondary,
+                      cursor: 'pointer',
+                      padding: '4px',
+                      fontSize: '14px',
+                      lineHeight: 1,
+                    }}
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new substitution form */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'center',
+          }}>
+            <input
+              type="text"
+              value={newSubFrom}
+              onChange={(e) => setNewSubFrom(e.target.value)}
+              placeholder="Heard as..."
+              style={{
+                ...styles.input,
+                flex: 1,
+                minWidth: 0,
+                fontFamily: 'monospace',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+              }}
+            />
+            <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+            <input
+              type="text"
+              value={newSubTo}
+              onChange={(e) => setNewSubTo(e.target.value)}
+              placeholder="Change to..."
+              style={{
+                ...styles.input,
+                flex: 1,
+                minWidth: 0,
+                fontFamily: 'monospace',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+              }}
+            />
+            <button
+              onClick={handleAddWordSubstitution}
+              disabled={!newSubFrom.trim()}
+              style={{
+                ...styles.btn,
+                opacity: newSubFrom.trim() ? 1 : 0.5,
+                minWidth: '60px',
+              }}
+            >
+              Add
+            </button>
+          </div>
+
+          {wordSubstitutions.length === 0 && (
+            <p style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginTop: '8px',
+              fontStyle: 'italic',
+            }}>
+              Example: "main" → "main" (for git branches)
+            </p>
+          )}
+        </div>
       </div>
-      </>
+      )}
+
+      {/* Auto Improve Section */}
+      {selectedSection === 'auto-improve' && (
+      <div style={styles.sectionStack}>
+        <TranscriptionSettings mode="auto-improve" />
+      </div>
       )}
 
       {/* Portable Commands Section */}
       {selectedSection === 'commands' && (
-      <>
-      <div style={styles.section}>
-        <SectionHeader title="Portable Commands" />
+      <div style={styles.sectionStack}>
         <CommandsSettings />
       </div>
+      )}
 
-      </>
+      {/* Launcher Section */}
+      {selectedSection === 'launcher' && (
+      <div style={styles.sectionStack}>
+        <LauncherSettings />
+      </div>
       )}
 
       {/* Librarian Section */}
       {selectedSection === 'librarian' && (
-      <div style={styles.section}>
-        <SectionHeader title="Librarian" />
+      <div style={styles.sectionStack}>
         <LibrarianSettings
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
@@ -2044,40 +2188,58 @@ export default function SettingsPanel({
       </div>
       )}
 
+      {/* Local model Section */}
+      {selectedSection === 'local-model' && (
+      <div style={styles.sectionStack}>
+        <LocalModelSettings />
+      </div>
+      )}
+
       {/* Allowlist Section */}
       {selectedSection === 'terminal-commands' && (
-      <div style={styles.section}>
-        <SectionHeader title="Allowlist" />
+      <div style={styles.section} data-ft-settings-card>
+        <SectionHeader title="Allowlist" styles={styles} />
         <ClaudeSettings />
       </div>
       )}
 
       {/* Your Stats Section - user-visible usage metrics */}
       {selectedSection === 'stats' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <UserStatsPanel />
+      </div>
+      )}
+
+      {/* Team Section */}
+      {selectedSection === 'team' && teamFeaturesVisible && (
+      <div style={styles.sectionStack}>
+        <TeamSettings
+          state={teamSettingsState}
+          onInviteMember={(email) => handleTeamMutation(() => window.teamAPI?.inviteMember(email))}
+          onRespondToInvite={(contactId, accept) => handleTeamMutation(() => window.teamAPI?.respondToInvite(contactId, accept))}
+          onRemoveMember={(contactId) => handleTeamMutation(() => window.teamAPI?.removeMember(contactId))}
+          onLeaveTeam={() => handleTeamMutation(() => window.teamAPI?.leaveTeam())}
+        />
       </div>
       )}
 
       {/* Hot Mic Section */}
       {selectedSection === 'hot-mic' && (
-      <div style={styles.section}>
-        <SectionHeader title="Hot Mic" />
+      <div style={styles.sectionStack}>
         <HotMicSettings />
       </div>
       )}
 
       {/* Windows Section */}
       {selectedSection === 'rectangle' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <RectangleSettings />
       </div>
       )}
 
       {/* Sounds Section */}
       {selectedSection === 'sounds' && (
-      <div style={styles.section}>
-        <SectionHeader title="Sounds" />
+      <div style={styles.sectionStack}>
         <SoundsSettings />
       </div>
       )}
@@ -2100,8 +2262,10 @@ export default function SettingsPanel({
             : 'Internal library, commands, and tasks sync is off on this device.';
 
         return (
-          <div style={styles.section}>
-            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} />
+          <div style={styles.section} data-ft-settings-card>
+            <SectionHeader title="Account" onHiddenReveal={() => {
+              if (teamFeaturesVisible) setShowInternalSyncToggle(true);
+            }} styles={styles} />
 
             {initialAuthLoading ? (
               <div style={styles.row}>
@@ -2277,7 +2441,7 @@ export default function SettingsPanel({
               </>
             )}
 
-            {(showInternalSyncToggle || syncLocalEnabled) && (
+            {teamFeaturesVisible && (showInternalSyncToggle || syncLocalEnabled) && (
               <div style={styles.row}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <span style={styles.rowLabel}>Field Theory Sync</span>
@@ -2287,13 +2451,13 @@ export default function SettingsPanel({
                   onClick={() => handleToggleFieldTheorySync(!syncLocalEnabled)}
                   style={{ ...styles.toggle, backgroundColor: syncLocalEnabled ? theme.success : '#d1d5db' }}
                 >
-                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
                 </button>
               </div>
             )}
 
             {/* Support section - shown for all users */}
-            <SectionHeader title="Support" />
+            <SectionHeader title="Support" styles={styles} />
             <div style={styles.row}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <span style={styles.rowLabel}>Launch on Login</span>
@@ -2361,7 +2525,7 @@ export default function SettingsPanel({
 
             {/* Delete Account - only show when signed in */}
             {session && (
-              <div style={{ ...styles.row, marginTop: '24px', borderTop: `1px solid ${theme.border}`, paddingTop: '16px' }}>
+              <div style={{ ...styles.row, marginTop: '24px', borderTop: `1px solid ${getSettingsDividerColor(theme)}`, paddingTop: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <span style={{ ...styles.rowLabel, color: theme.error }}>Delete Account</span>
                   <span style={styles.rowHint}>Permanently delete your account and all data</span>
@@ -2495,52 +2659,114 @@ export default function SettingsPanel({
 }
 
 // Styles consistent with ClipboardHistory styling
-const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
+const getStyles = (theme: Theme): SettingsStyles => ({
   // New sidebar layout
   settingsLayout: {
     display: 'flex',
     flex: 1,
     minHeight: 0, // Required for flex children to shrink below content size
     boxSizing: 'border-box',
-    borderTop: `1px solid ${theme.border}`,
     position: 'relative' as const,
+    backgroundColor: theme.isDark ? '#15181e' : '#faf9f7',
+    borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   sidebar: {
-    width: '208px',
-    minWidth: '208px',
-    padding: '16px 14px 24px 14px',
-    borderRight: `1px solid ${theme.border}`,
-    backgroundColor: theme.surface0,
+    width: '232px',
+    minWidth: '232px',
+    padding: '18px 10px 14px',
+    borderRight: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+    backgroundColor: theme.isDark ? '#191c22' : '#f1efea',
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
   sidebarNav: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: '1px',
   },
   sidebarItem: {
-    padding: '9px 12px',
-    fontSize: '12px',
-    fontWeight: 500,
+    position: 'relative' as const,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '11px',
+    padding: '8px 10px',
+    fontSize: '13px',
+    fontWeight: 400,
     textAlign: 'left',
-    border: '1px solid transparent',
-    borderRadius: '10px',
+    border: '2px solid transparent',
+    borderRightWidth: 0,
+    borderRadius: '6px',
     cursor: 'pointer',
-    transition: 'background-color 0.15s, color 0.15s, border-color 0.15s',
+    transition: 'background-color 0.15s, color 0.15s',
     outline: 'none',
+    minHeight: '34px',
+    width: '100%',
+  },
+  sidebarRail: {
+    position: 'absolute' as const,
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '2px',
+    borderRadius: '6px 0 0 6px',
+  },
+  sidebarGlyph: {
+    width: '18px',
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+    fontSize: '14px',
+    lineHeight: 1,
+    textAlign: 'center' as const,
+    flex: '0 0 18px',
+  },
+  sidebarLabel: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
   },
   content: {
     flex: 1,
     minHeight: 0, // Required for flex children to shrink below content size
-    padding: '24px 28px 40px 28px',
     overflowY: 'auto',
     boxSizing: 'border-box',
+    backgroundColor: theme.isDark ? '#15181e' : '#faf9f7',
   },
   contentInner: {
     width: '100%',
-    maxWidth: '780px',
+    maxWidth: '900px',
     margin: '0 auto',
+    padding: '26px 36px 96px',
+    boxSizing: 'border-box',
+  },
+  contentMasthead: {
+    paddingBottom: '22px',
+    marginBottom: '24px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
+  },
+  contentEyebrow: {
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+    fontSize: '10.5px',
+    color: theme.textSecondary,
+    letterSpacing: '1px',
+    textTransform: 'uppercase' as const,
+    marginBottom: '6px',
+  },
+  contentTitle: {
+    margin: 0,
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '26px',
+    fontWeight: 500,
+    lineHeight: 1.05,
+    color: theme.text,
+  },
+  contentSubtitle: {
+    maxWidth: '560px',
+    margin: '7px 0 0',
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '14.5px',
+    lineHeight: 1.55,
+    color: theme.textSecondary,
   },
   // Legacy container (kept for compatibility)
   container: {
@@ -2577,43 +2803,45 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Section with divider line
   section: {
     ...getSettingsSurfaceStyle(theme),
-    marginBottom: '20px',
+  },
+  sectionStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: SETTINGS_CARD_GAP,
   },
   sectionHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
     marginTop: 0,
-    marginBottom: '14px',
+    marginBottom: '12px',
   },
   sectionTitle: {
-    fontSize: '13px',
-    fontWeight: 600,
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '16px',
+    fontWeight: 500,
     color: theme.text,
-    letterSpacing: '-0.01em',
+    letterSpacing: 0,
     whiteSpace: 'nowrap' as const,
   },
-  sectionLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: theme.isDark ? theme.border : '#edf1f5',
-  },
-
   // Flat row layout: label left, control right
   row: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '10px 0',
-    minHeight: '42px',
+    gap: '16px',
+    padding: '12px 0',
+    minHeight: '44px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   rowLabel: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
     fontWeight: 500,
+    lineHeight: 1.35,
   },
   rowValue: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
     fontWeight: 500,
   },
@@ -2623,21 +2851,46 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gap: '8px',
   },
   rowHint: {
-    fontSize: '11px',
+    fontSize: '11.5px',
     color: theme.textSecondary,
     fontWeight: 400,
-    lineHeight: 1.45,
+    lineHeight: 1.5,
+    maxWidth: '460px',
+  },
+  shortcutReferenceGroup: {
+    marginTop: '16px',
+    paddingTop: '4px',
+  },
+  shortcutReferenceHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: '12px',
+    padding: '0 0 4px',
+  },
+  readOnlyShortcut: {
+    padding: '2px 6px',
+    fontSize: '10.5px',
+    fontWeight: 500,
+    color: theme.textSecondary,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '3px',
+    minWidth: '56px',
+    textAlign: 'center' as const,
+    cursor: 'default',
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
   },
 
   // Unified button styles
   btn: {
-    padding: '7px 12px',
+    padding: '6px 12px',
     fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    borderRadius: '5px',
     cursor: 'pointer',
     minWidth: '80px',
     textAlign: 'center' as const,
@@ -2666,23 +2919,23 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   linkBtn: {
     backgroundColor: 'transparent',
-    border: 'none',
+    border: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+    borderRadius: '5px',
     color: theme.textSecondary,
     fontSize: '12px',
-    padding: '4px 0',
+    padding: '6px 12px',
     cursor: 'pointer',
-    textDecoration: 'underline',
-    textUnderlineOffset: '2px',
+    textDecoration: 'none',
   },
 
   // Toggle switch
   toggle: {
     position: 'relative' as const,
-    width: '44px',
-    minWidth: '44px',
-    height: '24px',
-    minHeight: '24px',
-    borderRadius: '12px',
+    width: '32px',
+    minWidth: '32px',
+    height: '18px',
+    minHeight: '18px',
+    borderRadius: '999px',
     cursor: 'pointer',
     border: 'none',
     padding: 0,
@@ -2693,9 +2946,9 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     position: 'absolute' as const,
     top: '2px',
     left: 0,
-    width: '20px',
-    height: '20px',
-    borderRadius: '10px',
+    width: '14px',
+    height: '14px',
+    borderRadius: '999px',
     backgroundColor: '#fff',
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
     transition: 'transform 0.2s',
@@ -2703,24 +2956,24 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
 
   // Select dropdown
   select: {
-    padding: '8px 12px',
+    padding: '6px 10px',
     fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '5px',
     cursor: 'pointer',
     minWidth: '160px',
   },
 
   // Input field
   input: {
-    padding: '8px 12px',
+    padding: '6px 10px',
     fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '5px',
     outline: 'none',
     flex: 1,
   },
@@ -2751,7 +3004,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 0',
-    borderBottom: `1px solid ${theme.border}`,
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   modelName: {
     fontSize: '12px',
