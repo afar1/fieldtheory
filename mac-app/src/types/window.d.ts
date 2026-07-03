@@ -308,6 +308,8 @@ interface TranscribeAPI {
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
   getAutoImprove?: () => Promise<boolean>;
   setAutoImprove?: (enabled: boolean) => Promise<void>;
+  getLiveTyping?: () => Promise<boolean>;
+  setLiveTyping?: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;

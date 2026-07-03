@@ -9561,6 +9561,15 @@ function setupTranscribeIPCHandlers(): void {
     await transcriberManager.setAutoImprove(false);
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_LIVE_TYPING, () => {
+    return transcriberManager?.getLiveTyping() ?? false;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_LIVE_TYPING, async (_event, enabled: boolean) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setLiveTyping(enabled);
+  });
+
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
     return 0;
   });
@@ -14263,6 +14272,7 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager.setFieldTheoryTerminalInsertionTarget({
     isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
     insertText: writeTextIntoFocusedCodexTerminal,
+    submitText: submitTextIntoFocusedCodexTerminal,
   });
   transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
     const result = await getMeetingManager().stopActiveMeeting();

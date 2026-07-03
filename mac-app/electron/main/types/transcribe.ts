@@ -118,6 +118,8 @@ export const TranscribeIPCChannels = {
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',

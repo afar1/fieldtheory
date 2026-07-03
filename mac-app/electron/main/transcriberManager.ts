@@ -34,6 +34,8 @@ import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import { StdioJsonServer } from './stdioJsonServer';
 import { appendTranscriberTrace } from './transcriberTrace';
+import { LiveTypingCoordinator } from './liveTypingCoordinator';
+import { HOT_MIC_DEFAULTS } from './hotMicDefaults';
 import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
@@ -149,7 +151,10 @@ type FieldTheoryMarkdownInsertionTarget = {
 type FieldTheoryTerminalInsertionTarget = {
   isAvailable: () => boolean;
   insertText: (text: string) => boolean;
+  submitText?: (text: string, submitMode: LiveTypingSubmitMode) => boolean | Promise<boolean>;
 };
+
+type LiveTypingSubmitMode = 'enter' | 'command-enter';
 
 type MeetingCaptureHotkeyHandler = () => Promise<void>;
 type BeforeRecordingToggleHandler = () => void | Promise<void>;
@@ -277,6 +282,10 @@ export class TranscriberManager extends EventEmitter {
   private standardChunkCommandTriggered: boolean = false;
   private pendingImmediateSquaresAction: string | null = null;
   private pendingImmediateSquaresText: string = '';
+  private liveTypingCoordinator: LiveTypingCoordinator | null = null;
+  private liveTypingTargetBundleId: string | null = null;
+  private liveTypingPendingCommandText: string = '';
+  private liveTypingOutputSegments: string[] = [];
   private static readonly STANDARD_MAX_CHUNK_QUEUE_DEPTH = 8;
   private static readonly STANDARD_HARVEST_BACKPRESSURE_QUEUE_THRESHOLD = 2;
 
@@ -332,6 +341,7 @@ export class TranscriberManager extends EventEmitter {
     // still paste to the user's target app when recording is toggled from our UI.
     this.nativeHelper.on('frontmostAppChanged', (appInfo: { bundleId?: string | null }) => {
       const bundleId = appInfo?.bundleId ?? null;
+      this.liveTypingCoordinator?.notifyFrontmostChanged(bundleId);
       if (bundleId && !this.isFieldTheoryBundleId(bundleId)) {
         this.lastExternalPasteTargetBundleId = bundleId;
       }
@@ -871,6 +881,7 @@ export class TranscriberManager extends EventEmitter {
 
       this.resetStandardRealtimeSession();
       this.activeRecordingSource = recordingSource;
+      this.startLiveTypingSessionIfEligible(recordingSource);
       if (recordingSource === 'microphone') {
         this.attachStandardChunkListener();
         this.setStandardRealtimeHarvestMode();
@@ -884,6 +895,7 @@ export class TranscriberManager extends EventEmitter {
       this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
+      this.resetLiveTypingSession(true);
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
@@ -967,6 +979,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private resetStandardRealtimeSession(): void {
+    this.resetLiveTypingSession(true);
     this.standardLiveTranscript = '';
     this.standardLiveSegments = [];
     this.standardPendingChunkQueue = [];
@@ -981,6 +994,39 @@ export class TranscriberManager extends EventEmitter {
     this.standardLiveTranscript = '';
     this.standardLiveSegments = [];
     this.emit('standardLiveTranscript', '');
+  }
+
+  private startLiveTypingSessionIfEligible(recordingSource: RecordingInputSource): void {
+    if (!this.getLiveTyping() || recordingSource !== 'microphone') {
+      return;
+    }
+
+    const targetBundleId = this.nativeHelper.getFrontmostApp()?.bundleId ?? null;
+    if (!targetBundleId) {
+      appendTranscriberTrace('liveTyping.skipped', {
+        reason: 'no-frontmost-app',
+        source: recordingSource,
+      });
+      return;
+    }
+
+    this.liveTypingTargetBundleId = targetBundleId;
+    this.liveTypingCoordinator = new LiveTypingCoordinator({
+      insertTextSegment: (bundleId, text) => this.nativeHelper.insertTextSegment(bundleId, text),
+      onTrace: appendTranscriberTrace,
+    });
+    this.liveTypingCoordinator.start(targetBundleId);
+    appendTranscriberTrace('liveTyping.session-start', { targetBundleId });
+  }
+
+  private resetLiveTypingSession(cancelCoordinator: boolean): void {
+    if (cancelCoordinator) {
+      this.liveTypingCoordinator?.cancel();
+    }
+    this.liveTypingCoordinator = null;
+    this.liveTypingTargetBundleId = null;
+    this.liveTypingPendingCommandText = '';
+    this.liveTypingOutputSegments = [];
   }
 
   private attachStandardChunkListener(): void {
@@ -1104,8 +1150,9 @@ export class TranscriberManager extends EventEmitter {
       });
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
+      await this.handleLiveTypingChunk(liveChunkText);
 
-      if (this.squaresManager) {
+      if (!this.liveTypingCoordinator && this.squaresManager) {
         const cmdStart = performance.now();
         const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());
         const cmdMs = Math.round(performance.now() - cmdStart);
@@ -1389,6 +1436,16 @@ export class TranscriberManager extends EventEmitter {
       }
       this.activeRecordingSource = null;
 
+      const liveTypingSession = !!this.liveTypingCoordinator;
+      let liveTypingTypedSegmentCount: number | null = null;
+      let liveTypingRemainderText = '';
+      const liveTypingTargetBundleId = this.liveTypingTargetBundleId;
+      if (this.liveTypingCoordinator) {
+        this.flushLiveTypingPendingCommandText();
+        const liveTypingFinish = await this.liveTypingCoordinator.finish();
+        liveTypingTypedSegmentCount = liveTypingFinish.typedSegmentCount;
+      }
+
       const finishPrepMs = Math.round(performance.now() - finishStart);
       const timingMessage = '[timing] finish recording prep: snapshot=%dms snapshotStatus=%s stop=%dms drain=%dms total=%dms source=%s liveChars=%d queueDepth=%d helperActive=%s';
       if (finishPrepMs > 400) {
@@ -1488,6 +1545,7 @@ export class TranscriberManager extends EventEmitter {
       let deferredSquaresAction = immediateSquaresAction;
       if (cleanedText.length === 0) {
         this.clearStandardLiveTranscript();
+        this.resetLiveTypingSession(false);
         appendTranscriberTrace('finish.no-audio', {
           source: activeRecordingSource,
           totalMs: Math.round(performance.now() - finalPassStart),
@@ -1507,7 +1565,7 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
 
-      if (!deferredSquaresAction && this.squaresManager) {
+      if (!liveTypingSession && !deferredSquaresAction && this.squaresManager) {
         const handled = await this.squaresManager.handleVoiceCommand(cleanedText);
         if (handled) {
           log.info(`Squares voice command executed: "${cleanedText}"`);
@@ -1522,7 +1580,7 @@ export class TranscriberManager extends EventEmitter {
       // If user says "use the debug command", insert [cmd:debug.md] reference.
       const cmdDetectStart = performance.now();
       this.detectedCommands = [];
-      if (this.commandsManager) {
+      if (!liveTypingSession && this.commandsManager) {
         const commandDetection = this.commandsManager.detectCommands(cleanedText);
         if (commandDetection.detected) {
           // Insert [cmd:name.md] references at the end of the cleaned text (trigger phrases removed)
@@ -1547,11 +1605,27 @@ export class TranscriberManager extends EventEmitter {
       // Insert inline [Figure N] references for screenshots taken during recording.
       // IMPORTANT: must happen before clearStandardLiveTranscript() which clears
       // standardLiveSegments needed for inline placement based on timing.
-      const figureSegments = finalTextSource === 'asr' ? [] : this.standardLiveSegments;
-      cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
+      if (!liveTypingSession) {
+        const figureSegments = finalTextSource === 'asr' ? [] : this.standardLiveSegments;
+        cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
+      }
+      if (liveTypingSession && liveTypingTypedSegmentCount !== null) {
+        liveTypingRemainderText = this.computeLiveTypingRemainder(
+          liveTypingTypedSegmentCount,
+          cleanedText,
+          finalTextSource
+        );
+        appendTranscriberTrace('liveTyping.finish-remainder', {
+          typedSegmentCount: liveTypingTypedSegmentCount,
+          totalSegmentCount: this.standardLiveSegments.length,
+          remainderChars: liveTypingRemainderText.length,
+          textSource: finalTextSource,
+        });
+      }
       this.clearStandardLiveTranscript();
 
       // Store transcription in clipboard history.
+      let storedTranscriptItemId: number | null = null;
       if (this.clipboardManager) {
         // Check if continuous context mode is active - if so, use its stackId.
         const continuousContextState = this.clipboardManager.getContinuousContextState();
@@ -1566,6 +1640,7 @@ export class TranscriberManager extends EventEmitter {
           effectiveStackId
         );
         if (itemId > 0) {
+          storedTranscriptItemId = itemId;
           this.currentStack.push(itemId);
           
           // Auto-stack: if screenshots were taken during recording, group them with transcript.
@@ -1623,10 +1698,31 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       const pasteStart = performance.now();
-      const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
-      await this.notifyPasteStarting();
-      await this.pasteStack(false);
-      this.emit('stackChanged', 0);
+      let accessibilityCheckPromise: Promise<boolean> | null = null;
+      const liveTypingShouldPasteRemainder = liveTypingSession && liveTypingRemainderText.trim().length > 0;
+      const liveTypingShouldPasteScreenshots = liveTypingSession && this.currentStack.some((itemId) => itemId !== storedTranscriptItemId);
+      if (liveTypingShouldPasteRemainder || liveTypingShouldPasteScreenshots || !liveTypingSession) {
+        await this.notifyPasteStarting();
+      }
+
+      if (liveTypingSession) {
+        if (liveTypingShouldPasteRemainder && liveTypingTargetBundleId) {
+          await this.deliverLiveTypingRemainder(liveTypingTargetBundleId, liveTypingRemainderText);
+        }
+
+        if (liveTypingShouldPasteScreenshots) {
+          await this.pasteStack(false, {
+            excludeItemIds: storedTranscriptItemId === null ? undefined : new Set([storedTranscriptItemId]),
+          });
+          this.emit('stackChanged', 0);
+        } else {
+          this.clearStack();
+        }
+      } else {
+        accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
+        await this.pasteStack(false);
+        this.emit('stackChanged', 0);
+      }
       if (deferredSquaresAction && this.squaresManager) {
         await this.squaresManager.executeAction(deferredSquaresAction);
       }
@@ -1651,6 +1747,10 @@ export class TranscriberManager extends EventEmitter {
         totalMs: finalTotalMs,
         tailBytes: tailFileSize,
         commands: this.detectedCommands.map(c => c.name),
+        liveTyping: liveTypingSession ? {
+          typedSegmentCount: liveTypingTypedSegmentCount,
+          remainderChars: liveTypingRemainderText.length,
+        } : undefined,
       });
 
       // Set status to idle BEFORE emitting paste events.
@@ -1659,7 +1759,7 @@ export class TranscriberManager extends EventEmitter {
       this.handleOverlayAfterTranscription();
 
       // Use accessibility result to choose UI feedback (paste already happened)
-      const hasTextInput = await accessibilityCheckPromise;
+      const hasTextInput = liveTypingSession ? true : await accessibilityCheckPromise;
       if (hasTextInput) {
         this.emit('paste-success', cleanedText);
       } else if (!this.skipNextPasteFailedNotification) {
@@ -1667,6 +1767,7 @@ export class TranscriberManager extends EventEmitter {
       }
       // Reset the skip flag
       this.skipNextPasteFailedNotification = false;
+      this.resetLiveTypingSession(false);
     } catch (error) {
       const noRecordingInProgress =
         error instanceof Error && /no recording in progress/i.test(error.message);
@@ -1684,6 +1785,7 @@ export class TranscriberManager extends EventEmitter {
       this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
+      this.resetLiveTypingSession(true);
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
       if (!noRecordingInProgress) {
@@ -1721,6 +1823,7 @@ export class TranscriberManager extends EventEmitter {
     this.pendingImmediateSquaresAction = null;
     this.pendingImmediateSquaresText = '';
     this.activeRecordingSource = null;
+    this.resetLiveTypingSession(true);
     this.detachStandardChunkListener();
     this.clearStandardLiveTranscript();
     this.clearStack();
@@ -1742,6 +1845,7 @@ export class TranscriberManager extends EventEmitter {
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
       this.activeRecordingSource = null;
+      this.resetLiveTypingSession(true);
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1752,6 +1856,7 @@ export class TranscriberManager extends EventEmitter {
     } catch (error) {
       log.error('Failed to cancel recording:', error);
       this.activeRecordingSource = null;
+      this.resetLiveTypingSession(true);
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1911,6 +2016,21 @@ export class TranscriberManager extends EventEmitter {
    */
   getAutoImprove(): boolean {
     return false;
+  }
+
+  /**
+   * Set whether standard dictation types finalized segments as they arrive.
+   */
+  async setLiveTyping(enabled: boolean): Promise<void> {
+    await this.preferences.save({ liveTypingEnabled: !!enabled });
+  }
+
+  /**
+   * Get whether live typing is enabled for standard dictation.
+   * Default is false.
+   */
+  getLiveTyping(): boolean {
+    return this.preferences.getPreference('liveTypingEnabled') === true;
   }
 
   /**
@@ -3727,6 +3847,254 @@ export class TranscriberManager extends EventEmitter {
     return true;
   }
 
+  private async deliverLiveTypingRemainder(bundleId: string, text: string): Promise<void> {
+    const payload = this.addFollowupTypingSpace(text);
+    const result = await this.typeIntoAppWithClipboardSync(bundleId, payload, false);
+    if (result.success) {
+      return;
+    }
+
+    clipboard.writeText(payload);
+    this.clipboardManager?.syncClipboardHash();
+    await this.pasteText(bundleId);
+  }
+
+  private async handleLiveTypingChunk(text: string): Promise<void> {
+    if (!this.liveTypingCoordinator) {
+      return;
+    }
+
+    const commandEval = this.evaluateLiveTypingCommand(text);
+    if (commandEval.textToType) {
+      this.enqueueLiveTypingOutputSegment(commandEval.textToType);
+    }
+
+    if (!commandEval.submitMode) {
+      return;
+    }
+
+    const drainResult = await this.liveTypingCoordinator.drain();
+    if (drainResult.bufferedSegmentCount > 0) {
+      appendTranscriberTrace('liveTyping.submit-deferred', {
+        submitMode: commandEval.submitMode,
+        bufferedSegmentCount: drainResult.bufferedSegmentCount,
+      });
+      return;
+    }
+
+    await this.submitLiveTypingTarget(commandEval.submitMode);
+  }
+
+  private evaluateLiveTypingCommand(text: string): {
+    textToType: string;
+    submitMode: LiveTypingSubmitMode | null;
+  } {
+    const pendingText = typeof this.liveTypingPendingCommandText === 'string'
+      ? this.liveTypingPendingCommandText
+      : '';
+    const combined = [pendingText, text.trim()]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(' ');
+    const words = this.liveTypingWords(combined);
+    const commandEnterPhrases = this.getLiveTypingPhraseWords(
+      'hotMicCommandEnterWords',
+      HOT_MIC_DEFAULTS.commandEnterPhrases
+    );
+    const submitPhrases = this.getLiveTypingPhraseWords(
+      'hotMicSubmitWord',
+      HOT_MIC_DEFAULTS.submitPhrases
+    );
+    this.liveTypingPendingCommandText = '';
+
+    const commandEnterMatch = this.matchLiveTypingCommandPhrase(words, commandEnterPhrases);
+    if (commandEnterMatch.matched) {
+      return { textToType: commandEnterMatch.cleanedText, submitMode: 'command-enter' };
+    }
+
+    const submitMatch = this.matchLiveTypingCommandPhrase(words, submitPhrases);
+    if (submitMatch.matched) {
+      return { textToType: submitMatch.cleanedText, submitMode: 'enter' };
+    }
+
+    const phrasePrefix = this.splitTrailingLiveTypingPhrasePrefix(words, [
+      ...commandEnterPhrases,
+      ...submitPhrases,
+    ]);
+    this.liveTypingPendingCommandText = phrasePrefix.pendingText;
+    return { textToType: phrasePrefix.textToType, submitMode: null };
+  }
+
+  private flushLiveTypingPendingCommandText(): void {
+    const pending = typeof this.liveTypingPendingCommandText === 'string'
+      ? this.liveTypingPendingCommandText.trim()
+      : '';
+    this.liveTypingPendingCommandText = '';
+    if (pending) {
+      this.enqueueLiveTypingOutputSegment(pending);
+    }
+  }
+
+  private enqueueLiveTypingOutputSegment(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!Array.isArray(this.liveTypingOutputSegments)) {
+      this.liveTypingOutputSegments = [];
+    }
+    this.liveTypingOutputSegments.push(trimmed);
+    this.liveTypingCoordinator?.enqueueSegment(trimmed);
+  }
+
+  private getLiveTypingPhraseWords(
+    prefKey: 'hotMicCommandEnterWords' | 'hotMicSubmitWord',
+    fallback: string
+  ): string[][] {
+    const pref = this.preferences.getPreference(prefKey);
+    const raw = typeof pref === 'string' && pref.trim() ? pref : fallback;
+    return raw
+      .split(',')
+      .map((phrase) => phrase.trim().toLowerCase())
+      .filter(Boolean)
+      .map((phrase) => phrase.split(/\s+/));
+  }
+
+  private matchLiveTypingCommandPhrase(
+    words: string[],
+    phrases: string[][]
+  ): { matched: boolean; cleanedText: string } {
+    if (words.length === 0) {
+      return { matched: false, cleanedText: '' };
+    }
+
+    for (const phraseWords of phrases) {
+      if (words.length < phraseWords.length) continue;
+      const tail = words.slice(-phraseWords.length);
+      if (!this.liveTypingWordsMatch(tail, phraseWords)) continue;
+      return { matched: true, cleanedText: words.slice(0, -phraseWords.length).join(' ') };
+    }
+
+    return { matched: false, cleanedText: words.join(' ') };
+  }
+
+  private splitTrailingLiveTypingPhrasePrefix(
+    words: string[],
+    phrases: string[][]
+  ): { textToType: string; pendingText: string } {
+    if (words.length === 0) {
+      return { textToType: '', pendingText: '' };
+    }
+
+    const maxPrefixLength = Math.min(words.length, Math.max(...phrases.map((phrase) => phrase.length - 1), 0));
+    for (let count = maxPrefixLength; count > 0; count -= 1) {
+      const suffix = words.slice(-count);
+      const isPrefix = phrases.some((phrase) => (
+        phrase.length > count && this.liveTypingWordsMatch(suffix, phrase.slice(0, count))
+      ));
+      if (isPrefix) {
+        return {
+          textToType: words.slice(0, -count).join(' '),
+          pendingText: suffix.join(' '),
+        };
+      }
+    }
+
+    return { textToType: words.join(' '), pendingText: '' };
+  }
+
+  private async submitLiveTypingTarget(submitMode: LiveTypingSubmitMode): Promise<void> {
+    const targetBundleId = this.liveTypingTargetBundleId;
+    if (!targetBundleId) return;
+
+    if (this.isFieldTheoryBundleId(targetBundleId) && this.fieldTheoryTerminalInsertionTarget?.isAvailable()) {
+      const submitted = await this.fieldTheoryTerminalInsertionTarget.submitText?.('', submitMode);
+      if (submitted) {
+        appendTranscriberTrace('liveTyping.submit', { submitMode, target: 'field-theory-terminal' });
+        return;
+      }
+    }
+
+    const result = await this.nativeHelper.submitTextTarget(targetBundleId, submitMode);
+    appendTranscriberTrace('liveTyping.submit', {
+      submitMode,
+      target: targetBundleId,
+      success: result.success,
+      reason: result.reason,
+    });
+  }
+
+  private computeLiveTypingRemainder(
+    typedSegmentCount: number,
+    finalText: string,
+    finalTextSource: string
+  ): string {
+    const outputSegments = Array.isArray(this.liveTypingOutputSegments)
+      ? this.liveTypingOutputSegments
+      : this.standardLiveSegments.map((segment) => segment.text);
+    const typedPrefixText = outputSegments
+      .slice(0, typedSegmentCount)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .join(' ');
+    const liveSegmentRemainder = outputSegments
+      .slice(typedSegmentCount)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    if (finalTextSource !== 'asr') {
+      return liveSegmentRemainder;
+    }
+
+    const finalTail = this.removeLiveTypingPrefix(finalText, typedPrefixText);
+    return this.mergeLiveTypingRemainder(liveSegmentRemainder, finalTail);
+  }
+
+  private removeLiveTypingPrefix(finalText: string, typedPrefixText: string): string {
+    const finalWords = this.liveTypingWords(finalText);
+    const prefixWords = this.liveTypingWords(typedPrefixText);
+    if (finalWords.length === 0 || prefixWords.length === 0) {
+      return finalText.trim();
+    }
+
+    if (
+      finalWords.length >= prefixWords.length &&
+      this.liveTypingWordsMatch(prefixWords, finalWords.slice(0, prefixWords.length))
+    ) {
+      return finalWords.slice(prefixWords.length).join(' ');
+    }
+
+    return finalText.trim();
+  }
+
+  private mergeLiveTypingRemainder(liveSegmentRemainder: string, finalTail: string): string {
+    const leftWords = this.liveTypingWords(liveSegmentRemainder);
+    const rightWords = this.liveTypingWords(finalTail);
+    if (leftWords.length === 0) return rightWords.join(' ');
+    if (rightWords.length === 0) return leftWords.join(' ');
+
+    const maxOverlap = Math.min(leftWords.length, rightWords.length);
+    for (let count = maxOverlap; count > 0; count -= 1) {
+      if (this.liveTypingWordsMatch(leftWords.slice(-count), rightWords.slice(0, count))) {
+        return [...leftWords, ...rightWords.slice(count)].join(' ');
+      }
+    }
+
+    return [...leftWords, ...rightWords].join(' ');
+  }
+
+  private liveTypingWords(text: string): string[] {
+    return text.trim().split(/\s+/).filter(Boolean);
+  }
+
+  private liveTypingWordsMatch(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((word, index) => this.normalizeLiveTypingWord(word) === this.normalizeLiveTypingWord(right[index]));
+  }
+
+  private normalizeLiveTypingWord(word: string): string {
+    return word.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+  }
+
   /**
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
@@ -3734,7 +4102,10 @@ export class TranscriberManager extends EventEmitter {
    * Skips paste if Field Theory itself is frontmost to avoid pasting into own UI.
    * @param clearAfter - Whether to clear the stack after pasting (default: true for auto-paste, false for manual)
    */
-  async pasteStack(clearAfter: boolean = true): Promise<void> {
+  async pasteStack(
+    clearAfter: boolean = true,
+    options: { excludeItemIds?: Set<number> } = {}
+  ): Promise<void> {
     const sketchModeActive = this.sketchModeChecker?.() ?? false;
 
     if (!this.clipboardManager || this.currentStack.length === 0) {
@@ -3768,7 +4139,10 @@ export class TranscriberManager extends EventEmitter {
 
     const items = this.currentStack
       .map(id => this.clipboardManager!.getItem(id))
-      .filter((item): item is ClipboardItem => item !== null);
+      .filter((item): item is ClipboardItem => {
+        if (!item) return false;
+        return !(options.excludeItemIds?.has(item.id) && (item.type === 'text' || item.type === 'transcript'));
+      });
 
     if (items.length === 0) {
       return;

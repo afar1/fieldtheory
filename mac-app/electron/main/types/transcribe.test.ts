@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
+  TranscribeIPCChannels,
   isParakeetEngine,
 } from './transcribe';
 
@@ -19,5 +20,10 @@ describe('transcribe helpers', () => {
     expect(PARAKEET_ENGINE_MODEL_IDS['parakeet-multilingual']).toBe('nemo-parakeet-tdt-0.6b-v3');
     expect(PARAKEET_ENGINE_LABELS.parakeet).toBe('Parakeet English');
     expect(PARAKEET_ENGINE_LABELS['parakeet-multilingual']).toBe('Parakeet Multilingual');
+  });
+
+  it('defines live typing IPC channels', () => {
+    expect(TranscribeIPCChannels.GET_LIVE_TYPING).toBe('transcribe:getLiveTyping');
+    expect(TranscribeIPCChannels.SET_LIVE_TYPING).toBe('transcribe:setLiveTyping');
   });
 });

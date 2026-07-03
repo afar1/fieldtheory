@@ -148,6 +148,16 @@ describe('PreferencesManager', () => {
     expect(manager.getPreference('localLlmSelectedModel')).toBe('gemma-4-12B-it-Q4_K_M');
   });
 
+  it('defaults live typing off and persists opt-in changes', async () => {
+    const manager = new PreferencesManager();
+    await manager.load();
+
+    expect(manager.getPreference('liveTypingEnabled')).toBe(false);
+
+    await manager.save({ liveTypingEnabled: true });
+    expect(manager.getPreference('liveTypingEnabled')).toBe(true);
+  });
+
   it('migrates legacy normal-window prefs into Field Theory app mode', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(

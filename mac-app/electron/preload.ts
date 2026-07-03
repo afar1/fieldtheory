@@ -187,6 +187,8 @@ const TranscribeIPCChannels = {
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -904,6 +906,8 @@ export interface TranscribeAPI {
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getLiveTyping: () => Promise<boolean>;
+  setLiveTyping: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
@@ -1411,6 +1415,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setAutoImprove: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
+  },
+
+  getLiveTyping: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_LIVE_TYPING);
+  },
+
+  setLiveTyping: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_LIVE_TYPING, enabled);
   },
 
   getAutoImproveMinWords: async (): Promise<number> => {
