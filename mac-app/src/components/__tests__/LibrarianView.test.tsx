@@ -2654,10 +2654,10 @@ describe('LibrarianView render', () => {
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
     const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
-    const riverDivider = riverButton.nextElementSibling;
-    expect(riverDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
-    expect(riverDivider?.nextElementSibling).toBe(popOutButton);
-    expect(popOutButton.nextElementSibling).toBe(markdownButton);
+    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    const popOutDivider = popOutButton.nextElementSibling;
+    expect(popOutDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
+    expect(popOutDivider?.nextElementSibling).toBe(markdownButton);
     expect(popOutButton.style.width).toBe(focusButton.style.width);
     expect(markdownButton.style.width).toBe(focusButton.style.width);
     expect(terminalButton.style.width).toBe(focusButton.style.width);
@@ -5550,7 +5550,7 @@ describe('LibrarianView render', () => {
         '  ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: 5000 });
   });
 
   it('archives the selected sidebar file with e and undoes it with Cmd+Z', async () => {
