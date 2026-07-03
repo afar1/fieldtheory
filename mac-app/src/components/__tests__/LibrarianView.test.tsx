@@ -3639,6 +3639,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
 
@@ -3664,6 +3665,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     fireEvent.click(maxwellButton);
     fireEvent.click(screen.getByRole('button', { name: 'add current page' }));
@@ -3805,7 +3807,7 @@ describe('LibrarianView render', () => {
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
       expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('honors markdown mode for initial external Library targets', async () => {
     const externalPath = '/Users/afar/.fieldtheory/library/reports/notes.md';
@@ -4194,7 +4196,7 @@ describe('LibrarianView render', () => {
         page.documentVersion,
       );
     }, { timeout: 1800 });
-  }, 15000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('keeps River sync in the background after a rendered editor save', async () => {
     const relPath = 'scratchpad/rendered-shared-background-sync-test';
@@ -5733,7 +5735,7 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
-  }, 20000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
     const visibleRelPath = 'scratchpad/visible-boundary';
@@ -5989,7 +5991,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(firstRelPath);
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(secondRelPath);
     });
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('reveals the collapsed sidebar when the pointer reaches the edge strip', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
