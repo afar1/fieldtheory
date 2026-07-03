@@ -221,6 +221,8 @@ interface Preferences {
   autoImproveContextFiles?: AutoImproveContextFile[];
   // Minimum word count for auto-improve - only improve transcripts with at least this many words
   autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
+  // Live typing - type finalized standard dictation chunks into the target app as they arrive.
+  liveTypingEnabled?: boolean;
 
   // Auto-improve usage stats - cumulative all-time tracking
   autoImproveStats?: {
@@ -418,6 +420,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   autoImproveClaudeEffort: 'balanced',
   autoImproveWritingPreferences: '',
   autoImproveContextFiles: [],
+  liveTypingEnabled: false,
 
   // Sound settings - librarian sound ON by default, other sounds OFF by default
   soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default

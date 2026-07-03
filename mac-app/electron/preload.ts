@@ -198,6 +198,8 @@ const TranscribeIPCChannels = {
   GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
   SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
   CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -944,6 +946,8 @@ export interface TranscribeAPI {
   getAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
   setAutoImproveContextFiles: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
   chooseAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping: () => Promise<boolean>;
+  setLiveTyping: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
@@ -1491,6 +1495,14 @@ const transcribeAPI: TranscribeAPI = {
 
   chooseAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  getLiveTyping: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_LIVE_TYPING);
+  },
+
+  setLiveTyping: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_LIVE_TYPING, enabled);
   },
 
   getAutoImproveMinWords: async (): Promise<number> => {

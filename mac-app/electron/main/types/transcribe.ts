@@ -147,6 +147,8 @@ export const TranscribeIPCChannels = {
   GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
   SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
   CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',

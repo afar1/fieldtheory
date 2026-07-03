@@ -85,6 +85,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
   const [selectedModel, setSelectedModel] = useState<string>('small');
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
   const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio'>('microphone');
+  const [liveTypingEnabled, setLiveTypingEnabled] = useState(false);
 
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
@@ -160,6 +161,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
           currentAutoImproveWritingPreferences,
           currentAutoImproveContextFiles,
           currentHotMicHotkey,
+          currentLiveTyping,
         ] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
@@ -179,6 +181,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
           window.transcribeAPI!.getAutoImproveWritingPreferences?.() ?? '',
           window.transcribeAPI!.getAutoImproveContextFiles?.() ?? [],
           window.hotMicAPI?.getHotkey?.() ?? null,
+          window.transcribeAPI!.getLiveTyping?.() ?? false,
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
@@ -193,6 +196,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
         setAutoImproveWritingPreferences(currentAutoImproveWritingPreferences);
         setAutoImproveContextFiles(currentAutoImproveContextFiles as AutoImproveContextFile[]);
         setHotMicHotkey(currentHotMicHotkey);
+        setLiveTypingEnabled(currentLiveTyping);
 
         // Fetch current engine selection. Only Parakeet variants are user-facing.
         const currentEngine = mockMode === 'whisper-nudge' ? 'whisper' : (await window.transcribeAPI!.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
@@ -370,6 +374,17 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
       { path: filePath, enabled: true },
     ]);
   }, [autoImproveContextFiles, autoImproveContextPathInput, saveAutoImproveContextFiles]);
+
+  const handleLiveTypingChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setLiveTyping) return;
+    setLiveTypingEnabled(enabled);
+    try {
+      await window.transcribeAPI.setLiveTyping(enabled);
+    } catch (err) {
+      setLiveTypingEnabled(!enabled);
+      console.error('Failed to set live typing:', err);
+    }
+  }, []);
 
   const handleSetupParakeet = useCallback(async (engine: VisibleParakeetEngine) => {
     if (!window.transcribeAPI || settingUpParakeet) return;
@@ -815,6 +830,35 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
             {hotkeyError}
           </div>
         )}
+
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Live typing (experimental)</span>
+            <span style={styles.modelHint}>
+              Types your words into the focused field as you speak; Hot Mic submit phrases work, while auto-improve, voice window commands, and inline figure references are skipped.
+            </span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={liveTypingEnabled}
+              aria-label="Live typing"
+              onClick={() => void handleLiveTypingChange(!liveTypingEnabled)}
+              style={{
+                ...styles.toggle,
+                backgroundColor: liveTypingEnabled ? theme.info : (theme.isDark ? '#404040' : '#d1d5db'),
+              }}
+            >
+              <span
+                style={{
+                  ...styles.toggleKnob,
+                  transform: liveTypingEnabled ? 'translateX(22px)' : 'translateX(2px)',
+                }}
+              />
+            </button>
+          </div>
+        </div>
 
         <div style={{ ...styles.row, borderBottom: 0 }}>
           <div style={styles.rowText}>
