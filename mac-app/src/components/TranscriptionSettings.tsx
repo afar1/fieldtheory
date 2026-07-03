@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import { getSettingsDividerColor } from './settings/SettingsPrimitives';
+import { SETTINGS_CARD_GAP, getSettingsDividerColor } from './settings/SettingsPrimitives';
 import type { ParakeetSetupError, ParakeetSetupProgress, ParakeetStatus } from '../types/window';
 import ParakeetSupportPanel from './ParakeetSupportPanel';
 import {
@@ -40,6 +40,10 @@ type AutoImproveProviderStatus = {
   available: boolean;
   message: string;
 };
+type TranscriptionSettingsMode = 'transcription' | 'auto-improve';
+interface TranscriptionSettingsProps {
+  mode?: TranscriptionSettingsMode;
+}
 const AUTO_IMPROVE_PROVIDER_OPTIONS: Array<{
   id: AutoImproveProvider;
   label: string;
@@ -68,7 +72,7 @@ function getParakeetVerifiedBadge(isSelected: boolean): {
   };
 }
 
-export default function TranscriptionSettings() {
+export default function TranscriptionSettings({ mode = 'transcription' }: TranscriptionSettingsProps) {
   const { theme } = useTheme();
   const [status, setStatus] = useState<TranscriptionStatus>('idle');
   const [modelStatus, setModelStatus] = useState<ModelStatus>('missing');
@@ -703,6 +707,8 @@ export default function TranscriptionSettings() {
 
   return (
     <div style={styles.container}>
+      {mode === 'transcription' && (
+      <>
       <section style={styles.card}>
         <header style={styles.cardHeader}>
           <div style={styles.cardTitle}>Capture</div>
@@ -833,7 +839,10 @@ export default function TranscriptionSettings() {
           </div>
         </div>
       </section>
+      </>
+      )}
 
+      {mode === 'auto-improve' && (
       <section style={styles.card}>
         <header style={styles.cardHeader}>
           <div style={styles.cardTitle}>Auto-improve</div>
@@ -917,44 +926,33 @@ export default function TranscriptionSettings() {
           </div>
         )}
 
-        {autoImproveProvider !== 'local' && (
-          <div style={styles.fieldBlock}>
+        <div style={styles.fieldBlock}>
+          <div style={styles.modelOptionsHeader}>
+            <div style={styles.rowText}>
+              <span style={styles.rowLabel}>Subscription models</span>
+              <span style={styles.modelHint}>Used when Codex or Claude is selected as the provider.</span>
+            </div>
+          </div>
+          <div style={styles.modelOptionsStack}>
             <div style={styles.fieldGrid}>
               <label style={styles.fieldLabel}>
-                <span style={styles.rowLabel}>{autoImproveProvider === 'codex' ? 'Codex model' : 'Claude model'}</span>
+                <span style={styles.rowLabel}>Codex model</span>
                 <input
-                  value={autoImproveProvider === 'codex' ? autoImproveModelOptions.codexModel : autoImproveModelOptions.claudeModel}
+                  value={autoImproveModelOptions.codexModel}
                   onChange={(event) => {
                     const value = event.currentTarget.value;
-                    setAutoImproveModelOptions((current) => (
-                      autoImproveProvider === 'codex'
-                        ? { ...current, codexModel: value }
-                        : { ...current, claudeModel: value }
-                    ));
+                    setAutoImproveModelOptions((current) => ({ ...current, codexModel: value }));
                   }}
-                  onBlur={() => {
-                    void saveAutoImproveModelOptions(
-                      autoImproveProvider === 'codex'
-                        ? { codexModel: autoImproveModelOptions.codexModel }
-                        : { claudeModel: autoImproveModelOptions.claudeModel }
-                    );
-                  }}
+                  onBlur={() => void saveAutoImproveModelOptions({ codexModel: autoImproveModelOptions.codexModel })}
                   placeholder="Default"
                   style={styles.textInput}
                 />
               </label>
               <label style={styles.fieldLabel}>
-                <span style={styles.rowLabel}>Effort</span>
+                <span style={styles.rowLabel}>Codex reasoning</span>
                 <select
-                  value={autoImproveProvider === 'codex' ? autoImproveModelOptions.codexEffort : autoImproveModelOptions.claudeEffort}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value as AutoImproveEffort;
-                    void saveAutoImproveModelOptions(
-                      autoImproveProvider === 'codex'
-                        ? { codexEffort: value }
-                        : { claudeEffort: value }
-                    );
-                  }}
+                  value={autoImproveModelOptions.codexEffort}
+                  onChange={(event) => void saveAutoImproveModelOptions({ codexEffort: event.currentTarget.value as AutoImproveEffort })}
                   style={styles.select}
                 >
                   {AUTO_IMPROVE_EFFORT_OPTIONS.map((option) => (
@@ -963,19 +961,45 @@ export default function TranscriptionSettings() {
                 </select>
               </label>
             </div>
-            <div style={styles.providerStatus}>
-              Leave model blank to use the logged-in CLI default.
+            <div style={styles.fieldGrid}>
+              <label style={styles.fieldLabel}>
+                <span style={styles.rowLabel}>Claude model</span>
+                <input
+                  value={autoImproveModelOptions.claudeModel}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setAutoImproveModelOptions((current) => ({ ...current, claudeModel: value }));
+                  }}
+                  onBlur={() => void saveAutoImproveModelOptions({ claudeModel: autoImproveModelOptions.claudeModel })}
+                  placeholder="Default"
+                  style={styles.textInput}
+                />
+              </label>
+              <label style={styles.fieldLabel}>
+                <span style={styles.rowLabel}>Claude reasoning</span>
+                <select
+                  value={autoImproveModelOptions.claudeEffort}
+                  onChange={(event) => void saveAutoImproveModelOptions({ claudeEffort: event.currentTarget.value as AutoImproveEffort })}
+                  style={styles.select}
+                >
+                  {AUTO_IMPROVE_EFFORT_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
-        )}
+          <div style={styles.providerStatus}>
+            Leave a model blank to use the logged-in CLI default.
+          </div>
+        </div>
 
         <div style={styles.fieldBlock}>
           <label style={styles.fieldLabel}>
             <span style={styles.rowLabel}>Writing preferences</span>
             <textarea
               value={autoImproveWritingPreferences}
-              onChange={(event) => setAutoImproveWritingPreferences(event.currentTarget.value)}
-              onBlur={() => void saveAutoImproveWritingPreferences(autoImproveWritingPreferences)}
+              onChange={(event) => void saveAutoImproveWritingPreferences(event.currentTarget.value)}
               placeholder="Examples: keep my voice direct, avoid corporate polish, preserve uncertainty, do not add claims I did not say."
               style={styles.textArea}
             />
@@ -1054,7 +1078,10 @@ export default function TranscriptionSettings() {
           />
         </div>
       </section>
+      )}
 
+      {mode === 'transcription' && (
+      <>
       <section style={styles.card}>
         <header style={styles.cardHeader}>
           <div style={styles.cardTitle}>Transcription</div>
@@ -1183,6 +1210,8 @@ export default function TranscriptionSettings() {
           </button>
         </div>
       )}
+      </>
+      )}
     </div>
   );
 }
@@ -1193,6 +1222,9 @@ export default function TranscriptionSettings() {
 const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: SETTINGS_CARD_GAP,
   },
   card: {
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
@@ -1276,6 +1308,14 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gridTemplateColumns: 'minmax(160px, 1fr) minmax(120px, 180px)',
     gap: '10px',
     alignItems: 'end',
+  },
+  modelOptionsHeader: {
+    marginBottom: '10px',
+  },
+  modelOptionsStack: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '10px',
   },
   fieldLabel: {
     display: 'flex',

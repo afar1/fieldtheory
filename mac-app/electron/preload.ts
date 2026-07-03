@@ -86,6 +86,7 @@ const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
   'darkMode',
   'glassEffect',
   'accentPreset',
+  'themeStylePreset',
   'darkModeIntensity',
   'fieldtheory-rendered-editor-debug',
 ] as const;

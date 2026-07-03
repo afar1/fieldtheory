@@ -3117,6 +3117,7 @@ interface LibrarianViewProps {
   active?: boolean;
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
+  onNavigateToSignIn?: () => void;
   browserLibrarySurface?: boolean;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   onFocusChromeActiveChange?: (active: boolean) => void;
@@ -3228,7 +3229,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onNavigateToSignIn, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -8457,17 +8458,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
-      void (async () => {
-        await flushCurrentEdit();
-        await window.commandsAPI?.runLocalCommand?.({
-          commandName: 'improve',
-          mode: 'selection',
-          selection: {
-            start: selection.start,
-            end: selection.end,
-          },
-        });
-      })().catch(() => {});
+      void flushCurrentEdit()
+        .then(() => window.commandsAPI?.runGlobalImproveSelection?.())
+        .catch(() => {});
       return true;
     }
 
@@ -11529,6 +11522,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 void selectExternalFile(item.cachePath);
               }}
               onActionFeedback={flashCopyFeedback}
+              onNavigateToSignIn={onNavigateToSignIn}
             />
           </div>
         )}

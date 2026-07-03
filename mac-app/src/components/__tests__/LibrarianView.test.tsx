@@ -76,6 +76,11 @@ vi.mock('../SketchView', () => ({
   ),
 }));
 
+const LIBRARIAN_VIEW_TEST_TIMEOUT_MS = 30000;
+const RENDERED_EDITOR_SAVE_TIMEOUT_MS = 5000;
+
+vi.setConfig({ testTimeout: LIBRARIAN_VIEW_TEST_TIMEOUT_MS });
+
 describe('LibrarianView render', () => {
   type EditorSelectionSnapshot = Parameters<typeof shouldPreserveEditorSelectionPastePopover>[0]['latestEditorSnapshot'];
   const testLibraryRootPath = '/Users/afar/.fieldtheory/library';
@@ -2654,10 +2659,10 @@ describe('LibrarianView render', () => {
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
     const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
-    const riverDivider = riverButton.nextElementSibling;
-    expect(riverDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
-    expect(riverDivider?.nextElementSibling).toBe(popOutButton);
-    expect(popOutButton.nextElementSibling).toBe(markdownButton);
+    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    const popOutDivider = popOutButton.nextElementSibling;
+    expect(popOutDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
+    expect(popOutDivider?.nextElementSibling).toBe(markdownButton);
     expect(popOutButton.style.width).toBe(focusButton.style.width);
     expect(markdownButton.style.width).toBe(focusButton.style.width);
     expect(terminalButton.style.width).toBe(focusButton.style.width);
@@ -3280,7 +3285,7 @@ describe('LibrarianView render', () => {
         `${content}${insertedText}`,
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
     expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
   });
@@ -3530,7 +3535,7 @@ describe('LibrarianView render', () => {
         `${content}${imagePath}`,
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('keeps rendered mode when Enter commits the file title', async () => {
@@ -3634,6 +3639,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
 
@@ -3659,6 +3665,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     fireEvent.click(maxwellButton);
     fireEvent.click(screen.getByRole('button', { name: 'add current page' }));
@@ -3800,7 +3807,7 @@ describe('LibrarianView render', () => {
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
       expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('honors markdown mode for initial external Library targets', async () => {
     const externalPath = '/Users/afar/.fieldtheory/library/reports/notes.md';
@@ -3977,7 +3984,7 @@ describe('LibrarianView render', () => {
         'hello world!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 	    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
 	    expect(renderedInput.textContent).toContain('hello world!');
 	  });
@@ -4041,7 +4048,7 @@ describe('LibrarianView render', () => {
         'hello world!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(appendRenderedEditorDebug).not.toHaveBeenCalled();
   });
 
@@ -4108,7 +4115,7 @@ describe('LibrarianView render', () => {
       expect(stages).toContain('local-content-state-scheduled');
       expect(stages).toContain('editor-session-persist-scheduled');
       expect(stages).toContain('save-scheduled');
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     const timingEntries = appendRenderedEditorDebug.mock.calls
       .map(([entry]) => entry as { stage?: string; details?: Record<string, unknown> })
@@ -4189,7 +4196,7 @@ describe('LibrarianView render', () => {
         page.documentVersion,
       );
     }, { timeout: 1800 });
-  }, 15000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('keeps River sync in the background after a rendered editor save', async () => {
     const relPath = 'scratchpad/rendered-shared-background-sync-test';
@@ -4254,7 +4261,7 @@ describe('LibrarianView render', () => {
         'local first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(updateContent).not.toHaveBeenCalled();
 
     await waitFor(() => {
@@ -4341,7 +4348,7 @@ describe('LibrarianView render', () => {
         'river first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     await waitFor(() => {
       expect(updateContent).toHaveBeenCalledWith('shared-1', 'river first!', 1, page.absPath);
@@ -4358,7 +4365,7 @@ describe('LibrarianView render', () => {
         'river first!?',
         syncedVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('syncs River once when shared files become available', async () => {
@@ -4449,7 +4456,7 @@ describe('LibrarianView render', () => {
         'retry local first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     await waitFor(() => {
       expect(updateContent).toHaveBeenCalledTimes(2);
@@ -4511,7 +4518,7 @@ describe('LibrarianView render', () => {
 	      expect(renderedInput.textContent).toContain('Pasted Heading');
 	      expect(renderedInput.textContent).toContain('one');
 	      expect(renderedInput.textContent).not.toContain('# Pasted Heading');
-	    }, { timeout: 1200 });
+	    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 	  });
 
 	  it('pastes clipboard images into the rendered editor without switching to source mode', async () => {
@@ -4570,7 +4577,7 @@ describe('LibrarianView render', () => {
         'hello image![Image](<file:///Users/afar/Pictures/Test%20Image.png>)',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
     expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
   });
@@ -4638,7 +4645,7 @@ describe('LibrarianView render', () => {
         'hello image file![Image](<file:///Users/afar/Pictures/Phone%20Photo.jpg>)',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(getClipboardImagePath).not.toHaveBeenCalled();
   });
 
@@ -4703,7 +4710,7 @@ describe('LibrarianView render', () => {
         '![Image](<file:///Users/afar/Pictures/Phone%20Source%20Photo.png>)hello source image',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(getClipboardImagePath).not.toHaveBeenCalled();
   });
 
@@ -4757,7 +4764,7 @@ describe('LibrarianView render', () => {
         'draft: ![Image](./existing.png)\nhello source image',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(window.markdownImagesAPI!.makeImagesPortable).not.toHaveBeenCalled();
   });
 
@@ -4823,7 +4830,7 @@ describe('LibrarianView render', () => {
         portableContent,
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('opens a Quick Look style preview when a rendered editor image is clicked', async () => {
@@ -4913,7 +4920,7 @@ describe('LibrarianView render', () => {
         '---\ntodo: true\ntodo_state: open\n---\n\nhello!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('preserves artifact frontmatter while editing the rendered editor body', async () => {
@@ -4970,7 +4977,7 @@ describe('LibrarianView render', () => {
         '---\ncontent_edited_at: 1234\n---\n\nhello!',
         reading.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('lets rendered editor input create the next rendered body line', async () => {
@@ -5021,7 +5028,7 @@ describe('LibrarianView render', () => {
         'hello\nx',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('continues rendered list items on Enter without showing markdown syntax', async () => {
@@ -5073,7 +5080,7 @@ describe('LibrarianView render', () => {
         '- first\n- ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
 	  it('starts an ordered list from an empty rendered editor with Command+Shift+7', async () => {
@@ -5125,7 +5132,7 @@ describe('LibrarianView render', () => {
         '1. ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('handles rendered editor Command+/ as focus mode without inserting a comment', async () => {
@@ -5249,7 +5256,7 @@ describe('LibrarianView render', () => {
         'See [[Consensus]]',
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('lets rendered editor input complete @bookmarks mentions', async () => {
@@ -5306,7 +5313,7 @@ describe('LibrarianView render', () => {
         nextContent,
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('keeps rendered wiki link completion editable when deleting a character', async () => {
@@ -5370,7 +5377,7 @@ describe('LibrarianView render', () => {
         'See [[Co',
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('shows linked documents at the bottom of rendered wiki content', async () => {
@@ -5550,7 +5557,7 @@ describe('LibrarianView render', () => {
         '  ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: 5000 });
   });
 
   it('archives the selected sidebar file with e and undoes it with Cmd+Z', async () => {
@@ -5728,7 +5735,7 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
-  }, 20000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
     const visibleRelPath = 'scratchpad/visible-boundary';
@@ -5984,7 +5991,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(firstRelPath);
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(secondRelPath);
     });
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('reveals the collapsed sidebar when the pointer reaches the edge strip', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{

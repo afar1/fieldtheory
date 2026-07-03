@@ -11,7 +11,9 @@ import {
   darkThemeSolid,
   darkThemeGlass,
   AccentPreset,
+  ThemeStylePreset,
   accentPresets,
+  themeStylePresets,
   getAccentHover,
   getSelectedBg,
 } from '../design/tokens';
@@ -25,6 +27,8 @@ interface ThemeContextType {
   toggleDarkMode: () => void;
   accentPreset: AccentPreset;
   setAccentPreset: (preset: AccentPreset) => void;
+  themeStylePreset: ThemeStylePreset;
+  setThemeStylePreset: (preset: ThemeStylePreset) => void;
   darkModeIntensity: number;
   setDarkModeIntensity: (intensity: number) => void;
 }
@@ -34,12 +38,14 @@ const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 const DARK_MODE_KEY = 'darkMode';
 const GLASS_EFFECT_KEY = 'glassEffect';
 const ACCENT_PRESET_KEY = 'accentPreset';
+const THEME_STYLE_PRESET_KEY = 'themeStylePreset';
 const DARK_MODE_INTENSITY_KEY = 'darkModeIntensity';
 
 export function isThemeRendererStoragePreferenceKey(key: string | null | undefined): boolean {
   return key === DARK_MODE_KEY ||
     key === GLASS_EFFECT_KEY ||
     key === ACCENT_PRESET_KEY ||
+    key === THEME_STYLE_PRESET_KEY ||
     key === DARK_MODE_INTENSITY_KEY;
 }
 
@@ -145,6 +151,139 @@ function adjustDarkThemeIntensity(baseTheme: typeof darkThemeSolid, intensity: n
   };
 }
 
+export function applyThemeStylePreset(
+  baseTheme: Omit<Theme, 'isDark' | 'glassEnabled'>,
+  preset: ThemeStylePreset,
+  isDark: boolean
+): Omit<Theme, 'isDark' | 'glassEnabled'> {
+  if (preset === 'default') return baseTheme;
+
+  const overrides: Record<Exclude<ThemeStylePreset, 'default'>, {
+    light: Partial<Omit<Theme, 'isDark' | 'glassEnabled'>>;
+    dark: Partial<Omit<Theme, 'isDark' | 'glassEnabled'>>;
+  }> = {
+    soft: {
+      light: {
+        bg: '#f6f2ec',
+        background: '#f6f2ec',
+        bgSecondary: '#f1ece4',
+        bgTertiary: '#ebe5db',
+        surface0: '#f6f2ec',
+        surface1: '#f1ece4',
+        surface2: '#ebe5db',
+        surface3: '#e4ddd1',
+        listItemBg: '#f1ece4',
+        hoverBg: '#ece5da',
+        inputBg: '#fbf8f3',
+        border: '#e2d9cc',
+        inputBorder: '#d8cdbd',
+        dots: '#d6cbba',
+        text: '#3a342c',
+        textSecondary: '#857b6c',
+      },
+      dark: {
+        bg: '#1d1b18',
+        background: '#1d1b18',
+        bgSecondary: '#232120',
+        bgTertiary: '#2a2724',
+        surface0: '#1d1b18',
+        surface1: '#232120',
+        surface2: '#2a2724',
+        surface3: '#322e2a',
+        listItemBg: '#232120',
+        hoverBg: '#2c2925',
+        inputBg: '#232120',
+        border: '#37322c',
+        inputBorder: '#433d36',
+        dots: '#403a33',
+        text: '#e6e0d6',
+        textSecondary: '#a89e8f',
+      },
+    },
+    cool: {
+      light: {
+        bg: '#f6f7f9',
+        background: '#f6f7f9',
+        bgSecondary: '#eef0f3',
+        bgTertiary: '#e6e9ee',
+        surface0: '#f6f7f9',
+        surface1: '#eef0f3',
+        surface2: '#e6e9ee',
+        surface3: '#dde1e8',
+        listItemBg: '#eef0f3',
+        hoverBg: '#e6eaf0',
+        inputBg: '#ffffff',
+        border: '#dadfe6',
+        inputBorder: '#cad1da',
+        dots: '#c9d0d9',
+        text: '#1b2530',
+        textSecondary: '#5f6b78',
+      },
+      dark: {
+        bg: '#11151b',
+        background: '#11151b',
+        bgSecondary: '#171c24',
+        bgTertiary: '#1d232c',
+        surface0: '#11151b',
+        surface1: '#171c24',
+        surface2: '#1d232c',
+        surface3: '#242c37',
+        listItemBg: '#171c24',
+        hoverBg: '#202733',
+        inputBg: '#171c24',
+        border: '#283038',
+        inputBorder: '#343e49',
+        dots: '#303a45',
+        text: '#dde6ef',
+        textSecondary: '#94a3b3',
+      },
+    },
+    contrast: {
+      light: {
+        bg: '#ffffff',
+        background: '#ffffff',
+        bgSecondary: '#f2f3f5',
+        bgTertiary: '#e7e9ec',
+        surface0: '#ffffff',
+        surface1: '#f2f3f5',
+        surface2: '#e7e9ec',
+        surface3: '#d9dce1',
+        listItemBg: '#f2f3f5',
+        hoverBg: '#e4e7ec',
+        inputBg: '#ffffff',
+        border: '#c4c9d0',
+        inputBorder: '#aab1bb',
+        dots: '#b4bac2',
+        text: '#0a0c10',
+        textSecondary: '#4a525d',
+      },
+      dark: {
+        bg: '#0a0c10',
+        background: '#0a0c10',
+        bgSecondary: '#14171d',
+        bgTertiary: '#1e222a',
+        surface0: '#0a0c10',
+        surface1: '#14171d',
+        surface2: '#1e222a',
+        surface3: '#2a2f3a',
+        listItemBg: '#14171d',
+        hoverBg: '#252b35',
+        inputBg: '#14171d',
+        border: '#3a414d',
+        inputBorder: '#4e5765',
+        dots: '#454d5a',
+        text: '#ffffff',
+        textSecondary: '#b3bcc8',
+      },
+    },
+  };
+
+  return {
+    ...baseTheme,
+    ...(isDark ? overrides[preset].dark : overrides[preset].light),
+  };
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [isDark, setIsDark] = useState(() => {
     // Default to light mode, check localStorage for saved preference
@@ -176,6 +315,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       }
     }
     return 'forest';
+  });
+
+  const [themeStylePreset, setThemeStylePresetState] = useState<ThemeStylePreset>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(THEME_STYLE_PRESET_KEY);
+      if (saved && saved in themeStylePresets) {
+        return saved as ThemeStylePreset;
+      }
+    }
+    return 'default';
   });
 
   const [darkModeIntensity, setDarkModeIntensityState] = useState(() => {
@@ -245,6 +394,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         if (saved && saved in accentPresets) setAccentPresetState(saved as AccentPreset);
       }
 
+      if (syncAll || key === THEME_STYLE_PRESET_KEY) {
+        const saved = localStorage.getItem(THEME_STYLE_PRESET_KEY);
+        if (saved && saved in themeStylePresets) setThemeStylePresetState(saved as ThemeStylePreset);
+      }
+
       if (syncAll || key === DARK_MODE_INTENSITY_KEY) {
         const saved = localStorage.getItem(DARK_MODE_INTENSITY_KEY);
         if (saved === null) return;
@@ -292,6 +446,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(ACCENT_PRESET_KEY, preset);
   };
 
+  const setThemeStylePreset = (preset: ThemeStylePreset) => {
+    setThemeStylePresetState(preset);
+    localStorage.setItem(THEME_STYLE_PRESET_KEY, preset);
+  };
+
   const setDarkModeIntensity = (intensity: number) => {
     const clamped = Math.max(0, Math.min(100, intensity));
     setDarkModeIntensityState(clamped);
@@ -309,7 +468,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       darkTheme = adjustDarkThemeIntensity(darkTheme, darkModeIntensity);
     }
 
-    const baseTheme = isDark ? darkTheme : lightTheme;
+    const baseTheme = applyThemeStylePreset(isDark ? darkTheme : lightTheme, themeStylePreset, isDark);
 
     return {
       isDark,
@@ -321,7 +480,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       selectedBg: getSelectedBg(accentColor, isDark),
       selectedBorder: accentColor,
     } as Theme;
-  }, [isDark, glassEnabled, accentPreset, darkModeIntensity]);
+  }, [isDark, glassEnabled, accentPreset, themeStylePreset, darkModeIntensity]);
 
   // Sync theme to :root/body so overflow spill can't fall through to the prefers-color-scheme fallback in styles.css.
   useEffect(() => {
@@ -336,6 +495,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       toggleDarkMode,
       accentPreset,
       setAccentPreset,
+      themeStylePreset,
+      setThemeStylePreset,
       darkModeIntensity,
       setDarkModeIntensity,
     }}>

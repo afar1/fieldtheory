@@ -20,7 +20,7 @@ import TeamSettings from './TeamSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import { accentPresets, AccentPreset } from '../design/tokens';
+import { accentPresets, themeStylePresets, AccentPreset, ThemeStylePreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { buildTeamSettingsState } from '../utils/teamSettingsState';
@@ -42,6 +42,7 @@ import {
 type SettingsSection =
   | 'account'
   | 'appearance'
+  | 'auto-improve'
   | 'audio'
   | 'keyboard'
   | 'launcher'
@@ -83,6 +84,7 @@ type HotkeyCapture =
 const SECTION_LABELS: Record<SettingsSection, string> = {
   'account': 'Account',
   'appearance': 'Appearance & System',
+  'auto-improve': 'Auto Improve',
   'audio': 'Audio & Transcription',
   'keyboard': 'Keyboard Shortcuts',
   'launcher': 'Launcher',
@@ -100,6 +102,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
 const SECTION_GLYPHS: Record<SettingsSection, string> = {
   'account': '◉',
   'appearance': '◐',
+  'auto-improve': '✦',
   'audio': '∿',
   'keyboard': '⌘',
   'launcher': '⌖',
@@ -117,6 +120,7 @@ const SECTION_GLYPHS: Record<SettingsSection, string> = {
 const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
   'account': 'Profile, sign-in, local sync, and support.',
   'appearance': 'Theme, app behavior, permissions, and retention.',
+  'auto-improve': 'Clean up transcripts before paste using your selected provider.',
   'audio': 'Microphone, transcription, and word corrections.',
   'keyboard': 'Global shortcuts and app-local reference bindings.',
   'launcher': 'What the command launcher surfaces and how it opens.',
@@ -136,6 +140,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'account',
   'terminal-commands', // Allowlist
   'appearance',
+  'auto-improve',
   'audio',
   'hot-mic', // Hot Mic
   'keyboard',
@@ -198,7 +203,16 @@ export default function SettingsPanel({
   onPerformanceHudEnabledChange,
   initialSection,
 }: SettingsPanelProps) {
-  const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
+  const {
+    theme,
+    toggleDarkMode,
+    accentPreset,
+    setAccentPreset,
+    themeStylePreset,
+    setThemeStylePreset,
+    darkModeIntensity,
+    setDarkModeIntensity,
+  } = useTheme();
 
   // Selected section state for sidebar navigation
   const [selectedSection, setSelectedSection] = useState<SettingsSection>(() => {
@@ -1322,6 +1336,11 @@ export default function SettingsPanel({
 
   return (
     <div style={styles.settingsLayout}>
+      <style>{`
+        [data-ft-settings-card] > div:last-child {
+          border-bottom: 0 !important;
+        }
+      `}</style>
       {/* Left Sidebar Navigation */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
@@ -1374,7 +1393,7 @@ export default function SettingsPanel({
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
         <div style={styles.sectionStack}>
-          <div style={styles.section}>
+          <div style={styles.section} data-ft-settings-card>
         <SectionHeader title="Appearance" styles={styles} />
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1389,6 +1408,69 @@ export default function SettingsPanel({
           >
             <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
+            <span style={styles.rowLabel}>Theme Style</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Choose a palette for both light and dark mode
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', maxWidth: '306px' }}>
+            {(Object.keys(themeStylePresets) as ThemeStylePreset[]).map((preset) => {
+              const isSelected = preset === themeStylePreset;
+              const previewColors: Record<ThemeStylePreset, { bg: string; surface: string; border: string }> = {
+                default: theme.isDark
+                  ? { bg: '#15181e', surface: '#1c1f26', border: '#2a2d35' }
+                  : { bg: '#faf9f7', surface: '#f5f4f2', border: '#e0e0e0' },
+                soft: theme.isDark
+                  ? { bg: '#1d1b18', surface: '#232120', border: '#37322c' }
+                  : { bg: '#f6f2ec', surface: '#f1ece4', border: '#e2d9cc' },
+                cool: theme.isDark
+                  ? { bg: '#11151b', surface: '#171c24', border: '#283038' }
+                  : { bg: '#f6f7f9', surface: '#eef0f3', border: '#dadfe6' },
+                contrast: theme.isDark
+                  ? { bg: '#0a0c10', surface: '#14171d', border: '#3a414d' }
+                  : { bg: '#ffffff', surface: '#f2f3f5', border: '#c4c9d0' },
+              };
+              return (
+                <button
+                  key={preset}
+                  onClick={() => setThemeStylePreset(preset)}
+                  title={themeStylePresets[preset].description}
+                  style={{
+                    height: '50px',
+                    width: '72px',
+                    borderRadius: '6px',
+                    border: isSelected ? `2px solid ${theme.accent}` : `1px solid ${theme.border}`,
+                    backgroundColor: theme.surface1,
+                    color: theme.text,
+                    cursor: 'pointer',
+                    padding: '5px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    alignItems: 'stretch',
+                    boxShadow: isSelected ? `0 0 0 2px ${theme.selectedBg}` : 'none',
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      height: '18px',
+                      borderRadius: '4px',
+                      background: `linear-gradient(90deg, ${previewColors[preset].bg} 0 45%, ${previewColors[preset].surface} 45% 78%, ${previewColors[preset].border} 78% 100%)`,
+                      border: `1px solid ${previewColors[preset].border}`,
+                    }}
+                  />
+                  <span style={{ fontSize: '11px', lineHeight: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {themeStylePresets[preset].name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {renderedTextCursorStyle === 'block' && (
@@ -1518,7 +1600,7 @@ export default function SettingsPanel({
 
       {/* System Access Section - Permission status with quick links to settings */}
       {systemPermissions && (
-        <div style={styles.section}>
+        <div style={styles.section} data-ft-settings-card>
           <SectionHeader title="System Access" styles={styles} />
           
           {/* Microphone */}
@@ -1575,7 +1657,7 @@ export default function SettingsPanel({
       )}
 
       {/* Data Retention Section */}
-      <div style={styles.section}>
+      <div style={styles.section} data-ft-settings-card>
         <SectionHeader title="Data Retention" styles={styles} />
         <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
           Automatically delete clipboard history older than the selected period.
@@ -1609,7 +1691,7 @@ export default function SettingsPanel({
 
       {/* Keyboard Shortcuts Section - First for easy access */}
       {selectedSection === 'keyboard' && (
-      <div style={styles.section}>
+      <div style={styles.section} data-ft-settings-card>
         <SectionHeader title="Keyboard Shortcuts" styles={styles} />
         
         {/* Open Field Theory - primary action, shown first */}
@@ -1940,14 +2022,14 @@ export default function SettingsPanel({
       </div>
       )}
 
-      {/* Audio & Transcription Section (combined) */}
+      {/* Audio & Transcription Section */}
       {selectedSection === 'audio' && (
       <div style={styles.sectionStack}>
         <AudioSettingsPanel />
         <TranscriptionSettings />
 
         {/* Word Substitutions Section */}
-        <div style={styles.section}>
+        <div style={styles.section} data-ft-settings-card>
           <SectionHeader title="Word Corrections" styles={styles} />
           <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
             Fix common transcription mistakes. Words on the left will be replaced with words on the right.
@@ -2075,6 +2157,13 @@ export default function SettingsPanel({
       </div>
       )}
 
+      {/* Auto Improve Section */}
+      {selectedSection === 'auto-improve' && (
+      <div style={styles.sectionStack}>
+        <TranscriptionSettings mode="auto-improve" />
+      </div>
+      )}
+
       {/* Portable Commands Section */}
       {selectedSection === 'commands' && (
       <div style={styles.sectionStack}>
@@ -2108,7 +2197,7 @@ export default function SettingsPanel({
 
       {/* Allowlist Section */}
       {selectedSection === 'terminal-commands' && (
-      <div style={styles.section}>
+      <div style={styles.section} data-ft-settings-card>
         <SectionHeader title="Allowlist" styles={styles} />
         <ClaudeSettings />
       </div>
@@ -2173,7 +2262,7 @@ export default function SettingsPanel({
             : 'Internal library, commands, and tasks sync is off on this device.';
 
         return (
-          <div style={styles.section}>
+          <div style={styles.section} data-ft-settings-card>
             <SectionHeader title="Account" onHiddenReveal={() => {
               if (teamFeaturesVisible) setShowInternalSyncToggle(true);
             }} styles={styles} />

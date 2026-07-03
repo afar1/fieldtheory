@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import AudioSettingsPanel from '../AudioSettingsPanel';
+import { SETTINGS_CARD_GAP } from '../settings/SettingsPrimitives';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -101,6 +102,17 @@ describe('AudioSettingsPanel input mode controls', () => {
       expect(isModeButtonActive(hotMicButton)).toBe(true);
       expect(isModeButtonActive(standardButton)).toBe(false);
     });
+  });
+
+  it('uses the shared settings card gap between audio cards', async () => {
+    const { container } = renderPanel();
+
+    await screen.findByRole('button', { name: 'Hot Mic' });
+
+    const cardStack = container.firstElementChild as HTMLElement;
+    expect(cardStack.style.display).toBe('flex');
+    expect(cardStack.style.flexDirection).toBe('column');
+    expect(cardStack.style.gap).toBe(SETTINGS_CARD_GAP);
   });
 
   it('updates mode selection from shared input mode change events', async () => {

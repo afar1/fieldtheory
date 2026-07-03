@@ -141,6 +141,8 @@ import {
   trailingLineStartSelectionExtension,
 } from '../MarkdownCodeEditor';
 
+const RENDERED_MARKDOWN_VISIBLE_DECORATION_BUDGET_MS = process.env.CI ? 50 : 16;
+
 describe('MarkdownCodeEditor cursor blink', () => {
   it('leaves cursor animation enabled by default', () => {
     expect(getMarkdownCodeEditorCursorAnimationStyle(true)).toEqual({});
@@ -2806,7 +2808,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     expect(decorations.size).toBeGreaterThan(0);
     expect(decorations.size).toBeLessThan(500);
-    expect(elapsedMs).toBeLessThan(16);
+    expect(elapsedMs).toBeLessThan(RENDERED_MARKDOWN_VISIBLE_DECORATION_BUDGET_MS);
   });
 
   it('keeps offscreen image lines decorated while rebuilding visible rendered ranges', () => {

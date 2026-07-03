@@ -2,6 +2,7 @@ import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer, 
 import path from 'path';
 import { resolveFieldTheoryWindowMode, type PreferencesManager } from './preferences';
 import { createLogger } from './logger';
+import { hardenWindow } from './windowHardening';
 
 const log = createLogger('Onboarding');
 
@@ -196,6 +197,7 @@ export class OnboardingWindow {
         devTools: process.env.NODE_ENV !== 'production',
       },
     });
+    hardenWindow(this.window);
 
     // Show and focus the window when ready.
     this.window.once('ready-to-show', () => {

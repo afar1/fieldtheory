@@ -6,6 +6,7 @@ import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
 import type { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
+import { formatCompactPriorityMicName } from '../shared/audioDeviceLabels';
 
 const log = createLogger('Tray');
 const TRAY_ICON_WIDTH = 16;
@@ -308,7 +309,7 @@ export class TrayManager {
     }
 
     if (priorityDeviceId && priorityDevice) {
-      const abbrev = priorityDevice.name.slice(0, 3);
+      const abbrev = formatCompactPriorityMicName(priorityDevice.name);
       this.tray.setTitle(`:${abbrev}${unreadTitle}`);
     } else {
       this.tray.setTitle(unreadTitle.trimStart());

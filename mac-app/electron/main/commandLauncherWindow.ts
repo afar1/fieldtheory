@@ -20,6 +20,7 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
+import { hardenWindow } from './windowHardening';
 import {
   isExternalCommandTargetBundleId,
   isFieldTheoryCommandTargetBundleId,
@@ -635,6 +636,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.window);
     appendCommandLauncherTrace('create-window-complete');
     
     // Stay on top of everything.
@@ -758,6 +760,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.previewWindow);
     appendCommandLauncherTrace('preview-create-window-complete');
 
     this.previewWindow.setAlwaysOnTop(true, 'screen-saver', 1);
