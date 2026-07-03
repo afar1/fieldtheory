@@ -98,13 +98,13 @@ describe('teamSettingsState', () => {
     ]);
   });
 
-  it('surfaces ambiguous team scope as an actionable v1 message', () => {
+  it('surfaces ambiguous team scope without the old one-team limitation copy', () => {
     expect(buildTeamSettingsState({
       teamState: baseTeamState({ reason: 'ambiguous_team_scope' }),
       currentUser,
       loading: false,
       error: null,
-    }).error).toBe('Multiple teams are connected. River supports one team for v1.');
+    }).error).toBe('Multiple River contacts are connected. Use the River picker to choose who receives each file.');
   });
 
   it('derives stable initials from names and emails', () => {

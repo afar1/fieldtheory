@@ -12,12 +12,14 @@ import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import RiverPicker, { type RiverPickerTarget } from './RiverPicker';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   EMBER_ITEM_ID,
+  RIVER_ITEM_ID,
   LOCAL_WIKI_ADDED_EVENT,
   LOCAL_WIKI_DELETED_EVENT,
   LOCAL_WIKI_RENAMED_EVENT,
@@ -31,6 +33,7 @@ import WikiSidebar, {
 } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
 import EmberPane from './EmberPane';
+import RiverReader from './RiverReader';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
 import {
@@ -225,8 +228,11 @@ type InlineDrawInsertion = {
   } | null;
 };
 
-export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external' | null;
 type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
+type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
+type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+type RiverShareTarget = NonNullable<Parameters<SharedFilesClient['share']>[0]['targets']>[number];
 const COPY_PATH_FEEDBACK_MS = 1600;
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
@@ -239,6 +245,7 @@ interface SharedFileStatus {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
 }
 interface SharedFilePresenceUser {
   userId: string;
@@ -290,6 +297,20 @@ export function getReadingUpdatedTitle(reading: Pick<Reading, 'mtime' | 'sharedA
 
 export function getHtmlPreviewSrcDoc(html: string, filePath: string): string {
   return buildHtmlPreviewSrcDoc(html, filePath);
+}
+
+function riverTargetToPickerTarget(target: RiverTarget): RiverPickerTarget {
+  return {
+    id: target.id,
+    kind: target.kind,
+    label: target.label,
+    detail: target.detail,
+    callSign: target.callsign,
+    initials: target.initials,
+    avatarUrl: target.avatarUrl,
+    tint: target.tint,
+    status: target.status,
+  };
 }
 
 function libraryRenameTraceEnabled(): boolean {
@@ -2676,7 +2697,7 @@ export type LibrarianEditorSession = {
 };
 
 export type LibrarianNavigationEntry = {
-  itemType: 'wiki' | 'artifact' | 'external' | 'ember';
+  itemType: 'wiki' | 'artifact' | 'external' | 'river' | 'ember';
   itemPath: string;
 };
 
@@ -3297,7 +3318,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ||
     selectedItemType === 'artifact' ||
     selectedItemType === 'external' ||
-    selectedItemType === 'bookmarks';
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'river';
   const selectedItemUsesLegacyImmersive = selectedItemType === null;
   const [isFullScreen, setIsFullScreen] = useState(() => (
     initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
@@ -3436,6 +3458,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
   const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
   const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [riverSharePickerOpen, setRiverSharePickerOpen] = useState(false);
+  const [riverTargets, setRiverTargets] = useState<RiverTarget[]>([]);
+  const [selectedRiverTargetIds, setSelectedRiverTargetIds] = useState<string[]>([]);
+  const [riverDefaultTargetIds, setRiverDefaultTargetIds] = useState<string[]>([]);
+  const [riverTargetsLoading, setRiverTargetsLoading] = useState(false);
+  const [riverPickerError, setRiverPickerError] = useState<string | null>(null);
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
@@ -4106,6 +4134,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => initialSelection?.type === 'bookmarks');
+  const [riverEverShown, setRiverEverShown] = useState<boolean>(false);
   const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
@@ -4342,6 +4371,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'external' && externalOpenFile?.path) {
       return { itemType: 'external', itemPath: externalOpenFile.path };
     }
+    if (selectedItemType === 'river') {
+      return { itemType: 'river', itemPath: RIVER_ITEM_ID };
+    }
     if (selectedItemType === 'ember') {
       return { itemType: 'ember', itemPath: EMBER_ITEM_ID };
     }
@@ -4358,6 +4390,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(entry.itemPath);
     } else if (entry.itemType === 'artifact') {
       selectArtifactPath(entry.itemPath);
+    } else if (entry.itemType === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (entry.itemType === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -4559,10 +4598,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
       setBookmarksEverShown(true);
     }
+    if (selectedItemType === 'river' && !riverEverShown) {
+      setRiverEverShown(true);
+    }
     if (selectedItemType === 'ember' && !emberEverShown) {
       setEmberEverShown(true);
     }
-  }, [selectedItemType, bookmarksEverShown, emberEverShown]);
+  }, [selectedItemType, bookmarksEverShown, riverEverShown, emberEverShown]);
 
   useEffect(() => {
     onSelectedItemTypeChange?.(active ? selectedItemType : null);
@@ -4916,6 +4958,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'ember';
   const effectiveFullScreen = isFullScreen || focusImmersive;
   const activeReadingPath = activeReading?.path ?? null;
+  useEffect(() => {
+    if (!riverSharePickerOpen) return;
+    let cancelled = false;
+    setRiverTargetsLoading(true);
+    setRiverPickerError(null);
+    void Promise.all([
+      window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
+      activeReadingPath && sharedFileStatus?.shared
+        ? window.sharedFilesAPI?.getAudience?.(activeReadingPath) ?? Promise.resolve(null)
+        : Promise.resolve(null),
+    ])
+      .then(([targets, audience]) => {
+        if (cancelled) return;
+        const nextTargets = targets ?? [];
+        const defaultIds = nextTargets
+          .filter((target) => target.committable && target.isDefault)
+          .map((target) => target.id);
+        const audienceIds = audience?.shared
+          ? audience.targets.map((target) => target.id)
+          : [];
+        setRiverTargets(nextTargets);
+        setRiverDefaultTargetIds(defaultIds);
+        setSelectedRiverTargetIds(audienceIds.length > 0 ? audienceIds : defaultIds);
+        setRiverPickerError(audience?.error ?? null);
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River target lookup failed:', error);
+        if (!cancelled) {
+          setRiverTargets([]);
+          setRiverDefaultTargetIds([]);
+          setSelectedRiverTargetIds([]);
+          setRiverPickerError('Could not load River targets.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRiverTargetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeReadingPath, riverSharePickerOpen, sharedFileStatus?.shared]);
   const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
   const activeIsHtmlDocument = activeDocumentKind === 'html';
@@ -9231,6 +9314,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
       setContentMode('rendered');
+    } else if (item.type === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (item.type === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -9371,40 +9461,41 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  const handleToggleSharedFile = useCallback(async () => {
+  const openRiverSharePicker = useCallback(() => {
+    setSelectedRiverTargetIds([]);
+    setRiverPickerError(null);
+    setRiverSharePickerOpen(true);
+  }, []);
+
+  const commitRiverTargets = useCallback(async (targets: RiverShareTarget[]) => {
     if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
-    if (!sharedFileStatus?.shared && !sharedFilesCanWrite) {
-      flashCopyFeedback('Accept team invite to share');
+    if (targets.length === 0) {
+      flashCopyFeedback('Choose a River target');
       return;
     }
 
     setIsTogglingSharedFile(true);
     try {
       await flushCurrentEdit();
-      if (sharedFileStatus?.shared) {
-        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
-        if (success) {
-          setSharedFileStatus({ shared: false });
-          window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
-          flashCopyFeedback('Removed from River');
-        } else {
-          flashCopyFeedback('River remove failed');
-        }
-        return;
-      }
-
-      const content = activeReadingContentRef.current ?? activeReading.content;
-      const status = await window.sharedFilesAPI?.share({
-        filePath: activeReadingPath,
-        title: activeReading.title,
-        content,
-        type: inferSharedFileTypeForActiveReading(activeReadingPath),
-      });
+      const status = sharedFileStatus?.shared
+        ? await window.sharedFilesAPI?.updateAudience({
+          filePath: activeReadingPath,
+          sharedId: sharedFileStatus.sharedId,
+          targets,
+        })
+        : await window.sharedFilesAPI?.share({
+          filePath: activeReadingPath,
+          title: activeReading.title,
+          content: activeReadingContentRef.current ?? activeReading.content,
+          type: inferSharedFileTypeForActiveReading(activeReadingPath),
+          targets,
+        });
       const nextStatus = status ?? { shared: false, error: 'River share failed' };
       setSharedFileStatus(nextStatus);
       if (nextStatus.shared) {
+        setRiverSharePickerOpen(false);
         window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
-        flashCopyFeedback('Added to River');
+        flashCopyFeedback(sharedFileStatus?.shared ? 'River audience updated' : 'Added to River');
       } else {
         flashCopyFeedback(nextStatus.error ?? 'River share failed');
       }
@@ -9414,7 +9505,58 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } finally {
       setIsTogglingSharedFile(false);
     }
-  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite]);
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFileStatus?.sharedId, sharedFilesAvailable]);
+
+  const updateRiverDefaults = useCallback((targetIds: string[]) => {
+    setRiverDefaultTargetIds(targetIds);
+    const targetMap = new Map(riverTargets.map((target) => [target.id, target]));
+    const destinations = targetIds
+      .map((targetId, position) => {
+        const target = targetMap.get(targetId);
+        return target && target.committable ? { kind: target.kind, targetId: target.targetId, position } : null;
+      })
+      .filter((target): target is { kind: RiverTarget['kind']; targetId: string; position: number } => target !== null);
+    void window.sharedFilesAPI?.setDefaultDestinations?.(destinations)
+      .then((result) => {
+        if (!result?.ok) {
+          const message = result?.error ?? 'River defaults update failed';
+          setRiverPickerError(message);
+          flashCopyFeedback(message);
+        }
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River defaults update failed:', error);
+        setRiverPickerError('River defaults update failed');
+        flashCopyFeedback('River defaults update failed');
+      });
+  }, [flashCopyFeedback, riverTargets]);
+
+  const handleToggleSharedFile = useCallback(() => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+    openRiverSharePicker();
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, openRiverSharePicker, sharedFilesAvailable]);
+
+  const unshareFromRiver = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument || !sharedFileStatus?.shared) return;
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+      if (success) {
+        setSharedFileStatus({ shared: false });
+        setRiverSharePickerOpen(false);
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback('Removed from River');
+      } else {
+        flashCopyFeedback('River remove failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River remove error:', err);
+      flashCopyFeedback('River remove failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
 
   const toggleActiveHtmlLayout = useCallback(() => {
     if (!activeIsHtmlDocument || !activeReadingPath) return;
@@ -11047,6 +11189,130 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
+  const riverPickerTargets = riverTargets.map(riverTargetToPickerTarget);
+  const selectedRiverTargets = riverTargets.filter((target) => selectedRiverTargetIds.includes(target.id) && target.committable);
+  const selectedRiverShareTargets: RiverShareTarget[] = selectedRiverTargets.map((target) => ({
+    id: target.id,
+    kind: target.kind,
+  }));
+  const riverPrimaryLabel = selectedRiverTargets.length === 1
+    ? sharedFileStatus?.shared
+      ? `Update ${selectedRiverTargets[0]?.label ?? 'River'}`
+      : `Share to ${selectedRiverTargets[0]?.label ?? 'River'}`
+    : selectedRiverTargets.length > 1
+      ? sharedFileStatus?.shared
+        ? `Update ${selectedRiverTargets.length} targets`
+        : `Share to ${selectedRiverTargets.length} targets`
+      : 'Choose a destination';
+
+  const toggleRiverTarget = (targetId: string) => {
+    setSelectedRiverTargetIds((current) => (
+      current.includes(targetId)
+        ? current.filter((id) => id !== targetId)
+        : [...current, targetId]
+    ));
+  };
+
+  const confirmRiverShare = () => {
+    if (selectedRiverShareTargets.length === 0) return;
+    void commitRiverTargets(selectedRiverShareTargets);
+  };
+
+  const riverSharePicker = riverSharePickerOpen ? (
+    <div
+      role="dialog"
+      aria-label="Share to River"
+      aria-modal="true"
+      onMouseDown={() => setRiverSharePickerOpen(false)}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.46)' : 'rgba(15,23,42,0.18)',
+      }}
+    >
+      <div
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(460px, 100%)',
+          maxHeight: 'min(560px, calc(100vh - 40px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: theme.text, fontSize: '15px', fontWeight: 650 }}>Share to River</div>
+            <div style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeReading?.title ?? 'Selected document'}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setRiverSharePickerOpen(false)}
+            style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <RiverPicker
+          targets={riverPickerTargets}
+          selectedIds={selectedRiverTargetIds}
+          defaultIds={riverDefaultTargetIds}
+          surface="popover"
+          intent="share"
+          status={riverTargetsLoading ? 'loading' : riverPickerError ? 'error' : 'ready'}
+          disabled={isTogglingSharedFile}
+          errorMessage={riverPickerError}
+          emptyLabel="No River contacts or groups yet."
+          pendingOnlyLabel="No accepted River targets are available yet."
+          commitLabel={isTogglingSharedFile ? 'Sharing...' : riverPrimaryLabel}
+          onToggleTarget={toggleRiverTarget}
+          onCommit={confirmRiverShare}
+          onDefaultChange={updateRiverDefaults}
+        />
+        {sharedFileStatus?.shared && (
+          <button
+            type="button"
+            disabled={isTogglingSharedFile}
+            onClick={() => void unshareFromRiver()}
+            style={{
+              height: '32px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: '#dc2626',
+              cursor: isTogglingSharedFile ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 650,
+            }}
+          >
+            Remove from River
+          </button>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -11070,6 +11336,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     >
       <ScrollDiagnosticsHUD />
       {readerStatusFeedback}
+      {riverSharePicker}
       {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
         <div
           aria-hidden="true"
@@ -11236,6 +11503,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
+        {riverEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'river' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <RiverReader
+              active={active && selectedItemType === 'river'}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              isFullScreen={effectiveFullScreen}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
+              onToggleFullScreen={toggleImmersive}
+              onOpenItem={(item) => {
+                if (!item.cachePath) {
+                  flashCopyFeedback('River item is not cached yet');
+                  return;
+                }
+                void selectExternalFile(item.cachePath);
+              }}
+              onActionFeedback={flashCopyFeedback}
+            />
+          </div>
+        )}
         {emberEverShown && (
           <div
             style={{
@@ -11253,7 +11549,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'river' && selectedItemType !== 'ember' && (
         <div
           data-ft-reader-editor-pane="true"
           style={{
@@ -11472,9 +11768,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   shareStatus={sharedFileStatus}
                   isSharing={isTogglingSharedFile}
                   onToggleShare={handleToggleSharedFile}
-                  showShare={sharedFilesAvailable && (sharedFilesCanWrite || !!sharedFileStatus?.shared) && activeIsMarkdownDocument}
+                  showShare={sharedFilesAvailable && activeIsMarkdownDocument}
                   shareTitle="Add to River (shared)"
-                  sharedTitle="Remove from River (shared)"
+                  sharedTitle="Edit River audience (shared)"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                   onOpenInNewWindow={activeReadingPath && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external') ? openActiveDocumentInWindow : undefined}

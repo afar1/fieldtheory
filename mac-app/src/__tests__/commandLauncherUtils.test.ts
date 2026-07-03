@@ -197,6 +197,16 @@ describe('launcher default panel helpers', () => {
     expect(isLauncherRiverItem({ sourceLabel: 'River (shared)' })).toBe(true);
     expect(isLauncherRiverItem({ source: 'private', sourceLabel: 'Library' })).toBe(false);
   });
+
+  it('includes a launcher action for sharing the current file to River', () => {
+    const action = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, false)
+      .find((item) => item.actionId === 'share-current-file-river');
+
+    expect(action).toMatchObject({
+      displayName: 'Share Current File to River',
+      keywords: expect.arrayContaining(['river', 'share current file', 'team', 'contact']),
+    });
+  });
 });
 
 describe('launcher renderer tracing', () => {

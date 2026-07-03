@@ -1405,6 +1405,9 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   });
 
   window.teamAPI = {
+    getEntitlement: async () => (
+      await request<{ entitlement: unknown }>('/native/team/entitlement')
+    ).entitlement,
     onTeamChanged: (callback: () => void) => events.on('team:changed', callback),
   } as any;
 

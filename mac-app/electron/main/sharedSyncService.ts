@@ -7,6 +7,15 @@ import { libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
 import { SharedTeamService, type SharedTeamState } from './sharedTeamService';
 import {
+  RiverTargetService,
+  type RiverDefaultDestination,
+  type RiverMutationResult,
+  type RiverResolvedAudience,
+  type RiverSourcePreference,
+  type RiverShareTarget,
+  type RiverTarget,
+} from './riverTargetService';
+import {
   applySharedFileFrontmatter,
   buildSharedCacheFileName,
   buildSharedConflictFileName,
@@ -56,7 +65,7 @@ function safeTitleFromPath(filePath: string): string {
   return path.basename(filePath, path.extname(filePath)) || 'Untitled';
 }
 
-function sharedRowTitle(row: Pick<TeamDocumentRow, 'shared_name' | 'title'>): string {
+function sharedRowTitle(row: Pick<RiverDocumentLike, 'shared_name' | 'title'>): string {
   return row.shared_name?.trim() || row.title?.trim() || 'Untitled';
 }
 
@@ -119,7 +128,60 @@ export interface SharedFileShareInput {
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
 }
+
+export interface SharedFileAudienceStatus {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+}
+
+export interface SharedFileAudienceUpdateInput {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
+}
+
+export type RiverTimelineScope = 'private' | 'public';
+export type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted';
+
+export interface RiverTimelineQuery {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+}
+
+export interface RiverTimelineItem {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  content?: string;
+  authorUserId?: string | null;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+}
+
+interface RiverDocumentTargetRow {
+  document_id: string;
+  target_kind: 'person' | 'group' | 'public';
+  target_id: string;
+}
+
+interface RiverDocumentAudienceRow {
+  document_id: string;
+}
+
+type SupabaseClient = NonNullable<ReturnType<AuthManager['getSupabaseClient']>>;
 
 export interface SharedFileUpdateResult {
   ok: boolean;
@@ -139,7 +201,7 @@ export interface SharedFilePresenceUser {
 export interface SharedFilePinResult {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 }
 
@@ -147,8 +209,28 @@ export interface SharedFilesAvailability {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
+  stale?: boolean;
+}
+
+export type SharedFileDestinationKind = 'contact' | 'team';
+export type SharedFileDestinationStatus = 'accepted' | 'pending';
+
+export interface SharedFileShareTarget {
+  id: string;
+  kind: SharedFileDestinationKind;
+}
+
+export interface SharedFileDestination {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: SharedFileDestinationStatus;
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
 }
 
 interface TeamDocumentRow {
@@ -173,6 +255,29 @@ interface TeamDocumentRow {
   revision?: number | null;
 }
 
+interface RiverDocumentRow {
+  id: string;
+  kind: 'document' | 'command';
+  path: string;
+  title: string;
+  content: string;
+  content_hash: string | null;
+  client_id: string;
+  client_created_at_ms: number;
+  created_by: string;
+  updated_by: string;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  original_source_path?: string | null;
+  shared_name?: string | null;
+  author_initials?: string | null;
+  author_callsign?: string | null;
+  revision?: number | null;
+}
+
+type RiverDocumentLike = RiverDocumentRow | TeamDocumentRow;
+
 function sharedKindForType(type: SharedFileType): 'document' | 'command' {
   return type === 'command' ? 'command' : 'document';
 }
@@ -192,19 +297,24 @@ function canWriteTeamDocuments(teamState: SharedTeamState): boolean {
 export class SharedSyncService extends EventEmitter {
   private authManager: AuthManager;
   private sharedTeamService: SharedTeamService;
+  private riverTargetService: RiverTargetService;
   private presenceChannel: any | null = null;
   private activePresenceSharedId: string | null = null;
-  private teamDocumentsChannel: any | null = null;
-  private teamDocumentsChannelScopeUserId: string | null = null;
+  private riverDocumentsChannel: any | null = null;
   private remoteChangeSetupInFlight: Promise<void> | null = null;
   private remoteSyncInFlight = false;
   private remoteSyncQueued = false;
   private disposed = false;
 
-  constructor(authManager: AuthManager, sharedTeamService = new SharedTeamService(authManager)) {
+  constructor(
+    authManager: AuthManager,
+    sharedTeamService = new SharedTeamService(authManager),
+    riverTargetService = new RiverTargetService(authManager),
+  ) {
     super();
     this.authManager = authManager;
     this.sharedTeamService = sharedTeamService;
+    this.riverTargetService = riverTargetService;
   }
 
   async setActivePresence(sharedId: string | null): Promise<SharedFilePresenceUser[]> {
@@ -288,25 +398,18 @@ export class SharedSyncService extends EventEmitter {
       return;
     }
 
-    const teamScopeUserId = await this.getReadableTeamScopeUserId();
-    if (this.disposed || !teamScopeUserId) {
-      await this.stopRemoteChangeSync();
-      return;
-    }
-    if (this.teamDocumentsChannel && this.teamDocumentsChannelScopeUserId === teamScopeUserId) return;
+    if (this.riverDocumentsChannel) return;
 
     await this.stopRemoteChangeSync();
     if (this.disposed) return;
-    this.teamDocumentsChannelScopeUserId = teamScopeUserId;
-    this.teamDocumentsChannel = supabase
-      .channel(`shared-team-documents:${teamScopeUserId}`)
+    this.riverDocumentsChannel = supabase
+      .channel(`river-documents:${session.user.id}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: 'team_documents',
-          filter: `team_scope_user_id=eq.${teamScopeUserId}`,
+          table: 'river_documents',
         },
         () => {
           void this.syncFromRemoteChange();
@@ -317,8 +420,68 @@ export class SharedSyncService extends EventEmitter {
         {
           event: '*',
           schema: 'public',
-          table: 'team_document_pins',
-          filter: `team_scope_user_id=eq.${teamScopeUserId}`,
+          table: 'river_document_audience',
+          filter: `recipient_user_id=eq.${session.user.id}`,
+        },
+        () => {
+          void this.syncFromRemoteChange();
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_document_targets',
+        },
+        () => {
+          void this.syncFromRemoteChange();
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_share_group_members',
+        },
+        () => {
+          void this.syncFromRemoteChange();
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_default_destinations',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        () => {
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_source_preferences',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        () => {
+          this.emit('targetsChanged');
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'river_document_pins',
+          filter: `user_id=eq.${session.user.id}`,
         },
         () => {
           this.emit('pinsChanged');
@@ -335,9 +498,8 @@ export class SharedSyncService extends EventEmitter {
 
   async stopRemoteChangeSync(): Promise<void> {
     const supabase = this.authManager.getSupabaseClient();
-    const channel = this.teamDocumentsChannel;
-    this.teamDocumentsChannel = null;
-    this.teamDocumentsChannelScopeUserId = null;
+    const channel = this.riverDocumentsChannel;
+    this.riverDocumentsChannel = null;
     if (!channel || !supabase) return;
     try {
       await supabase.removeChannel(channel);
@@ -386,23 +548,23 @@ export class SharedSyncService extends EventEmitter {
   }
 
   async getAvailability(): Promise<SharedFilesAvailability> {
-    const teamState = await this.sharedTeamService.getTeamState();
-    const cachedTeamScopeUserId = this.getCachedTeamScopeUserId();
-    if (!teamState.available && cachedTeamScopeUserId) {
+    const session = this.authManager.getSession();
+    if (!session?.user?.id) {
       return {
-        available: true,
+        available: false,
         canWrite: false,
-        hasTeamMembers: true,
-        currentTeamScopeUserId: cachedTeamScopeUserId,
+        hasTeamMembers: false,
+        reason: 'not_authenticated',
+        currentTeamScopeUserId: null,
       };
     }
-    const hasTeamMembers = teamState.available;
+    const destinations = await this.getDestinations();
+    const hasTeamMembers = destinations.some((destination) => destination.status === 'accepted');
     return {
-      available: teamState.available,
-      canWrite: canWriteTeamDocuments(teamState),
+      available: true,
+      canWrite: true,
       hasTeamMembers,
-      reason: teamState.available ? undefined : teamState.reason,
-      currentTeamScopeUserId: teamState.currentTeamScopeUserId,
+      currentTeamScopeUserId: null,
     };
   }
 
@@ -445,6 +607,86 @@ export class SharedSyncService extends EventEmitter {
     return null;
   }
 
+  async getDestinations(query = ''): Promise<SharedFileDestination[]> {
+    const targets = await this.riverTargetService.listTargets(query);
+    const destinations = targets
+      .filter((target) => target.kind !== 'public')
+      .map((target): SharedFileDestination => ({
+        id: target.kind === 'person' ? `contact:${target.targetId}` : `team:${target.targetId}`,
+        kind: target.kind === 'person' ? 'contact' : 'team',
+        label: target.label,
+        detail: target.detail,
+        status: target.status === 'accepted' ? 'accepted' : 'pending',
+        recipientUserIds: target.committable ? target.recipientUserIds : [],
+        memberCount: target.memberCount,
+        isDefault: target.isDefault,
+      }));
+    if (!destinations.some((destination) => destination.isDefault)) {
+      const firstAccepted = destinations.find((destination) => destination.status === 'accepted');
+      if (firstAccepted) firstAccepted.isDefault = true;
+    }
+    return destinations;
+  }
+
+  async getRiverTargets(query = ''): Promise<RiverTarget[]> {
+    return this.riverTargetService.listTargets(query);
+  }
+
+  async setRiverDefaultDestinations(destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> {
+    return this.riverTargetService.setDefaultDestinations(destinations);
+  }
+
+  async getRiverSourcePreferences(): Promise<RiverSourcePreference[]> {
+    return this.riverTargetService.getSourcePreferences();
+  }
+
+  async updateRiverSourcePreferences(preferences: RiverSourcePreference[]): Promise<RiverMutationResult> {
+    return this.riverTargetService.updateSourcePreferences(preferences);
+  }
+
+  private async resolveShareRecipients(targets: SharedFileShareTarget[] | undefined): Promise<{ recipients: string[]; error?: string }> {
+    const destinations = await this.getDestinations();
+    const accepted = destinations.filter((destination) => destination.status === 'accepted');
+    const defaultDestination = accepted.find((destination) => destination.isDefault);
+    const selectedTargets = targets?.length
+      ? targets
+      : defaultDestination
+        ? [defaultDestination]
+        : accepted.slice(0, 1);
+    if (!selectedTargets.length) return this.resolveLegacyTeamRecipients();
+
+    const byId = new Map(accepted.map((destination) => [destination.id, destination]));
+    const recipientIds = new Set<string>();
+    for (const target of selectedTargets) {
+      const destination = byId.get(target.id);
+      if (!destination || destination.kind !== target.kind) {
+        return { recipients: [], error: 'Choose an approved River destination' };
+      }
+      for (const recipientUserId of destination.recipientUserIds) recipientIds.add(recipientUserId);
+    }
+    if (recipientIds.size > 0) return { recipients: [...recipientIds] };
+    return this.resolveLegacyTeamRecipients();
+  }
+
+  private async resolveLegacyTeamRecipients(): Promise<{ recipients: string[]; error?: string }> {
+    const teamState = await this.sharedTeamService.getTeamState();
+    const recipientIds = new Set<string>();
+    if (teamState.available && !canWriteTeamDocuments(teamState)) {
+      return { recipients: [], error: 'Accept the team invite before sharing to River' };
+    }
+    if (teamState.available && canWriteTeamDocuments(teamState)) {
+      for (const member of teamState.members) {
+        if (member.userId) recipientIds.add(member.userId);
+      }
+      if (teamState.currentTeamScopeUserId && teamState.currentTeamScopeUserId !== this.authManager.getSession()?.user?.id) {
+        recipientIds.add(teamState.currentTeamScopeUserId);
+      }
+    }
+    return recipientIds.size > 0
+      ? { recipients: [...recipientIds] }
+      : { recipients: [], error: 'Add an approved contact before sharing to River' };
+  }
+
   async getShareStatus(filePath: string): Promise<SharedFileStatus> {
     if (isInsidePath(sharedFilesRoot(), path.resolve(filePath)) && fs.existsSync(filePath)) {
       try {
@@ -465,12 +707,34 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { shared: false };
+    const { data, error } = await supabase
+      .from('river_documents')
+      .select('id, revision, path, shared_name, author_initials, content, kind, created_by, original_source_path, title')
+      .eq('created_by', session.user.id)
+      .eq('original_source_path', sourceKeyForFilePath(filePath))
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (error || !data) return this.getLegacyShareStatus(filePath);
+    const row = data as RiverDocumentRow;
+    return {
+      shared: true,
+      sharedId: row.id,
+      revision: row.revision ?? 0,
+      cachePath: this.cachePathForRow(row),
+    };
+  }
+
+  private async getLegacyShareStatus(filePath: string): Promise<SharedFileStatus> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { shared: false };
     const teamState = await this.getActiveTeamState();
     if (!teamState) return { shared: false };
 
     const { data, error } = await supabase
       .from('team_documents')
-      .select('id, revision, path, shared_name, author_initials, content, kind, team_scope_user_id, created_by, original_source_path')
+      .select('id, revision, path, shared_name, author_initials, content, kind, team_scope_user_id, created_by, original_source_path, title')
       .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
       .eq('created_by', session.user.id)
       .eq('original_source_path', sourceKeyForFilePath(filePath))
@@ -491,13 +755,11 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return [];
-    const teamScopeUserId = await this.getReadableTeamScopeUserId();
-    if (!teamScopeUserId) return [];
 
     const { data, error } = await supabase
-      .from('team_document_pins')
+      .from('river_document_pins')
       .select('document_id')
-      .eq('team_scope_user_id', teamScopeUserId);
+      .eq('user_id', session.user.id);
 
     if (error) {
       log.warn('River pinned items lookup failed:', error);
@@ -533,8 +795,6 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { ok: false, reason: 'not_authenticated' };
-    const teamScopeUserId = await this.getWritableTeamScopeUserId();
-    if (!teamScopeUserId) return { ok: false, reason: 'not_available' };
 
     const resolvedPath = path.resolve(filePath);
     if (!isInsidePath(sharedFilesRoot(), resolvedPath) || !fs.existsSync(resolvedPath)) {
@@ -551,18 +811,18 @@ export class SharedSyncService extends EventEmitter {
 
     if (pinned) {
       const { error } = await supabase
-        .from('team_document_pins')
+        .from('river_document_pins')
         .upsert({
-          team_scope_user_id: teamScopeUserId,
+          user_id: session.user.id,
           document_id: sharedId,
           pinned_by: session.user.id,
-        }, { onConflict: 'team_scope_user_id,document_id' });
+        }, { onConflict: 'user_id,document_id' });
       if (error) return { ok: false, reason: 'request_failed', error: error.message };
     } else {
       const { error } = await supabase
-        .from('team_document_pins')
+        .from('river_document_pins')
         .delete()
-        .eq('team_scope_user_id', teamScopeUserId)
+        .eq('user_id', session.user.id)
         .eq('document_id', sharedId);
       if (error) return { ok: false, reason: 'request_failed', error: error.message };
     }
@@ -575,14 +835,17 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { shared: false };
-    const teamState = await this.sharedTeamService.getTeamState();
-    const teamScopeUserId = teamState.available && teamState.currentTeamScopeUserId && canWriteTeamDocuments(teamState)
-      ? teamState.currentTeamScopeUserId
+    const resolvedTargets = input.targets?.length
+      ? await this.riverTargetService.resolveShareTargets(input.targets)
       : null;
-    if (!teamScopeUserId) {
-      return teamState.available
-        ? { shared: false, error: 'Accept the team invite before sharing to River' }
-        : { shared: false };
+    if (resolvedTargets?.error) {
+      return { shared: false, error: resolvedTargets.error };
+    }
+    const resolved = resolvedTargets
+      ? { recipients: resolvedTargets.recipients, error: resolvedTargets.error }
+      : await this.resolveShareRecipients(input.destinations);
+    if (resolved.error || (resolvedTargets ? resolvedTargets.targets.length === 0 : resolved.recipients.length === 0)) {
+      return { shared: false, error: resolved.error ?? 'Choose an approved River destination' };
     }
 
     const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
@@ -594,7 +857,6 @@ export class SharedSyncService extends EventEmitter {
     const authorCallsign = await authorCallsignForSession(supabase, session);
 
     const row = {
-      team_scope_user_id: teamScopeUserId,
       kind: sharedKindForType(type),
       path: sharedPathForInput({ ...input, type }),
       title,
@@ -613,9 +875,9 @@ export class SharedSyncService extends EventEmitter {
     };
 
     const { data, error } = await supabase
-      .from('team_documents')
-      .upsert(row, { onConflict: 'team_scope_user_id,client_id' })
-      .select('id, team_scope_user_id, kind, path, title, content_hash, client_id, client_created_at_ms, created_by, updated_by, deleted_at, created_at, updated_at, original_source_path, shared_name, author_initials, author_callsign, revision')
+      .from('river_documents')
+      .upsert(row, { onConflict: 'created_by,client_id' })
+      .select('id, kind, path, title, content_hash, client_id, client_created_at_ms, created_by, updated_by, deleted_at, created_at, updated_at, original_source_path, shared_name, author_initials, author_callsign, revision')
       .single();
 
     if (error || !data) {
@@ -623,9 +885,186 @@ export class SharedSyncService extends EventEmitter {
       return { shared: false, error: error?.message ?? 'Share file failed' };
     }
 
-    const savedRow = { ...row, ...(data as Omit<TeamDocumentRow, 'content'>), content } as TeamDocumentRow;
+    const savedRow = { ...row, ...(data as Omit<RiverDocumentRow, 'content'>), content } as RiverDocumentRow;
+    if (resolvedTargets) {
+      const targetResult = await this.writeTargetAudience(savedRow.id, resolvedTargets);
+      if (!targetResult.ok) return { shared: false, error: targetResult.error };
+    } else {
+      const audienceRows = resolved.recipients.map((recipientUserId) => ({
+        document_id: savedRow.id,
+        recipient_user_id: recipientUserId,
+        granted_by_user_id: session.user.id,
+        source_type: 'direct',
+        source_id: 'direct',
+        revoked_at: null,
+      }));
+      const { error: audienceError } = await supabase
+        .from('river_document_audience')
+        .upsert(audienceRows, { onConflict: 'document_id,recipient_user_id,source_type,source_id' });
+      if (audienceError) {
+        log.error('River audience grant failed:', audienceError);
+        return { shared: false, error: audienceError.message ?? 'River audience grant failed' };
+      }
+    }
     const cachePath = this.writeRowToCache(savedRow);
     return { shared: true, sharedId: savedRow.id, revision: savedRow.revision ?? 1, cachePath };
+  }
+
+  private async writeTargetAudience(documentId: string, resolved: RiverResolvedAudience): Promise<RiverMutationResult> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { ok: false, error: 'Not authenticated' };
+
+    const targetRows = resolved.targets.map((target) => ({
+      document_id: documentId,
+      target_kind: target.kind,
+      target_id: target.targetId,
+      created_by: session.user.id,
+      revoked_at: null,
+    }));
+    const { data: savedTargets, error: targetError } = await supabase
+      .from('river_document_targets')
+      .upsert(targetRows, { onConflict: 'document_id,target_kind,target_id' })
+      .select('id, target_kind, target_id');
+    if (targetError) {
+      log.error('River target write failed:', targetError);
+      return { ok: false, error: targetError.message ?? 'River target write failed' };
+    }
+
+    const savedTargetIds = new Map(
+      ((savedTargets ?? []) as Array<{ id: string; target_kind: string; target_id: string }>)
+        .map((row) => [`${row.target_kind}:${row.target_id}`, row.id]),
+    );
+    const audienceRows = resolved.targets.flatMap((target) => {
+      if (target.kind === 'public') return [];
+      const savedTargetId = savedTargetIds.get(`${target.kind}:${target.targetId}`);
+      if (!savedTargetId) return [];
+      return target.recipientUserIds.map((recipientUserId) => ({
+        document_id: documentId,
+        recipient_user_id: recipientUserId,
+        granted_by_user_id: session.user.id,
+        source_type: target.kind,
+        source_id: savedTargetId,
+        revoked_at: null,
+      }));
+    });
+    if (!audienceRows.length) return { ok: true };
+
+    const { error: audienceError } = await supabase
+      .from('river_document_audience')
+      .upsert(audienceRows, { onConflict: 'document_id,recipient_user_id,source_type,source_id' });
+    if (audienceError) {
+      log.error('River audience grant failed:', audienceError);
+      return { ok: false, error: audienceError.message ?? 'River audience grant failed' };
+    }
+    return { ok: true };
+  }
+
+  async getAudienceStatus(filePath: string): Promise<SharedFileAudienceStatus> {
+    const status = await this.getShareStatus(filePath);
+    if (!status.shared || !status.sharedId) return { shared: false, targets: [] };
+
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase) return { shared: true, sharedId: status.sharedId, targets: [] };
+
+    const { data, error } = await supabase
+      .from('river_document_targets')
+      .select('target_kind, target_id')
+      .eq('document_id', status.sharedId)
+      .is('revoked_at', null);
+    if (error) return { shared: true, sharedId: status.sharedId, targets: [], error: error.message };
+
+    const selectedKeys = new Set(((data ?? []) as Array<{ target_kind?: unknown; target_id?: unknown }>)
+      .map((row) => `${String(row.target_kind)}:${String(row.target_id)}`));
+    const targets = (await this.riverTargetService.listTargets())
+      .filter((target) => selectedKeys.has(`${target.kind}:${target.targetId}`));
+    return { shared: true, sharedId: status.sharedId, targets };
+  }
+
+  async updateAudience(input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { shared: false, targets: [], error: 'Not authenticated' };
+
+    const sharedId = input.sharedId
+      ?? (input.filePath ? (await this.getShareStatus(input.filePath)).sharedId : null);
+    if (!sharedId) return { shared: false, targets: [], error: 'Shared file not found' };
+
+    const resolved = input.targets.length === 0
+      ? { targets: [], recipients: [] }
+      : await this.riverTargetService.resolveShareTargets(input.targets);
+    if (resolved.error) return { shared: true, sharedId, targets: [], error: resolved.error };
+
+    if (resolved.targets.length > 0) {
+      const targetResult = await this.writeTargetAudience(sharedId, resolved);
+      if (!targetResult.ok) return { shared: true, sharedId, targets: [], error: targetResult.error };
+    }
+
+    const selectedTargetIds = new Set(resolved.targets.map((target) => `${target.kind}:${target.targetId}`));
+    const allRows = await supabase
+      .from('river_document_targets')
+      .select('id, target_kind, target_id')
+      .eq('document_id', sharedId);
+    if (!allRows.error) {
+      for (const row of (allRows.data ?? []) as Array<{ id: string; target_kind: string; target_id: string }>) {
+        if (selectedTargetIds.has(`${row.target_kind}:${row.target_id}`)) continue;
+        await supabase
+          .from('river_document_targets')
+          .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+        await supabase
+          .from('river_document_audience')
+          .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('document_id', sharedId)
+          .eq('source_id', row.id);
+      }
+    }
+
+    if (input.filePath) return this.getAudienceStatus(input.filePath);
+    return { shared: true, sharedId, targets: resolved.targets };
+  }
+
+  async getTimeline(query: RiverTimelineQuery): Promise<RiverTimelineItem[]> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!session?.user?.id) return [];
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 50)));
+
+    if (supabase) {
+      try {
+        const requestedTargets = query.scope === 'public'
+          ? [{ kind: 'public' as const, targetId: 'public' }]
+          : this.timelineTargetKeys(query.sourceIds);
+        const targetDocumentIds = requestedTargets.length > 0
+          ? await this.documentIdsForTargetRows(supabase, requestedTargets)
+          : null;
+        if (targetDocumentIds && targetDocumentIds.size === 0) return [];
+
+        let documentQuery = supabase
+          .from('river_documents')
+          .select('id, title, shared_name, content, created_by, updated_at, created_at, author_initials, author_callsign')
+          .is('deleted_at', null)
+          .order('updated_at', { ascending: false });
+
+        if (targetDocumentIds) {
+          documentQuery = documentQuery.in('id', [...targetDocumentIds]);
+        }
+
+        if (query.scope === 'private') {
+          const audienceDocumentIds = await this.documentIdsForRecipient(supabase, session.user.id);
+          documentQuery = documentQuery.or(this.privateTimelineVisibilityFilter(session.user.id, audienceDocumentIds));
+        }
+
+        const response = await documentQuery.limit(limit);
+        if (!response.error && response.data) {
+          return ((response.data ?? []) as RiverDocumentRow[]).map((row) => this.timelineItemFromRow(row, query.scope));
+        }
+      } catch {
+        // Fall through to local cache while offline or while the remote schema is unavailable.
+      }
+    }
+
+    return this.timelineItemsFromCache(limit, query.scope);
   }
 
   async unshareFile(filePath: string): Promise<boolean> {
@@ -639,7 +1078,7 @@ export class SharedSyncService extends EventEmitter {
       ? [sharedId]
       : this.sharedIdsForCacheReference({ originalSourcePath });
     let query = supabase
-      .from('team_documents')
+      .from('river_documents')
       .update({ deleted_at: new Date().toISOString(), updated_by: session.user.id })
       .eq('created_by', session.user.id);
     query = sharedId
@@ -662,27 +1101,26 @@ export class SharedSyncService extends EventEmitter {
     const session = this.authManager.getSession();
     const result = { written: 0, removed: 0, created: 0, errors: [] as string[] };
     if (!supabase || !session?.user?.id) return result;
-    const teamScopeUserId = await this.getReadableTeamScopeUserId();
-    if (!teamScopeUserId) return result;
     const root = sharedFilesRoot();
     const createdRoot = !fs.existsSync(root);
     ensureDir(root);
     if (createdRoot) result.created = 1;
 
-    const { data, error } = await supabase
-      .from('team_documents')
-      .select('*')
-      .eq('team_scope_user_id', teamScopeUserId)
-      .is('deleted_at', null);
-
-    if (error) {
-      result.errors.push(error.message);
-      return result;
+    let data: unknown[] | null = null;
+    try {
+      const response = await supabase
+        .from('river_documents')
+        .select('*')
+        .is('deleted_at', null);
+      data = response.data;
+      if (response.error) return this.syncLegacyOnce(result);
+    } catch {
+      return this.syncLegacyOnce(result);
     }
 
     const activeIds = new Set<string>();
     let currentUserCallsign: Promise<string | null> | null = null;
-    for (const row of (data ?? []) as TeamDocumentRow[]) {
+    for (const row of (data ?? []) as RiverDocumentRow[]) {
       try {
         let cacheRow = row;
         if (!row.author_callsign && row.created_by === session.user.id) {
@@ -707,14 +1145,14 @@ export class SharedSyncService extends EventEmitter {
     if (!supabase || !session?.user?.id) return { ok: false, error: 'Not authenticated' };
 
     const { data: current, error: fetchError } = await supabase
-      .from('team_documents')
+      .from('river_documents')
       .select('*')
       .eq('id', sharedId)
       .is('deleted_at', null)
       .single();
 
     if (fetchError || !current) return { ok: false, error: fetchError?.message ?? 'Shared file not found' };
-    const currentRow = current as TeamDocumentRow;
+    const currentRow = current as RiverDocumentRow;
     const remoteRevision = currentRow.revision ?? 0;
     const cleanContent = documentPath
       ? contentForSharedTransport(documentPath, content)
@@ -736,7 +1174,7 @@ export class SharedSyncService extends EventEmitter {
 
     const nextRevision = remoteRevision + 1;
     const { data, error } = await supabase
-      .from('team_documents')
+      .from('river_documents')
       .update({
         content: cleanContent,
         content_hash: sha256(cleanContent),
@@ -750,11 +1188,43 @@ export class SharedSyncService extends EventEmitter {
       .single();
 
     if (error || !data) return { ok: false, error: error?.message ?? 'Shared update failed' };
-    const cachePath = this.writeRowToCache(data as TeamDocumentRow);
+    const cachePath = this.writeRowToCache(data as RiverDocumentRow);
     return { ok: true, revision: nextRevision, cachePath };
   }
 
-  cachePathForRow(row: Pick<TeamDocumentRow, 'id' | 'title' | 'shared_name' | 'author_initials'>): string {
+  private async syncLegacyOnce(result: { written: number; removed: number; created: number; errors: string[] }): Promise<{ written: number; removed: number; created: number; errors: string[] }> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return result;
+    const teamScopeUserId = await this.getReadableTeamScopeUserId();
+    if (!teamScopeUserId) return result;
+
+    const { data, error } = await supabase
+      .from('team_documents')
+      .select('*')
+      .eq('team_scope_user_id', teamScopeUserId)
+      .is('deleted_at', null);
+
+    if (error) {
+      result.errors.push(error.message);
+      return result;
+    }
+
+    const activeIds = new Set<string>();
+    for (const row of (data ?? []) as TeamDocumentRow[]) {
+      try {
+        this.writeRowToCache(row);
+        activeIds.add(row.id);
+        result.written++;
+      } catch (err) {
+        result.errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    result.removed = this.removeStaleCacheFiles(activeIds);
+    return result;
+  }
+
+  cachePathForRow(row: Pick<RiverDocumentLike, 'id' | 'title' | 'shared_name' | 'author_initials'>): string {
     const root = sharedFilesRoot();
     const existingPath = this.existingCachePathForRow(row.id);
     if (existingPath) return existingPath;
@@ -776,6 +1246,126 @@ export class SharedSyncService extends EventEmitter {
       existingFileNames: existingForOtherRows,
     });
     return path.join(root, fileName);
+  }
+
+  private timelineItemFromRow(row: RiverDocumentRow, scope: RiverTimelineScope): RiverTimelineItem {
+    return {
+      documentId: row.id,
+      cachePath: this.existingCachePathForRow(row.id) ?? undefined,
+      title: sharedRowTitle(row),
+      excerpt: this.excerptForContent(row.content),
+      content: this.timelineContentForDisplay(row.content),
+      authorUserId: row.created_by ?? null,
+      authorCallsign: row.author_callsign ?? null,
+      authorInitials: row.author_initials ?? null,
+      sourceLabel: scope === 'public' ? 'Public River' : null,
+      sourceKind: scope === 'public' ? 'public' : row.created_by === this.authManager.getSession()?.user?.id ? 'mine' : 'all',
+      sharedAt: row.updated_at ?? row.created_at,
+      pinned: false,
+      public: scope === 'public',
+    };
+  }
+
+  private timelineTargetKeys(sourceIds: string[]): Array<{ kind: 'person' | 'group' | 'public'; targetId: string }> {
+    const keys: Array<{ kind: 'person' | 'group' | 'public'; targetId: string }> = [];
+    for (const sourceId of sourceIds) {
+      const separatorIndex = sourceId.indexOf(':');
+      if (separatorIndex <= 0) continue;
+      const kind = sourceId.slice(0, separatorIndex);
+      const targetId = sourceId.slice(separatorIndex + 1);
+      if (!targetId) continue;
+      if (kind === 'person' || kind === 'group' || kind === 'public') keys.push({ kind, targetId });
+    }
+    return keys;
+  }
+
+  private privateTimelineVisibilityFilter(userId: string, audienceDocumentIds: Set<string>): string {
+    if (audienceDocumentIds.size === 0) return `created_by.eq.${userId}`;
+    return `created_by.eq.${userId},id.in.(${[...audienceDocumentIds].join(',')})`;
+  }
+
+  private async documentIdsForRecipient(
+    supabase: SupabaseClient,
+    userId: string,
+  ): Promise<Set<string>> {
+    const { data, error } = await supabase
+      .from('river_document_audience')
+      .select('document_id')
+      .eq('recipient_user_id', userId)
+      .is('revoked_at', null);
+    if (error) throw error;
+    return new Set(((data ?? []) as RiverDocumentAudienceRow[])
+      .map((row) => row.document_id)
+      .filter(Boolean));
+  }
+
+  private async documentIdsForTargetRows(
+    supabase: SupabaseClient,
+    targets: Array<{ kind: 'person' | 'group' | 'public'; targetId: string }>,
+  ): Promise<Set<string>> {
+    if (targets.length === 0) return new Set();
+    const { data, error } = await supabase
+      .from('river_document_targets')
+      .select('document_id, target_kind, target_id')
+      .is('revoked_at', null);
+    if (error) throw error;
+
+    const targetKeys = new Set(targets.map((target) => `${target.kind}:${target.targetId}`));
+    return new Set(((data ?? []) as RiverDocumentTargetRow[])
+      .filter((row) => targetKeys.has(`${row.target_kind}:${row.target_id}`))
+      .map((row) => row.document_id)
+      .filter(Boolean));
+  }
+
+  private timelineItemsFromCache(limit: number, scope: RiverTimelineScope): RiverTimelineItem[] {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return [];
+    if (scope === 'public') return [];
+    const items: RiverTimelineItem[] = [];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = parseSharedFileFrontmatter(content);
+        if (!parsed?.sharedId) continue;
+        items.push({
+          documentId: parsed.sharedId,
+          cachePath: filePath,
+          title: parsed.title?.trim() || path.basename(filePath, path.extname(filePath)),
+          excerpt: this.excerptForContent(content),
+          content: this.timelineContentForDisplay(content),
+          authorUserId: null,
+          authorCallsign: parsed.authorCallsign ?? null,
+          authorInitials: parsed.authorInitials ?? null,
+          sourceLabel: parsed.teamName ?? null,
+          sourceKind: 'all',
+          sharedAt: parsed.updatedAt ?? new Date(fs.statSync(filePath).mtimeMs).toISOString(),
+          pinned: false,
+          public: false,
+        });
+      } catch {
+        // Ignore unreadable cache files while building the timeline.
+      }
+    }
+    return items
+      .sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))
+      .slice(0, limit);
+  }
+
+  private excerptForContent(content: string): string {
+    return stripSharedFileFrontmatter(content)
+      .replace(/^---[\s\S]*?---\s*/, '')
+      .replace(/[#>*_`[\]()-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
+  }
+
+  private timelineContentForDisplay(content: string): string {
+    return stripSharedFileFrontmatter(content)
+      .replace(/^---[\s\S]*?---\s*/, '')
+      .trim();
   }
 
   private sharedIdForCacheFile(filePath: string): string | null {
@@ -823,11 +1413,23 @@ export class SharedSyncService extends EventEmitter {
     if (!supabase || sharedIds.length === 0) return;
     for (const sharedId of sharedIds) {
       try {
-        const { error } = await supabase
-          .from('team_document_pins')
-          .delete()
-          .eq('document_id', sharedId);
-        if (error) log.warn('River pin cleanup failed:', error);
+        let removed = false;
+        try {
+          const { error } = await supabase
+            .from('river_document_pins')
+            .delete()
+            .eq('document_id', sharedId);
+          removed = !error;
+        } catch {
+          removed = false;
+        }
+        if (!removed) {
+          const { error } = await supabase
+            .from('team_document_pins')
+            .delete()
+            .eq('document_id', sharedId);
+          if (error) log.warn('River pin cleanup failed:', error);
+        }
       } catch (err) {
         log.warn('River pin cleanup failed:', err);
       }
@@ -881,7 +1483,7 @@ export class SharedSyncService extends EventEmitter {
     return null;
   }
 
-  private writeRowToCache(row: TeamDocumentRow): string {
+  private writeRowToCache(row: RiverDocumentLike): string {
     const root = sharedFilesRoot();
     ensureDir(root);
     const cachePath = this.cachePathForRow(row);
@@ -894,8 +1496,8 @@ export class SharedSyncService extends EventEmitter {
     const content = applySharedFileFrontmatter(portableContent, {
       sharedId: row.id,
       title: sharedRowTitle(row),
-      teamId: row.team_scope_user_id,
-      teamName: 'Field Theory Team',
+      teamId: 'team_scope_user_id' in row ? row.team_scope_user_id : undefined,
+      teamName: 'team_scope_user_id' in row ? 'Field Theory Team' : 'River',
       authorId: row.created_by,
       authorInitials: row.author_initials ?? undefined,
       authorCallsign: row.author_callsign ?? undefined,
@@ -908,7 +1510,7 @@ export class SharedSyncService extends EventEmitter {
     return cachePath;
   }
 
-  private writePrivateConflictCopy(row: TeamDocumentRow, content: string): string {
+  private writePrivateConflictCopy(row: RiverDocumentLike, content: string): string {
     const conflictDir = path.join(libraryDir(), 'Conflicts');
     ensureDir(conflictDir);
     const fileName = buildSharedConflictFileName({

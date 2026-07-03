@@ -1165,6 +1165,7 @@ describe('BrowserHelperServer', () => {
           calls.push(['pin', filePath, pinned]);
           return { success: true, filePath, pinned };
         },
+        getTeamEntitlement: () => ({ allowed: true, stale: false, userId: 'user-1', checkedAt: '2026-06-18T00:00:00.000Z' }),
       },
     });
     servers.push(server);
@@ -1198,6 +1199,7 @@ describe('BrowserHelperServer', () => {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
     });
+    const entitlement = await request(`http://${address.host}:${address.port}/native/team/entitlement?token=test-token`);
     const unshare = await request(`http://${address.host}:${address.port}/native/shared-files/unshare`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
@@ -1212,6 +1214,7 @@ describe('BrowserHelperServer', () => {
     expect(presence.body.users).toEqual([{ userId: 'user-1', initials: 'FT' }]);
     expect(pin.body.result).toEqual({ success: true, filePath: '/tmp/River.md', pinned: true });
     expect(sync.body.result).toEqual({ written: 1, removed: 0, created: 0, errors: [] });
+    expect(entitlement.body.entitlement).toEqual({ allowed: true, stale: false, userId: 'user-1', checkedAt: '2026-06-18T00:00:00.000Z' });
     expect(unshare.body.success).toBe(true);
     expect(calls).toEqual([
       ['share', { filePath: '/tmp/Plan.md', title: 'Plan' }],
@@ -1223,6 +1226,34 @@ describe('BrowserHelperServer', () => {
     ]);
     server.emitNativeEvent({ type: 'sharedFiles:pinsChanged' });
     await expect(pinsEvent).resolves.toContain('sharedFiles:pinsChanged');
+  });
+
+  it('preserves unavailable shared-file availability from the native bridge', async () => {
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([]),
+      token: 'test-token',
+      nativeBridge: {
+        getSharedFilesAvailability: () => ({
+          available: false,
+          canWrite: false,
+          hasTeamMembers: false,
+          reason: 'not_entitled',
+          stale: true,
+        }),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const availability = await request(`http://${address.host}:${address.port}/native/shared-files/availability?token=test-token`);
+
+    expect(availability.body.availability).toEqual({
+      available: false,
+      canWrite: false,
+      hasTeamMembers: false,
+      reason: 'not_entitled',
+      stale: true,
+    });
   });
 
   it('saves native wiki writes with expected-version protection', async () => {
