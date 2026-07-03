@@ -1,0 +1,81 @@
+name: FieldTheory
+options:
+  bundleIdPrefix: com.afar1
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: 2.0.0
+  Markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    from: 0.4.0
+targets:
+  FieldTheoryTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FieldTheory/Tests
+    dependencies:
+      - target: FieldTheory
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+  FieldTheoryUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: FieldTheory/UITests
+    dependencies:
+      - target: FieldTheory
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+  FieldTheory:
+    type: application
+    platform: iOS
+    scheme:
+      testTargets:
+        - FieldTheoryTests
+        - FieldTheoryUITests
+    sources:
+      - path: FieldTheory/Sources
+      - path: FieldTheory/Resources
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - package: Markdown
+        product: Markdown
+      - framework: ../build-apple/whisper.xcframework
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory
+        DEVELOPMENT_TEAM: 3244UJ94D8
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: FieldTheory/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Field Theory
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: "Field Theory records audio so it can transcribe your voice entirely on this device."
+        UIAppFonts:
+          - SourceSerif4-Variable.ttf
+          - SourceSerif4-Italic-Variable.ttf
+          - SourceSans3-Variable.ttf
+          - SourceSans3-Italic-Variable.ttf
+          - SourceCodePro-Variable.ttf
+          - SourceCodePro-Italic-Variable.ttf
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
