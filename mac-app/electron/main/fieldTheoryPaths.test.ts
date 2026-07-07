@@ -8,6 +8,9 @@ import {
   canonicalLibraryDir,
   commandsDir,
   ideasDir,
+  kindleArtifactDir,
+  kindleDeliveryDir,
+  kindleDeliveryStatePath,
   legacyLibraryDir,
   libraryDir,
   sharedFilesCacheDir,
@@ -27,6 +30,9 @@ describe('Field Theory path contract', () => {
     expect(sharedFilesCacheDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'River (shared)'));
     expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'Commands'));
     expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
+    expect(kindleDeliveryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle'));
+    expect(kindleDeliveryStatePath(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle', 'state.json'));
+    expect(kindleArtifactDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle', 'artifacts'));
   });
 
   it('honors explicit env overrides', () => {
@@ -39,6 +45,8 @@ describe('Field Theory path contract', () => {
         FT_SHARED_FILES_CACHE_DIR: '/tmp/ft-shared-cache',
         FT_COMMANDS_DIR: '/tmp/ft-commands',
         FT_IDEAS_DIR: '/tmp/ft-ideas',
+        FT_KINDLE_DELIVERY_DIR: '/tmp/ft-kindle',
+        FT_KINDLE_DELIVERY_STATE_PATH: '/tmp/ft-kindle-state.json',
       },
     };
 
@@ -48,6 +56,9 @@ describe('Field Theory path contract', () => {
     expect(sharedFilesCacheDir(options)).toBe('/tmp/ft-shared-cache');
     expect(commandsDir(options)).toBe('/tmp/ft-commands');
     expect(ideasDir(options)).toBe('/tmp/ft-ideas');
+    expect(kindleDeliveryDir(options)).toBe('/tmp/ft-kindle');
+    expect(kindleDeliveryStatePath(options)).toBe('/tmp/ft-kindle-state.json');
+    expect(kindleArtifactDir(options)).toBe(path.join('/tmp/ft-kindle', 'artifacts'));
   });
 
   it('places default commands inside a custom Library root', () => {
@@ -140,9 +151,11 @@ describe('Field Theory path contract', () => {
       expect(sharedFilesRootDir(options)).toBe(fixture.sharedFilesRootDir);
       expect(sharedFilesCacheDir(options)).toBe(fixture.sharedFilesCacheDir);
       expect(ideasDir(options)).toBe(fixture.ideasDir);
+      expect(kindleDeliveryDir(options)).toBe(fixture.kindleDeliveryDir);
 
       fixture.assertInsideTestRoot(libraryDir(options));
       fixture.assertInsideTestRoot(commandsDir(options));
+      fixture.assertInsideTestRoot(kindleArtifactDir(options));
       expect(() => fixture.assertNoRealFieldTheoryPath(path.join(os.homedir(), '.fieldtheory', 'library'))).toThrow(/real Field Theory data path/);
     } finally {
       fixture.cleanup();
