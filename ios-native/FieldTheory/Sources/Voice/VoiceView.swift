@@ -66,6 +66,9 @@ struct VoiceView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 12, pinnedViews: []) {
+                if shouldShowRecorderStatus {
+                    recorderStatusBanner
+                }
                 if case .downloading(let progress) = model.recorder.models.state {
                     modelBanner(progress: progress)
                 }
@@ -134,6 +137,11 @@ struct VoiceView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
+            if shouldShowRecorderStatus {
+                recorderStatusBanner
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
             Image(systemName: "waveform")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
@@ -146,6 +154,54 @@ struct VoiceView: View {
                 .padding(.horizontal, 44)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var shouldShowRecorderStatus: Bool {
+        model.recorder.pendingSessionCount > 0 || model.recorder.lastError != nil
+    }
+
+    private var recorderStatusBanner: some View {
+        let pendingCount = model.recorder.pendingSessionCount
+        let title = pendingCount == 1
+            ? "1 recording waiting to transcribe"
+            : "\(pendingCount) recordings waiting to transcribe"
+        let message = model.recorder.lastError
+            ?? "Audio is saved on this phone. Field Theory will retry when the app is open."
+
+        return HStack(spacing: 12) {
+            Image(systemName: pendingCount > 0 ? "clock.arrow.circlepath" : "exclamationmark.triangle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(pendingCount > 0 ? Theme.link : Theme.unread)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(pendingCount > 0 ? title : "Voice needs attention")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text(colorScheme))
+                Text(message)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.textMuted(colorScheme))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if pendingCount > 0 {
+                Button {
+                    Task { await model.recorder.resumePendingWork() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.link)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Retry transcription")
+            }
+        }
+        .padding(12)
+        .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.border(colorScheme), lineWidth: 1)
+        )
     }
 
     // MARK: Record bar

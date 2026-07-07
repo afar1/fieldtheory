@@ -1,12 +1,18 @@
 import AVFoundation
 import Foundation
 import Observation
+import os
 import UIKit
 
 enum RecorderPhase: Equatable {
     case idle
     case recording
     case transcribing
+}
+
+struct PendingAudioSession: Equatable, Identifiable {
+    let id: String
+    let files: [URL]
 }
 
 /// Records 16 kHz mono WAV with the audio background mode keeping the
@@ -20,6 +26,7 @@ final class RecorderController {
     private(set) var startedAt: Date?
     private(set) var level: Float = 0 // 0...1 for the waveform
     private(set) var elapsed: TimeInterval = 0
+    private(set) var pendingSessionCount = 0
     var lastError: String?
 
     private var recorder: AVAudioRecorder?
@@ -28,6 +35,8 @@ final class RecorderController {
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
     private var draining = false
+    private var backgroundTasks = Set<UIBackgroundTaskIdentifier>()
+    private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "Voice")
 
     /// Set by the app: receives the final transcript text for routing
     /// (insert at cursor vs. save to Voice).
@@ -45,6 +54,7 @@ final class RecorderController {
     }
 
     init() {
+        refreshPendingAudioStatus()
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance(),
@@ -53,10 +63,7 @@ final class RecorderController {
             Task { @MainActor in self?.handleInterruption(notification) }
         }
         models.onReady = { [weak self] in
-            Task { await self?.drainPendingQueue() }
-        }
-        if models.readyModelURL != nil {
-            Task { await drainPendingQueue() }
+            Task { await self?.resumePendingWork() }
         }
     }
 
@@ -170,74 +177,184 @@ final class RecorderController {
         let urls = segmentURLs
         segmentURLs = []
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        logger.info("Voice recording stopped with \(urls.count, privacy: .public) segment(s)")
 
-        guard let modelURL = models.readyModelURL else {
-            // Capture is sacred: park the audio and transcribe when the
-            // model lands.
+        let queued = queueForRetry(urls)
+        guard !queued.isEmpty else {
             phase = .idle
             startedAt = nil
-            try? FileManager.default.createDirectory(at: Self.pendingAudioDir, withIntermediateDirectories: true)
-            for url in urls {
-                let parked = Self.pendingAudioDir.appendingPathComponent(url.lastPathComponent)
-                try? FileManager.default.moveItem(at: url, to: parked)
-            }
+            return
+        }
+
+        guard models.readyModelURL != nil else {
+            phase = .idle
+            startedAt = nil
             models.ensureDownloaded()
             onNotice?("Saved — transcribing when the speech model finishes", "clock.arrow.circlepath")
             return
         }
 
-        phase = .transcribing
-        defer {
-            phase = .idle
-            startedAt = nil
-            for url in urls { try? FileManager.default.removeItem(at: url) }
-        }
-
-        if let transcript = await transcribeSegments(urls, modelURL: modelURL) {
-            await onTranscript?(transcript)
-        }
+        phase = .idle
+        startedAt = nil
+        await drainPendingQueue()
     }
 
-    private func transcribeSegments(_ urls: [URL], modelURL: URL) async -> String? {
+    private func transcribeSegments(_ urls: [URL], modelURL: URL) async throws -> String {
         var parts: [String] = []
         for url in urls {
-            do {
-                let text = try await whisper.transcribe(audioURL: url, modelURL: modelURL)
-                if !text.isEmpty { parts.append(text) }
-            } catch {
-                lastError = "Transcription failed: \(error.localizedDescription)"
-                onNotice?("Transcription failed", "exclamationmark.triangle")
-            }
+            logger.info("Voice transcription starting for \(url.lastPathComponent, privacy: .public)")
+            let text = try await whisper.transcribe(audioURL: url, modelURL: modelURL)
+            logger.info("Voice transcription finished for \(url.lastPathComponent, privacy: .public)")
+            if !text.isEmpty { parts.append(text) }
         }
-        let transcript = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        return transcript.isEmpty ? nil : transcript
+        return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Transcribes recordings that were parked while the model downloaded.
     /// Segments are grouped by recording session (rec-<session>-<index>.wav)
     /// so one long capture stays one transcript.
     func drainPendingQueue() async {
-        guard !draining, let modelURL = models.readyModelURL else { return }
-        let files = (try? FileManager.default.contentsOfDirectory(at: Self.pendingAudioDir, includingPropertiesForKeys: nil)) ?? []
-        let wavs = files.filter { $0.pathExtension == "wav" }
-        guard !wavs.isEmpty else { return }
+        refreshPendingAudioStatus()
+        guard !draining, phase != .recording, pendingSessionCount > 0 else { return }
+        guard onTranscript != nil else {
+            logger.info("Voice pending queue is waiting for transcript routing")
+            return
+        }
+        guard let modelURL = models.readyModelURL else {
+            models.ensureDownloaded()
+            return
+        }
 
         draining = true
-        defer { draining = false }
+        let task = beginBackgroundTask()
+        phase = .transcribing
+        logger.info("Voice pending queue drain started")
+        defer {
+            phase = .idle
+            startedAt = nil
+            draining = false
+            finishBackgroundTask(task)
+            refreshPendingAudioStatus()
+            logger.info("Voice pending queue drain ended with \(self.pendingSessionCount, privacy: .public) pending session(s)")
+        }
 
+        for session in Self.pendingSessions(in: Self.pendingAudioDir) {
+            do {
+                let transcript = try await transcribeSegments(session.files, modelURL: modelURL)
+                if transcript.isEmpty {
+                    onNotice?("No speech detected", "waveform.badge.magnifyingglass")
+                } else {
+                    await onTranscript?(transcript)
+                }
+                for url in session.files { try? FileManager.default.removeItem(at: url) }
+                lastError = nil
+                refreshPendingAudioStatus()
+            } catch {
+                lastError = "Transcription failed: \(error.localizedDescription)"
+                logger.error("Voice transcription failed: \(error.localizedDescription, privacy: .public)")
+                onNotice?("Saved — retry transcription when Field Theory is open", "clock.arrow.circlepath")
+                break
+            }
+        }
+    }
+
+    func resumePendingWork() async {
+        refreshPendingAudioStatus()
+        await drainPendingQueue()
+    }
+
+    func refreshPendingAudioStatus() {
+        pendingSessionCount = Self.pendingSessions(in: Self.pendingAudioDir).count
+    }
+
+    private func queueForRetry(_ urls: [URL]) -> [URL] {
+        guard !urls.isEmpty else { return [] }
+        do {
+            try FileManager.default.createDirectory(at: Self.pendingAudioDir, withIntermediateDirectories: true)
+        } catch {
+            lastError = "Could not save recording: \(error.localizedDescription)"
+            logger.error("Voice pending directory could not be created: \(error.localizedDescription, privacy: .public)")
+            onNotice?("Could not save recording", "exclamationmark.triangle")
+            return []
+        }
+
+        var queued: [URL] = []
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            let parked = Self.pendingAudioDir.appendingPathComponent(url.lastPathComponent)
+            do {
+                if parked != url, FileManager.default.fileExists(atPath: parked.path) {
+                    try FileManager.default.removeItem(at: parked)
+                }
+                if parked != url {
+                    try FileManager.default.moveItem(at: url, to: parked)
+                }
+                queued.append(parked)
+                logger.info("Voice audio queued at \(parked.lastPathComponent, privacy: .public)")
+            } catch {
+                lastError = "Could not save recording: \(error.localizedDescription)"
+                logger.error("Voice audio could not be queued: \(error.localizedDescription, privacy: .public)")
+                onNotice?("Could not save recording", "exclamationmark.triangle")
+            }
+        }
+        refreshPendingAudioStatus()
+        return queued
+    }
+
+    private func beginBackgroundTask() -> UIBackgroundTaskIdentifier {
+        var task: UIBackgroundTaskIdentifier = .invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "FieldTheoryVoiceTranscription") { [weak self] in
+            Task { @MainActor in
+                self?.logger.warning("Voice background transcription task expired")
+                self?.onNotice?("Saved — retrying when Field Theory reopens", "clock.arrow.circlepath")
+                self?.finishBackgroundTask(task)
+            }
+        }
+        if task != .invalid { backgroundTasks.insert(task) }
+        return task
+    }
+
+    private func finishBackgroundTask(_ task: UIBackgroundTaskIdentifier) {
+        guard task != .invalid, backgroundTasks.remove(task) != nil else { return }
+        UIApplication.shared.endBackgroundTask(task)
+    }
+
+    nonisolated static func pendingSessions(in directory: URL) -> [PendingAudioSession] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        let wavs = files.filter { $0.pathExtension == "wav" }
         var sessions: [String: [URL]] = [:]
         for url in wavs {
-            let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-")
-            let session = parts.count >= 2 ? String(parts[1]) : url.lastPathComponent
-            sessions[session, default: []].append(url)
+            sessions[pendingSessionID(for: url), default: []].append(url)
         }
-
-        for (_, sessionFiles) in sessions.sorted(by: { $0.key < $1.key }) {
-            let ordered = sessionFiles.sorted { $0.lastPathComponent < $1.lastPathComponent }
-            if let transcript = await transcribeSegments(ordered, modelURL: modelURL) {
-                await onTranscript?(transcript)
+        return sessions
+            .map { id, files in PendingAudioSession(id: id, files: files.sorted(by: pendingAudioSort)) }
+            .sorted { lhs, rhs in
+                if let left = Int64(lhs.id), let right = Int64(rhs.id) {
+                    return left < right
+                }
+                return lhs.id < rhs.id
             }
-            for url in ordered { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private nonisolated static func pendingSessionID(for url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let parts = stem.split(separator: "-")
+        if parts.count >= 3, parts.first == "rec" {
+            return String(parts[1])
         }
+        return stem
+    }
+
+    private nonisolated static func pendingAudioSort(_ lhs: URL, _ rhs: URL) -> Bool {
+        let left = pendingSegmentIndex(for: lhs)
+        let right = pendingSegmentIndex(for: rhs)
+        if left != right { return left < right }
+        return lhs.lastPathComponent < rhs.lastPathComponent
+    }
+
+    private nonisolated static func pendingSegmentIndex(for url: URL) -> Int {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let parts = stem.split(separator: "-")
+        guard parts.count >= 3, parts.first == "rec" else { return 0 }
+        return Int(parts[2]) ?? 0
     }
 }
