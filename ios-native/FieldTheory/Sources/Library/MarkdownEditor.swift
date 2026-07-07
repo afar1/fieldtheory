@@ -24,12 +24,14 @@ final class EditorFocusBus {
 struct MarkdownEditor: UIViewRepresentable {
     @Binding var text: String
     let styling: MarkdownStyling
+    var showLineNumbers = true
     let focusBus: EditorFocusBus?
     var focusOnAppear = false
     var onEditingChanged: ((Bool) -> Void)?
+    var onChromeVisibilityChanged: ((Bool) -> Void)?
     var onPullDismiss: (() -> Void)?
 
-    func makeUIView(context: Context) -> UITextView {
+    func makeUIView(context: Context) -> LineNumberedTextView {
         let textView = LineNumberedTextView()
         textView.backgroundColor = .clear
         textView.alwaysBounceVertical = true
@@ -42,7 +44,8 @@ struct MarkdownEditor: UIViewRepresentable {
         // Constant layout: chrome and tab-bar transitions must never reflow
         // the text (that reflow was the reading jitter).
         textView.contentInsetAdjustmentBehavior = .never
-        textView.textContainerInset = UIEdgeInsets(top: 64, left: 44, bottom: 160, right: 18)
+        Self.applyDisplayInsets(to: textView, showsLineNumbers: showLineNumbers)
+        textView.showsLineNumbers = showLineNumbers
         textView.gutterColor = UIColor(styling.mutedColor).withAlphaComponent(0.45)
         textView.delegate = context.coordinator
         textView.inputAccessoryView = context.coordinator.makeToolbar()
@@ -61,8 +64,13 @@ struct MarkdownEditor: UIViewRepresentable {
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: LineNumberedTextView, context: Context) {
         context.coordinator.parent = self
+        textView.gutterColor = UIColor(styling.mutedColor).withAlphaComponent(0.45)
+        if textView.showsLineNumbers != showLineNumbers {
+            textView.showsLineNumbers = showLineNumbers
+            Self.applyDisplayInsets(to: textView, showsLineNumbers: showLineNumbers)
+        }
         if textView.text != text {
             context.coordinator.setInitialText(text, preservingSelectionOf: textView)
         } else if context.coordinator.stylingSignatureChanged(styling) {
@@ -73,6 +81,15 @@ struct MarkdownEditor: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    private static func applyDisplayInsets(to textView: UITextView, showsLineNumbers: Bool) {
+        textView.textContainerInset = UIEdgeInsets(
+            top: 64,
+            left: showsLineNumbers ? 44 : 18,
+            bottom: 160,
+            right: 18
+        )
     }
 
     @MainActor
@@ -248,11 +265,40 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             (scrollView as? LineNumberedTextView)?.setNeedsDisplay()
+            if textView?.isFirstResponder == true {
+                parent.onChromeVisibilityChanged?(true)
+                return
+            }
+            let insetTop = scrollView.adjustedContentInset.top
+            let insetBottom = scrollView.adjustedContentInset.bottom
+            let minY = -insetTop
+            let maxY = max(minY, scrollView.contentSize.height - scrollView.bounds.height + insetBottom)
+            let atBoundary = scrollView.contentOffset.y <= minY + 12 || scrollView.contentOffset.y >= maxY - 12
+            if scrollView.isTracking || scrollView.isDecelerating {
+                parent.onChromeVisibilityChanged?(!atBoundary)
+            } else if atBoundary {
+                parent.onChromeVisibilityChanged?(false)
+            }
             if scrollView.contentOffset.y < -70, !pulledToDismiss, scrollView.isTracking {
                 pulledToDismiss = true
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 parent.onPullDismiss?()
             }
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate {
+                showChromeWhenIdle()
+            }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            showChromeWhenIdle()
+        }
+
+        private func showChromeWhenIdle() {
+            guard textView?.isFirstResponder != true else { return }
+            parent.onChromeVisibilityChanged?(false)
         }
 
         // MARK: Keyboard avoidance (manual, because inset adjustment is off)
@@ -284,6 +330,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard let textView else { return }
+            showChromeWhenIdle()
             let point = gesture.location(in: textView)
             guard let position = textView.closestPosition(to: point) else { return }
             let index = textView.offset(from: textView.beginningOfDocument, to: position)
@@ -413,12 +460,19 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 }
 
-/// UITextView with a Mac-style line-number gutter, drawn per source line
-/// using TextKit 2 layout fragments.
+/// UITextView with a Mac-style line-number gutter, drawn per visible wrapped
+/// row using TextKit 2 layout fragments.
 final class LineNumberedTextView: UITextView {
     var gutterColor: UIColor = .tertiaryLabel
+    var showsLineNumbers = true {
+        didSet {
+            visualLineNumberCache.removeAll()
+            setNeedsDisplay()
+        }
+    }
 
-    private var lineStartOffsets: [Int] = []
+    private var visualLineNumberCache: [Int: Int] = [:]
+    private var lastLayoutWidth: CGFloat = 0
     private let numberFont = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
 
     override var text: String! {
@@ -430,33 +484,43 @@ final class LineNumberedTextView: UITextView {
     }
 
     func invalidateLineNumbers() {
-        let nsText = (text ?? "") as NSString
-        var offsets: [Int] = [0]
-        nsText.enumerateSubstrings(in: NSRange(location: 0, length: nsText.length), options: [.byLines, .substringNotRequired]) { _, _, enclosingRange, _ in
-            let next = enclosingRange.location + enclosingRange.length
-            if next <= nsText.length { offsets.append(next) }
-        }
-        lineStartOffsets = offsets
+        visualLineNumberCache.removeAll()
         setNeedsDisplay()
     }
 
-    private func lineNumber(forCharacterAt offset: Int) -> Int {
-        var low = 0
-        var high = lineStartOffsets.count - 1
-        while low < high {
-            let mid = (low + high + 1) / 2
-            if lineStartOffsets[mid] <= offset { low = mid } else { high = mid - 1 }
+    private func firstVisualLineNumber(
+        beforeCharacterAt targetOffset: Int,
+        layoutManager: NSTextLayoutManager,
+        contentManager: NSTextContentManager
+    ) -> Int {
+        if let cached = visualLineNumberCache[targetOffset] {
+            return cached
         }
-        return low + 1
+
+        var number = 1
+        layoutManager.enumerateTextLayoutFragments(from: contentManager.documentRange.location, options: [.ensuresLayout]) { fragment in
+            let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
+            guard offset < targetOffset else { return false }
+            visualLineNumberCache[offset] = number
+            number += max(fragment.textLineFragments.count, 1)
+            return true
+        }
+        visualLineNumberCache[targetOffset] = number
+        return number
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if abs(bounds.width - lastLayoutWidth) > 0.5 {
+            visualLineNumberCache.removeAll()
+            lastLayoutWidth = bounds.width
+        }
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
         super.draw(rect)
+        guard showsLineNumbers else { return }
         guard let layoutManager = textLayoutManager,
               let contentManager = layoutManager.textContentManager else { return }
 
@@ -470,6 +534,7 @@ final class LineNumberedTextView: UITextView {
         // the top would lay out the whole document on every draw.
         let startLocation = layoutManager.textViewportLayoutController.viewportRange?.location
 
+        var nextNumber: Int?
         layoutManager.enumerateTextLayoutFragments(from: startLocation, options: [.ensuresLayout]) { fragment in
             let frame = fragment.layoutFragmentFrame
             let fragmentTop = frame.minY + originY
@@ -477,11 +542,29 @@ final class LineNumberedTextView: UITextView {
             guard fragmentTop >= rect.minY - 40 else { return true }
 
             let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
-            let number = "\(self.lineNumber(forCharacterAt: offset))" as NSString
-            let size = number.size(withAttributes: attributes)
-            let firstLineHeight = fragment.textLineFragments.first?.typographicBounds.height ?? size.height
-            let numberY = fragmentTop + (firstLineHeight - size.height) / 2
-            number.draw(at: CGPoint(x: 34 - size.width, y: numberY), withAttributes: attributes)
+            if nextNumber == nil {
+                nextNumber = self.firstVisualLineNumber(
+                    beforeCharacterAt: offset,
+                    layoutManager: layoutManager,
+                    contentManager: contentManager
+                )
+            }
+            let lines = fragment.textLineFragments
+            if lines.isEmpty {
+                let number = "\(nextNumber ?? 1)" as NSString
+                let size = number.size(withAttributes: attributes)
+                number.draw(at: CGPoint(x: 34 - size.width, y: fragmentTop), withAttributes: attributes)
+                nextNumber = (nextNumber ?? 1) + 1
+            } else {
+                for line in lines {
+                    let number = "\(nextNumber ?? 1)" as NSString
+                    let size = number.size(withAttributes: attributes)
+                    let bounds = line.typographicBounds
+                    let numberY = fragmentTop + bounds.minY + (bounds.height - size.height) / 2
+                    number.draw(at: CGPoint(x: 34 - size.width, y: numberY), withAttributes: attributes)
+                    nextNumber = (nextNumber ?? 1) + 1
+                }
+            }
             return true
         }
     }
