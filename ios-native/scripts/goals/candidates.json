@@ -1,0 +1,1037 @@
+{
+  "algorithmVersion": "v0.1",
+  "generatedAt": "2026-07-07T19:22:58.501Z",
+  "cards": [
+    {
+      "id": "v0.1-fieldtheory-2037766104722890982",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2037766104722890982",
+        "url": "https://x.com/tom_doerr/status/2037766104722890982",
+        "authorHandle": "tom_doerr",
+        "authorName": "Tom Dörr",
+        "postedAt": "Sat Mar 28 05:37:53 +0000 2026",
+        "excerpt": "Direct Google Flights API access without scraping\n\ngithub.com/punitarani/fli https://t.co/lFXjeLKz5z"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.33,
+        "actionability": 0.95,
+        "novelty": 0.6,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.96,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"local first sync\"; strongest axes evidence + actionability; category tool",
+      "composite": 0.596,
+      "_synthesisContext": {
+        "fullText": "Direct Google Flights API access without scraping\n\ngithub.com/punitarani/fli https://t.co/lFXjeLKz5z",
+        "articleTitle": "GitHub - punitarani/fli: Google Flights MCP and Python Library",
+        "articleExcerpt": "🛫 Fli - Flight Search MCP Server and Library A powerful Python library that provides programmatic access to Google Flights data with an elegant CLI interface. Search flights, find the best deals, and filter results with ease. 🚀 What makes fli special? Unlike other flight search libraries that rely on web scraping, Fli directly interacts with Google Flights' API through reverse engineering. This means: Fast : Direct API access means faster, more reliable results Zero Scraping : No HTML parsing, no browser automation, just pure API interaction Reliable : Less prone to breaking from UI changes ",
+        "githubUrls": [
+          "https://github.com/punitarani/fli"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-2069426951366807965",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2069426951366807965",
+        "url": "https://x.com/BHolmesDev/status/2069426951366807965",
+        "authorHandle": "BHolmesDev",
+        "authorName": "Ben Holmes",
+        "postedAt": "Tue Jun 23 14:26:47 +0000 2026",
+        "excerpt": "Introducing Hubble: the best notepad for you and your agents.\n\n- Feels like Notion or Apples Notes, but for Markdown\n- Live-reloading editor to collaborate with agents\n- Supports HTML-based apps to build interactive visualizations\n\nFree and open-source 👉 https://t.co/lJdHeTrSbt "
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.55,
+        "timing": 0.5,
+        "evidence": 0.59,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"markdown editor notes\"; strongest axes relevance + evidence; category unclassified",
+      "composite": 0.579,
+      "_synthesisContext": {
+        "fullText": "Introducing Hubble: the best notepad for you and your agents.\n\n- Feels like Notion or Apples Notes, but for Markdown\n- Live-reloading editor to collaborate with agents\n- Supports HTML-based apps to build interactive visualizations\n\nFree and open-source 👉 https://t.co/lJdHeTrSbt https://t.co/dEjoee8eas",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-1857664507805368663",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "1857664507805368663",
+        "url": "https://x.com/namuan_twt/status/1857664507805368663",
+        "authorHandle": "namuan_twt",
+        "authorName": "namuaN",
+        "postedAt": "Sat Nov 16 05:58:27 +0000 2024",
+        "excerpt": "@joshwhiton Llamafile is what you are looking for\n\ngithub.com/Mozilla-Ocho/l…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.33,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.88,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"voice transcription whisper\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.566,
+      "_synthesisContext": {
+        "fullText": "@joshwhiton Llamafile is what you are looking for\n\ngithub.com/Mozilla-Ocho/l…",
+        "articleTitle": "GitHub - mozilla-ai/llamafile: Distribute and run LLMs with a single file.",
+        "articleExcerpt": "llamafile llamafile lets you distribute and run LLMs with a single file. llamafile is a Mozilla Builders project (see its announcement blog post ), now revamped by Mozilla.ai . Our goal is to make open LLMs much more accessible to both developers and end users. We're doing that by combining llama.cpp with Cosmopolitan Libc into one framework that collapses all the complexity of LLMs down to a single-file executable (called a \"llamafile\") that runs locally on most operating systems and CPU archiectures, with no installation. llamafile also includes whisperfile , a single-file speech-to-text too",
+        "githubUrls": [
+          "https://github.com/Mozilla-Ocho/llamafile"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-2027292039914684643",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2027292039914684643",
+        "url": "https://x.com/WillWorth/status/2027292039914684643",
+        "authorHandle": "WillWorth",
+        "authorName": "Will Worth",
+        "postedAt": "Fri Feb 27 07:57:42 +0000 2026",
+        "excerpt": "@marktenenholtz for those interested github.com/karpathy/llm-c…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.25,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.84,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"local first sync\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.542,
+      "_synthesisContext": {
+        "fullText": "@marktenenholtz for those interested github.com/karpathy/llm-c…",
+        "articleTitle": "GitHub - karpathy/llm-council: LLM Council works together to answer your hardest questions",
+        "articleExcerpt": "LLM Council The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your \"LLM Council\". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response. In a bit more detail, here is what happens when you submit a query: Stage 1: First opinions . The user query is gi",
+        "githubUrls": [
+          "https://github.com/karpathy/llm-council"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-1995184588415750376",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "1995184588415750376",
+        "url": "https://x.com/joelhooks/status/1995184588415750376",
+        "authorHandle": "joelhooks",
+        "authorName": "joel ⛈️",
+        "postedAt": "Sun Nov 30 17:34:09 +0000 2025",
+        "excerpt": "beads is rad, agent todo list/memory github.com/steveyegge/bea…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.2,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.9,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"local first sync\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.535,
+      "_synthesisContext": {
+        "fullText": "beads is rad, agent todo list/memory github.com/steveyegge/bea…",
+        "articleTitle": "GitHub - gastownhall/beads: Beads - A memory upgrade for your coding agent",
+        "articleExcerpt": "bd - Beads Distributed graph issue tracker for AI agents, powered by Dolt . Platforms: macOS, Linux, Windows, FreeBSD Docs: https://gastownhall.github.io/beads/ Beads provides a persistent, structured memory for coding agents. It replaces messy markdown plans with a dependency-aware graph, allowing agents to handle long-horizon tasks without losing context. ⚡ Quick Start # Install beads CLI (system-wide - don't clone this repo into your project) curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash # Initialize in YOUR project cd your-project bd init # Te",
+        "githubUrls": [
+          "https://github.com/steveyegge/beads"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-2023444228018499846",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2023444228018499846",
+        "url": "https://x.com/hasantoxr/status/2023444228018499846",
+        "authorHandle": "hasantoxr",
+        "authorName": "Hasan Toor",
+        "postedAt": "Mon Feb 16 17:07:52 +0000 2026",
+        "excerpt": "🚨BREAKING: The \"Ollama for voice cloning\" just dropped.\n\nIt's called Voicebox and it clones any voice from just a few seconds of audio entirely on your machine.\n\nNo ElevenLabs subscription. No cloud uploads. No voice data leaving your device.\n\nIt's powered by Qwen3-TTS, Alibaba'"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.5,
+        "actionability": 0.6,
+        "novelty": 0.5,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.48,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"voice transcription whisper\"; strongest axes actionability + relevance; category launch",
+      "composite": 0.488,
+      "_synthesisContext": {
+        "fullText": "🚨BREAKING: The \"Ollama for voice cloning\" just dropped.\n\nIt's called Voicebox and it clones any voice from just a few seconds of audio entirely on your machine.\n\nNo ElevenLabs subscription. No cloud uploads. No voice data leaving your device.\n\nIt's powered by Qwen3-TTS, Alibaba's breakthrough voice model.\n\n→ Upload a few seconds of audio\n→ Get a near-perfect voice clone\n→ Generate speech in any language\n→ Mix multi-voice conversations in a DAW-like timeline editor\n\nAll running locally. Zero cloud dependency.\n\nBut it's not just a TTS wrapper.\n\nIt's a full voice production studio:\n\n→ Multi-track timeline editor for podcasts and dialogues\n→ System audio capture + Whisper transcription built in\n→ Voice prompt caching for instant regeneration\n→ Built with Tauri (Rust), not Electron 10x smaller, native performance\n\n100% Opensource. MIT Licensed.\n\nmacOS + Windows available now. Linux coming soon.\n\nThis is the moment voice cloning leaves the cloud and runs on your desktop.\n\nLink in the first comment.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "launch"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-1829605447990722912",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "1829605447990722912",
+        "url": "https://x.com/BHolmesDev/status/1829605447990722912",
+        "authorHandle": "BHolmesDev",
+        "authorName": "Ben Holmes",
+        "postedAt": "Fri Aug 30 19:41:45 +0000 2024",
+        "excerpt": "Learning more about local-first tech. This editor works offline, and syncs changes when you're back with zero conflicts. Using Automerge. It's a brilliant library! 🙌 https://t.co/yq9OCQRSZ2"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.17,
+        "actionability": 0.75,
+        "novelty": 0.75,
+        "leverage": 0.6,
+        "timing": 0.5,
+        "evidence": 0.43,
+        "confidence": 0.8,
+        "cost": 0.4
+      },
+      "scoreNote": "matched \"local first sync\"; strongest axes actionability + novelty; category technique",
+      "composite": 0.478,
+      "_synthesisContext": {
+        "fullText": "Learning more about local-first tech. This editor works offline, and syncs changes when you're back with zero conflicts. Using Automerge. It's a brilliant library! 🙌 https://t.co/yq9OCQRSZ2",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "technique"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-2043821909335212218",
+      "project": "fieldtheory",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2043821909335212218",
+        "url": "https://x.com/joelbqz/status/2043821909335212218",
+        "authorHandle": "joelbqz",
+        "authorName": "Joel",
+        "postedAt": "Mon Apr 13 22:41:30 +0000 2026",
+        "excerpt": "i'm building the fastest markdown editor, cold starts are faster than apple notes, reading and indexing files is almost as fast as the legendary sublime text, 100% free and open source\n\nlaunching soon https://t.co/YNZQGFO41s"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.25,
+        "actionability": 0.4,
+        "novelty": 0.55,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.43,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"markdown editor notes\"; strongest axes novelty + timing; category unclassified",
+      "composite": 0.388,
+      "_synthesisContext": {
+        "fullText": "i'm building the fastest markdown editor, cold starts are faster than apple notes, reading and indexing files is almost as fast as the legendary sublime text, 100% free and open source\n\nlaunching soon https://t.co/YNZQGFO41s",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2028937646798766109",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2028937646798766109",
+        "url": "https://x.com/OsaurusAI/status/2028937646798766109",
+        "authorHandle": "OsaurusAI",
+        "authorName": "Osaurus",
+        "postedAt": "Tue Mar 03 20:56:45 +0000 2026",
+        "excerpt": "Fully native. Fully local. No API.\nOpen source.\ngithub.com/osaurus-ai/osa…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.33,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.88,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"shell scripting automation\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.566,
+      "_synthesisContext": {
+        "fullText": "Fully native. Fully local. No API.\nOpen source.\ngithub.com/osaurus-ai/osa…",
+        "articleTitle": "GitHub - osaurus-ai/osaurus: Own your AI. The native macOS harness for AI agents -- any model, persistent memory, autonomous execution, cryptographic identity. Built in Swift. Fully offline. Open source.",
+        "articleExcerpt": "Osaurus Own your AI. Agents, memory, tools, and identity that live on your Mac. Built purely in Swift. Fully offline. Open source. Download for Mac · Docs · Models · Discord · Twitter · Plugin Registry Inference is all you need. Everything else can be owned by you. Models are getting cheaper and more interchangeable by the day. What's irreplaceable is the layer around them -- your context, your memory, your tools, your identity. Others keep that layer on their servers. Osaurus keeps it on your machine. Osaurus is the AI harness for macOS. It sits between you and any model -- local or cloud -- ",
+        "githubUrls": [
+          "http://github.com/osaurus-ai/osaurus"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2041431639985725623",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2041431639985725623",
+        "url": "https://x.com/capetorch/status/2041431639985725623",
+        "authorHandle": "capetorch",
+        "authorName": "Thomas Capelle @ ICML 🇰🇷",
+        "postedAt": "Tue Apr 07 08:23:25 +0000 2026",
+        "excerpt": "Missed opportunity: Resident Eval\ngithub.com/milla-jovovich…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.5,
+        "actionability": 0.65,
+        "novelty": 0.55,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.96,
+        "confidence": 0.8,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"sqlite OR full text search\"; strongest axes evidence + leverage; category unclassified",
+      "composite": 0.564,
+      "_synthesisContext": {
+        "fullText": "Missed opportunity: Resident Eval\ngithub.com/milla-jovovich…",
+        "articleTitle": "GitHub - MemPalace/mempalace: The best-benchmarked open-source AI memory system. And it's free.",
+        "articleExcerpt": "Caution Scam alert. The only official sources for MemPalace are this GitHub repository , the PyPI package , and the docs site at mempalaceofficial.com . Any other domain — including mempalace.tech — is an impostor and may distribute malware. Details and timeline: docs/HISTORY.md . MemPalace Local-first AI memory. Verbatim storage, pluggable backend, 96.6% R@5 raw on LongMemEval — zero API calls. What it is MemPalace stores your conversation history as verbatim text and retrieves it with semantic search. It does not summarize, extract, or paraphrase. The index is structured — people and project",
+        "githubUrls": [
+          "https://github.com/milla-jovovich/mempalace"
+        ],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2025411776700121280",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2025411776700121280",
+        "url": "https://x.com/anemll/status/2025411776700121280",
+        "authorHandle": "anemll",
+        "authorName": "Anemll",
+        "postedAt": "Sun Feb 22 03:26:12 +0000 2026",
+        "excerpt": "AnemllClaw - OpenClaw Server App on iOS &amp; tvOS\nSee README\ngithub.com/Anemll/anemllc…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.33,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.86,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"sqlite OR full text search\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.564,
+      "_synthesisContext": {
+        "fullText": "AnemllClaw - OpenClaw Server App on iOS &amp; tvOS\nSee README\ngithub.com/Anemll/anemllc…",
+        "articleTitle": "anemllclaw/apps/anemll/README.md at anemll-ios-app · Anemll/anemllclaw",
+        "articleExcerpt": "AnemllClaw (pronounced \"Animal Claw\") is a port and fork of OpenClaw that runs a full OpenClaw server on-device on Apple iOS and tvOS. To our knowledge, this is the first OpenClaw server implementation for iOS. The initial motivation was to experiment with local model workflows and to learn how OpenClaw works internally. Goals The primary goal is to run on-device models so that as much work as possible stays on the device instead of being sent to external providers. Because of the sandboxed environment, bash, TypeScript, and self-modifying code are not supported. On the flip side, this makes i",
+        "githubUrls": [
+          "https://github.com/Anemll/anemllclaw/blob/anemll-ios-app/apps/anemll/README.md"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2070394629250601330",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2070394629250601330",
+        "url": "https://x.com/twtayaan/status/2070394629250601330",
+        "authorHandle": "twtayaan",
+        "authorName": "Ayaan 🐧",
+        "postedAt": "Fri Jun 26 06:32:00 +0000 2026",
+        "excerpt": "Epic Games got tired of Git. So they built their own version control system. Then gave it away for free.\n\nThis is Lore. Announced at State of Unreal 2026. Open source under MIT. Available right now.\n\nGit was never built for game development. When you are working on a project like"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.45,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"cli developer tool\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.555,
+      "_synthesisContext": {
+        "fullText": "Epic Games got tired of Git. So they built their own version control system. Then gave it away for free.\n\nThis is Lore. Announced at State of Unreal 2026. Open source under MIT. Available right now.\n\nGit was never built for game development. When you are working on a project like Unreal Engine or Fortnite you are mixing source code with massive binary files. 3D models. Textures. Audio. Build outputs. Files that are gigabytes in size.\n\nGit handles large binary files through a bolted-on add-on called Git LFS. Perforce handles them better but it needs a live server connection for everything and nobody outside your company can build tools on top of it.\n\nEpic said none of the existing systems solved all three problems together. Large binary handling, offline work and an open specification. So they spent years building one themselves.\n\nHere is what Lore actually does differently:\n\n→ Works completely offline. Commits, branches, switching — all happen on your machine without touching a server.\n→ Every file gets a unique fingerprint. Identical data is never stored twice across files or branches.\n→ Large files are broken into chunks. Edit one part of a multi-gigabyte file and only that chunk gets re-uploaded.\n→ Your machine only holds files you are actually using. Everything else gets pulled down on demand.\n→ Built in Rust. Core library, server and CLI all use the same interface. No special privileged commands.\n→ Official SDKs for JavaScript, Python, C# and Go ship with it.\n\nPerforce licenses cost tens of thousands of dollars a year. Git LFS is a workaround that was never meant to be a solution.\n\nLore is free. Written in Rust. MIT licensed. And Epic just put it on the internet for anyone to use.\n\nRepo here:\nhttps://t.co/WelEpip8Ln",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2071692278582890889",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2071692278582890889",
+        "url": "https://x.com/gokulr/status/2071692278582890889",
+        "authorHandle": "gokulr",
+        "authorName": "Gokul Rajaram",
+        "postedAt": "Mon Jun 29 20:28:24 +0000 2026",
+        "excerpt": "MEMORY IS THE MOAT\n\n@nikesharora, Chairman & CEO of @PaloAltoNtwks , interviewed by @HarryStebbings   (@20vcFund )\n\nSummary: Nikesh Arora took Palo Alto Networks from an $18 billion company to one worth $225 billion, and his read on enterprise AI is blunt: most companies are doin"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.44,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"claude code OR codex workflow\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.554,
+      "_synthesisContext": {
+        "fullText": "MEMORY IS THE MOAT\n\n@nikesharora, Chairman & CEO of @PaloAltoNtwks , interviewed by @HarryStebbings   (@20vcFund )\n\nSummary: Nikesh Arora took Palo Alto Networks from an $18 billion company to one worth $225 billion, and his read on enterprise AI is blunt: most companies are doing it wrong, and most of the products are not ready. His core claim is that consumers forgive AI's mistakes while enterprises cannot, so the money will flow to whoever builds the depth (the context, the memory, and the edge-case training) that lets an agent act without a human catching its errors. The companies that win will redesign themselves around AI instead of adding it to yesterday's workflow, and the lasting advantage will be the memory a system builds up about you. He expects token prices to fall 90%, half of G&A roles to disappear in 3 years, and more engineers and salespeople, not fewer.\n\n1. Context Stickiness. The lasting advantage in AI is the context a system holds about you, not the model itself. Arora says the frontier labs are racing to remember what you asked over the last 30, 60, 90 days so each new answer gets easier and you stop wanting to leave. The more a model knows about a user, the higher the cost of switching, and that stickiness is the moat. For enterprises the same logic holds: the company that owns its context wins, not the one renting the smartest model.\n\n2. Breadth Versus Depth. The frontier model problem is a breadth versus depth problem. Consumers tolerate false positives and enterprises have none to spare. Arora had Gemini write a passable investment memo in 4 minutes, and a wrong line or two did not matter because a person was sitting in the middle to catch it. An agent acting on its own has no person in the middle, so a false positive becomes a live failure. Consumer AI wins on breadth and brand, while real enterprise revenue comes from depth.\n\n3. The Waymo Standard. Waymo is the biggest agentic product in the world, and it shows what depth actually costs. Replacing one human, the driver, took tens of billions of dollars of edge-case training and data that exists nowhere on the internet. You cannot drop the next Anthropic model into your Mercedes and tell it to drive you home. Every enterprise agent that truly replaces a person needs that same depth, which is why most agentic enterprise products are not ready.\n\n4. Rethink The Workflow. Most enterprises are losing because they add a little AI to an old workflow instead of redesigning the workflow around AI. Arora's example: scanning an invoice 20% faster is the trap, while the real win is letting AI do 80% of the thinking, like reading every CV and telling you which 20 people to interview and what to ask each one. That means giving up human control, which is exactly what companies resist. The winners over the next 3 years rethink the company with AI, not the task.\n\n5. Software With Opinions. The next wave of enterprise software will have opinions, and that is the real change Arora is pointing at. Coded SaaS gives you the output you defined for the input you fed it. An AI marketing assistant reads your copy, tells you it is off-brand, and says how to fix it. That opinion makes an average employee smarter, which is why Arora expects half the people in G&A functions like marketing, finance, and HR to be gone within 3 years.\n\n6. More Engineers, Not Fewer. The fear that AI shrinks headcount is half wrong. Process-heavy G&A roles compress, but Arora wants more technical and more sales people. His teams keep asking for resources to rework marketing and HR, and for people who can prompt frontier models, build harnesses, and bring in data nobody else has. A good product also needs more sellers: he met 20 customers in Europe last week and half did not know what his 20-year-old company already ships.\n\n7. Tokens At One-Tenth. Long-term token pricing should be a tenth of what it is today. Compute costs 2 to 4 times what it did 2 years ago because more than half of it feeds loss-making consumer AI, which forces the pricing pressure onto enterprise and coding workloads that have to pay. As compute gets more efficient and consumer usage gets capped, prices fall hard over the next 3 to 5 years. The model from 2 years ago was already good enough for 90% of tasks; the problem was it cost too much to run.\n\n8. The Token Allocation Trap. Capping token spend punishes your best people. Arora runs a \"use judiciously\" model, not a free-for-all, because the smartest AI-savvy employee can burn 20 times the tokens of an average one. Playing whack-a-mole with cost hurts the high performers most and slows the learning you need. The better move is to track usage, leave the power users alone, and cap only the genuine outliers.\n\n9. The Attacker's New Edge. Powerful coding models cut both ways. Trained to write good code, they are just as good at finding bad code. Pointed at his own systems, a model found in 6 weeks what would have taken his team 5 to 6 years. It cannot safely auto-patch, because it would \"fix\" 30% of things that are not broken, so it arms attackers faster than defenders. The result is urgency: every enterprise has to fix its systems faster, which is good for security companies.\n\n10. The FTE Tell. If a startup needs forward-deployed engineers to sell into the enterprise, the product is not finished. Arora's read: enterprise AI is barely 12 months old, agents keep changing what the product even is, so vendors send engineers to build the product inside the customer while the technology keeps moving. A real forward-deployed engineer brings code back and folds it into the product; many are just adoption consultants. Expect customers to churn from one tool to the next, the way coding went from Windsurf and Devin to Codex, Claude, and Factory.\n\n11. Three Missed Tricks. Miss one trick and you survive, miss two and you are partly impaled, miss three and you could be obsolete. This is why Arora spends more time than ever learning, pinging founders building things he does not yet understand. He buys early and cheap on conviction, treating an acquisition as a 10x or 100x bet where paying 1 or 2 times more does not matter, rather than waiting to buy the proven winner for a billion. He runs a twice-weekly \"AI EIO\" meeting so his top 15 leaders compete to show what they shipped.\n\n12. The Sunk Cost Walk. A board member taught Arora to separate effort from wanting the outcome. After months grinding through a near-billion-dollar acquisition, he was told to take a long walk and ask one question: if this deal walked in the door right now with zero effort, would I still write the check? You have not spent a dollar yet, so the only thing that counts is whether it stands on its own merits. The same trap catches investors who confuse beating 8 VCs to a term sheet with the deal being good.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2065458879442375147",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2065458879442375147",
+        "url": "https://x.com/kushalbyatnal/status/2065458879442375147",
+        "authorHandle": "kushalbyatnal",
+        "authorName": "Kushal Byatnal",
+        "postedAt": "Fri Jun 12 15:39:05 +0000 2026",
+        "excerpt": "today, we're open sourcing the Extend CLI\n\nwatch Fable use it to parse and extract an entire corpus of documents — end to end, without leaving the terminal\n\ntry it yourself: npm install -g @​extend-ai/cli\n\nit comes with a built-in agent skill, so claude code/codex/cursor know how"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.39,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"terminal agent coding\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.549,
+      "_synthesisContext": {
+        "fullText": "today, we're open sourcing the Extend CLI\n\nwatch Fable use it to parse and extract an entire corpus of documents — end to end, without leaving the terminal\n\ntry it yourself: npm install -g @​extend-ai/cli\n\nit comes with a built-in agent skill, so claude code/codex/cursor know how to drive it out of the box",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2042378139897086107",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2042378139897086107",
+        "url": "https://x.com/tom_doerr/status/2042378139897086107",
+        "authorHandle": "tom_doerr",
+        "authorName": "Tom Dörr",
+        "postedAt": "Thu Apr 09 23:04:28 +0000 2026",
+        "excerpt": "Run 122B parameter AI locally on MacBook\n\ngithub.com/nicedreamzapp/… https://t.co/n1RKMGRmoc"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.5,
+        "actionability": 0.65,
+        "novelty": 0.4,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.92,
+        "confidence": 0.8,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"shell scripting automation\"; strongest axes evidence + leverage; category unclassified",
+      "composite": 0.537,
+      "_synthesisContext": {
+        "fullText": "Run 122B parameter AI locally on MacBook\n\ngithub.com/nicedreamzapp/… https://t.co/n1RKMGRmoc",
+        "articleTitle": "GitHub - nicedreamzapp/claude-code-local: Run Claude Code with local AI on Apple Silicon. 122B model at 41 tok/s with Google TurboQuant. No cloud, no API fees.",
+        "articleExcerpt": "🧠⚡ Claude Code Local — The Lineup Three local AI brains. Four modes. One MacBook. Zero cloud. Pick your fighter and run Claude Code 100% on-device. 🧩 You're looking at the BRAIN of a three-repo local-first ambient-computing stack Pair it with its sibling repos for the full experience: 🤖 THIS REPO 🎤 NarrateClaude 🌐 browser-agent BRAIN EARS + MOUTH HANDS Runs local AI (Gemma / Llama / Qwen) + Claude Code Talk to it, hear it in your cloned voice — 100% on-device Drives a real Brave browser via Chrome DevTools You are here 👈 🔗 github.com/nicedreamzapp/NarrateClaude 🔗 github.com/nicedreamza",
+        "githubUrls": [
+          "https://github.com/nicedreamzapp/claude-code-local"
+        ],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2022123808296251451",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2022123808296251451",
+        "url": "https://x.com/OfficialLoganK/status/2022123808296251451",
+        "authorHandle": "OfficialLoganK",
+        "authorName": "Logan Kilpatrick",
+        "postedAt": "Fri Feb 13 01:40:59 +0000 2026",
+        "excerpt": "We made a skill for the Gemini API! \n\ngithub.com/google-gemini/…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.08,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.97,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"cli developer tool\"; strongest axes evidence + actionability; category tool",
+      "composite": 0.512,
+      "_synthesisContext": {
+        "fullText": "We made a skill for the Gemini API! \n\ngithub.com/google-gemini/…",
+        "articleTitle": "GitHub - google-gemini/gemini-skills: Skills for the Gemini API, SDK and model/agent interactions",
+        "articleExcerpt": "Gemini API skills A library of skills for the Gemini API, SDK and model interactions. About LLMs have fixed knowledge, being trained at a specific point in time. Software dev is fast paced and changes often, where new libraries are launched every day and best practices evolve quickly. This leaves a knowledge gap that language models can't solve on their own. For example, models don't know about themselves when they're trained, and they aren't necessarily aware of subtle changes in best practices (like thought circulation ) or SDK changes. Skills are a lightweight technique for adding relevant ",
+        "githubUrls": [
+          "https://github.com/google-gemini/gemini-skills"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-2031150042334089255",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2031150042334089255",
+        "url": "https://x.com/tom_doerr/status/2031150042334089255",
+        "authorHandle": "tom_doerr",
+        "authorName": "Tom Dörr",
+        "postedAt": "Mon Mar 09 23:28:01 +0000 2026",
+        "excerpt": "Desktop interface for AI agents and git worktrees\n\ngithub.com/coollabsio/jean https://t.co/U7CAAhFUGW"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.1,
+        "actionability": 0.95,
+        "novelty": 0.45,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 0.86,
+        "confidence": 0.8,
+        "cost": 0.45
+      },
+      "scoreNote": "matched \"cli developer tool\"; strongest axes actionability + evidence; category tool",
+      "composite": 0.506,
+      "_synthesisContext": {
+        "fullText": "Desktop interface for AI agents and git worktrees\n\ngithub.com/coollabsio/jean https://t.co/U7CAAhFUGW",
+        "articleTitle": "GitHub - coollabsio/jean: A dev environment for AI agents.",
+        "articleExcerpt": "Jean A desktop AI assistant for managing multiple projects, worktrees, and chat sessions with Claude CLI, Codex CLI, and OpenCode. Tauri v2 · React 19 · Rust · TypeScript · Tailwind CSS v4 · shadcn/ui v4 · Zustand v5 · TanStack Query · CodeMirror 6 · xterm.js About the Project Jean is an opinionated native desktop app built with Tauri that gives you a powerful interface for working with Claude CLI, Codex CLI, and OpenCode across multiple projects. It has strong opinions about how AI-assisted development should work — managing git worktrees, chat sessions, terminals, and GitHub integrations in ",
+        "githubUrls": [
+          "https://github.com/coollabsio/jean"
+        ],
+        "category": "tool"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-cli-1989048467608707529",
+      "project": "fieldtheory-cli",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "1989048467608707529",
+        "url": "https://x.com/TheRealAdamG/status/1989048467608707529",
+        "authorHandle": "TheRealAdamG",
+        "authorName": "Adam.GPT",
+        "postedAt": "Thu Nov 13 19:11:24 +0000 2025",
+        "excerpt": "GPT-5.1 prompting guide\n\ncookbook.openai.com/examples/gpt-5…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.03,
+        "actionability": 0.85,
+        "novelty": 0.6,
+        "leverage": 0.7,
+        "timing": 0.5,
+        "evidence": 0.79,
+        "confidence": 0.8,
+        "cost": 0.4
+      },
+      "scoreNote": "matched \"terminal agent coding\"; strongest axes actionability + evidence; category technique",
+      "composite": 0.487,
+      "_synthesisContext": {
+        "fullText": "GPT-5.1 prompting guide\n\ncookbook.openai.com/examples/gpt-5…",
+        "articleTitle": "GPT-5.1 Prompting Guide",
+        "articleExcerpt": "Introduction GPT-5.1, our newest flagship model, is designed to balance intelligence and speed for a variety of agentic and coding tasks, while also introducing a new none reasoning mode for low-latency interactions. Building on the strengths of GPT-5, GPT-5.1 is better calibrated to prompt difficulty, consuming far fewer tokens on easy inputs and more efficiently handling challenging ones. Along with these benefits, GPT-5.1 is more steerable in personality, tone, and output formatting. While GPT-5.1 works well out of the box for most applications, this guide focuses on prompt patterns that ma",
+        "githubUrls": [],
+        "category": "technique"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2055277918633562153",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2055277918633562153",
+        "url": "https://x.com/elonmusk/status/2055277918633562153",
+        "authorHandle": "elonmusk",
+        "authorName": "Elon Musk",
+        "postedAt": "Fri May 15 13:23:35 +0000 2026",
+        "excerpt": "The latest 𝕏 algorithm has been published to GitHub\ngithub.com/xai-org/x-algo…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.65,
+        "novelty": 0.4,
+        "leverage": 0.75,
+        "timing": 0.5,
+        "evidence": 1,
+        "confidence": 0.8,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"feed ranking OR recommendation algorithm\"; strongest axes relevance + evidence; category unclassified",
+      "composite": 0.67,
+      "_synthesisContext": {
+        "fullText": "The latest 𝕏 algorithm has been published to GitHub\ngithub.com/xai-org/x-algo…",
+        "articleTitle": "GitHub - xai-org/x-algorithm: Algorithm powering the For You feed on X",
+        "articleExcerpt": "X For You Feed Algorithm This repository contains the core recommendation system powering the \"For You\" feed on X. It combines in-network content (from accounts you follow) with out-of-network content (discovered through ML-based retrieval) and ranks everything using a Grok-based transformer model. Note: The transformer implementation is ported from the Grok-1 open source release by xAI, adapted for recommendation system use cases. Table of Contents Updates — May 15th, 2026 Overview System Architecture Components Home Mixer Thunder Phoenix Candidate Pipeline How It Works Pipeline Stages Scorin",
+        "githubUrls": [
+          "https://github.com/xai-org/x-algo",
+          "https://github.com/xai-org/x-algorithm"
+        ],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2069860656678048004",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2069860656678048004",
+        "url": "https://x.com/bryan_johnson/status/2069860656678048004",
+        "authorHandle": "bryan_johnson",
+        "authorName": "Bryan Johnson",
+        "postedAt": "Wed Jun 24 19:10:11 +0000 2026",
+        "excerpt": "Some of us will live forever.\n\nAnd if you’re reading this, that may or may not be you.\n\nI am so bullish on this that I just renamed my company to Immortals.\n\nBelow:\n+ why I think this\n+ early signs of success\n+ how to increase your odds\n\nYes, I know this sounds crazy.\n\nImmortalit"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.48,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"personal knowledge tools\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.558,
+      "_synthesisContext": {
+        "fullText": "Some of us will live forever.\n\nAnd if you’re reading this, that may or may not be you.\n\nI am so bullish on this that I just renamed my company to Immortals.\n\nBelow:\n+ why I think this\n+ early signs of success\n+ how to increase your odds\n\nYes, I know this sounds crazy.\n\nImmortality has been an ambition for humanity since the beginning of recorded history.\n\nThe immortality I’m referring to is specific: increases in life expectancy will outpace the rate of aging. Meaning, we will no longer, by default, expect to die of natural causes.\n\nI believe this for three reasons.\n\n#1: Immortality already exists\n\nBiology can reverse some features of aging, and in a handful of organisms escape it almost entirely. For example, a sperm and an egg from two people in their 30s carry the legacy of bodies that have aged for decades (the egg in particular has been arrested inside the mother since before she herself was born), yet they combine to produce an embryo that resets the aging clock to zero.\n\nThe immortal jellyfish goes further and resets itself within one lifetime, reverting its adult cells to an earlier stage through transdifferentiation and starting its life cycle again. And in the lab, scientists have begun doing this deliberately, making induced pluripotent stem cells (iPSCs) from mature adult cells such as skin fibroblasts, and using partial cellular reprogramming to turn the clock back in the tissues of living animals.\n\n#2: AI offers new potentials\n\nBiology is a hard problem. For most of history that complexity was beyond native human capacity. AI was made for this complexity. The clearest demonstration so far is protein folding. Predicting the three-dimensional shape a protein folds was an unsolved problem for roughly fifty years, and it mattered because a protein's shape determines what it does in the body.\n\nDeepMind's AlphaFold2 effectively solved it in 2020, reaching a median accuracy of 92.4 out of 100, a level long thought to require the slow, painstaking work of crystallizing a protein and solving its structure by X-ray crystallography. It then released predicted structures for over 200 million proteins, nearly the entire catalogued protein universe, in a fraction of the time anyone expected.\n\n#3: Early signs are encouraging \n\nThese aspirations are not imaginative. With the current tools in biotech Sid Sijbrandij, the co-founder of GitLab, was diagnosed with an aggressive bone cancer, osteosarcoma in his vertebrae. He treated his own disease like an engineering problem, he used AI to help direct several experimental, personalized therapies in parallel and drove the cancer into remission after standard medicine had given up. Around the same time, an Australian named Paul Conyngham, with no medical or biology background, did something similar for his dog. He used AI to help design a personalized mRNA vaccine targeting the specific mutations in his dog's tumor, and after it was given alongside another immunotherapy and within a few months the main tumor had shrunk by roughly three-quarters.\n\nHow to increase your odds…\n\nI. Don’t die in the meantime\n\nWe don’t know when these longevity therapies will become available. Your goal is to be around when they come out. Buy yourself as much time as possible by looking after your body to the best of our scientific knowledge. Good diet, sleep, exercise will get you 80% of the results.\n\nII. Find your achilles\n\nLongevity therapies will likely be outcome specific.  Individual specific drugs/therapies that target specific things like…\n\n> prevent and remove arterial plaque\n> prevent and reverse neurodegeneration\n> specifically target and eliminate cancers, or pre cancerous legions\n> prevent frailty and muscle loss, and regain muscle mass, strength and, bone density\n> reverse skin aging\n> rejuvenate eye health \n> restore lost hearing\n> etc\n\nWe don’t know what therapies will be available first. Your goal is to find what your body is struggling with most and keep that problem at-bay until a therapy is available that can fully cure or reverse it. \n\nFor example, do you struggle with cholesterol? Blood glucose control? Cognitive decline? Find your achilles heel and reduce your risk systematically.\n\nIII. Invest in the future\n\nThere are three macro trends happening on planet earth right now, and the people who bet on these areas have the highest risk + reward.\n\n> AI\n> Immortality\n> Energy\n\nAs we know, power comes in many forms: money, social, political, health, etc. Those that can collect power in these fields will have the greatest chance of positioning themselves in the Immortal future.\n\nWith time, Immortal therapies will become broadly available.\n\nIf you’re reading this: don’t waste your chances by burning down your life points on a yolo-like mentality. Grind culture, addiction, social media pollution, fast food, porn, alcohol, these are all corporations turning your life into their profit. This is the Die Economy.\n\nMy company Immortals has the sole objective of turning your time, attention, and life into more healthy, functional, and prosperous minutes, days, and years. The Don’t Die Economy.\n\nGood luck.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2069689212643971234",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2069689212643971234",
+        "url": "https://x.com/divaagurlxw/status/2069689212643971234",
+        "authorHandle": "divaagurlxw",
+        "authorName": "diva",
+        "postedAt": "Wed Jun 24 07:48:55 +0000 2026",
+        "excerpt": "As an AI Engineer. Please learn\n\n>Harness engineering, not just prompt engineering\n\n>Context engineering, not just long prompts\n\n>Prompt caching vs. semantic caching tradeoffs\n\n>KV cache management, eviction, reuse, and memory pressure at scale\n\n>Prefill vs. decode latency and wh"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.47,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"embeddings retrieval rerank\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.557,
+      "_synthesisContext": {
+        "fullText": "As an AI Engineer. Please learn\n\n>Harness engineering, not just prompt engineering\n\n>Context engineering, not just long prompts\n\n>Prompt caching vs. semantic caching tradeoffs\n\n>KV cache management, eviction, reuse, and memory pressure at scale\n\n>Prefill vs. decode latency and why they optimize differently\n\n>Continuous batching, paged attention, and throughput optimization\n\n>Speculative decoding vs. quantization vs. distillation tradeoffs\n\n>INT8, INT4, FP8, AWQ, GPTQ, and when quantization hurts quality\n\n>Structured output failures, schema validation, repair loops, and fallback chains\n\n>Function calling reliability, tool contracts, argument validation, and idempotency\n\n>Agent guardrails, loop budgets, tool budgets, and termination conditions\n\n>Model routing, graceful fallback logic, and degraded-mode UX\n\n>RAG architecture: chunking, embeddings, hybrid search, reranking, and freshness\n\n>Retrieval evals: recall, precision, grounding, attribution, and citation quality\n\n>Evals: golden sets, regression tests, adversarial tests, LLM-as-judge, and human evals\n\n>LLM observability as a first-class discipline: traces, spans, tokens, latency, errors, and drift\n\n>Cost attribution per feature, workflow, tenant, and user journey not just per model\n\n>Safety engineering: prompt injection defense, data leakage prevention, and permission boundaries\n\n>Multi-tenant isolation, cache safety, and cross-user context contamination prevention\n\n>Fine-tuning vs. in-context learning vs. RAG vs. distillation and when each is the wrong tool\n\n>Latency, quality, cost, and reliability tradeoffs across the full inference stack\n\n>Production failure modes: hallucinated tool calls, malformed JSON, stale retrieval, runaway agents, and silent eval regressions",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2062037577755238561",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2062037577755238561",
+        "url": "https://x.com/jiahanjimliu/status/2062037577755238561",
+        "authorHandle": "jiahanjimliu",
+        "authorName": "Jim Liu",
+        "postedAt": "Wed Jun 03 05:04:03 +0000 2026",
+        "excerpt": "$OUST: The Truth About Elon and Lidar\n\nThis is my current long term view on Ouster: $OUST. However, with the stock up 67% 1-month, 157% 3-months, the short term is possibly overheated so I'm looking to sell CSP to increase my position. \n\nElon doesn't hate lidar (1). Elon hates li"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 1,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.41,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"human feedback model\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.551,
+      "_synthesisContext": {
+        "fullText": "$OUST: The Truth About Elon and Lidar\n\nThis is my current long term view on Ouster: $OUST. However, with the stock up 67% 1-month, 157% 3-months, the short term is possibly overheated so I'm looking to sell CSP to increase my position. \n\nElon doesn't hate lidar (1). Elon hates lidar for self driving but personally led the design to use lidar for SpaceX Dragon docking (1). What I see in Ouster is a technically strong engineering team building lidar for robotics, industrial, drones, and smart infrastructure. \n\nHistory\nOuster started with mainly selling lidar for self driving cars and it's stock price's peak during the self driving hype of 2021 at 126.90. However, most of the self driving companies outside Tesla and Waymo either went bankrupt or were not competitive. Tesla famously does  not use lidar and Waymo has been developing analog lidar in house starting in 2011 so $OUST bottomed at 3.72 in 2023.\n\nWe have seen the resurgence of companies previously left for dead companies but with sufficiently complex to replicate engineering moats like SNDK, MU, CRDO, LITE, NOK go on a tear. It's hard to imagine a world when MU was left for dead but in 2023, fame value investor Mohnish Pabrai sold his entire 1.59 million share position of $MU for $64/share after holding it for 5 years because the stock did not move. For those looking to do the math, that's a 16.6x gain missed and Mohnish Pabrai was known for his patient value investing philosophy. The main take way here is that sufficiently complex engineering met with the right trends can deliver great returns.\n\nOuster has a very component engineering team, which I will detail later, and refocused on lidar for robotics, industrial, drones, and smart infrastructure. This aligns with an possibly upcoming physical AI trend.\n\nI am not saying that OUST will be the next MU as HBM is more complex and has faster scaling demand compared to lidar. On the other hand, SK and Samsung have more dominant HBM positions than MU, and MU started at 72B market cap while OUST is at 3B market cap today.  \n\nEngineering Tradeoffs: Lidar vs Camera\nElon chose camera because he forecasted that with advancement in AI, FSD would be able to use camera to calculate depth, remember occlusion from glare and become effective in darkness. Today, we see that Waymo cannot go without lidar but Tesla can go without camera.\n\nHowever there is advantage that lidar innately has over camera: millimeter precision. For self driving cars that move at miles per hour, no one cares about millimeter precision. But for robots picking up things, pouring industrial chemicals, doing surgery, and Elon's use case of docking Dragon in space, millimeter precision matters. Yes, camera can work around this with tactile feedback, calibration, and visual servoing which one reason is why Elon focuses so much on Optimus' hands.    \n\nDifferences between Robotics, FSD, and LLMs\nLLMs utilizes mostly the entire internet for data with a mix of proprietary data and reinforcement learning. The resulting dynamics is LLMs is a winner takes most category for whoever has the best researchers and most compute.\n\nRobotics segments on the other hand are more distributed. Tesla and Waymo are not contenders for the best surgery robots, that's Intuitive Surgical $ISRG. Meanwhile Intuitive Surgical don't have a chance in full self driving. Granted within certain segments like full self driving, it's currently dominated by two top players: Tesla and Waymo but that's because these two have the most training data to imbue onto their models. \n\nFull self driving training data and surgery data cannot be sourced from the web, that's why OpenAI and Anthropic are not in the conversation for FSD or surgery robots. Thus it's likely that many segments of robotics will have their owner leaders. Open/Ant are not in the conversation for military drones: that's Anduril. Anduril is top for military drones but $ONDS has carved itself a great niche in defense drones in the civil government / private security domain. Even within military drones, Anduril dominates high tech drones while $RCAT has a niche in low cost disposable drones.\n\nComponent Choice in Robotics\nSegmentation is likely in robotics, but there will probably be either a variety of industry standard platforms or at least components. For industry standard platform dynamic look no further than the Apple iPhone. The iPhone has both camera and lidar. Application developers on top of that can choose to use either, both or none. \n\nWhether robotics will have a variety of standard platforms or have industry standard components, lidar is a strong choice of sensor for various applications. Camera can serve as a workaround in some application but is not a universal sensor. Can you imagine using camera instead of $KRKNF sonar? You think reducing complexity would have prevented Blue Origin's landing pad explosions? You think Elon was reducing complexity when he chose to use lidar for DragonX docking? I am not a proponent of lidar in self driving cars but in many other applications, lidar reduces complexity. Reduction in complexity allows both human and Human-AI hybrid teams to iterate faster and focus on innovation instead of fixing regressions. \n\nOuster: Pioneers of Digital Lidar\nOuster pioneered the digital lidar. Analog sensors and compute rely on continuous signals converted from  physics based feedback while digital relies on 1s and 0s. Analog is found in the natural world and in many domains starts out as the winner. Digital disrupts because it has Moore's Law working for it. Digital cameras disrupted film cameras. Digital thermometers disrupted liquid thermometer. MP3 disrupted Vinyl. Digital TV disrupted Analog TVs. VoIP is used for Zoom nowadays, not landlines. Most importantly, many analog digital signal processing circuits moved to digital signal processing.\n\nOuster invented the digital lidar (4) and in 2026 Hesai, the lidar champion of China introduced their Picasso SPAD-SoC, their first digital lidar. Aeva is halfway digitalizing components in their FMCW lidar. Quanergy is has some digital components in their OPA lidar but is still focused on optical waves. The moat is not the concept of digital lidar itself but rather that Ouster's engineers moves faster than it's competitors.\n\nDigital lidar has best cost/performance improvements, lower manufacturing complexity, higher reliability, and has software defined behavior, and is more power efficient which is big in drones.\n\nThe Team at Ouster\nEvaluating the team at Ouster:\n1. Angus Pacala (5), CEO, BS, MS, Stanford Mechatronics. Was a top performing engineer at Quanergy, an incumbent lidar company, and saw improvements that could make a better product. This has vibes of Eric Yuan of Zoom who was previously a top performer at Cisco. \n2. Mark Frichtl (6), CTO, BS, MS Physics. Interned at Palantir in 2012 and Apple Special Projects Groups (15). Mark and Angus were friends, startups co-led by friends is a huge green flag for long term success. Furthermore, interning Palantir in 2012 and Apple SPG in 2015 were top students technically.\n3. Onur Ulusel, FPGA Lead (7) and Anil Semizoglu, Lead Calibration and Test (8), Feichen Shen, FPGA (9). Onur, Anil, Feichen all worked on ArgoAI's lidar. ArgoAI had the 2nd best lidar in self driving cars to Waymo. I didn't work with Onur, Anil, Feichen directly but they had excellent work and were well respected when I worked at ArgoAI. \n4. Aman Bindra, Sr Staff Embedded Engineer (10). Worked 3 years 8 months at SK Hynix Memory Team. Memory firmware team at SK Hynix is among their best. Not every team at every company is bad or good. You have to recognize which team were the elite teams at each company. Ads Infra team at Meta is elite but metaverse team at Meta doesn't mean much. \n5. Yan Zhao, Lead ASIC Architect (11). Worked 9 years 11 months at Ouster and 4 years at Oracle before that. Working a tenure like 9 years 11 months at Ouster is a great sign. This is continuation of knowledge and serious expertise building. This is a great indication of belief in the mission and strong outcomes at work. Yan graduated bachelors from Shanghai Jiao Tong which is equivalent to the Stanford/MIT of China. \n6. Joshua Sakwa, Sr Firmware Engineer (12). Worked 4 years as Sr Staff IC Design at Broadcom. Although through acquisition, Broadcom makes targetted strategic acquisition and the fact Broadcom kept him for 4 years and promoted him to Sr. Staff means that he was key to the acquisition technology. Always known in Silicon Valley but now known by FinX is that Broadcom $AVGO is a top tier hardware company.\n7. Karthik K. Principal Hardware Engineer (13). Worked 7 years 4 months at Ouster graduating from Berkeley. I'm not as impressed by staying at one company many years for a 40/50 years old but like Yan, early career, and Karthik fresh grad from UC Berkeley, being able to develop at one company signals a few things to me:\n- Ouster has the ability to attract and retain talent from top universities.\n- Ouster has institutional knowledge built over many years by long standing employees who worked here in the prime of their years.\n- These people had all the job opportunities during the hottest times in the bay area but saw something at Ouster that made them stay.\n\nAdoption\n1. Lightning, developed by Chinese company Honor, has the world record for half marathon by a robot and uses both Ouster and Hesai lidars (15, 16). The event where Lighting set the record was in China. Can you imagine China importing EOSE batteries or $FSLR solar panels in China? China is dominant in lidar, yet their winning robot use Ouster in some parts of their robots over Hesai, Huawei, RoboSense, their national champions. If you move faster than Chinese companies in some electronic sensor component, that's a moat. This is not to mention that many applications are security sensitive that require US made key components for US robots. I mean, if Ford manufacturing plants need to be ready to be retrofitted to produce tanks again ala WW2, don't you think all the industrial lidars should be made by Ouster/Luminar or an American company instead of Hesai/Huawei? Seyond, the last key lidar company that should be mentioned in this post, is \"headquartered\" in Silicon Valley but is obviously a Chinese Company \n2. Komatsu - Autonomous Mining. Multi-million supplier agreement with Ouster. Mining can be dangerous for humans, robotics are key here.\n3. Utah Department of Transportation - Smart Infrastructure. Ever wonder why red lights could be smarter and turn red and green based on traffic instead of pre-set timers? Every wonder if road repair and expansion can be process by data instead of sending humans to survey? Utah Department of Transportation tested solutions from 6 lidar companies and found Ouster to be the best and put Ouster in 100+ of their intersections (17).\n4. Chattanooga, Tennessee - same applicaiton to Utah Department of Transportation and for 120+ intersection (18).\n5. Balyo - autonomous forklifts.\n6. Trombia - electric street sweepers.\n7. Microavia - Avalanche safety drones at ski resorts to monitor snow levels and avalache conditions.\n8. Deep Forestry - surveying forests.\n9. Mine Vision System - mining mapping.\n10. SafeHaus - Crowd analytics at live events.\n11. Avanti West Coast Rail - crowd analytics and station management at rail stations in UK.\n12. Digital Mortar + Global Partners - shopper journey and layout analytics. \n13. Argus - Germany Counter-UAS drones company will  uses Ouster (20). Big field where precision matters for trajectory prediction for drone interception.   \n\nVertical Integration\nOuster has true vertical integration because it designs the Integrated Circuits, ASICs, FPGAs, Firmware, and Software, and lidar domain specific AI models (19). Ouster provides software for object detection, classification, tracking and navigation for it's lidars. \n\nOuster has shown the ability to expand to other product categories besides lidar. Their ZED cameras uses camera to produce depth in addition to all the camera functions. Remember what FSD does with Cameras? Ouster is adapting here too as there are some applications that prefer Cameras.\n\nTheir vertical integration is notable because their sales to Utah DOT is Blue City - a turn key real time traffic management system which includes all of the software on top of their lidar.\n\nFinancials\nI mostly analyze tech potential. Many other people analyze financials better than me so I'll just do the basics here. 30-50% guided revenue growth (19) and 49m revenue with 49% revenue growth - Q1 2026 (21). Q4 2025 62m revenue was an abnormally because of IP license contract. 43% gross margins (21). 175m cash in hand with Adjusted EBITDA of 7m loss.      \n\nOuster is pretty exciting from a tech perspective but at 3B market cap and 196m revenue that's a forward PS of 15.3 and 30-50% guided growth that's very expensive. I bought a tiny amount at $34 but am working to sell CSP and in parallel slowly DCA to increase my position. Forward PS of 15.3 is very expensive. For reference, IREN has a forward PS of 6.7, NBIS 8.3, MU 7.3, Nvidia 12.4. MU and Nvidia have 80% margins.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2033567781342396884",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2033567781342396884",
+        "url": "https://x.com/farzyness/status/2033567781342396884",
+        "authorHandle": "farzyness",
+        "authorName": "Farzad 🇺🇸 🇮🇷",
+        "postedAt": "Mon Mar 16 15:35:15 +0000 2026",
+        "excerpt": "I'm having a lot of success with the following @openclaw stack:\n\nPrimary Agent (Claw) with @claudeai Opus 4.6 1M token context + thinking high: processes everything I need it to do - from simple to complex tasks.\n\nThen for complex tasks that require some sort of tool/software bui"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.08,
+        "actionability": 0.75,
+        "novelty": 0.6,
+        "leverage": 0.6,
+        "timing": 0.5,
+        "evidence": 0.41,
+        "confidence": 1,
+        "cost": 0.4
+      },
+      "scoreNote": "matched \"idea generation agent\"; strongest axes actionability + novelty; category technique",
+      "composite": 0.451,
+      "_synthesisContext": {
+        "fullText": "I'm having a lot of success with the following @openclaw stack:\n\nPrimary Agent (Claw) with @claudeai Opus 4.6 1M token context + thinking high: processes everything I need it to do - from simple to complex tasks.\n\nThen for complex tasks that require some sort of tool/software building, I have the primary agent automatically talk to a different @openclaw agent that's optimized for development (Webby) - using same \"brain\" set up as above with Opus 4.6, but it uses @ChatGPTapp CODEX with GPT 5.4 thinking xhigh to do all its actual coding.\n\nThen, if I need anything researched/fact checked that's related to research, script building - basically anything that requires up-to-date or accurate information about the world - all agents reach out to Scout (research agent) that is specialized in research and will always use @Grok 420 multi agent.\n\nI find that creating individual agents for the primary functions of a business is FAR better than having a do-everything agent.\n\nThought process is that context windows are super valuable real estate, and using OpenClaw core files (soul, identity, agents, etc) you can use those to maximize the capability of each agent to be extra-good at their role. Then because each agent can talk to each other, they are basically sending their own sub-queries to the LLM that are fully optimized for each tasks that you're trying to solve.\n\nSaid another way - if you are building a business where the AI agents are at the foundation, make sure you are defining the roles that you need in that business - and then create an AI agent that is in charge of each role.\n\nFor example, for my YouTube channel, these are the major categories as I think about them - idea generation, research, scripting & fact checking, titles and thumbnails, performance tracking.\n\nBefore AI agents, I did that whole chain. Major YouTubers would have a production team that would execute that with them. But with AI agents, you can specialize each one to do each one of those steps.\n\nAnd then on top of that, each one of those agents probably should be under a different model - in my experience, Claude is by far the most creative and the best writer. Grok is by far the best at research and fact checking. ChatGPT is by far the most autistic (ie best for coding/development of tools). Gemini is by far the best at framing titles and thumbnails (shocker - they have all YouTube data).\n\nSo as you use AI agents, it is EXTREMELY important that you think of them as literal humans that you are working with to build an organization, and give them the tools necessary (and the brains necessary) to set them up for success.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "technique"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-1896387913128251636",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "1896387913128251636",
+        "url": "https://x.com/ChaithanyaK42/status/1896387913128251636",
+        "authorHandle": "ChaithanyaK42",
+        "authorName": "Chaithanya Kumar",
+        "postedAt": "Mon Mar 03 02:31:26 +0000 2025",
+        "excerpt": "I think everyone should watch @Karpathy's latest video on how he uses LLMs, even those who think AI is already a big part of their lives because:\n\n1. One of the best minds in AI is spending time showing how he uses AI personally rather he could have spent his time building AGI , "
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.04,
+        "actionability": 0.75,
+        "novelty": 0.6,
+        "leverage": 0.6,
+        "timing": 0.5,
+        "evidence": 0.49,
+        "confidence": 1,
+        "cost": 0.4
+      },
+      "scoreNote": "matched \"personal knowledge tools\"; strongest axes actionability + novelty; category technique",
+      "composite": 0.449,
+      "_synthesisContext": {
+        "fullText": "I think everyone should watch @Karpathy's latest video on how he uses LLMs, even those who think AI is already a big part of their lives because:\n\n1. One of the best minds in AI is spending time showing how he uses AI personally rather he could have spent his time building AGI , that's one of the reason to watch & learn \n\n2. @karpathy  clearly explains a first-principles approach to leveraging these tools & the visual explanation really helps you build a mental model for specific use cases.\n\nbelow is short high level summary & some note's that I had taken from the video \n\n- karpathy takes us through the practical applications of various tools with lots of examples & different settings one can play around with while using these tools\n\n- he starts off with -> to get a general Idea about what are the best models at anytime , one can always look that up In https://t.co/WuMWeCp9u7 & @scale_AI  seal leaderboard ( https://t.co/HOSlEwPr0d) \n\n- he starts with @OpenAI's  ChatGPT ( the OG & the most feature rich AI tool that Is available currently & the one that has been there for the longer time) which started the era of where one can give a text Input and get a text output via an Interface. \n\n- my fav part was he explaining from first principles what exactly is happening under the hood when we Interact with Chatgpt  - it's amazing how he visually thinks about this & presents It 😅\n\n- difference between a pre-training stage vs the post-training stage (🙂) which is the final model that we get to interact with , basically a fine tuned version of the base model via SFT , RLH or RL  -> all of this compressed Into a single zip file \n\n- one cannot directly use the base model (pre-trained) since in this stage we optimise the model to predict the next token In the sequence , but during the post-training we  can actually use this for real world applications as this model can now act as an assistant basically combining loads of knowledge with some style ,form, personality  &  yet this knowledge has a cut-off date.",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "technique"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2026374584644284606",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2026374584644284606",
+        "url": "https://x.com/chrisbarber/status/2026374584644284606",
+        "authorHandle": "chrisbarber",
+        "authorName": "Chris Barber (in SF and at AIE)",
+        "postedAt": "Tue Feb 24 19:12:03 +0000 2026",
+        "excerpt": "notes for founders/engineers building in the claude cowork / claw space:\n\nonboarding\n- re-onboard yourself a dozen times. each time, note what might be confusing\n- then repeat for your team members\n- then repeat for technical friends and family\n- then repeat for non-technical fri"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.06,
+        "actionability": 0.75,
+        "novelty": 0.6,
+        "leverage": 0.6,
+        "timing": 0.5,
+        "evidence": 0.39,
+        "confidence": 1,
+        "cost": 0.4
+      },
+      "scoreNote": "matched \"idea generation agent\"; strongest axes actionability + novelty; category technique",
+      "composite": 0.444,
+      "_synthesisContext": {
+        "fullText": "notes for founders/engineers building in the claude cowork / claw space:\n\nonboarding\n- re-onboard yourself a dozen times. each time, note what might be confusing\n- then repeat for your team members\n- then repeat for technical friends and family\n- then repeat for non-technical friends and family\n- iteration reps, where the goal is to go from manual concierge onboarding, to the point where you don't need to say anything\n- goal of onboarding: get the user on the path to experiencing the magic moment of the product, as quickly as possible, with as minimal time/effort/money as possible\n- your product is a fine dining restaurant, you are a restauranteur, and you're doing a fine dining soft open with family and friends to polish the annoyances before you open to the public\n- i recently tried 30+ products in this space and onboarding is a weak point\n\nintegrations\n- check your stats, which integrations are the predictors of highest user engagement and retention?\n- and which integrations have no impact on engagement or retention?\n- how can you streamline a user adding those integrations?\n- go back to the in person onboarding iteration method. watch people set up those integrations. what are their points of confusion? what are their points of security and privacy concerns?\n\nthe in-n-out method\n- have two lenses for your product: a) your product for users who haven't yet hit the magic moment and b) your product for users who have already hit the magic moment\n- pre-magic moment, they should only be able to order the simple burger and milkshake, the things that you know lead to retention\n- post-magic moment, you can let them access the hidden menu\n- claude code does a good job of this. the basic version puts you right on the path to the magic moment. and then it's also easy to access lots of hidden powerful features, but they don't get in your way before you've hit the magic moment\n\npricing and business model\n- ai labs have pricing friction with their users\n- tokens are expensive\n- great products need lots of tokens\n- but to reach the mainstream the product needs to be affordable\n- my suggestion is to have two product lines. one that might be smaller and more secretive. your r&d product line. for very large token consumers. no limits on the product you offer. maybe expensive subscriptions or maybe pay as you go. and then one that is aimed at the mainstream, more affordable, just the features that are high roi for everyone.\n\nuser selection\n- in ai products there are often two groups of users\n- a) users looking for roi, ie people trying to get rich or start a business or similar\n- b) users who already have something that they make money from (a business, a job), who want to optimize that thing\n- i'll posit that it's easier to get users that fall into a) but that can be a bit of a local max trap, so ideally, go after users in b)\n\nprivacy, security\n- how can you minimize the information needed in integrations? if it's sign in with google, do you need all the scopes or just some?\n- instead of having the user sign in with gmail, could you give them an email address? (startup idea that might already exist: api that makes it easy for any product to give each user their own email address)\n- eg instead of chatgpt having me auth my email, why doesn't it give me a chatgpt dot com email address. less permission concern there\n- pay attention to this when onboarding people in person\n- this will be big friction for your product and your onboarding\n- this is also a big advantage of local ai. apple and dgx spark etc.\n\nintegrations\n- the other side of privacy and security is that ai agents are useful proportional to how much of the user's data and context they have\n- and how low effort it is for the user to bring data and context in\n\napis\n- agents are hobbled by scraping blocks, web search in general\n- they need easy access to apis\n- perhaps some kind of bulk buffet subscription\n- or a user budget for them to spend on self serve apis as needed\n\nmetrics that matter\n- how long in minutes does it take the user to reach the magic moment\n- how much does it cost you, and how much does it cost the user, to reach that magic moment\n- (where magic moment ~= the point at which they're likely to retain, ie they've experienced the part of the product that makes them feel like they have to keep using it)\n\nthings users like from claude code and claws that are missing in chat assistants\n- persistent easy to view and edit text doc style scratchpads across projects\n- ability to text your agent\n- some kind of persistent filesystem where you can drag files in and out\n- more subagents\n- easier to work with many and larger files and unlimited attachments\n- generally, make it easier to burn more tokens\n\ndelegation patterns\n- think of agents like employees\n- teaching employees often works like: i do one and you watch, then we do one together and i help you, then you do one solo, then maybe you teach someone else how to do one. for agents this could be demo, collaborate, do, document\n- employees generally start as more directed and then work their way up to more proactive. there's the adage of an ok employee needs to be told the problem and solution, a good one needs to be told only the problem and will find the solution, and a great one will find the problem and the solution\n- people love it when their employees are so good that the employees manage them, vs the other way around. as models get better in more domains this will happen more. this will have product market fit\n- in general there's rich things to discover and apply in terms of how to be a good employee, that also apply to how to make a good agent product\n\nproduct ideas\n- look for misuse\n- i've done posts on this but generally there are lots of ways that non technical people are \"misusing\" claude code to help in their businesses, with their health, with their finances, with their investing etc\n- these point at the products people want\n\nthe general shape\n- feels like a new operating system\n- ephemeral software\n- computers will be better at using computers than humans ever were\n- majority of computer/app/software usage feels like it'll be mediated via an agent for most people. it's just a better *and* lazier way to use computers\n- right now the interface of this new os is basically a terminal. i can imagine terminal + easy text editing and file access and browser access. and some kind of new (or old) gui layer for these new ephermeral apps\n- i think there's the two lenses on do you start with something polished and work backwards or do you start with something more like the terminal and go forwards\n- what's the terminal ui type thing for non-engineers?\n- i like terminal forwards. because this is such an uncertain space. uncertain fast moving spaces benefit from bottoms up emergence, easy iteration, invariant primatives. whereas overdesigning a ui is the opposite of that. stay nimble.\n\nuncertainty\n- this is a fast moving space\n- fast moving fast changing spaces aren't easy to top-down plan in\n- therefore, bottoms up exploration is the way to go\n- concretely this looks like a) maximize dogfooding b) maximize exploration (multiple efforts going after the same problem/observation is fine! encouraged even) c) minimize coordination costs d) minimize iteration costs (hence, easier to iterate on a terminal ui than it is to iterate on some really polished gui software)\n\nhobbling\n- the need to iterate on heavy guis hobbles the team\n- lack of integrations hobbles the model\n- a slow web ui hobbles the model\n- in general, being more like a web chat ui and less like a filesystem with a ui that can morph to new things (eg python script guis and tuis) hobbles the model\n\nthe video game for work\n- people have always wanted this\n- people like video games\n- claude code is a great example\n- the terminal feels fast. fun. press enter. up down a b left right. pretty colors. text streaming.\n- what expansion packs do you use for claude code? oh i mean which mcps\n- what difficulty level are you using? oh i mean which permissions mode\n- did you hit the paywall? oh i mean did you max out your subscription\n- are you doing p2w? oh i mean do you have fast mode and extra usage\n- in general i think the space of making personal and professional agent products feel like a video game for work is underexplored\n- one of the most important elements of feeling like a video game is speed! this is a big advantage of terminal uis. with long threads in claude or chatgpt web, it's not fast. long threads in the terminal, very fast, no ui lag.\n\nbugs\n- every point of confusion during onboarding is a bug\n- everything that gets in the way of a user getting to a magic moment is a bug\n- every time a user needs to copy into your app, that's a bug (fix is maybe expand product scope or add integration)\n- every time a user needs to copy out of your app, that's a bug\n- if you're unsure what predicts retention and what the magic moment is, that's a bug\n\nthis space will be massive, and the quick adoption of openclaw shows it's wide open, labs don't have much advantage\n\nit seems to me that some keys are\n- onboarding polish and general product polish\n- post-training\n- integrations\n- privacy/security\n\nhere's the set of tools i've tried so far. i'd love suggestions of more to try\n- ai browsers: dia, comet, claude for chrome, atlas, dex\n- claw/hosted agent products: openclaw, kimi claw, klaus, viktor, duet, atris\n- automation things: tasklet, lindy\n- code: devin, claude code, cursor, codex\n- search: parallel, you, exa, yutori\n- official things: claude cowork, various connectors in claude, various apps and data sources in chatgpt\n- other agent products: ii, open interpreter\n- desktop automation things: vercept, nox, liminary, logical, raycast\n- email products: shortwave, cora, jace",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "technique"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2060037913694364151",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2060037913694364151",
+        "url": "https://x.com/danshipper/status/2060037913694364151",
+        "authorHandle": "danshipper",
+        "authorName": "Dan Shipper 📧",
+        "postedAt": "Thu May 28 16:38:06 +0000 2026",
+        "excerpt": "Someone needs to read After Automation\n\nevery.to/p/after-automa…"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.33,
+        "actionability": 0.5,
+        "novelty": 0.4,
+        "leverage": 0.55,
+        "timing": 0.5,
+        "evidence": 0.7,
+        "confidence": 0.8,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"idea generation agent\"; strongest axes evidence + leverage; category unclassified",
+      "composite": 0.423,
+      "_synthesisContext": {
+        "fullText": "Someone needs to read After Automation\n\nevery.to/p/after-automa…",
+        "articleTitle": "After Automation",
+        "articleExcerpt": "After A utomation AI progress creates more work for humans, not less Dan Shipper CEO of Every There is a paradox at the heart of AI. At Every , we’ve automated everything we can. We use Codex and Claude Code across coding, writing, design, customer service, and more. We alpha-test all of the new models from OpenAI, Anthropic, and Google before they come out. We are riding the exponential boom in model intelligence and automation as far and as fast as possible. And yet it seems like, for us, there’s more human work to do than ever. We are a team of almost 30 people, and we haven’t fired all of ",
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2066889074343026723",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2066889074343026723",
+        "url": "https://x.com/rywiggs/status/2066889074343026723",
+        "authorHandle": "rywiggs",
+        "authorName": "Ryan Wiggins",
+        "postedAt": "Tue Jun 16 14:22:10 +0000 2026",
+        "excerpt": "Introducing Command from @mercury\n\nCommand is a new agentic operating system for banking - frontier AI paired w/ mercury’s UX, tools, and knowledge to turn ideas into action\n\nIt's available today to everyone on Mercury, business and personal (and iOS)\n\nWhy'd we build Command? 🧵 "
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.5,
+        "actionability": 0.4,
+        "novelty": 0.4,
+        "leverage": 0.45,
+        "timing": 0.5,
+        "evidence": 0.38,
+        "confidence": 1,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"personal knowledge tools\"; strongest axes relevance + timing; category unclassified",
+      "composite": 0.423,
+      "_synthesisContext": {
+        "fullText": "Introducing Command from @mercury\n\nCommand is a new agentic operating system for banking - frontier AI paired w/ mercury’s UX, tools, and knowledge to turn ideas into action\n\nIt's available today to everyone on Mercury, business and personal (and iOS)\n\nWhy'd we build Command? 🧵 https://t.co/fgCrDRr4ot",
+        "articleTitle": null,
+        "articleExcerpt": null,
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    },
+    {
+      "id": "v0.1-fieldtheory-labs-2057869205740069212",
+      "project": "fieldtheory-labs",
+      "algorithmVersion": "v0.1",
+      "source": {
+        "tweetId": "2057869205740069212",
+        "url": "https://x.com/a16z/status/2057869205740069212",
+        "authorHandle": "a16z",
+        "authorName": "a16z",
+        "postedAt": "Fri May 22 17:00:26 +0000 2026",
+        "excerpt": "Intelligence is getting cheaper\n\nCharts of the Week: a16z.news/p/charts-of-th… https://t.co/M2hkcvw65C"
+      },
+      "title": "",
+      "whyNow": "",
+      "goal": "",
+      "firstTest": "",
+      "scores": {
+        "relevance": 0.25,
+        "actionability": 0.5,
+        "novelty": 0.4,
+        "leverage": 0.55,
+        "timing": 0.5,
+        "evidence": 0.79,
+        "confidence": 0.8,
+        "cost": 0.5
+      },
+      "scoreNote": "matched \"idea generation agent\"; strongest axes evidence + leverage; category unclassified",
+      "composite": 0.412,
+      "_synthesisContext": {
+        "fullText": "Intelligence is getting cheaper\n\nCharts of the Week: a16z.news/p/charts-of-th… https://t.co/M2hkcvw65C",
+        "articleTitle": "Charts of the Week: Reflections from Sohn",
+        "articleExcerpt": "Charts of the Week: Reflections from Sohn Peak computer science; Small Business Boom; Tokenmaxxing Moses Sternstein May 22, 2026 163 10 8 Share America | Tech | Opinion | Culture | Charts Two things. First, we’re excited to welcome Peter Levine back as a full-time GP. Read more about his return here . Second, we get asked a lot: who does your charts? Today I’m really happy to get to unveil his identity: Moses Sternstein , known to many of you as the author of Random Walk . Before we get to charts today (they’re there, if you scroll down), here’s Moses introducing himself and sharing some insig",
+        "githubUrls": [],
+        "category": "unclassified"
+      }
+    }
+  ]
+}

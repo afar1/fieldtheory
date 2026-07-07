@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum AppTab: Hashable, CaseIterable {
-    case voice, library, river
+    case voice, library, river, goals
 }
 
-/// Screen-edge strips reserved for hopping between the three sections.
+/// Screen-edge strips reserved for hopping between the sections.
 /// Content gestures (river card triage, etc.) must ignore drags that
 /// start inside these zones.
 enum EdgeSwipe {
@@ -57,6 +57,7 @@ struct RootView: View {
             }
             if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
             if model.launchDirectives.contains("ft-tab-voice") { selectedTab = .voice }
+            if model.launchDirectives.contains("ft-tab-goals") { selectedTab = .goals }
         }
     }
 
@@ -72,9 +73,12 @@ struct RootView: View {
                 RiverView(showSettings: $showSettings)
             }
             .badge(model.river.unreadCount)
+            Tab("Goals", systemImage: "scope", value: AppTab.goals) {
+                GoalsView(showSettings: $showSettings)
+            }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
-        // Edge swipes hop between the three sections (disabled while a
+        // Edge swipes hop between the sections (disabled while a
         // document is open so the system back-swipe keeps its lane).
         .simultaneousGesture(
             DragGesture(minimumDistance: 25, coordinateSpace: .global)

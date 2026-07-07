@@ -11,6 +11,7 @@ final class AppModel {
     let library: LibraryStore
     let river: RiverStore
     let transcripts: TranscriptStore
+    let goals: GoalsStore
     let sync: SyncEngine
     let recorder: RecorderController
 
@@ -25,6 +26,7 @@ final class AppModel {
         let library = LibraryStore(db: db)
         let river = RiverStore(db: db)
         let transcripts = TranscriptStore(db: db)
+        let goals = GoalsStore(db: db)
         let auth = AuthStore(client: client)
         let sync = SyncEngine(client: client, db: db, settings: settings,
                               library: library, river: river, transcripts: transcripts)
@@ -35,6 +37,7 @@ final class AppModel {
         self.library = library
         self.river = river
         self.transcripts = transcripts
+        self.goals = goals
         self.sync = sync
         self.recorder = RecorderController()
 
@@ -57,6 +60,7 @@ final class AppModel {
             await library.reload()
             await river.reload()
             await transcripts.reload()
+            await goals.reload()
             if case .signedIn(let userId, let email) = auth.phase {
                 sync.start(userId: userId, email: email)
             }
@@ -153,5 +157,6 @@ final class AppModel {
         await library.reload()
         await river.reload()
         await transcripts.reload()
+        await goals.reload()
     }
 }
