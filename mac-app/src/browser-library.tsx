@@ -1412,6 +1412,15 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     getStatus: async () => (
       await request<{ status: unknown }>('/native/field-theory-sync/status')
     ).status,
+    getLibraryStatus: async () => (
+      await request<{ status: unknown }>('/native/field-theory-sync/library-status')
+    ).status,
+    publishLibraryDocument: async (filePath: string) => (
+      await request<{ result: unknown }>('/native/field-theory-sync/publish-library-document', {
+        method: 'POST',
+        json: { filePath },
+      })
+    ).result,
   } as any;
 
   window.agentKickoffAPI = {

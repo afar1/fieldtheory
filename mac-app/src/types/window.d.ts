@@ -2790,9 +2790,51 @@ declare global {
     reason: 'enabled' | 'local_disabled' | 'not_authenticated';
   }
 
+  interface LibrarySyncStatusDetails {
+    ready: boolean;
+    reason: 'enabled' | 'not_authenticated' | 'sync_disabled' | 'sync_unavailable';
+    lastSyncAt: number | null;
+    lastPushAt: number | null;
+    lastError: string | null;
+    pendingLocalDocumentCount: number | null;
+  }
+
+  interface LibraryDocumentPublishResult {
+    success: boolean;
+    reason:
+      | 'published'
+      | 'up_to_date'
+      | 'not_authenticated'
+      | 'sync_disabled'
+      | 'sync_unavailable'
+      | 'sync_in_progress'
+      | 'invalid_path'
+      | 'outside_library'
+      | 'shared_path'
+      | 'not_markdown'
+      | 'not_found'
+      | 'read_failed'
+      | 'remote_newer'
+      | 'upload_failed'
+      | 'read_only';
+    uploaded: number;
+    updated: number;
+    skipped: number;
+    sourcePath?: string;
+    clientId?: string;
+    title?: string;
+    contentHash?: string;
+    error?: string;
+    errors: string[];
+    lastSyncAt: number | null;
+    lastPushAt: number | null;
+  }
+
   interface FieldTheorySyncAPI {
     getStatus: () => Promise<FieldTheorySyncStatus>;
     setLocalEnabled: (enabled: boolean) => Promise<FieldTheorySyncStatus>;
+    getLibraryStatus: () => Promise<LibrarySyncStatusDetails>;
+    publishLibraryDocument: (filePath: string) => Promise<LibraryDocumentPublishResult>;
   }
 
   interface CodexTerminalHistoryEntry {
