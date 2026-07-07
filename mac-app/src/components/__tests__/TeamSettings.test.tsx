@@ -147,6 +147,9 @@ describe('TeamSettings', () => {
 
     expect(screen.getByText('Andrew')).toBeTruthy();
     expect(screen.getByText('Jamie')).toBeTruthy();
+    expect(screen.getByText('Andrew\'s team')).toBeTruthy();
+    expect(screen.getByText('Admin')).toBeTruthy();
+    expect(screen.getByText('2 accepted members, 0 pending invites')).toBeTruthy();
     expect(screen.getByText('Owner')).toBeTruthy();
     expect(screen.getByText('Member')).toBeTruthy();
 
@@ -172,6 +175,23 @@ describe('TeamSettings', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Leave Andrew' }));
     });
     expect(onLeaveTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('summarizes pending River shared-space invites', () => {
+    renderTeamSettings({
+      currentUserRole: null,
+      members: [],
+      pendingInvites: [{
+        contactId: 'incoming-andrew',
+        email: 'andrew@example.com',
+        direction: 'incoming',
+        invitedByName: 'Andrew',
+      }],
+    });
+
+    expect(screen.getByText('Invite pending')).toBeTruthy();
+    expect(screen.getByText('Invitee')).toBeTruthy();
+    expect(screen.getByText('0 accepted members, 1 pending invite')).toBeTruthy();
   });
 
   it('locks all team actions when disabled', async () => {

@@ -2864,16 +2864,38 @@ export class LibrarianManager extends EventEmitter {
       .join('/');
   }
 
-  private resolveExistingDirectoryPath(dirPath: string): string | null {
+  private resolveExistingDirectoryPathForLibraryRoot(dirPath: string): string {
+    if (!dirPath.trim()) {
+      throw new Error('Paste a folder path.');
+    }
     const expandedPath = this.expandPath(dirPath.trim());
     const normalizedPath = this.normalizePath(expandedPath);
+    let stats: fs.Stats;
     try {
-      if (!fs.existsSync(normalizedPath) || !fs.statSync(normalizedPath).isDirectory()) {
-        return null;
-      }
+      stats = fs.statSync(normalizedPath);
+    } catch {
+      throw new Error('Folder path does not exist.');
+    }
+    if (!stats.isDirectory()) {
+      throw new Error('Choose a folder, not a file.');
+    }
+    try {
       return fs.realpathSync(normalizedPath);
     } catch {
-      return null;
+      throw new Error('Field Theory could not read that folder path.');
+    }
+  }
+
+  private assertLibraryRootCanBeAdded(canonicalPath: string): void {
+    const unsafeMessage = this.getUnsafeBroadDirectoryMessage(canonicalPath);
+    if (unsafeMessage) throw new Error(unsafeMessage);
+
+    const newKey = this.libraryRootKey(canonicalPath);
+    if (newKey === this.libraryRootKey(this.wikiDir)) {
+      throw new Error('That folder is already in Library.');
+    }
+    if ((this.settings.libraryRoots ?? []).some((rootPath) => this.libraryRootKey(rootPath) === newKey)) {
+      throw new Error('That folder is already in Library.');
     }
   }
 
@@ -3344,17 +3366,8 @@ export class LibrarianManager extends EventEmitter {
   }
 
   addLibraryRoot(dirPath: string): LibraryRoot | null {
-    const canonicalPath = this.resolveExistingDirectoryPath(dirPath);
-    if (!canonicalPath) return null;
-
-    const unsafeMessage = this.getUnsafeBroadDirectoryMessage(canonicalPath);
-    if (unsafeMessage) throw new Error(unsafeMessage);
-
-    const newKey = this.libraryRootKey(canonicalPath);
-    if (newKey === this.libraryRootKey(this.wikiDir)) return null;
-    if ((this.settings.libraryRoots ?? []).some((rootPath) => this.libraryRootKey(rootPath) === newKey)) {
-      return null;
-    }
+    const canonicalPath = this.resolveExistingDirectoryPathForLibraryRoot(dirPath);
+    this.assertLibraryRootCanBeAdded(canonicalPath);
 
     this.settings.libraryRoots = [...(this.settings.libraryRoots ?? []), canonicalPath];
     this.saveSettings();

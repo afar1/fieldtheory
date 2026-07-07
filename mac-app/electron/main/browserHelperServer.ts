@@ -677,8 +677,19 @@ export class BrowserHelperServer {
       if (req.method === 'POST' && parsed.pathname === '/native/library/root') {
         const body = await readJsonBody(req);
         const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
-        const root = dirPath ? await this.service.addLibraryRoot(dirPath) : null;
-        writeJson(res, root ? 200 : 400, { ok: Boolean(root), root }, req.headers.origin);
+        try {
+          const root = dirPath ? await this.service.addLibraryRoot(dirPath) : null;
+          writeJson(res, root ? 200 : 400, {
+            ok: Boolean(root),
+            root,
+            ...(root ? {} : { error: 'Could not add folder. Choose an existing folder that is not already in Library.' }),
+          }, req.headers.origin);
+        } catch (error) {
+          writeJson(res, 400, {
+            ok: false,
+            error: error instanceof Error ? error.message : 'Could not add folder.',
+          }, req.headers.origin);
+        }
         return;
       }
 

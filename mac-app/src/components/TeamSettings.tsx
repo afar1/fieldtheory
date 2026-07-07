@@ -180,6 +180,14 @@ function displayNameForMember(member: TeamMemberView): string {
   return member.email;
 }
 
+function possessiveName(name: string): string {
+  return name.endsWith('s') ? `${name}'` : `${name}'s`;
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function disabledStyle(disabled: boolean, styles: ReturnType<typeof getStyles>) {
   return disabled ? styles.disabled : null;
 }
@@ -202,8 +210,34 @@ export default function TeamSettings({
   const isMember = state.currentUserRole === 'member';
   const canInvite = isOwner || state.currentUserRole === null;
   const hasAcceptedTeam = state.members.length >= 2;
+  const hasActiveTeam = state.currentUserRole !== null;
   const outgoingInvites = state.pendingInvites.filter((invite) => invite.direction === 'outgoing');
   const incomingInvites = state.pendingInvites.filter((invite) => invite.direction === 'incoming');
+  const pendingInviteCount = state.pendingInvites.length;
+  const ownerName = owner ? displayNameForMember(owner) : 'Team';
+  const currentSpaceLabel = hasActiveTeam
+    ? `${possessiveName(ownerName)} team`
+    : incomingInvites.length > 0
+      ? 'Invite pending'
+      : 'No active team';
+  const currentSpaceHint = hasActiveTeam
+    ? 'River sharing uses this team as the active shared space.'
+    : incomingInvites.length > 0
+      ? 'Accept an invite to join a River shared space.'
+      : 'Invite someone to create a River shared space.';
+  const roleSummary = isOwner
+    ? 'Admin'
+    : isMember
+      ? 'Member'
+      : incomingInvites.length > 0
+        ? 'Invitee'
+        : 'Solo';
+  const roleHint = isOwner
+    ? 'You administer this River team.'
+    : isMember
+      ? 'You belong to this River team.'
+      : 'You are not part of a River team yet.';
+  const membershipSummary = `${countLabel(state.members.length, 'accepted member')}, ${countLabel(pendingInviteCount, 'pending invite')}`;
   const trimmedEmail = email.trim();
   const isBusy = disabled || pendingAction !== null || !!state.loading;
   const inviteDisabled = !onInviteMember || !trimmedEmail || isBusy;
@@ -273,6 +307,28 @@ export default function TeamSettings({
         ) : (
           <>
             {state.error && <p style={styles.error}>{state.error}</p>}
+
+            <SettingsInsetGroup theme={theme}>
+              <SettingsSectionHeading theme={theme} title="River shared space" />
+              <SettingsRow
+                theme={theme}
+                label="Current space"
+                hint={currentSpaceHint}
+                control={<SettingsBadge theme={theme} tone={hasActiveTeam ? 'success' : 'neutral'}>{currentSpaceLabel}</SettingsBadge>}
+              />
+              <SettingsRow
+                theme={theme}
+                label="Your role"
+                hint={roleHint}
+                control={<SettingsBadge theme={theme} tone={isOwner ? 'info' : 'neutral'}>{roleSummary}</SettingsBadge>}
+              />
+              <SettingsRow
+                theme={theme}
+                label="Team state"
+                hint={membershipSummary}
+                last
+              />
+            </SettingsInsetGroup>
 
             {!hasAcceptedTeam && incomingInvites.length === 0 && (
               <SettingsInsetGroup theme={theme}>

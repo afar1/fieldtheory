@@ -2258,10 +2258,56 @@ describe('librarian setup inference', () => {
 });
 
 describe('library roots', () => {
+  function makeLibraryRootManager(wikiDir: string, roots: string[] = []) {
+    const manager = Object.create(LibrarianManager.prototype) as {
+      wikiDir: string;
+      settings: { libraryRoots: string[] };
+      saveSettings: ReturnType<typeof vi.fn>;
+      watchLibraryRoot: ReturnType<typeof vi.fn>;
+      emit: ReturnType<typeof vi.fn>;
+      scanMarkdownTree: ReturnType<typeof vi.fn>;
+      addLibraryRoot: LibrarianManager['addLibraryRoot'];
+    };
+    Object.defineProperty(manager, 'wikiDir', {
+      configurable: true,
+      get: () => wikiDir,
+    });
+    manager.settings = { libraryRoots: roots };
+    manager.saveSettings = vi.fn();
+    manager.watchLibraryRoot = vi.fn();
+    manager.emit = vi.fn();
+    manager.scanMarkdownTree = vi.fn(() => []);
+    return manager;
+  }
+
   it('rejects adding the whole home folder as a library root', () => {
     const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
 
     expect(() => manager.addLibraryRoot(process.env.HOME ?? os.homedir())).toThrow(/whole home folder/);
+  });
+
+  it('rejects missing paths and files as library roots with specific messages', () => {
+    const rootDir = makeTempDir();
+    const wikiDir = path.join(rootDir, 'Library');
+    const filePath = path.join(rootDir, 'notes.md');
+    fs.mkdirSync(wikiDir, { recursive: true });
+    fs.writeFileSync(filePath, '# Notes\n', 'utf-8');
+    const manager = makeLibraryRootManager(wikiDir);
+
+    expect(() => manager.addLibraryRoot(path.join(rootDir, 'Missing'))).toThrow('Folder path does not exist.');
+    expect(() => manager.addLibraryRoot(filePath)).toThrow('Choose a folder, not a file.');
+  });
+
+  it('rejects duplicate library roots with a specific message', () => {
+    const rootDir = makeTempDir();
+    const wikiDir = path.join(rootDir, 'Library');
+    const externalRoot = path.join(rootDir, 'Notes');
+    fs.mkdirSync(wikiDir, { recursive: true });
+    fs.mkdirSync(externalRoot, { recursive: true });
+    const manager = makeLibraryRootManager(wikiDir, [externalRoot]);
+
+    expect(() => manager.addLibraryRoot(wikiDir)).toThrow('That folder is already in Library.');
+    expect(() => manager.addLibraryRoot(externalRoot)).toThrow('That folder is already in Library.');
   });
 
   it('prunes an unsafe persisted home-folder library root', () => {

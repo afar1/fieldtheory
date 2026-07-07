@@ -107,6 +107,9 @@ function mockSidebarNativeApis(
     configurable: true,
     value: {
       getRoots: vi.fn(async () => roots),
+      addRoot: vi.fn(async () => null),
+      pickFolder: vi.fn(async () => null),
+      removeRoot: vi.fn(async () => false),
       moveItem: vi.fn(async () => null),
       getHiddenFolders: vi.fn(async () => []),
       onRootsChanged: vi.fn(() => undefined),
@@ -274,6 +277,94 @@ describe('WikiSidebar River root helpers', () => {
         }],
       }],
     }]);
+  });
+
+  it('splits Finder and pasted path folder add actions', async () => {
+    const newRoot = {
+      path: '/Users/afar/Projects/Notes',
+      label: 'Notes',
+      builtin: false,
+      tree: [],
+    } as LibraryRoot;
+    const { container } = renderSidebarForTest();
+    vi.mocked(window.libraryAPI!.pickFolder).mockResolvedValue(newRoot.path);
+    vi.mocked(window.libraryAPI!.addRoot).mockResolvedValue(newRoot);
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
+
+    expect(screen.getByRole('button', { name: 'Add folder from Finder...' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add folder from path...' })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add folder from Finder...' }));
+    });
+
+    expect(window.libraryAPI?.pickFolder).toHaveBeenCalledTimes(1);
+    expect(window.libraryAPI?.addRoot).toHaveBeenCalledWith(newRoot.path);
+  });
+
+  it('adds a pasted folder path and shows the new root in the sidebar', async () => {
+    const newRoot = {
+      path: '/Users/afar/Projects/Notes',
+      label: 'Notes',
+      builtin: false,
+      tree: [],
+    } as LibraryRoot;
+    let roots: LibraryRoot[] = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [],
+    } as LibraryRoot];
+    const { container } = renderSidebarForTest({ roots });
+    vi.mocked(window.libraryAPI!.getRoots).mockImplementation(async () => roots);
+    vi.mocked(window.libraryAPI!.addRoot).mockImplementation(async (dirPath) => {
+      expect(dirPath).toBe(newRoot.path);
+      roots = [...roots, newRoot];
+      return newRoot;
+    });
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
+    fireEvent.click(screen.getByRole('button', { name: 'Add folder from path...' }));
+
+    const input = screen.getByLabelText('Folder path') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: newRoot.path } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
+    });
+
+    expect(window.libraryAPI?.pickFolder).not.toHaveBeenCalled();
+    expect(window.libraryAPI?.addRoot).toHaveBeenCalledWith(newRoot.path);
+    expect(await screen.findByText('Notes')).toBeTruthy();
+  });
+
+  it('validates empty and duplicate pasted folder paths before addRoot', async () => {
+    const roots = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [],
+    }] as LibraryRoot[];
+    const { container } = renderSidebarForTest({ roots });
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
+    fireEvent.click(screen.getByRole('button', { name: 'Add folder from path...' }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
+    });
+    expect(screen.getByRole('alert').textContent).toContain('Paste a folder path');
+
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: libraryRootPath } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain('already in Library');
+    expect(window.libraryAPI?.addRoot).not.toHaveBeenCalled();
   });
 
   it('keeps newer sidebar tree state when an older reload finishes last', async () => {
