@@ -21,6 +21,10 @@ final class AppSettings {
         didSet { defaults.set(textSize.rawValue, forKey: "librarian-text-size") }
     }
 
+    var showLineNumbers: Bool {
+        didSet { defaults.set(showLineNumbers, forKey: "librarian-show-line-numbers") }
+    }
+
     var accentPreset: AccentPreset {
         didSet { defaults.set(accentPreset.rawValue, forKey: "accentPreset") }
     }
@@ -66,6 +70,7 @@ final class AppSettings {
         typographyPreset = TypographyPresetID(rawValue: defaults.string(forKey: "librarian-typography-preset") ?? "") ?? .book
         lineHeight = LineHeightID(rawValue: defaults.string(forKey: "librarian-line-height") ?? "") ?? .normal
         textSize = TextSizeID(rawValue: defaults.string(forKey: "librarian-text-size") ?? "") ?? .normal
+        showLineNumbers = defaults.object(forKey: "librarian-show-line-numbers") as? Bool ?? true
         accentPreset = AccentPreset(rawValue: defaults.string(forKey: "accentPreset") ?? "") ?? .forest
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearance-mode") ?? "") ?? .system
         newDocFolder = defaults.string(forKey: "library-new-doc-location") ?? "scratchpad"

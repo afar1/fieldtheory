@@ -29,6 +29,7 @@ struct SettingsView: View {
                             Text(height.displayName).tag(height)
                         }
                     }
+                    Toggle("Line numbers", isOn: $settings.showLineNumbers)
                     Picker("Accent", selection: $settings.accentPreset) {
                         ForEach(AccentPreset.allCases) { preset in
                             HStack {

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: Hashable, CaseIterable {
-    case library, river, voice
+    case voice, library, river
 }
 
 /// Screen-edge strips reserved for hopping between the three sections.
@@ -28,7 +28,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
 
-    @State private var selectedTab: AppTab = .library
+    @State private var selectedTab: AppTab = .voice
     @State private var editorFocus = EditorFocusBus()
     @State private var toast = ToastCenter()
     @State private var readingState = ReadingState()
@@ -52,6 +52,9 @@ struct RootView: View {
         .preferredColorScheme(model.settings.appearanceMode.colorScheme)
         .onAppear {
             wireRecorder()
+            if model.launchDirectives.contains("ft-open-doc") || model.launchDirectives.contains("ft-edit-doc") {
+                selectedTab = .library
+            }
             if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
             if model.launchDirectives.contains("ft-tab-voice") { selectedTab = .voice }
         }
@@ -59,6 +62,9 @@ struct RootView: View {
 
     private var mainTabs: some View {
         TabView(selection: $selectedTab) {
+            Tab("Voice", systemImage: "waveform", value: AppTab.voice) {
+                VoiceView(showSettings: $showSettings)
+            }
             Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
                 LibraryView(showSettings: $showSettings)
             }
@@ -66,9 +72,6 @@ struct RootView: View {
                 RiverView(showSettings: $showSettings)
             }
             .badge(model.river.unreadCount)
-            Tab("Voice", systemImage: "waveform", value: AppTab.voice) {
-                VoiceView(showSettings: $showSettings)
-            }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         // Edge swipes hop between the three sections (disabled while a
