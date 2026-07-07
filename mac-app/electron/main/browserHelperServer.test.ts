@@ -2758,6 +2758,83 @@ describe('BrowserHelperServer', () => {
     });
   });
 
+  it('bridges Library sync status for mobile publish callers', async () => {
+    const root = makeTempDir();
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        getLibrarySyncStatus: () => ({
+          ready: true,
+          reason: 'enabled',
+          lastSyncAt: 100,
+          lastPushAt: 90,
+          lastError: null,
+          pendingLocalDocumentCount: 2,
+        }),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/field-theory-sync/library-status?token=test-token`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toEqual({
+      ready: true,
+      reason: 'enabled',
+      lastSyncAt: 100,
+      lastPushAt: 90,
+      lastError: null,
+      pendingLocalDocumentCount: 2,
+    });
+  });
+
+  it('bridges selected Library document publish requests', async () => {
+    const root = makeTempDir();
+    const calls: string[] = [];
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: {
+        publishLibraryDocument: (filePath) => {
+          calls.push(filePath);
+          return {
+            success: true,
+            reason: 'published',
+            uploaded: 1,
+            updated: 0,
+            skipped: 0,
+            sourcePath: 'briefs/New.md',
+            clientId: 'library-client',
+            title: 'New',
+            contentHash: 'hash',
+            errors: [],
+            lastSyncAt: 100,
+            lastPushAt: 100,
+          };
+        },
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const response = await request(`http://${address.host}:${address.port}/native/field-theory-sync/publish-library-document`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { filePath: '/tmp/New.md' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.result).toMatchObject({
+      success: true,
+      reason: 'published',
+      uploaded: 1,
+      sourcePath: 'briefs/New.md',
+    });
+    expect(calls).toEqual(['/tmp/New.md']);
+  });
+
   it('bridges agent kickoff start, cancel, progress, and status events', async () => {
     const root = makeTempDir();
     const calls: unknown[] = [];

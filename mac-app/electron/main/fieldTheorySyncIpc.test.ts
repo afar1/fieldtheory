@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FieldTheorySyncIPCChannels, registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import type { FieldTheorySyncStatus } from './releaseSyncPolicy';
+import type { LibraryDocumentPublishResult, LibrarySyncStatusDetails } from './librarySyncService';
 
 describe('fieldTheorySyncIpc', () => {
   let handlers: Map<string, (event: any, ...args: any[]) => unknown>;
   let ipcMain: { handle: ReturnType<typeof vi.fn> };
   let status: FieldTheorySyncStatus;
   let setLocalEnabled: ReturnType<typeof vi.fn>;
+  let libraryStatus: LibrarySyncStatusDetails;
+  let publishLibraryDocument: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     handlers = new Map();
@@ -31,6 +34,28 @@ describe('fieldTheorySyncIpc', () => {
         reason: enabled ? 'enabled' : 'local_disabled',
       };
     });
+    libraryStatus = {
+      ready: true,
+      reason: 'enabled',
+      lastSyncAt: 100,
+      lastPushAt: 100,
+      lastError: null,
+      pendingLocalDocumentCount: 1,
+    };
+    publishLibraryDocument = vi.fn((filePath: string): LibraryDocumentPublishResult => ({
+      success: true,
+      reason: 'published',
+      uploaded: 1,
+      updated: 0,
+      skipped: 0,
+      sourcePath: 'briefs/New.md',
+      clientId: 'library-client',
+      title: 'New',
+      contentHash: 'hash',
+      errors: [],
+      lastSyncAt: 200,
+      lastPushAt: 200,
+    }));
   });
 
   function register() {
@@ -38,6 +63,8 @@ describe('fieldTheorySyncIpc', () => {
       ipcMain: ipcMain as any,
       getStatus: () => status,
       setLocalEnabled: setLocalEnabled as any,
+      getLibraryStatus: () => libraryStatus,
+      publishLibraryDocument: publishLibraryDocument as any,
     });
   }
 
@@ -53,6 +80,8 @@ describe('fieldTheorySyncIpc', () => {
     expect([...handlers.keys()]).toEqual([
       'fieldTheorySync:getStatus',
       'fieldTheorySync:setLocalEnabled',
+      'fieldTheorySync:getLibraryStatus',
+      'fieldTheorySync:publishLibraryDocument',
     ]);
   });
 
@@ -79,5 +108,38 @@ describe('fieldTheorySyncIpc', () => {
     await handler(FieldTheorySyncIPCChannels.SET_LOCAL_ENABLED)({ sender: {} }, 'yes');
 
     expect(setLocalEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it('returns Library sync status with pending local document count', async () => {
+    register();
+
+    await expect(handler(FieldTheorySyncIPCChannels.GET_LIBRARY_STATUS)({ sender: {} })).resolves.toEqual(libraryStatus);
+  });
+
+  it('publishes a selected Library document by path', async () => {
+    register();
+
+    await expect(
+      handler(FieldTheorySyncIPCChannels.PUBLISH_LIBRARY_DOCUMENT)({ sender: {} }, '/tmp/New.md'),
+    ).resolves.toMatchObject({
+      success: true,
+      reason: 'published',
+      uploaded: 1,
+      sourcePath: 'briefs/New.md',
+    });
+    expect(publishLibraryDocument).toHaveBeenCalledWith('/tmp/New.md');
+  });
+
+  it('rejects selected Library publish requests without a path', async () => {
+    register();
+
+    await expect(
+      handler(FieldTheorySyncIPCChannels.PUBLISH_LIBRARY_DOCUMENT)({ sender: {} }, ''),
+    ).resolves.toMatchObject({
+      success: false,
+      reason: 'invalid_path',
+      error: 'Missing Library document path',
+    });
+    expect(publishLibraryDocument).not.toHaveBeenCalled();
   });
 });

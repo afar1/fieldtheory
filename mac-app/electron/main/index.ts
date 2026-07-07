@@ -119,12 +119,17 @@ import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlm
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
-import { LibrarySyncService } from './librarySyncService';
+import { LibrarySyncService, type LibraryDocumentPublishResult, type LibrarySyncStatusDetails } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
-import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
+import {
+  isFieldTheoryInternalSyncEnvEnabled,
+  resolveFieldTheorySyncStatus,
+  resolveLibraryPublishDisabledReason,
+  type FieldTheorySyncStatus,
+} from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
@@ -3767,6 +3772,8 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
       },
       getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
+      getLibrarySyncStatus: () => getLibrarySyncStatusDetails(),
+      publishLibraryDocument: (filePath) => publishLibraryDocumentToMobile(filePath),
       startAgentKickoff: (args) => {
         if (!agentKickoffManager) {
           return {
@@ -4629,6 +4636,66 @@ function getFieldTheorySyncStatus(): FieldTheorySyncStatus {
     localEnabled,
     authenticated: authManager?.isAuthenticated() ?? false,
   });
+}
+
+function disabledLibrarySyncStatus(reason: LibrarySyncStatusDetails['reason']): LibrarySyncStatusDetails {
+  return {
+    ready: false,
+    reason,
+    lastSyncAt: librarySyncService?.getLastSyncAt() ?? null,
+    lastPushAt: librarySyncService?.getLastPushAt() ?? null,
+    lastError: librarySyncService?.getLastError() ?? null,
+    pendingLocalDocumentCount: null,
+  };
+}
+
+async function getLibrarySyncStatusDetails(): Promise<LibrarySyncStatusDetails> {
+  const status = getFieldTheorySyncStatus();
+  const disabledReason = resolveLibraryPublishDisabledReason(status);
+  if (disabledReason === 'not_authenticated') return disabledLibrarySyncStatus('not_authenticated');
+  if (disabledReason === 'sync_disabled') return disabledLibrarySyncStatus('sync_disabled');
+
+  refreshFieldTheorySyncServices();
+  if (!librarySyncService) return disabledLibrarySyncStatus('sync_unavailable');
+  return librarySyncService.getStatusDetails();
+}
+
+function disabledLibraryDocumentPublishResult(
+  reason: LibraryDocumentPublishResult['reason'],
+  error: string,
+): LibraryDocumentPublishResult {
+  return {
+    success: false,
+    reason,
+    uploaded: 0,
+    updated: 0,
+    skipped: 0,
+    error,
+    errors: [error],
+    lastSyncAt: librarySyncService?.getLastSyncAt() ?? null,
+    lastPushAt: librarySyncService?.getLastPushAt() ?? null,
+  };
+}
+
+async function publishLibraryDocumentToMobile(filePath: string): Promise<LibraryDocumentPublishResult> {
+  const status = getFieldTheorySyncStatus();
+  const disabledReason = resolveLibraryPublishDisabledReason(status);
+  if (disabledReason === 'not_authenticated') {
+    return disabledLibraryDocumentPublishResult('not_authenticated', 'Not authenticated');
+  }
+  if (disabledReason === 'sync_disabled') {
+    return disabledLibraryDocumentPublishResult('sync_disabled', 'Field Theory Library sync is disabled');
+  }
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return disabledLibraryDocumentPublishResult('read_only', 'Field Theory is read-only');
+  }
+
+  refreshFieldTheorySyncServices();
+  if (!librarySyncService) {
+    return disabledLibraryDocumentPublishResult('sync_unavailable', 'Field Theory Library sync is not available');
+  }
+  return librarySyncService.publishLocalDocument(filePath);
 }
 
 function canUseFieldTheorySync(): boolean {
@@ -12999,6 +13066,8 @@ function setupClipboardIPCHandlers(): void {
         refreshFieldTheorySyncServices();
       }
     },
+    getLibraryStatus: getLibrarySyncStatusDetails,
+    publishLibraryDocument: publishLibraryDocumentToMobile,
   });
 }
 

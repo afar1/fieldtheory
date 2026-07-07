@@ -265,6 +265,8 @@ export type BrowserHelperNativeBridge = {
   makeImagesPortable?: (documentPath: string, content: string) => unknown | Promise<unknown>;
   deleteUnusedCopiedImages?: (documentPath: string, removedMarkdown: string, remainingContent: string) => unknown | Promise<unknown>;
   getFieldTheorySyncStatus?: () => unknown | Promise<unknown>;
+  getLibrarySyncStatus?: () => unknown | Promise<unknown>;
+  publishLibraryDocument?: (filePath: string) => unknown | Promise<unknown>;
   startAgentKickoff?: (args: unknown) => unknown | Promise<unknown>;
   cancelAgentKickoff?: (runId: string) => boolean | Promise<boolean>;
   getRendererStorage?: () => BrowserHelperRendererStorageSnapshot | Promise<BrowserHelperRendererStorageSnapshot>;
@@ -1488,6 +1490,49 @@ export class BrowserHelperServer {
           reason: 'local_disabled',
         };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/field-theory-sync/library-status') {
+        const status = await this.nativeBridge.getLibrarySyncStatus?.() ?? {
+          ready: false,
+          reason: 'sync_unavailable',
+          lastSyncAt: null,
+          lastPushAt: null,
+          lastError: null,
+          pendingLocalDocumentCount: null,
+        };
+        writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/field-theory-sync/publish-library-document') {
+        const body = await readJsonBody(req);
+        const filePath = typeof body.filePath === 'string' ? body.filePath : '';
+        const result = filePath
+          ? await this.nativeBridge.publishLibraryDocument?.(filePath) ?? {
+            success: false,
+            reason: 'sync_unavailable',
+            uploaded: 0,
+            updated: 0,
+            skipped: 0,
+            error: 'Field Theory Library sync is not available',
+            errors: ['Field Theory Library sync is not available'],
+            lastSyncAt: null,
+            lastPushAt: null,
+          }
+          : {
+            success: false,
+            reason: 'invalid_path',
+            uploaded: 0,
+            updated: 0,
+            skipped: 0,
+            error: 'Missing Library document path',
+            errors: ['Missing Library document path'],
+            lastSyncAt: null,
+            lastPushAt: null,
+          };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 
