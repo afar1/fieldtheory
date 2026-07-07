@@ -123,6 +123,7 @@ struct RootView: View {
         model.recorder.onNotice = { message, symbol in
             toast.show(message, symbol: symbol, duration: 2.6)
         }
+        Task { await model.recorder.resumePendingWork() }
     }
 }
 

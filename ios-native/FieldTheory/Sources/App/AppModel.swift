@@ -96,6 +96,7 @@ final class AppModel {
         if case .signedIn = auth.phase {
             sync.scheduleDebounced(after: 0.3)
         }
+        Task { await recorder.resumePendingWork() }
     }
 
     /// Simulator launch-arg directives for screenshot navigation
