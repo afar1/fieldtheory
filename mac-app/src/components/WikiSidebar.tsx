@@ -1496,6 +1496,16 @@ function libraryRootCanCreateFiles(root: LibraryRoot): boolean {
   return root.writable !== false;
 }
 
+function normalizeLibraryRootPathForComparison(dirPath: string): string {
+  const trimmed = dirPath.trim();
+  return trimmed.replace(/[\\/]+$/, '') || trimmed;
+}
+
+function hasLibraryRootPath(roots: readonly LibraryRoot[], dirPath: string): boolean {
+  const target = normalizeLibraryRootPathForComparison(dirPath);
+  return roots.some((root) => normalizeLibraryRootPathForComparison(root.path) === target);
+}
+
 function normalizeTaggedPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
@@ -1851,6 +1861,10 @@ function WikiSidebar({
     node: SidebarNode | null;
   } | null>(null);
   const [folderConfirmation, setFolderConfirmation] = useState<LibraryFolderConfirmationRequest | null>(null);
+  const [pathAddOpen, setPathAddOpen] = useState(false);
+  const [pathAddValue, setPathAddValue] = useState('');
+  const [pathAddError, setPathAddError] = useState<string | null>(null);
+  const pathAddInputRef = useRef<HTMLInputElement | null>(null);
   const [renameRequestId, setRenameRequestId] = useState<string | null>(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const selectedFileIdsRef = useRef<Set<string>>(selectedFileIds);
@@ -1912,6 +1926,12 @@ function WikiSidebar({
       emptyRootsRetryTimeoutRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!pathAddOpen) return;
+    const id = requestAnimationFrame(() => pathAddInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [pathAddOpen]);
 
   const pruneDeletedWikiPage = useCallback((relPath: string) => {
     deletedWikiRelPathsRef.current.add(relPath);
@@ -3182,29 +3202,63 @@ function WikiSidebar({
     return () => { archiveControllerRef.current = null; };
   }, [archiveControllerRef, cycleSelectedTodoState, deleteSelectedItems, getActionItems, renameFocusedItem, toggleFocusedSelection, toggleSelectedArchive, undoArchive]);
 
-  const addFolderFromPath = useCallback(async () => {
-    closeContextMenu();
-    const picked = await window.libraryAPI?.pickFolder();
-    if (!picked) return;
+  const addLibraryRootFromPath = useCallback(async (
+    rawPath: string,
+    reportError: (message: string) => void,
+  ): Promise<boolean> => {
+    const dirPath = rawPath.trim();
+    if (!dirPath) {
+      reportError('Paste a folder path.');
+      return false;
+    }
+    if (hasLibraryRootPath(libraryRootsRef.current, dirPath)) {
+      reportError('That folder is already in Library.');
+      return false;
+    }
     let root: LibraryRoot | null | undefined;
     try {
-      root = await window.libraryAPI?.addRoot(picked);
+      root = await window.libraryAPI?.addRoot(dirPath);
     } catch (error) {
-      setMoveError(error instanceof Error ? error.message : 'Could not add folder.');
-      return;
+      reportError(error instanceof Error ? error.message : 'Could not add folder.');
+      return false;
     }
     if (!root) {
-      setMoveError('Could not add folder. Choose an existing folder that is not already in Library.');
-      return;
+      reportError('Could not add folder. Choose an existing folder that is not already in Library.');
+      return false;
     }
-    setMoveError(null);
+    setMoveError(root.writable === false
+      ? 'Folder added read-only. Field Theory cannot create or move files there until macOS grants write access.'
+      : null);
+    setPathAddError(null);
     await loadTree();
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       next.add(`root:${root.path}`);
       return next;
     });
-  }, [closeContextMenu, loadTree]);
+    return true;
+  }, [loadTree]);
+
+  const addFolderFromFinder = useCallback(async () => {
+    closeContextMenu();
+    const picked = await window.libraryAPI?.pickFolder();
+    if (!picked) return;
+    await addLibraryRootFromPath(picked, setMoveError);
+  }, [addLibraryRootFromPath, closeContextMenu]);
+
+  const openAddFolderFromPath = useCallback(() => {
+    closeContextMenu();
+    setPathAddValue('');
+    setPathAddError(null);
+    setPathAddOpen(true);
+  }, [closeContextMenu]);
+
+  const submitAddFolderFromPath = useCallback(async () => {
+    const added = await addLibraryRootFromPath(pathAddValue, setPathAddError);
+    if (!added) return;
+    setPathAddOpen(false);
+    setPathAddValue('');
+  }, [addLibraryRootFromPath, pathAddValue]);
 
   const removeContextRoot = useCallback(() => {
     const target = contextDir;
@@ -3772,7 +3826,8 @@ function WikiSidebar({
             if (!canCreateInContext) return;
             beginCreateDir(contextCreateTarget);
           }}
-          onAddFolder={addFolderFromPath}
+          onAddFolderFromFinder={addFolderFromFinder}
+          onAddFolderFromPath={openAddFolderFromPath}
           onShowFolderInFinder={showContextFolderInFinder}
           onRenameFile={renameContextFile}
           onOpenFileInNewWindow={() => {
@@ -3834,6 +3889,23 @@ function WikiSidebar({
         request={folderConfirmation}
         theme={theme}
         onClose={() => setFolderConfirmation(null)}
+      />
+      <LibraryPathInputDialog
+        open={pathAddOpen}
+        value={pathAddValue}
+        error={pathAddError}
+        inputRef={pathAddInputRef}
+        theme={theme}
+        onChange={(value) => {
+          setPathAddValue(value);
+          if (pathAddError) setPathAddError(null);
+        }}
+        onSubmit={submitAddFolderFromPath}
+        onClose={() => {
+          setPathAddOpen(false);
+          setPathAddError(null);
+          setPathAddValue('');
+        }}
       />
       {moveError && (
         <div
@@ -4509,6 +4581,131 @@ function LibraryFolderConfirmationDialog({
   );
 }
 
+function LibraryPathInputDialog({
+  open,
+  value,
+  error,
+  inputRef,
+  theme,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  open: boolean;
+  value: string;
+  error: string | null;
+  inputRef: MutableRefObject<HTMLInputElement | null>;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onChange: (value: string) => void;
+  onSubmit: () => void | Promise<void>;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      role="presentation"
+      onMouseDown={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.36)' : 'rgba(0,0,0,0.16)',
+      }}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add folder from path"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSubmit();
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(380px, calc(100vw - 32px))',
+          padding: '16px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface2,
+          boxShadow: theme.isDark ? '0 18px 48px rgba(0,0,0,0.5)' : '0 18px 48px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{ fontSize: '14px', fontWeight: 600, color: theme.text, marginBottom: '10px' }}>
+          Add folder from path
+        </div>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
+          Folder path
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                onClose();
+              }
+            }}
+            placeholder="/Users/you/Notes"
+            style={{
+              height: '32px',
+              padding: '0 10px',
+              fontSize: '12px',
+              color: theme.text,
+              backgroundColor: theme.bg,
+              border: `1px solid ${error ? '#dc2626' : theme.border}`,
+              borderRadius: '6px',
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </label>
+        {error && (
+          <div role="alert" style={{ marginTop: '8px', fontSize: '11px', lineHeight: 1.35, color: '#dc2626' }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              height: '28px',
+              padding: '0 10px',
+              fontSize: '12px',
+              color: theme.text,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '5px',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            style={{
+              height: '28px',
+              padding: '0 10px',
+              fontSize: '12px',
+              color: '#fff',
+              backgroundColor: theme.accent,
+              border: `1px solid ${theme.accent}`,
+              borderRadius: '5px',
+              cursor: 'pointer',
+            }}
+          >
+            Add folder
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function LibraryContextMenu({
   x,
   y,
@@ -4531,7 +4728,8 @@ function LibraryContextMenu({
   canDeleteDir,
   onNewFile,
   onNewFolder,
-  onAddFolder,
+  onAddFolderFromFinder,
+  onAddFolderFromPath,
   onShowFolderInFinder,
   onRenameFile,
   onOpenFileInNewWindow,
@@ -4568,7 +4766,8 @@ function LibraryContextMenu({
   canDeleteDir: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
-  onAddFolder: () => void;
+  onAddFolderFromFinder: () => void;
+  onAddFolderFromPath: () => void;
   onShowFolderInFinder: () => void;
   onRenameFile: () => void;
   onOpenFileInNewWindow: () => void;
@@ -4695,7 +4894,8 @@ function LibraryContextMenu({
       {pinLabel && pinIsFolder && (
         <button style={itemStyle} onClick={onTogglePin} onMouseEnter={setHover} onMouseLeave={clearHover}>{pinLabel}</button>
       )}
-      <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
+      <button style={itemStyle} onClick={onAddFolderFromFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from Finder...</button>
+      <button style={itemStyle} onClick={onAddFolderFromPath} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
       {canShowFolderInFinder && (
         <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
       )}

@@ -1399,6 +1399,20 @@ describe('BrowserHelperServer', () => {
     expect(removeRoot.status).toBe(200);
   });
 
+  it('returns native left-nav root validation errors', async () => {
+    const { address, root } = await startServer();
+    const filePath = path.join(root, 'Plan.md');
+
+    const addRoot = await request(`http://${address.host}:${address.port}/native/library/root`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { dirPath: filePath },
+    });
+
+    expect(addRoot.status).toBe(400);
+    expect(addRoot.body.error).toBe('Choose a folder, not a file.');
+  });
+
   it('notifies native listeners when a wiki page is deleted through the browser helper', async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'Plan.md'), '# Plan\n');
