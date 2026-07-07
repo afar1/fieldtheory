@@ -188,13 +188,22 @@ export type BrowserHelperNativeBridge = {
   rescanTaggedDocs?: () => unknown[] | Promise<unknown[]>;
   getSharedFilesAvailability?: () => unknown | Promise<unknown>;
   getSharedFileStatus?: (filePath: string) => unknown | Promise<unknown>;
+  getSharedFileAudience?: (filePath: string) => unknown | Promise<unknown>;
+  getRiverTimeline?: (query: unknown) => unknown[] | Promise<unknown[]>;
+  getSharedFileDestinations?: (query?: string) => unknown[] | Promise<unknown[]>;
+  getRiverTargets?: (query?: string) => unknown[] | Promise<unknown[]>;
+  setRiverDefaultDestinations?: (destinations: unknown[]) => unknown | Promise<unknown>;
+  getRiverSourcePreferences?: () => unknown[] | Promise<unknown[]>;
+  updateRiverSourcePreferences?: (preferences: unknown[]) => unknown | Promise<unknown>;
   shareSharedFile?: (input: unknown) => unknown | Promise<unknown>;
+  updateSharedFileAudience?: (input: unknown) => unknown | Promise<unknown>;
   unshareSharedFile?: (filePath: string) => boolean | Promise<boolean>;
   syncSharedFiles?: () => unknown | Promise<unknown>;
   updateSharedFileContent?: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => unknown | Promise<unknown>;
   setActivePresence?: (sharedId: string | null) => unknown[] | Promise<unknown[]>;
   getPinnedItemIds?: () => string[] | Promise<string[]>;
   setPinned?: (filePath: string, pinned: boolean) => unknown | Promise<unknown>;
+  getTeamEntitlement?: () => unknown | Promise<unknown>;
   initializeCommands?: () => void | Promise<void>;
   getWatchedCommandDirs?: () => unknown[] | Promise<unknown[]>;
   addWatchedCommandDir?: (dirPath: string) => unknown | Promise<unknown>;
@@ -265,8 +274,6 @@ export type BrowserHelperNativeBridge = {
   makeImagesPortable?: (documentPath: string, content: string) => unknown | Promise<unknown>;
   deleteUnusedCopiedImages?: (documentPath: string, removedMarkdown: string, remainingContent: string) => unknown | Promise<unknown>;
   getFieldTheorySyncStatus?: () => unknown | Promise<unknown>;
-  getLibrarySyncStatus?: () => unknown | Promise<unknown>;
-  publishLibraryDocument?: (filePath: string) => unknown | Promise<unknown>;
   startAgentKickoff?: (args: unknown) => unknown | Promise<unknown>;
   cancelAgentKickoff?: (runId: string) => boolean | Promise<boolean>;
   getRendererStorage?: () => BrowserHelperRendererStorageSnapshot | Promise<BrowserHelperRendererStorageSnapshot>;
@@ -679,19 +686,8 @@ export class BrowserHelperServer {
       if (req.method === 'POST' && parsed.pathname === '/native/library/root') {
         const body = await readJsonBody(req);
         const dirPath = typeof body.dirPath === 'string' ? body.dirPath : '';
-        try {
-          const root = dirPath ? await this.service.addLibraryRoot(dirPath) : null;
-          writeJson(res, root ? 200 : 400, {
-            ok: Boolean(root),
-            root,
-            ...(root ? {} : { error: 'Could not add folder. Choose an existing folder that is not already in Library.' }),
-          }, req.headers.origin);
-        } catch (error) {
-          writeJson(res, 400, {
-            ok: false,
-            error: error instanceof Error ? error.message : 'Could not add folder.',
-          }, req.headers.origin);
-        }
+        const root = dirPath ? await this.service.addLibraryRoot(dirPath) : null;
+        writeJson(res, root ? 200 : 400, { ok: Boolean(root), root }, req.headers.origin);
         return;
       }
 
@@ -1288,10 +1284,65 @@ export class BrowserHelperServer {
         return;
       }
 
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/audience') {
+        const filePath = String(parsed.searchParams.get('path') ?? '');
+        const audience = filePath ? await this.nativeBridge.getSharedFileAudience?.(filePath) ?? { shared: false, targets: [] } : { shared: false, targets: [] };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/timeline') {
+        const query = await readJsonBody(req);
+        const items = await this.nativeBridge.getRiverTimeline?.(query) ?? [];
+        writeJson(res, 200, { ok: true, items }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/shared-files/destinations') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const destinations = await this.nativeBridge.getSharedFileDestinations?.(query) ?? [];
+        writeJson(res, 200, { ok: true, destinations }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/targets') {
+        const query = String(parsed.searchParams.get('q') ?? '');
+        const targets = await this.nativeBridge.getRiverTargets?.(query) ?? [];
+        writeJson(res, 200, { ok: true, targets }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/default-destinations') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.setRiverDefaultDestinations?.(Array.isArray(body.destinations) ? body.destinations : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/river/source-preferences') {
+        const preferences = await this.nativeBridge.getRiverSourcePreferences?.() ?? [];
+        writeJson(res, 200, { ok: true, preferences }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/river/source-preferences') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.updateRiverSourcePreferences?.(Array.isArray(body.preferences) ? body.preferences : []) ?? { ok: false, error: 'Field Theory River targets are not ready' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
       if (req.method === 'POST' && parsed.pathname === '/native/shared-files/share') {
         const input = await readJsonBody(req);
         const status = await this.nativeBridge.shareSharedFile?.(input) ?? { shared: false };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/shared-files/audience') {
+        const input = await readJsonBody(req);
+        const audience = await this.nativeBridge.updateSharedFileAudience?.(input) ?? { shared: false, targets: [], error: 'Field Theory shared sync is not ready' };
+        writeJson(res, 200, { ok: true, audience }, req.headers.origin);
         return;
       }
 
@@ -1343,6 +1394,11 @@ export class BrowserHelperServer {
         const pinned = body.pinned === true;
         const result = filePath ? await this.nativeBridge.setPinned?.(filePath, pinned) : { ok: false, reason: 'missing_path' };
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/team/entitlement') {
+        writeJson(res, 200, { ok: true, entitlement: await this.nativeBridge.getTeamEntitlement?.() ?? { allowed: false, reason: 'not_authenticated', stale: false, userId: null, checkedAt: null } }, req.headers.origin);
         return;
       }
 
@@ -1501,49 +1557,6 @@ export class BrowserHelperServer {
           reason: 'local_disabled',
         };
         writeJson(res, 200, { ok: true, status }, req.headers.origin);
-        return;
-      }
-
-      if (req.method === 'GET' && parsed.pathname === '/native/field-theory-sync/library-status') {
-        const status = await this.nativeBridge.getLibrarySyncStatus?.() ?? {
-          ready: false,
-          reason: 'sync_unavailable',
-          lastSyncAt: null,
-          lastPushAt: null,
-          lastError: null,
-          pendingLocalDocumentCount: null,
-        };
-        writeJson(res, 200, { ok: true, status }, req.headers.origin);
-        return;
-      }
-
-      if (req.method === 'POST' && parsed.pathname === '/native/field-theory-sync/publish-library-document') {
-        const body = await readJsonBody(req);
-        const filePath = typeof body.filePath === 'string' ? body.filePath : '';
-        const result = filePath
-          ? await this.nativeBridge.publishLibraryDocument?.(filePath) ?? {
-            success: false,
-            reason: 'sync_unavailable',
-            uploaded: 0,
-            updated: 0,
-            skipped: 0,
-            error: 'Field Theory Library sync is not available',
-            errors: ['Field Theory Library sync is not available'],
-            lastSyncAt: null,
-            lastPushAt: null,
-          }
-          : {
-            success: false,
-            reason: 'invalid_path',
-            uploaded: 0,
-            updated: 0,
-            skipped: 0,
-            error: 'Missing Library document path',
-            errors: ['Missing Library document path'],
-            lastSyncAt: null,
-            lastPushAt: null,
-          };
-        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 

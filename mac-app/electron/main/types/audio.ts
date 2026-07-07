@@ -118,6 +118,8 @@ export type HelperOutgoingMessageType =
   | 'frontmostWindowBounds'
   | 'soundsPreloaded'
   | 'typeIntoAppResult'
+  | 'insertTextSegmentResult'
+  | 'submitTextTargetResult'
   | 'focusWindowByTitleResult'
   | 'windowFrameSet'
   | 'windowList'
@@ -326,6 +328,38 @@ export interface TypeIntoAppResultMessage extends HelperMessage {
   eventTarget?: string;
 }
 
+export type TextTargetFailureReason =
+  | 'accessibility-denied'
+  | 'app-not-running'
+  | 'not-frontmost'
+  | 'secure-input'
+  | 'no-focused-text-input'
+  | 'post-failed'
+  | 'missing-bundle-id-or-text'
+  | 'missing-bundle-id-or-submit-mode';
+
+/**
+ * Result of insertTextSegment command.
+ * Sent after one live-typing segment has been inserted or buffered.
+ */
+export interface InsertTextSegmentResultMessage extends HelperMessage {
+  type: 'insertTextSegmentResult';
+  success: boolean;
+  reason?: TextTargetFailureReason;
+  accessibilityTrusted: boolean;
+}
+
+/**
+ * Result of submitTextTarget command.
+ * Sent after live typing posts Enter or Command-Enter to the focused target.
+ */
+export interface SubmitTextTargetResultMessage extends HelperMessage {
+  type: 'submitTextTargetResult';
+  success: boolean;
+  reason?: TextTargetFailureReason;
+  accessibilityTrusted: boolean;
+}
+
 /**
  * Result of focusWindowByTitle command.
  * Sent after attempting to focus a window by title substring.
@@ -461,6 +495,8 @@ export type HelperOutgoingMessage =
   | FrontmostWindowBoundsMessage
   | SoundsPreloadedMessage
   | TypeIntoAppResultMessage
+  | InsertTextSegmentResultMessage
+  | SubmitTextTargetResultMessage
   | FocusWindowByTitleResultMessage
   | WindowFrameSetMessage
   | WindowListMessage
@@ -543,6 +579,30 @@ export interface TypeIntoAppCommand {
   text: string;
   pressEnter: boolean;
   submitMode?: 'none' | 'enter' | 'command-enter';
+  targetWindowBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+/**
+ * Command to insert one live-typing segment using unicode CGEvents.
+ */
+export interface InsertTextSegmentCommand {
+  type: 'insertTextSegment';
+  bundleId: string;
+  text: string;
+}
+
+/**
+ * Command to submit the focused target without touching the clipboard.
+ */
+export interface SubmitTextTargetCommand {
+  type: 'submitTextTarget';
+  bundleId: string;
+  submitMode: 'enter' | 'command-enter';
 }
 
 /**
@@ -620,6 +680,8 @@ export type HelperIncomingCommand =
   | PlaySoundCommand
   | StopSoundsCommand
   | TypeIntoAppCommand
+  | InsertTextSegmentCommand
+  | SubmitTextTargetCommand
   | FocusWindowByTitleCommand
   | SetHarvestModeCommand
   | SetWindowFrameCommand

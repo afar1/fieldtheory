@@ -1,6 +1,4 @@
-import fs from 'fs';
-import os from 'os';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import path from 'path';
 import {
   clientIdForLibrarySourcePath,
@@ -8,7 +6,6 @@ import {
   getLibrarySyncSourceRoots,
   getLibrarySyncTargetForSourcePath,
   getRowsToTombstoneForMissingLocalDocs,
-  LibrarySyncService,
   normalizeLibrarySourcePath,
   reconcilePendingTombstonesForMissingKnownDocs,
   shouldSkipPrivateLibrarySyncPath,
@@ -213,150 +210,5 @@ describe('librarySyncService pending tombstones', () => {
       { 'client-1': pendingTombstone() },
       Date.parse('2026-05-01T10:06:00.000Z'),
     )).toEqual({});
-  });
-});
-
-describe('LibrarySyncService selected document publish', () => {
-  let tempRoot: string;
-  let originalLibraryDir: string | undefined;
-  let originalSharedRootDir: string | undefined;
-  let originalSharedCacheDir: string | undefined;
-  let homedirSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-library-sync-service-'));
-    originalLibraryDir = process.env.FT_LIBRARY_DIR;
-    originalSharedRootDir = process.env.FT_SHARED_FILES_ROOT_DIR;
-    originalSharedCacheDir = process.env.FT_SHARED_FILES_CACHE_DIR;
-    process.env.FT_LIBRARY_DIR = path.join(tempRoot, 'library');
-    process.env.FT_SHARED_FILES_ROOT_DIR = path.join(tempRoot, 'shared');
-    process.env.FT_SHARED_FILES_CACHE_DIR = path.join(tempRoot, 'library', 'River (shared)');
-    fs.mkdirSync(process.env.FT_LIBRARY_DIR, { recursive: true });
-    homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(path.join(tempRoot, 'home'));
-  });
-
-  afterEach(() => {
-    if (originalLibraryDir === undefined) delete process.env.FT_LIBRARY_DIR;
-    else process.env.FT_LIBRARY_DIR = originalLibraryDir;
-    if (originalSharedRootDir === undefined) delete process.env.FT_SHARED_FILES_ROOT_DIR;
-    else process.env.FT_SHARED_FILES_ROOT_DIR = originalSharedRootDir;
-    if (originalSharedCacheDir === undefined) delete process.env.FT_SHARED_FILES_CACHE_DIR;
-    else process.env.FT_SHARED_FILES_CACHE_DIR = originalSharedCacheDir;
-    homedirSpy.mockRestore();
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  });
-
-  function createAuthMock(options: {
-    authenticated?: boolean;
-    rows?: LibraryDocumentRow[];
-    userId?: string;
-  } = {}) {
-    const userId = options.userId ?? 'user-1';
-    const store = {
-      rows: [...(options.rows ?? [])],
-      upserts: [] as Record<string, unknown>[],
-    };
-    const table = {
-      select: vi.fn(() => ({
-        eq: vi.fn(async () => ({ data: store.rows, error: null })),
-      })),
-      upsert: vi.fn(async (rows: Record<string, unknown>[]) => {
-        store.upserts.push(...rows);
-        rows.forEach((row) => {
-          const clientId = row.client_id as string;
-          const existingIndex = store.rows.findIndex((item) => item.client_id === clientId);
-          const next = remoteRow({
-            id: existingIndex === -1 ? `row-${store.rows.length + 1}` : store.rows[existingIndex].id,
-            user_id: row.user_id as string,
-            title: row.title as string,
-            content: row.content as string,
-            tags: row.tags as string[],
-            source_path: row.source_path as string,
-            source_kind: row.source_kind as string,
-            content_hash: row.content_hash as string,
-            client_id: clientId,
-            client_created_at_ms: row.client_created_at_ms as number,
-            deleted_at: row.deleted_at as string | null,
-            created_at: existingIndex === -1 ? '2026-05-01T10:00:00.000Z' : store.rows[existingIndex].created_at,
-            updated_at: '2026-05-01T10:05:00.000Z',
-          });
-          if (existingIndex === -1) store.rows.push(next);
-          else store.rows[existingIndex] = next;
-        });
-        return { error: null };
-      }),
-    };
-    const supabase = {
-      from: vi.fn(() => table),
-    };
-    const session = options.authenticated === false ? null : { user: { id: userId } };
-    const auth = {
-      on: vi.fn(),
-      off: vi.fn(),
-      isAuthenticated: vi.fn(() => Boolean(session)),
-      getSession: vi.fn(() => session),
-      getSupabaseClient: vi.fn(() => session ? supabase : null),
-    };
-    return { auth, store, table };
-  }
-
-  it('reports not_authenticated when selected document publish has no usable session', async () => {
-    const { auth } = createAuthMock({ authenticated: false });
-    const service = new LibrarySyncService(auth as any);
-
-    try {
-      await expect(service.publishLocalDocument('/tmp/Brief.md')).resolves.toMatchObject({
-        success: false,
-        reason: 'not_authenticated',
-        error: 'Not authenticated',
-      });
-    } finally {
-      service.dispose();
-    }
-  });
-
-  it('counts pending local docs and uploads a selected Library markdown document', async () => {
-    const briefPath = path.join(process.env.FT_LIBRARY_DIR!, 'briefs', 'Agent Brief.md');
-    fs.mkdirSync(path.dirname(briefPath), { recursive: true });
-    fs.writeFileSync(briefPath, '# Agent Brief\n\nCreated by Codex.\n');
-    const { auth, store } = createAuthMock();
-    const service = new LibrarySyncService(auth as any);
-
-    try {
-      await expect(service.getStatusDetails()).resolves.toMatchObject({
-        ready: true,
-        reason: 'enabled',
-        pendingLocalDocumentCount: 1,
-      });
-
-      const result = await service.publishLocalDocument(briefPath);
-
-      expect(result).toMatchObject({
-        success: true,
-        reason: 'published',
-        uploaded: 1,
-        updated: 0,
-        sourcePath: 'briefs/Agent Brief.md',
-        title: 'Agent Brief',
-      });
-      expect(result.lastPushAt).toEqual(expect.any(Number));
-      expect(store.upserts).toHaveLength(1);
-      expect(store.upserts[0]).toMatchObject({
-        user_id: 'user-1',
-        title: 'Agent Brief',
-        content: '# Agent Brief\n\nCreated by Codex.\n',
-        source_path: 'briefs/Agent Brief.md',
-        source_kind: 'laptop',
-        client_id: clientIdForLibrarySourcePath('briefs/Agent Brief.md'),
-        deleted_at: null,
-      });
-      await expect(service.getStatusDetails()).resolves.toMatchObject({
-        ready: true,
-        reason: 'enabled',
-        pendingLocalDocumentCount: 0,
-      });
-    } finally {
-      service.dispose();
-    }
   });
 });

@@ -15,6 +15,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { flushSync } from 'react-dom';
 import ReactDOM from 'react-dom/client';
 import ScrollDiagnosticsHUD from './components/ScrollDiagnosticsHUD';
+import RiverShareLauncher from './components/RiverShareLauncher';
 import { SidebarRiverIcon } from './components/SidebarIcons';
 import { useInteractionFpsSampler } from './hooks/useInteractionFpsSampler';
 import './utils/scrollDiagnostics.bootstrap';
@@ -114,6 +115,7 @@ import type {
   RunningApp as ClipboardRunningApp,
   StackInfo,
 } from './types/clipboard';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 // =============================================================================
 // Types
@@ -438,6 +440,7 @@ interface LauncherCommandsAPI {
     selection?: { start?: number; end?: number; text?: string } | null;
     useMemory?: boolean;
   }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
+  runGlobalImproveSelection?: () => Promise<{ success: boolean; error?: string }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; hasActiveLibraryFileContext?: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
@@ -480,6 +483,8 @@ interface LauncherClipboardAPI {
 interface LauncherTranscribeAPI {
   getHotkey: () => Promise<string>;
   toggleRecording: () => Promise<void>;
+  getAutoImprove?: () => Promise<boolean>;
+  setAutoImprove?: (enabled: boolean) => Promise<void>;
 }
 
 interface LauncherThemeAPI {
@@ -954,6 +959,7 @@ function CommandLauncher() {
   const [authorNamespace, setAuthorNamespace] = useState<string | null>(null);
   const [bookmarkNamespace, setBookmarkNamespace] = useState<BookmarkNamespace | null>(null);
   const [moveSource, setMoveSource] = useState<LauncherLibraryMoveSource | null>(null);
+  const [riverShareSource, setRiverShareSource] = useState<LauncherLibraryMoveSource | null>(null);
   const [clipboardSearchActive, setClipboardSearchActive] = useState(false);
   const [launcherDefaultPanelSource, setLauncherDefaultPanelSource] = useState<LauncherDefaultPanelSource>(() => readLauncherDefaultPanelSource());
   const [launcherDefaultPanelExpanded, setLauncherDefaultPanelExpanded] = useState<boolean>(() => readLauncherDefaultPanelExpanded());
@@ -1685,6 +1691,7 @@ function CommandLauncher() {
     setAuthorNamespace(null);
     setBookmarkNamespace(null);
     setMoveSource(null);
+    setRiverShareSource(null);
     setActiveWebPage(null);
     setPreviewOpen(false);
     setPreviewPayload(null);
@@ -3225,6 +3232,7 @@ function CommandLauncher() {
     setAuthorNamespace(null);
     setBookmarkNamespace(null);
     setMoveSource(null);
+    setRiverShareSource(null);
     setBookmarkNamespaceBookmarks([]);
     setBookmarkNamespaceItems([]);
     if (sourceId === 'bookmarks') {
@@ -3240,6 +3248,15 @@ function CommandLauncher() {
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+    if (riverShareSource) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setRiverShareSource(null);
+        resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+      }
+      return;
+    }
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -3722,7 +3739,9 @@ function CommandLauncher() {
         const result = await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
         if (!result.success) {
           showInvocationError('open-field-theory-target-error', result.error, 'Open failed');
+          return;
         }
+        closeForInvocation({ skipActivation: true });
         return;
       }
       if (options.insertWikiLink) {
@@ -3886,6 +3905,24 @@ function CommandLauncher() {
         case 'start-recording':
           transcribeAPI.toggleRecording?.();
           break;
+        case 'improve-selected-text': {
+          const result = await commandsAPI.runGlobalImproveSelection?.();
+          if (!result?.success) {
+            showLauncherMessage(result?.error ?? 'Improve selected text is unavailable');
+            return;
+          }
+          break;
+        }
+        case 'toggle-auto-improve': {
+          if (!transcribeAPI.getAutoImprove || !transcribeAPI.setAutoImprove) {
+            showLauncherMessage('Auto-improve settings are unavailable');
+            return;
+          }
+          const next = !(await transcribeAPI.getAutoImprove());
+          await transcribeAPI.setAutoImprove(next);
+          showLauncherMessage(next ? 'Auto-improve enabled' : 'Auto-improve disabled');
+          return;
+        }
         case 'toggle-theme':
           // Toggle dark/light mode
           (async () => {
@@ -3969,6 +4006,28 @@ function CommandLauncher() {
           selectIndex(0);
           return;
         }
+        case 'share-current-file-river': {
+          if (!latestContext?.fieldTheoryActive) {
+            showLauncherMessage('Open Field Theory to share the current file');
+            launcherInvocationInFlightRef.current = false;
+            setCommittedItemId(null);
+            return;
+          }
+          const source = await commandsAPI.getActiveLibraryFileContext?.();
+          if (!source?.filePath) {
+            showLauncherMessage('No current Library file to share');
+            launcherInvocationInFlightRef.current = false;
+            setCommittedItemId(null);
+            return;
+          }
+          launcherInvocationInFlightRef.current = false;
+          setCommittedItemId(null);
+          setRiverShareSource(source);
+          setQuery('');
+          setFiltered([]);
+          resizeLauncher(520);
+          return;
+        }
         case 'archive-current-library-file': {
           if (!latestContext?.fieldTheoryActive) {
             showLauncherMessage('Open Field Theory to archive the current file');
@@ -4021,6 +4080,28 @@ function CommandLauncher() {
   }
 
   const styles = getStyles(isDarkMode);
+  if (riverShareSource) {
+    return (
+      <div onKeyDown={handleKeyDown}>
+        <RiverShareLauncher
+          file={{ filePath: riverShareSource.filePath, title: riverShareSource.title }}
+          loadContent={async (filePath) => {
+            const preview = await commandsAPI.getMarkdownPreview(filePath);
+            return preview ? { content: preview.content, title: preview.title } : null;
+          }}
+          onCancel={() => {
+            setRiverShareSource(null);
+            resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+          }}
+          onShared={(message) => {
+            setRiverShareSource(null);
+            showLauncherMessage(message);
+          }}
+        />
+      </div>
+    );
+  }
+
   const selectedItemStyle = (item: LauncherItem, index: number) => {
     if (item.id === committedItemId) return styles.listItemCommitted;
     if (index !== selectedIndex) return {};
@@ -4344,6 +4425,8 @@ function CommandLauncher() {
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <CommandLauncher />
+    <ThemeProvider>
+      <CommandLauncher />
+    </ThemeProvider>
   </React.StrictMode>
 );

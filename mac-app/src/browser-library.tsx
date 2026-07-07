@@ -1405,6 +1405,9 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   });
 
   window.teamAPI = {
+    getEntitlement: async () => (
+      await request<{ entitlement: unknown }>('/native/team/entitlement')
+    ).entitlement,
     onTeamChanged: (callback: () => void) => events.on('team:changed', callback),
   } as any;
 
@@ -1412,15 +1415,6 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     getStatus: async () => (
       await request<{ status: unknown }>('/native/field-theory-sync/status')
     ).status,
-    getLibraryStatus: async () => (
-      await request<{ status: unknown }>('/native/field-theory-sync/library-status')
-    ).status,
-    publishLibraryDocument: async (filePath: string) => (
-      await request<{ result: unknown }>('/native/field-theory-sync/publish-library-document', {
-        method: 'POST',
-        json: { filePath },
-      })
-    ).result,
   } as any;
 
   window.agentKickoffAPI = {

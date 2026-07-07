@@ -117,17 +117,11 @@ function ClipboardPreviewCard({
   );
 }
 
-function PreviewStackFrame({
+function PreviewFrame({
   children,
-  isDark,
 }: {
   children: React.ReactNode;
-  isDark: boolean;
 }) {
-  const lowerBackground = isDark ? 'rgba(0, 0, 0, 0.42)' : 'rgba(17, 17, 17, 0.14)';
-  const upperBackground = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.58)';
-  const border = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)';
-
   return (
     <div
       style={{
@@ -139,37 +133,6 @@ function PreviewStackFrame({
         boxSizing: 'border-box',
       }}
     >
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          left: '18px',
-          right: '18px',
-          top: '22px',
-          bottom: '2px',
-          borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
-          background: lowerBackground,
-          border: `1px solid ${border}`,
-          transform: 'translateY(12px) scale(0.94)',
-          filter: 'blur(0.2px)',
-          opacity: 0.8,
-        }}
-      />
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          left: '9px',
-          right: '9px',
-          top: '16px',
-          bottom: '7px',
-          borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
-          background: upperBackground,
-          border: `1px solid ${border}`,
-          transform: 'translateY(6px) scale(0.97)',
-          opacity: 0.9,
-        }}
-      />
       <div
         style={{
           position: 'relative',
@@ -259,7 +222,7 @@ function CommandLauncherPreview() {
             borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
           }}
         >
-          <PreviewStackFrame isDark={isDarkMode}>
+          <PreviewFrame>
             {preview.kind === 'bookmark' ? (
               <BookmarkCard bookmark={preview.bookmark} isDark={isDarkMode} />
             ) : preview.kind === 'markdown' ? (
@@ -276,7 +239,7 @@ function CommandLauncherPreview() {
                 isDark={isDarkMode}
               />
             )}
-          </PreviewStackFrame>
+          </PreviewFrame>
         </div>
       )}
     </div>

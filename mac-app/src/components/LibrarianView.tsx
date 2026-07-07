@@ -12,12 +12,14 @@ import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import RiverPicker, { type RiverPickerTarget } from './RiverPicker';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   EMBER_ITEM_ID,
+  RIVER_ITEM_ID,
   LOCAL_WIKI_ADDED_EVENT,
   LOCAL_WIKI_DELETED_EVENT,
   LOCAL_WIKI_RENAMED_EVENT,
@@ -31,6 +33,7 @@ import WikiSidebar, {
 } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
 import EmberPane from './EmberPane';
+import RiverReader from './RiverReader';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
 import {
@@ -140,6 +143,7 @@ import MarkdownCodeEditor, {
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownInlineHtmlBlockRanges,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
   isRenderedMarkdownSelectionInsideInlineHtmlBlock,
   isRenderedMarkdownDrawingAlt,
   type MarkdownCodeEditorImagePreview,
@@ -224,8 +228,11 @@ type InlineDrawInsertion = {
   } | null;
 };
 
-export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external' | null;
 type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
+type SharedFilesClient = NonNullable<Window['sharedFilesAPI']>;
+type RiverTarget = Awaited<ReturnType<SharedFilesClient['getTargets']>>[number];
+type RiverShareTarget = NonNullable<Parameters<SharedFilesClient['share']>[0]['targets']>[number];
 const COPY_PATH_FEEDBACK_MS = 1600;
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
@@ -238,6 +245,7 @@ interface SharedFileStatus {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
 }
 interface SharedFilePresenceUser {
   userId: string;
@@ -291,12 +299,35 @@ export function getHtmlPreviewSrcDoc(html: string, filePath: string): string {
   return buildHtmlPreviewSrcDoc(html, filePath);
 }
 
+function riverTargetToPickerTarget(target: RiverTarget): RiverPickerTarget {
+  return {
+    id: target.id,
+    kind: target.kind,
+    label: target.label,
+    detail: target.detail,
+    callSign: target.callsign,
+    initials: target.initials,
+    avatarUrl: target.avatarUrl,
+    tint: target.tint,
+    status: target.status,
+  };
+}
+
 function libraryRenameTraceEnabled(): boolean {
   try {
     return localStorage.getItem('fieldtheory.libraryRenameTrace') === 'true';
   } catch {
     return false;
   }
+}
+
+function traceLibraryNavigation(stage: string, extra: Record<string, unknown> = {}): void {
+  const payload = {
+    timestamp: Date.now(),
+    ...extra,
+  };
+  console.info('[LibraryNavigationTrace]', stage, payload);
+  void window.librarianAPI?.traceNavigation?.(stage, payload);
 }
 
 function traceLibraryRename(stage: string, event: LibraryRenameEvent, extra: Record<string, unknown> = {}): void {
@@ -491,6 +522,44 @@ export function getRenderedDisplayReadingContent(input: {
 }
 
 type CodexTerminalLineMapping = NonNullable<CodexTerminalPageContextInput['lineMapping']>;
+
+type ActiveLibraryFileSelectionContext = {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionText?: string;
+};
+
+function getActiveLibraryFileContextKey(context: ActiveLibraryFileSelectionContext | null): string {
+  if (!context) return 'null';
+  return JSON.stringify([
+    context.type,
+    context.rootPath,
+    context.relPath,
+    context.filePath,
+    context.title,
+    context.selectionStart ?? null,
+    context.selectionEnd ?? null,
+    context.selectionText ?? null,
+  ]);
+}
+
+export function hasActiveLibraryFileSelectionContext(context: ActiveLibraryFileSelectionContext | null): boolean {
+  return typeof context?.selectionStart === 'number'
+    && typeof context.selectionEnd === 'number'
+    && context.selectionStart !== context.selectionEnd;
+}
+
+export function shouldReportActiveLibraryFileContextForSelection(
+  snapshot: Pick<MarkdownCodeEditorSelectionSnapshot, 'isCollapsed'>,
+  hasReportedSelection: boolean,
+): boolean {
+  return !snapshot.isCollapsed || hasReportedSelection;
+}
 
 export function buildSourceLineMapping(content: string, options: {
   contentMode: MarkdownContentMode;
@@ -828,6 +897,7 @@ const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
 const LIBRARIAN_READER_SCROLLBAR_GUTTER_PX = 14;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const LINKED_DOCUMENTS_CONTENT_DEBOUNCE_MS = 180;
+const CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS = 500;
 const FULL_LINK_RELATION_LOAD_DELAY_MS = 250;
 const RENDERED_SAVE_INITIAL_DELAY_MS = 400;
 const RENDERED_SAVE_QUIET_DELAY_MS = 750;
@@ -1615,10 +1685,27 @@ export function getMarkdownListToggleEdit(
   const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(lineStart, lineEnd);
   const lines = block.split('\n');
-
-  const orderedRe = /^(\s*)(\d+)\.\s/;
-  const unorderedRe = /^(\s*)[-*+]\s/;
-  const carrotRe = /^(\s*)›+\s/;
+  type ToggleLine = {
+    indent: string;
+    marker: 'ordered' | 'unordered' | 'carrot' | 'task' | 'none';
+    markerLength: number;
+    text: string;
+  };
+  const parseToggleLine = (line: string): ToggleLine => {
+    const task = line.match(/^(\s*)(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.*)$/);
+    if (task) return { indent: task[1], marker: 'task', markerLength: line.length - task[2].length, text: task[2] };
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
+    if (ordered) return { indent: ordered[1], marker: 'ordered', markerLength: line.length - ordered[2].length, text: ordered[2] };
+    const unordered = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (unordered) return { indent: unordered[1], marker: 'unordered', markerLength: line.length - unordered[2].length, text: unordered[2] };
+    const carrot = line.match(/^(\s*)›+\s+(.*)$/);
+    if (carrot) return { indent: carrot[1], marker: 'carrot', markerLength: line.length - carrot[2].length, text: carrot[2] };
+    const plain = line.match(/^(\s*)(.*)$/);
+    return { indent: plain?.[1] ?? '', marker: 'none', markerLength: plain?.[1].length ?? 0, text: plain?.[2] ?? line };
+  };
+  const markerText = kind === 'ordered'
+    ? (counter: number) => `${counter}. `
+    : () => (unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ');
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
   if (nonBlank.length === 0 && selectionStart === selectionEnd) {
@@ -1637,29 +1724,49 @@ export function getMarkdownListToggleEdit(
   }
 
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
-    kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
+    kind === 'ordered'
+      ? parseToggleLine(line).marker === 'ordered'
+      : ['unordered', 'carrot'].includes(parseToggleLine(line).marker)
   ));
 
   let counter = 1;
-  const transformed = lines.map((line) => {
+  let collapsedSelection: number | null = null;
+  let blockOffset = 0;
+  const selectionIsCollapsed = selectionStart === selectionEnd;
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
     if (line.trim().length === 0) return line;
-    const orderedMatch = line.match(orderedRe);
-    const unorderedMatch = line.match(unorderedRe);
-    const carrotMatch = line.match(carrotRe);
-    const stripped = orderedMatch
-      ? line.slice(orderedMatch[0].length)
-      : unorderedMatch
-      ? line.slice(unorderedMatch[0].length)
-      : carrotMatch
-      ? line.slice(carrotMatch[0].length)
-      : line;
-    if (allMarked) return stripped;
-    if (kind === 'ordered') return `${counter++}. ${stripped}`;
-    return unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
+    const parsed = parseToggleLine(line);
+    const nextLine = allMarked
+      ? `${parsed.indent}${parsed.text}`
+      : `${parsed.indent}${markerText(counter++)}${parsed.text}`;
+    if (
+      selectionIsCollapsed
+      && collapsedSelection === null
+      && selectionStart >= lineStart + lineOffset
+      && selectionStart <= lineStart + lineOffset + line.length
+    ) {
+      const nextMarkerLength = nextLine.length - parsed.text.length;
+      const relativeSelection = selectionStart - lineStart - lineOffset;
+      const delta = relativeSelection >= parsed.markerLength
+        ? nextMarkerLength - parsed.markerLength
+        : 0;
+      collapsedSelection = lineStart + lineOffset + Math.max(0, relativeSelection + delta);
+    }
+    return nextLine;
   });
 
   const nextBlock = transformed.join('\n');
   if (nextBlock === block) return null;
+  if (selectionIsCollapsed) {
+    const nextSelection = Math.max(lineStart, Math.min(lineStart + nextBlock.length, collapsedSelection ?? selectionStart));
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
   return {
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,
@@ -1730,13 +1837,16 @@ export function getRenderedMarkdownShortcutEdit(input: {
 }): MarkdownTextEdit | null {
   const formattingKind = getMarkdownFormattingShortcut(input.event);
   if (formattingKind) {
-    if (input.selectionStart === input.selectionEnd) return null;
     return getMarkdownFormattingEdit(
       input.value,
       input.selectionStart,
       input.selectionEnd,
       formattingKind,
     );
+  }
+
+  if (isMarkdownTaskToggleShortcut(input.event)) {
+    return getMarkdownTaskToggleEdit(input.value, input.selectionStart, input.selectionEnd);
   }
 
   if (!input.event.metaKey || !input.event.shiftKey || input.event.altKey || input.event.ctrlKey) return null;
@@ -1823,7 +1933,6 @@ function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: numbe
 function getRenderedMarkdownLineStartEditOffset(value: string, offset: number): number | null {
   const caret = Math.max(0, Math.min(value.length, offset));
   const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
-  if (caret === lineStart) return lineStart;
   const lineEndIndex = value.indexOf('\n', caret);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
   const visibleStart = getRenderedMarkdownBlockBodyStartForLine(value, lineStart);
@@ -1846,6 +1955,11 @@ export function getRenderedMarkdownEnterEdit(
 ): MarkdownTextEdit | null {
   if (selectionStart !== selectionEnd) return null;
   const lineStartOffset = getRenderedMarkdownLineStartEditOffset(value, selectionStart);
+  const directListEnterEdit = lineStartOffset === null
+    ? (getCarrotListEnterEdit(value, selectionStart, selectionEnd)
+      ?? getMarkdownListEnterEdit(value, selectionStart, selectionEnd))
+    : null;
+  if (directListEnterEdit) return directListEnterEdit;
   const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, lineStartOffset ?? selectionStart);
   const insertionOffset = openingOffset === selectionStart
     ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
@@ -1858,6 +1972,7 @@ export function getRenderedMarkdownEnterEdit(
     ? null
     : (getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
       ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset));
+  if (!listEnterEdit && lineStartOffset === null && insertionOffset === selectionStart) return null;
   return listEnterEdit
     ?? {
       nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
@@ -2061,6 +2176,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
 
   const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
   if (emptyMarkerEdit) return emptyMarkerEdit;
+
+  const markerDeleteEdit = getRenderedMarkdownListMarkerDeleteBackwardEdit(input.value, selectionStart);
+  if (markerDeleteEdit) {
+    return {
+      nextValue: `${input.value.slice(0, markerDeleteEdit.from)}${markerDeleteEdit.insert}${input.value.slice(markerDeleteEdit.to)}`,
+      selectionStart: markerDeleteEdit.selection,
+      selectionEnd: markerDeleteEdit.selection,
+    };
+  }
 
   const listBodyDeleteEdit = getSingleCharacterRenderedListBodyDeleteEdit(
     input.value,
@@ -2573,7 +2697,7 @@ export type LibrarianEditorSession = {
 };
 
 export type LibrarianNavigationEntry = {
-  itemType: 'wiki' | 'artifact' | 'external' | 'ember';
+  itemType: 'wiki' | 'artifact' | 'external' | 'river' | 'ember';
   itemPath: string;
 };
 
@@ -2993,6 +3117,7 @@ interface LibrarianViewProps {
   active?: boolean;
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
+  onNavigateToSignIn?: () => void;
   browserLibrarySurface?: boolean;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   onFocusChromeActiveChange?: (active: boolean) => void;
@@ -3104,17 +3229,20 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onNavigateToSignIn, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
   const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
+  const handledInitialOpenTargetKeyRef = useRef<string | null>(null);
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
   const initialSelection = useMemo(
     () => resolveLibrarianInitialSelection(restoredSelection, restoredEditorSession, hadInitialOpenTargetRef.current),
     [restoredEditorSession, restoredSelection],
   );
   const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
+  const restoredExternalSessionOpenedRef = useRef(false);
+  const restoredInitialExternalSelectionOpenedRef = useRef(false);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(() => initialSelection?.type === 'artifact' ? initialSelection.path : null);
@@ -3186,11 +3314,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   });
   const selectedItemIdRef = useRef<string | null>(selectedItemId);
   const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => initialSelection?.type ?? null);
+  const selectedItemTypeRef = useRef<LibrarianSelectedItemType>(selectedItemType);
   const canUseFocusImmersive =
     selectedItemType === 'wiki' ||
     selectedItemType === 'artifact' ||
     selectedItemType === 'external' ||
-    selectedItemType === 'bookmarks';
+    selectedItemType === 'bookmarks' ||
+    selectedItemType === 'river';
   const selectedItemUsesLegacyImmersive = selectedItemType === null;
   const [isFullScreen, setIsFullScreen] = useState(() => (
     initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
@@ -3216,7 +3346,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive, setFocusImmersive]);
   useLayoutEffect(() => {
     selectedItemIdRef.current = selectedItemId;
-  }, [selectedItemId]);
+    selectedItemTypeRef.current = selectedItemType;
+  }, [selectedItemId, selectedItemType]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const markdownEditorEdgeFadesRef = useRef({ top: false, bottom: false });
   const [markdownDocumentTopFade, setMarkdownDocumentTopFade] = useState(false);
@@ -3259,6 +3390,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const renderedMarkdownEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
   const activeReadingPathRef = useRef<string | null>(null);
   const activeReadingContentRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileContextRef = useRef<string | null>(null);
+  const lastReportedActiveLibraryFileHasSelectionRef = useRef(false);
   const markdownEditorFocusedRef = useRef(false);
   const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
@@ -3326,6 +3459,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
   const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
   const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [isPreparingKindle, setIsPreparingKindle] = useState(false);
+  const [riverSharePickerOpen, setRiverSharePickerOpen] = useState(false);
+  const [riverTargets, setRiverTargets] = useState<RiverTarget[]>([]);
+  const [selectedRiverTargetIds, setSelectedRiverTargetIds] = useState<string[]>([]);
+  const [riverDefaultTargetIds, setRiverDefaultTargetIds] = useState<string[]>([]);
+  const [riverTargetsLoading, setRiverTargetsLoading] = useState(false);
+  const [riverPickerError, setRiverPickerError] = useState<string | null>(null);
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
@@ -3398,7 +3538,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
   const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
-  const [codexTerminalLineMapRevision, setCodexTerminalLineMapRevision] = useState(0);
   const [terminalPastePopover, setTerminalPastePopover] = useState<TerminalPastePopover>(null);
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -3410,7 +3549,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [codexTerminalResizing, setCodexTerminalResizing] = useState(false);
   const userResizingPanel = isResizing || codexTerminalResizing;
   const previousSidebarCollapsedRef = useRef(sidebarCollapsed);
-  const codexTerminalLineMapRefreshFrameRef = useRef<number | null>(null);
   const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && selectedItemId === null && !isFullScreen;
   const responsivePanelState = getResponsivePanelState({
     containerWidth: responsivePanelSize.width,
@@ -3994,24 +4132,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const next = !!scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight > 1 && scrollEl.scrollTop > 1;
     setRenderedDocumentTopFade((current) => current === next ? current : next);
   }, []);
-  const scheduleCodexTerminalLineMapRefresh = useCallback(() => {
-    if (!codexTerminalVisible || codexTerminalLineMapRefreshFrameRef.current !== null) return;
-    codexTerminalLineMapRefreshFrameRef.current = window.requestAnimationFrame(() => {
-      codexTerminalLineMapRefreshFrameRef.current = null;
-      setCodexTerminalLineMapRevision((revision) => revision + 1);
-    });
-  }, [codexTerminalVisible]);
-  useEffect(() => () => {
-    if (codexTerminalLineMapRefreshFrameRef.current !== null) {
-      window.cancelAnimationFrame(codexTerminalLineMapRefreshFrameRef.current);
-      codexTerminalLineMapRefreshFrameRef.current = null;
-    }
-  }, []);
-
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => initialSelection?.type === 'bookmarks');
+  const [riverEverShown, setRiverEverShown] = useState<boolean>(false);
   const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
@@ -4032,6 +4157,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
   const [externalOpenFile, setExternalOpenFile] = useState<Reading | null>(null);
+  const wikiSelectedRelPathRef = useRef<string | null>(wikiSelectedRelPath);
+  const externalOpenPathRef = useRef<string | null>(externalOpenFile?.path ?? null);
+  useLayoutEffect(() => {
+    wikiSelectedRelPathRef.current = wikiSelectedRelPath;
+    externalOpenPathRef.current = externalOpenFile?.path ?? null;
+  }, [externalOpenFile?.path, wikiSelectedRelPath]);
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
@@ -4044,26 +4175,48 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
+  const libraryNavigationRequestIdRef = useRef(0);
+  const beginLibraryNavigation = useCallback((): number => {
+    libraryNavigationRequestIdRef.current += 1;
+    return libraryNavigationRequestIdRef.current;
+  }, []);
+  const isCurrentLibraryNavigation = useCallback((requestId: number): boolean => (
+    libraryNavigationRequestIdRef.current === requestId
+  ), []);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`artifact:${artifactPath}`);
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
-  }, []);
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   // Load an external markdown file (outside wiki root) into the editor.
   // Deduped against the current external selection so re-opening the same
   // file is a no-op — preserves the editor's undo stack.
   const selectExternalFile = useCallback(async (absPath: string): Promise<Reading | null> => {
+    traceLibraryNavigation('select-external-start', {
+      absPath,
+      currentExternalPath: externalOpenFile?.path ?? null,
+      selectedItemType,
+    });
     if (externalOpenFile?.path === absPath && selectedItemType === 'external') {
+      traceLibraryNavigation('select-external-same-file', { absPath });
       return externalOpenFile;
     }
+    const requestId = beginLibraryNavigation();
     await flushSaveRef.current?.();
+    if (!isCurrentLibraryNavigation(requestId)) return null;
     const file = await window.externalAPI?.open(absPath);
-    if (!file) return null;
+    if (!isCurrentLibraryNavigation(requestId)) return null;
+    if (!file) {
+      traceLibraryNavigation('select-external-open-null', { absPath });
+      return null;
+    }
     const reading = readingFromExternalMarkdownFile(file);
     setExternalOpenFile(reading);
     setSelectedItemId(`external:${file.path}`);
@@ -4078,30 +4231,61 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       title: reading.title,
       lastOpenedAt: Date.now(),
     });
+    traceLibraryNavigation('select-external-done', {
+      requestedPath: absPath,
+      openedPath: file.path,
+      title: reading.title,
+    });
     return reading;
-  }, [externalOpenFile?.path, selectedItemType]);
+  }, [beginLibraryNavigation, externalOpenFile?.path, isCurrentLibraryNavigation, selectedItemType]);
+  const selectExternalFileRef = useRef(selectExternalFile);
+  useLayoutEffect(() => {
+    selectExternalFileRef.current = selectExternalFile;
+  }, [selectExternalFile]);
 
-  const openWikiPage = useCallback((relPath: string) => {
+  const openWikiPage = useCallback((relPath: string): number | null => {
     const normalized = normalizeWikiRelPath(relPath);
-    if (!normalized) return;
+    traceLibraryNavigation('open-wiki-request', { relPath, normalized });
+    if (!normalized) {
+      traceLibraryNavigation('open-wiki-empty', { relPath });
+      return null;
+    }
+    const requestId = beginLibraryNavigation();
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
     setWikiSelectedPageLoading(true);
     setSelectedPath(null);
     setExternalOpenFile(null);
-  }, []);
+    traceLibraryNavigation('open-wiki-state-set', { relPath: normalized });
+    return requestId;
+  }, [beginLibraryNavigation]);
 
   useEffect(() => {
+    traceLibraryNavigation('restore-editor-session-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      hasInitialSelection: Boolean(initialSelection),
+      sessionItemType: restoredEditorSessionRef.current?.itemType ?? null,
+      sessionItemPath: restoredEditorSessionRef.current?.itemPath ?? null,
+    });
     if (hadInitialOpenTargetRef.current || initialSelection) return;
+    if (restoredExternalSessionOpenedRef.current) return;
     const session = restoredEditorSessionRef.current;
     if (session?.itemType !== 'external') return;
+    restoredExternalSessionOpenedRef.current = true;
     void selectExternalFile(session.itemPath);
   }, [initialSelection, selectExternalFile]);
 
   useEffect(() => {
+    traceLibraryNavigation('restore-initial-selection-effect', {
+      hasInitialOpenTarget: hadInitialOpenTargetRef.current,
+      initialSelectionType: initialSelection?.type ?? null,
+      initialSelectionPath: initialSelection?.type === 'external' ? initialSelection.path : null,
+    });
     if (hadInitialOpenTargetRef.current) return;
     if (initialSelection?.type !== 'external') return;
+    if (restoredInitialExternalSelectionOpenedRef.current) return;
+    restoredInitialExternalSelectionOpenedRef.current = true;
     void selectExternalFile(initialSelection.path);
   }, [initialSelection, selectExternalFile]);
 
@@ -4127,6 +4311,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [openWikiPage]);
 
   const openBookmarksPane = useCallback(() => {
+    beginLibraryNavigation();
     setSelectedItemId(BOOKMARKS_ITEM_ID);
     setSelectedItemType('bookmarks');
     setSelectedPath(null);
@@ -4134,7 +4319,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setWikiSelectedPageLoading(false);
     setExternalOpenFile(null);
     setContentMode('rendered');
-  }, []);
+  }, [beginLibraryNavigation]);
 
   const openLinkAction = useCallback((action: LinkAction) => {
     switch (action.kind) {
@@ -4188,6 +4373,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'external' && externalOpenFile?.path) {
       return { itemType: 'external', itemPath: externalOpenFile.path };
     }
+    if (selectedItemType === 'river') {
+      return { itemType: 'river', itemPath: RIVER_ITEM_ID };
+    }
     if (selectedItemType === 'ember') {
       return { itemType: 'ember', itemPath: EMBER_ITEM_ID };
     }
@@ -4204,6 +4392,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(entry.itemPath);
     } else if (entry.itemType === 'artifact') {
       selectArtifactPath(entry.itemPath);
+    } else if (entry.itemType === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (entry.itemType === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -4405,10 +4600,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
       setBookmarksEverShown(true);
     }
+    if (selectedItemType === 'river' && !riverEverShown) {
+      setRiverEverShown(true);
+    }
     if (selectedItemType === 'ember' && !emberEverShown) {
       setEmberEverShown(true);
     }
-  }, [selectedItemType, bookmarksEverShown, emberEverShown]);
+  }, [selectedItemType, bookmarksEverShown, riverEverShown, emberEverShown]);
 
   useEffect(() => {
     onSelectedItemTypeChange?.(active ? selectedItemType : null);
@@ -4762,6 +4960,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'ember';
   const effectiveFullScreen = isFullScreen || focusImmersive;
   const activeReadingPath = activeReading?.path ?? null;
+  useEffect(() => {
+    if (!riverSharePickerOpen) return;
+    let cancelled = false;
+    setRiverTargetsLoading(true);
+    setRiverPickerError(null);
+    void Promise.all([
+      window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
+      activeReadingPath && sharedFileStatus?.shared
+        ? window.sharedFilesAPI?.getAudience?.(activeReadingPath) ?? Promise.resolve(null)
+        : Promise.resolve(null),
+    ])
+      .then(([targets, audience]) => {
+        if (cancelled) return;
+        const nextTargets = targets ?? [];
+        const defaultIds = nextTargets
+          .filter((target) => target.committable && target.isDefault)
+          .map((target) => target.id);
+        const audienceIds = audience?.shared
+          ? audience.targets.map((target) => target.id)
+          : [];
+        setRiverTargets(nextTargets);
+        setRiverDefaultTargetIds(defaultIds);
+        setSelectedRiverTargetIds(audienceIds.length > 0 ? audienceIds : defaultIds);
+        setRiverPickerError(audience?.error ?? null);
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River target lookup failed:', error);
+        if (!cancelled) {
+          setRiverTargets([]);
+          setRiverDefaultTargetIds([]);
+          setSelectedRiverTargetIds([]);
+          setRiverPickerError('Could not load River targets.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRiverTargetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeReadingPath, riverSharePickerOpen, sharedFileStatus?.shared]);
   const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
   const activeIsHtmlDocument = activeDocumentKind === 'html';
@@ -5042,21 +5281,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, []);
 
-  type ActiveLibraryFileSelectionContext = {
-    type: 'wiki' | 'external';
-    rootPath: string;
-    relPath: string;
-    filePath: string;
-    title: string;
-    selectionStart?: number;
-    selectionEnd?: number;
-    selectionText?: string;
-  };
-
   const withActiveLibraryFileSelectionContext = useCallback((context: ActiveLibraryFileSelectionContext): ActiveLibraryFileSelectionContext => {
     const selection = getActiveLibraryFileSelectionContext();
     return selection ? { ...context, ...selection } : context;
   }, [getActiveLibraryFileSelectionContext]);
+
+  const publishActiveLibraryFileContext = useCallback((
+    context: ActiveLibraryFileSelectionContext | null,
+    options: { force?: boolean } = {},
+  ) => {
+    const nextKey = getActiveLibraryFileContextKey(context);
+    if (!options.force && lastReportedActiveLibraryFileContextRef.current === nextKey) return;
+    lastReportedActiveLibraryFileContextRef.current = nextKey;
+    lastReportedActiveLibraryFileHasSelectionRef.current = hasActiveLibraryFileSelectionContext(context);
+    void window.commandsAPI?.setActiveLibraryFileContext?.(context);
+  }, []);
 
   const inferWikiRootPathForContext = useCallback((filePath: string, relPath: string): string => {
     const normalizedFilePath = filePath.replace(/\\/g, '/');
@@ -5065,9 +5304,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return normalizedFilePath.endsWith(suffix) ? normalizedFilePath.slice(0, -suffix.length) : '';
   }, []);
 
-  const reportActiveLibraryFileContext = useCallback(() => {
+  const reportActiveLibraryFileContext = useCallback((options: { force?: boolean } = {}) => {
     if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')) {
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
@@ -5076,47 +5315,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     ));
     if (!sidebarItem?.rootPath || !sidebarItem.relPath || (sidebarItem.type !== 'wiki' && sidebarItem.type !== 'external')) {
       if (selectedItemType === 'wiki' && wikiSelectedRelPath && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'wiki',
           rootPath: inferWikiRootPathForContext(activeReading.path, wikiSelectedRelPath),
           relPath: wikiSelectedRelPath,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
       if (selectedItemType === 'external' && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'external',
           rootPath: '',
           relPath: activeReading.path,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
       if (selectedItemType === 'artifact' && activeReading.path) {
-        void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+        publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
           type: 'external',
           rootPath: '',
           relPath: activeReading.path,
           filePath: activeReading.path,
           title: activeReading.title,
-        }));
+        }), options);
         return;
       }
-      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      publishActiveLibraryFileContext(null, options);
       return;
     }
 
-    void window.commandsAPI?.setActiveLibraryFileContext?.(withActiveLibraryFileSelectionContext({
+    publishActiveLibraryFileContext(withActiveLibraryFileSelectionContext({
       type: sidebarItem.type,
       rootPath: sidebarItem.rootPath,
       relPath: sidebarItem.relPath,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
-    }));
-  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
+    }), options);
+  }, [active, activeIsMarkdownDocument, activeReading, inferWikiRootPathForContext, publishActiveLibraryFileContext, selectedItemId, selectedItemType, wikiSelectedRelPath, withActiveLibraryFileSelectionContext]);
 
   useEffect(() => {
     reportActiveLibraryFileContext();
@@ -5125,7 +5364,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     const reportCurrentContext = () => {
-      reportActiveLibraryFileContext();
+      reportActiveLibraryFileContext({ force: true });
     };
     window.addEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, reportCurrentContext);
     return () => {
@@ -5711,6 +5950,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
+  const codexTerminalPageContextSourceContent = contentMode === 'markdown' ? editContent : displaySourceBody;
+  const codexTerminalPageContextIdentity = `${selectedItemType ?? 'none'}:${activeReadingPath ?? ''}:${contentMode}`;
+  const [debouncedCodexTerminalPageContextContent, setDebouncedCodexTerminalPageContextContent] = useState({
+    identity: codexTerminalPageContextIdentity,
+    content: codexTerminalPageContextSourceContent,
+  });
+  const codexTerminalPageContextSourceContentRef = useRef(codexTerminalPageContextSourceContent);
+  codexTerminalPageContextSourceContentRef.current = codexTerminalPageContextSourceContent;
+  useEffect(() => {
+    // File changes should attach immediately; content-only edits stay off the keystroke path.
+    setDebouncedCodexTerminalPageContextContent({
+      identity: codexTerminalPageContextIdentity,
+      content: codexTerminalPageContextSourceContentRef.current,
+    });
+  }, [codexTerminalPageContextIdentity]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCodexTerminalPageContextContent({
+        identity: codexTerminalPageContextIdentity,
+        content: codexTerminalPageContextSourceContent,
+      });
+    }, CODEX_TERMINAL_PAGE_CONTEXT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [codexTerminalPageContextIdentity, codexTerminalPageContextSourceContent]);
+  const codexTerminalPageContextContent =
+    debouncedCodexTerminalPageContextContent.identity === codexTerminalPageContextIdentity
+      ? debouncedCodexTerminalPageContextContent.content
+      : codexTerminalPageContextSourceContent;
   const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
     if (!activeReading) return null;
     const kind: CodexTerminalPageContextInput['kind'] =
@@ -5718,41 +5985,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         ? selectedItemType
         : 'unknown';
     const selectionText = window.getSelection()?.toString().trim() || undefined;
-    const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(activeReading.content);
-    const renderedVisualRows = renderedMarkdownEditorRef.current?.getVisualLineMap() ?? [];
-    const renderedLineMapping: CodexTerminalLineMapping = renderedVisualRows.length > 0
-      ? {
-          activeLineKind: 'renderedVisual',
-          contentMode,
-          visibleRowsOnly: true,
-          lines: renderedVisualRows.slice(0, 400).map((line) => ({
-            visibleLine: line.visualLine,
-            sourceLine: bodyStartLineIndex + line.sourceLine,
-            rowInSourceLine: line.rowInSourceLine,
-            rowsInSourceLine: line.rowsInSourceLine,
-            text: line.sourceLineText,
-          })),
-        }
-      : {
-          ...buildSourceLineMapping(displaySourceBody, {
-            contentMode,
-            sourceLineOffset: bodyStartLineIndex,
-          }),
-          activeLineKind: 'renderedVisual',
-          visibleRowsOnly: false,
-        };
     return {
       title: activeReading.title,
       path: activeReading.path,
       kind,
       contentMode,
-      content: contentMode === 'markdown' ? editContent : displaySourceBody,
+      content: codexTerminalPageContextContent,
       selectionText,
-      lineMapping: contentMode === 'markdown'
-        ? buildSourceLineMapping(editContent, { contentMode })
-        : renderedLineMapping,
     };
-  }, [activeReading, codexTerminalLineMapRevision, contentMode, displaySourceBody, editContent, selectedItemType]);
+  }, [activeReading, codexTerminalPageContextContent, contentMode, selectedItemType]);
   const shouldLoadMarkdownLinkRelationDocuments = (
     active
     && !!activeReading
@@ -7262,7 +7503,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       renderedEditUndoStackRef.current = [];
     }
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
-    reportActiveLibraryFileContext();
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
     showSelectionPastePopoverFromEditorSnapshot(snapshot);
     updateRenderedEditorWikiLinkCompletion(snapshot);
     scheduleEditorSessionPersistRef.current?.();
@@ -7811,7 +8054,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ) => {
     const reason = snapshot.docChanged ? 'markdown-input' : 'markdown-selection';
     latestMarkdownCursorSnapshotRef.current = { ...snapshot, timestamp: Date.now(), stage: reason };
-    reportActiveLibraryFileContext();
+    if (shouldReportActiveLibraryFileContextForSelection(snapshot, lastReportedActiveLibraryFileHasSelectionRef.current)) {
+      reportActiveLibraryFileContext();
+    }
     recordRenderedEditorDebug('markdown-cursor-change', () => ({
       reason,
       cursor: getMarkdownCursorDebugState(reason, snapshot),
@@ -8214,17 +8459,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
-      void (async () => {
-        await flushCurrentEdit();
-        await window.commandsAPI?.runLocalCommand?.({
-          commandName: 'improve',
-          mode: 'selection',
-          selection: {
-            start: selection.start,
-            end: selection.end,
-          },
-        });
-      })().catch(() => {});
+      void flushCurrentEdit()
+        .then(() => window.commandsAPI?.runGlobalImproveSelection?.())
+        .catch(() => {});
       return true;
     }
 
@@ -8647,7 +8884,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (contentMode !== 'markdown') return;
     const frame = requestAnimationFrame(() => updateMarkdownEditorFades(markdownCodeEditorRef.current));
     return () => cancelAnimationFrame(frame);
-  }, [activeReading?.path, contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
+  }, [activeReading?.path, contentMode, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
 
   useEffect(() => {
     if (!markdownUrlPasteChoice) return;
@@ -8802,6 +9039,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetTitle = activeReading.title;
     const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = removeEmptyMarkdownCommentPlaceholders(editContent);
+    const previousSavedContent = lastSavedContentRef.current;
     const targetSharedFileStatus = sharedFileStatus;
     let done = false;
     const doSave = async () => {
@@ -8809,7 +9047,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       done = true;
       setSaveStatus('saving');
       try {
-        const portableContent = targetReadingPath
+        const portableContent = targetReadingPath && markdownPortableImagesChanged(previousSavedContent, targetContent)
           ? (await window.markdownImagesAPI?.makeImagesPortable(targetReadingPath, targetContent))?.content ?? targetContent
           : targetContent;
         let result: DocumentSaveResult | null | undefined;
@@ -8925,12 +9163,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useEffect(() => {
-    if (!initialOpenTarget) return;
+    if (!initialOpenTarget) {
+      traceLibraryNavigation('initial-open-target-cleared');
+      handledInitialOpenTargetKeyRef.current = null;
+      return;
+    }
+    const targetKey = JSON.stringify(initialOpenTarget);
+    if (handledInitialOpenTargetKeyRef.current === targetKey) {
+      traceLibraryNavigation('initial-open-target-skip-duplicate', { target: initialOpenTarget });
+      return;
+    }
+    handledInitialOpenTargetKeyRef.current = targetKey;
+    traceLibraryNavigation('initial-open-target-handle', { target: initialOpenTarget });
     if (initialOpenTarget.kind === 'wiki') {
       void (async () => {
         setSearchQuery('');
-        openWikiPage(initialOpenTarget.path);
+        const requestId = openWikiPage(initialOpenTarget.path);
         const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
+        if (requestId !== null && !isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, page?.content);
         if (page) {
           dispatchLocalWikiAdded(page);
@@ -8939,12 +9189,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = page.content;
           lastSavedVersionRef.current = page.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'artifact') {
       void (async () => {
-        selectArtifactPath(initialOpenTarget.path);
+        const requestId = selectArtifactPath(initialOpenTarget.path);
         const reading = await window.librarianAPI?.getReading(initialOpenTarget.path);
+        if (!isCurrentLibraryNavigation(requestId)) return;
         applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
         if (reading) {
           setSelectedReading(reading);
@@ -8952,11 +9204,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           lastSavedContentRef.current = reading.content;
           lastSavedVersionRef.current = reading.documentVersion;
         }
+      })().finally(() => {
         onInitialOpenTargetConsumed?.();
-      })();
+      });
     } else if (initialOpenTarget.kind === 'external') {
       void selectExternalFile(initialOpenTarget.path).then((reading) => {
-        applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading?.content);
+        if (reading) applyInitialOpenMarkdownTargetMode(initialOpenTarget, reading.content);
       }).finally(() => {
         onInitialOpenTargetConsumed?.();
       });
@@ -8979,7 +9232,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setContentMode('rendered');
       onInitialOpenTargetConsumed?.();
     }
-  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
+  }, [applyInitialOpenMarkdownTargetMode, initialOpenTarget, isCurrentLibraryNavigation, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
   const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.builtin) return false;
@@ -9018,10 +9271,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedPath === autoPopArtifactPath;
 
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    beginLibraryNavigation();
+    traceLibraryNavigation('handle-select-start', {
+      itemId: item.id,
+      itemType: item.type,
+      itemRelPath: item.relPath ?? null,
+      itemAbsPath: item.absPath ?? null,
+      previousSelectedItemId: selectedItemIdRef.current,
+      previousSelectedItemType: selectedItemType,
+      previousWikiRelPath: wikiSelectedRelPath,
+      previousExternalPath: externalOpenFile?.path ?? null,
+    });
     selectedItemIdRef.current = item.id;
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
     await flushCurrentEdit();
+    traceLibraryNavigation('handle-select-after-flush', {
+      itemId: item.id,
+      itemType: item.type,
+    });
     if (item.taggedDocId && item.hasUnread) {
       void window.taggedDocsAPI?.markRead(item.taggedDocId);
     }
@@ -9040,6 +9308,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
       setContentMode('rendered');
+    } else if (item.type === 'river') {
+      setSelectedItemId(RIVER_ITEM_ID);
+      setSelectedItemType('river');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else if (item.type === 'ember') {
       setSelectedItemId(EMBER_ITEM_ID);
       setSelectedItemType('ember');
@@ -9054,7 +9329,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+    traceLibraryNavigation('handle-select-done', {
+      itemId: item.id,
+      itemType: item.type,
+    });
+  }, [beginLibraryNavigation, flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded, externalOpenFile?.path, selectedItemType, wikiSelectedRelPath]);
 
   const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
     const clearSource = isSidebarItemActiveDocument(item);
@@ -9176,40 +9455,41 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  const handleToggleSharedFile = useCallback(async () => {
+  const openRiverSharePicker = useCallback(() => {
+    setSelectedRiverTargetIds([]);
+    setRiverPickerError(null);
+    setRiverSharePickerOpen(true);
+  }, []);
+
+  const commitRiverTargets = useCallback(async (targets: RiverShareTarget[]) => {
     if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
-    if (!sharedFileStatus?.shared && !sharedFilesCanWrite) {
-      flashCopyFeedback('Accept team invite to share');
+    if (targets.length === 0) {
+      flashCopyFeedback('Choose a River target');
       return;
     }
 
     setIsTogglingSharedFile(true);
     try {
       await flushCurrentEdit();
-      if (sharedFileStatus?.shared) {
-        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
-        if (success) {
-          setSharedFileStatus({ shared: false });
-          window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
-          flashCopyFeedback('Removed from River');
-        } else {
-          flashCopyFeedback('River remove failed');
-        }
-        return;
-      }
-
-      const content = activeReadingContentRef.current ?? activeReading.content;
-      const status = await window.sharedFilesAPI?.share({
-        filePath: activeReadingPath,
-        title: activeReading.title,
-        content,
-        type: inferSharedFileTypeForActiveReading(activeReadingPath),
-      });
+      const status = sharedFileStatus?.shared
+        ? await window.sharedFilesAPI?.updateAudience({
+          filePath: activeReadingPath,
+          sharedId: sharedFileStatus.sharedId,
+          targets,
+        })
+        : await window.sharedFilesAPI?.share({
+          filePath: activeReadingPath,
+          title: activeReading.title,
+          content: activeReadingContentRef.current ?? activeReading.content,
+          type: inferSharedFileTypeForActiveReading(activeReadingPath),
+          targets,
+        });
       const nextStatus = status ?? { shared: false, error: 'River share failed' };
       setSharedFileStatus(nextStatus);
       if (nextStatus.shared) {
+        setRiverSharePickerOpen(false);
         window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
-        flashCopyFeedback('Added to River');
+        flashCopyFeedback(sharedFileStatus?.shared ? 'River audience updated' : 'Added to River');
       } else {
         flashCopyFeedback(nextStatus.error ?? 'River share failed');
       }
@@ -9219,7 +9499,58 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } finally {
       setIsTogglingSharedFile(false);
     }
-  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable, sharedFilesCanWrite]);
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFileStatus?.sharedId, sharedFilesAvailable]);
+
+  const updateRiverDefaults = useCallback((targetIds: string[]) => {
+    setRiverDefaultTargetIds(targetIds);
+    const targetMap = new Map(riverTargets.map((target) => [target.id, target]));
+    const destinations = targetIds
+      .map((targetId, position) => {
+        const target = targetMap.get(targetId);
+        return target && target.committable ? { kind: target.kind, targetId: target.targetId, position } : null;
+      })
+      .filter((target): target is { kind: RiverTarget['kind']; targetId: string; position: number } => target !== null);
+    void window.sharedFilesAPI?.setDefaultDestinations?.(destinations)
+      .then((result) => {
+        if (!result?.ok) {
+          const message = result?.error ?? 'River defaults update failed';
+          setRiverPickerError(message);
+          flashCopyFeedback(message);
+        }
+      })
+      .catch((error) => {
+        console.warn('[Librarian] River defaults update failed:', error);
+        setRiverPickerError('River defaults update failed');
+        flashCopyFeedback('River defaults update failed');
+      });
+  }, [flashCopyFeedback, riverTargets]);
+
+  const handleToggleSharedFile = useCallback(() => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+    openRiverSharePicker();
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, openRiverSharePicker, sharedFilesAvailable]);
+
+  const unshareFromRiver = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument || !sharedFileStatus?.shared) return;
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+      if (success) {
+        setSharedFileStatus({ shared: false });
+        setRiverSharePickerOpen(false);
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback('Removed from River');
+      } else {
+        flashCopyFeedback('River remove failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River remove error:', err);
+      flashCopyFeedback('River remove failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
 
   const toggleActiveHtmlLayout = useCallback(() => {
     if (!activeIsHtmlDocument || !activeReadingPath) return;
@@ -9295,6 +9626,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       console.warn('[Librarian] Failed to copy path:', err);
     }
   }, [activeReading?.path, flashCopyFeedback, writeTextToClipboard]);
+
+  const prepareActiveReadingForKindle = useCallback(async () => {
+    if (!activeReadingPath || !activeIsMarkdownDocument || isPreparingKindle) return;
+    const prepareKindleDelivery = window.librarianAPI?.prepareKindleDelivery;
+    if (!prepareKindleDelivery) {
+      flashCopyFeedback('Kindle unavailable');
+      return;
+    }
+
+    setIsPreparingKindle(true);
+    try {
+      await flushCurrentEdit();
+      const result = await prepareKindleDelivery(activeReadingPath);
+      if (result.status === 'error' || result.status === 'blocked') {
+        flashCopyFeedback(result.message ?? 'Kindle prepare failed');
+        return;
+      }
+
+      const preflight = result.sendPreflight;
+      if (preflight) {
+        await writeTextToClipboard([
+          `To: ${preflight.recipientEmail}`,
+          `From: ${preflight.senderEmail}`,
+          `Subject: ${preflight.subject}`,
+          `Attachment: ${preflight.attachmentPath}`,
+        ].join('\n'));
+      }
+      if (result.artifactPath) {
+        void window.shellAPI?.showItemInFolder(result.artifactPath);
+      }
+      flashCopyFeedback(result.status === 'already_sent' ? 'Already sent to Kindle' : 'Kindle EPUB ready');
+    } catch (err) {
+      console.warn('[Librarian] Failed to prepare Kindle delivery:', err);
+      flashCopyFeedback('Kindle prepare failed');
+    } finally {
+      setIsPreparingKindle(false);
+    }
+  }, [activeIsMarkdownDocument, activeReadingPath, flashCopyFeedback, flushCurrentEdit, isPreparingKindle, writeTextToClipboard]);
 
   useEffect(() => {
     return () => {
@@ -9375,31 +9744,68 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
 
   useEffect(() => {
-    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); setWikiSelectedPageLoading(false); return; }
+    if (!wikiSelectedRelPath) {
+      traceLibraryNavigation('wiki-load-clear-empty-relpath');
+      setWikiSelectedPage(null);
+      setWikiSelectedPageLoading(false);
+      return;
+    }
     let cancelled = false;
     setWikiSelectedPageLoading(true);
+    traceLibraryNavigation('wiki-load-start', { relPath: wikiSelectedRelPath });
     (async () => {
-      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-      if (cancelled) return;
-      if (page) {
-        if (page.relPath !== wikiSelectedRelPath) {
-          setWikiSelectedRelPath(page.relPath);
-          setSelectedItemId(`wiki:${page.relPath}`);
+      try {
+        const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-cancelled', { relPath: wikiSelectedRelPath });
+          return;
         }
-        setWikiSelectedPage(readingFromWikiPage(page));
-        void window.recentAPI?.visit({
-          kind: 'wiki',
-          path: page.relPath,
-          title: page.title,
-          lastOpenedAt: Date.now(),
+        if (page) {
+          if (page.relPath !== wikiSelectedRelPath) {
+            traceLibraryNavigation('wiki-load-normalized-relpath', {
+              requestedRelPath: wikiSelectedRelPath,
+              pageRelPath: page.relPath,
+            });
+            setWikiSelectedRelPath(page.relPath);
+            setSelectedItemId(`wiki:${page.relPath}`);
+          }
+          setWikiSelectedPage(readingFromWikiPage(page));
+          traceLibraryNavigation('wiki-load-done', {
+            requestedRelPath: wikiSelectedRelPath,
+            pageRelPath: page.relPath,
+            absPath: page.absPath,
+            title: page.title,
+          });
+          void window.recentAPI?.visit({
+            kind: 'wiki',
+            path: page.relPath,
+            title: page.title,
+            lastOpenedAt: Date.now(),
+          });
+        } else {
+          // Target relPath disappeared between index refresh and navigation —
+          // clear the stale render so the reader sees empty state instead of
+          // the previous page, which would look like "the link did nothing".
+          traceLibraryNavigation('wiki-load-null-page', { relPath: wikiSelectedRelPath });
+          setWikiSelectedPage(null);
+        }
+      } catch (error) {
+        console.warn('[Librarian] Failed to load wiki page:', error);
+        if (cancelled) {
+          traceLibraryNavigation('wiki-load-error-after-cancel', { relPath: wikiSelectedRelPath });
+          return;
+        }
+        traceLibraryNavigation('wiki-load-error', {
+          relPath: wikiSelectedRelPath,
+          error: error instanceof Error ? error.message : String(error),
         });
-      } else {
-        // Target relPath disappeared between index refresh and navigation —
-        // clear the stale render so the reader sees empty state instead of
-        // the previous page, which would look like "the link did nothing".
         setWikiSelectedPage(null);
+      } finally {
+        if (!cancelled) {
+          setWikiSelectedPageLoading(false);
+          traceLibraryNavigation('wiki-load-finish', { relPath: wikiSelectedRelPath });
+        }
       }
-      setWikiSelectedPageLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -10301,10 +10707,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // macOS `open-file` for paths outside the wiki root.
   useEffect(() => {
     const unsubscribe = window.externalAPI?.onOpenExternal((absPath) => {
-      void selectExternalFile(absPath);
+      traceLibraryNavigation('external-open-event', {
+        absPath,
+        selectedItemId: selectedItemIdRef.current,
+        selectedItemType: selectedItemTypeRef.current,
+        wikiSelectedRelPath: wikiSelectedRelPathRef.current,
+        externalOpenPath: externalOpenPathRef.current,
+      });
+      void selectExternalFileRef.current(absPath);
     });
     return () => unsubscribe?.();
-  }, [selectExternalFile]);
+  }, []);
 
   // Mirror the current file into the native macOS title bar (proxy icon +
   // Cmd-click menu showing the full path). Only external files get this —
@@ -10570,6 +10983,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSidebarHoverExpanded(false);
   }, []);
 
+  const inlineDrawUsesMarkdownOverlay = inlineDrawInsertion?.mode === 'markdown';
   const inlineDrawSurface = inlineDrawInsertion ? (
     <div
       role="region"
@@ -10578,9 +10992,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       style={{
         position: 'relative',
         width: '100%',
-        height: 'min(520px, calc(100vh - 180px))',
-        minHeight: '360px',
-        margin: '8px 0 18px 0',
+        height: inlineDrawUsesMarkdownOverlay ? '100%' : 'min(520px, calc(100vh - 180px))',
+        minHeight: inlineDrawUsesMarkdownOverlay ? 0 : '360px',
+        margin: inlineDrawUsesMarkdownOverlay ? 0 : '8px 0 18px 0',
         overflow: 'hidden',
         borderRadius: '8px',
         border: `1px solid ${theme.border}`,
@@ -10807,6 +11221,130 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
+  const riverPickerTargets = riverTargets.map(riverTargetToPickerTarget);
+  const selectedRiverTargets = riverTargets.filter((target) => selectedRiverTargetIds.includes(target.id) && target.committable);
+  const selectedRiverShareTargets: RiverShareTarget[] = selectedRiverTargets.map((target) => ({
+    id: target.id,
+    kind: target.kind,
+  }));
+  const riverPrimaryLabel = selectedRiverTargets.length === 1
+    ? sharedFileStatus?.shared
+      ? `Update ${selectedRiverTargets[0]?.label ?? 'River'}`
+      : `Share to ${selectedRiverTargets[0]?.label ?? 'River'}`
+    : selectedRiverTargets.length > 1
+      ? sharedFileStatus?.shared
+        ? `Update ${selectedRiverTargets.length} targets`
+        : `Share to ${selectedRiverTargets.length} targets`
+      : 'Choose a destination';
+
+  const toggleRiverTarget = (targetId: string) => {
+    setSelectedRiverTargetIds((current) => (
+      current.includes(targetId)
+        ? current.filter((id) => id !== targetId)
+        : [...current, targetId]
+    ));
+  };
+
+  const confirmRiverShare = () => {
+    if (selectedRiverShareTargets.length === 0) return;
+    void commitRiverTargets(selectedRiverShareTargets);
+  };
+
+  const riverSharePicker = riverSharePickerOpen ? (
+    <div
+      role="dialog"
+      aria-label="Share to River"
+      aria-modal="true"
+      onMouseDown={() => setRiverSharePickerOpen(false)}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 72,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.46)' : 'rgba(15,23,42,0.18)',
+      }}
+    >
+      <div
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(460px, 100%)',
+          maxHeight: 'min(560px, calc(100vh - 40px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1 ?? theme.bg,
+          boxShadow: theme.isDark ? '0 24px 70px rgba(0,0,0,0.55)' : '0 24px 70px rgba(15,23,42,0.2)',
+          padding: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: theme.text, fontSize: '15px', fontWeight: 650 }}>Share to River</div>
+            <div style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeReading?.title ?? 'Selected document'}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setRiverSharePickerOpen(false)}
+            style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: theme.textSecondary,
+              cursor: 'pointer',
+            }}
+          >
+            x
+          </button>
+        </div>
+        <RiverPicker
+          targets={riverPickerTargets}
+          selectedIds={selectedRiverTargetIds}
+          defaultIds={riverDefaultTargetIds}
+          surface="popover"
+          intent="share"
+          status={riverTargetsLoading ? 'loading' : riverPickerError ? 'error' : 'ready'}
+          disabled={isTogglingSharedFile}
+          errorMessage={riverPickerError}
+          emptyLabel="No River contacts or groups yet."
+          pendingOnlyLabel="No accepted River targets are available yet."
+          commitLabel={isTogglingSharedFile ? 'Sharing...' : riverPrimaryLabel}
+          onToggleTarget={toggleRiverTarget}
+          onCommit={confirmRiverShare}
+          onDefaultChange={updateRiverDefaults}
+        />
+        {sharedFileStatus?.shared && (
+          <button
+            type="button"
+            disabled={isTogglingSharedFile}
+            onClick={() => void unshareFromRiver()}
+            style={{
+              height: '32px',
+              borderRadius: '6px',
+              border: `1px solid ${theme.border}`,
+              backgroundColor: theme.surface2 ?? theme.bg,
+              color: '#dc2626',
+              cursor: isTogglingSharedFile ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 650,
+            }}
+          >
+            Remove from River
+          </button>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -10830,6 +11368,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     >
       <ScrollDiagnosticsHUD />
       {readerStatusFeedback}
+      {riverSharePicker}
       {effectiveSidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisible && (
         <div
           aria-hidden="true"
@@ -10996,6 +11535,36 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
+        {riverEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'river' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <RiverReader
+              active={active && selectedItemType === 'river'}
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              isFullScreen={effectiveFullScreen}
+              onNavigateBack={() => navigateHistory(-1)}
+              onNavigateForward={() => navigateHistory(1)}
+              onToggleFullScreen={toggleImmersive}
+              onOpenItem={(item) => {
+                if (!item.cachePath) {
+                  flashCopyFeedback('River item is not cached yet');
+                  return;
+                }
+                void selectExternalFile(item.cachePath);
+              }}
+              onActionFeedback={flashCopyFeedback}
+              onNavigateToSignIn={onNavigateToSignIn}
+            />
+          </div>
+        )}
         {emberEverShown && (
           <div
             style={{
@@ -11013,7 +11582,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'river' && selectedItemType !== 'ember' && (
         <div
           data-ft-reader-editor-pane="true"
           style={{
@@ -11189,23 +11758,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       activeReadingBreadcrumbLabel
                     )}
                   </span>
-                  {selectedItemType === 'external' && (
-                    <span
-                      style={{
-                        fontSize: '9px',
-                        fontWeight: 600,
-                        letterSpacing: '0.4px',
-                        textTransform: 'uppercase',
-                        color: theme.isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        padding: '2px 6px',
-                        borderRadius: '10px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      External
-                    </span>
-                  )}
                 </div>
               )}
               {focusToolbarControlsVisible && (
@@ -11249,9 +11801,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   shareStatus={sharedFileStatus}
                   isSharing={isTogglingSharedFile}
                   onToggleShare={handleToggleSharedFile}
-                  showShare={sharedFilesAvailable && (sharedFilesCanWrite || !!sharedFileStatus?.shared) && activeIsMarkdownDocument}
+                  showShare={sharedFilesAvailable && activeIsMarkdownDocument}
                   shareTitle="Add to River (shared)"
-                  sharedTitle="Remove from River (shared)"
+                  sharedTitle="Edit River audience (shared)"
+                  onPrepareKindle={prepareActiveReadingForKindle}
+                  showKindle={activeIsMarkdownDocument}
+                  kindlePreparing={isPreparingKindle}
+                  kindleTitle="Prepare Kindle EPUB"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                   onOpenInNewWindow={activeReadingPath && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external') ? openActiveDocumentInWindow : undefined}
@@ -11455,7 +12011,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           onScroll={(e) => {
             if (contentMode !== 'markdown') {
               updateRenderedDocumentTopFade(e.currentTarget);
-              scheduleCodexTerminalLineMapRefresh();
             }
           }}
           style={{
@@ -11618,19 +12173,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     blockCursorOpacity={renderedBlockCursorOpacity}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
-	                    dataAttributes={{
-	                      'data-ft-quality-editor': 'markdown',
-	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
-	                      'data-ft-agent-file-path': activeReading.path,
-	                      'data-ft-agent-title': activeReading.title,
-	                    }}
-	                  />
+                    dataAttributes={{
+                      'data-ft-quality-editor': 'markdown',
+                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
+                      'data-ft-agent-file-path': activeReading.path,
+                      'data-ft-agent-title': activeReading.title,
+                    }}
+                  />
                 </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownMentionSuggestion, 'mention')}
                 {renderMarkdownEmojiSuggestionMenu(applyMarkdownEmojiSuggestion)}
                 {renderMarkdownSlashCommandMenu(applyMarkdownSlashCommandSuggestion)}
-                {inlineDrawInsertion?.mode === 'markdown' ? inlineDrawSurface : null}
+                {inlineDrawUsesMarkdownOverlay ? (
+                  <div
+                    data-ft-inline-draw-overlay="markdown"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      zIndex: 4,
+                      backgroundColor: theme.bg,
+                    }}
+                  >
+                    {inlineDrawSurface}
+                  </div>
+                ) : null}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -11814,12 +12381,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       width: '100%',
                       minHeight: '160px',
                       height: 'auto',
-	                    }}
-	                  />
-	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
-	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
-	                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
-	                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
+                    }}
+                  />
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedMentionSuggestion, 'mention')}
+                  {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
+                  {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
                   {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>

@@ -27,7 +27,7 @@ export type CommandLauncherFieldTheoryLaunchSurface =
 
 export type CommandLauncherLaunchOrigin =
   | { kind: 'field-theory'; surface: CommandLauncherFieldTheoryLaunchSurface }
-  | { kind: 'external-app'; app: { bundleId: string; name: string } }
+  | { kind: 'external-app'; app: { bundleId: string; name: string; windowBounds?: { x: number; y: number; width: number; height: number } | null } }
   | { kind: 'none' };
 
 export function resolveCommandLauncherInvocationTarget(input: {

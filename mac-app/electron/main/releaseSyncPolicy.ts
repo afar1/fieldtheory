@@ -43,9 +43,3 @@ export function resolveFieldTheorySyncStatus(options: {
     reason: 'enabled',
   };
 }
-
-export function resolveLibraryPublishDisabledReason(status: FieldTheorySyncStatus): 'not_authenticated' | 'sync_disabled' | null {
-  if (!status.authenticated) return 'not_authenticated';
-  if (!status.localEnabled || !status.enabled) return 'sync_disabled';
-  return null;
-}

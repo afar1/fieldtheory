@@ -24,7 +24,7 @@ type SidebarTodoStateOverride = SidebarTodoState | null;
 interface UnifiedItem {
   id: string;
   title: string;
-  type: 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external';
+  type: 'wiki' | 'artifact' | 'bookmarks' | 'river' | 'ember' | 'external';
   absPath: string;
   relPath?: string;
   rootPath?: string;
@@ -40,6 +40,7 @@ interface UnifiedItem {
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 export const BOOKMARKS_SHORTCUT_FOLDER_ID = 'bookmarks-shortcut';
+export const RIVER_ITEM_ID = 'river:root';
 const RIVER_SHARED_FOLDER_NAME = 'River (shared)';
 const RIVER_SHORTCUT_LABEL = 'River';
 export const EMBER_ITEM_ID = 'ember:root';
@@ -1013,12 +1014,22 @@ export function libraryRootsHaveBuiltinRelPath(roots: LibraryRoot[], relPath: st
   return roots.some((root) => root.builtin && nodesHaveRelPath(root.tree, relPath));
 }
 
+function libraryRootsHaveRelPath(roots: LibraryRoot[], rootPath: string, relPath: string): boolean {
+  return roots.some((root) => root.path === rootPath && nodesHaveRelPath(root.tree, relPath));
+}
+
 function nodesHaveRelPath(nodes: WikiNode[], relPath: string): boolean {
   return nodes.some((node) => {
     if (node.kind === 'file') return node.relPath === relPath;
     return nodesHaveRelPath(node.children, relPath);
   });
 }
+
+type PendingCreatedPage = {
+  page: WikiPageMeta;
+  rootPath: string;
+  builtin: boolean;
+};
 
 /** Pin Scratchpad at the top when the wiki tree doesn't already expose it, so
  * the user can create ad-hoc docs without running a backfill first. */
@@ -1035,6 +1046,16 @@ function makeBookmarksItem(): UnifiedItem {
     id: BOOKMARKS_ITEM_ID,
     title: 'Bookmarks',
     type: 'bookmarks',
+    absPath: '',
+    timestamp: 0,
+  };
+}
+
+function makeRiverItem(): UnifiedItem {
+  return {
+    id: RIVER_ITEM_ID,
+    title: 'River',
+    type: 'river',
     absPath: '',
     timestamp: 0,
   };
@@ -1496,16 +1517,6 @@ function libraryRootCanCreateFiles(root: LibraryRoot): boolean {
   return root.writable !== false;
 }
 
-function normalizeLibraryRootPathForComparison(dirPath: string): string {
-  const trimmed = dirPath.trim();
-  return trimmed.replace(/[\\/]+$/, '') || trimmed;
-}
-
-function hasLibraryRootPath(roots: readonly LibraryRoot[], dirPath: string): boolean {
-  const target = normalizeLibraryRootPathForComparison(dirPath);
-  return roots.some((root) => normalizeLibraryRootPathForComparison(root.path) === target);
-}
-
 function normalizeTaggedPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
@@ -1838,6 +1849,7 @@ function WikiSidebar({
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const defaultCreateInFlightRef = useRef<Set<string>>(new Set());
   const [defaultCreateInFlightKeys, setDefaultCreateInFlightKeys] = useState<Set<string>>(new Set());
+  const pendingCreatedPagesRef = useRef<Map<string, PendingCreatedPage>>(new Map());
   const [nearCreateButtonNodeId, setNearCreateButtonNodeId] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
@@ -1861,10 +1873,6 @@ function WikiSidebar({
     node: SidebarNode | null;
   } | null>(null);
   const [folderConfirmation, setFolderConfirmation] = useState<LibraryFolderConfirmationRequest | null>(null);
-  const [pathAddOpen, setPathAddOpen] = useState(false);
-  const [pathAddValue, setPathAddValue] = useState('');
-  const [pathAddError, setPathAddError] = useState<string | null>(null);
-  const pathAddInputRef = useRef<HTMLInputElement | null>(null);
   const [renameRequestId, setRenameRequestId] = useState<string | null>(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const selectedFileIdsRef = useRef<Set<string>>(selectedFileIds);
@@ -1927,26 +1935,26 @@ function WikiSidebar({
     }
   }, []);
 
-  useEffect(() => {
-    if (!pathAddOpen) return;
-    const id = requestAnimationFrame(() => pathAddInputRef.current?.focus());
-    return () => cancelAnimationFrame(id);
-  }, [pathAddOpen]);
-
   const pruneDeletedWikiPage = useCallback((relPath: string) => {
     deletedWikiRelPathsRef.current.add(relPath);
     setWikiTree((prev) => removeWikiRelPathFromTree(prev, relPath));
     setLibraryRoots((prev) => removeWikiRelPathFromLibraryRoots(prev, relPath));
   }, []);
 
+  const rememberCreatedPage = useCallback((page: WikiPageMeta, rootPath: string, builtin: boolean) => {
+    if (!page.relPath || deletedWikiRelPathsRef.current.has(page.relPath)) return;
+    pendingCreatedPagesRef.current.set(`${rootPath}::${page.relPath}`, { page, rootPath, builtin });
+  }, []);
+
   const patchChangedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
     if ((event.type !== 'file-added' && event.type !== 'file-changed') || !event.page) return false;
+    if (event.type === 'file-added') rememberCreatedPage(event.page, event.rootPath, event.builtin);
     if (event.builtin) {
       setWikiTree((prev) => addWikiPageToTree(prev, event.page!));
     }
     setLibraryRoots((prev) => addPageToLibraryRoot(prev, event.rootPath, event.page!));
     return true;
-  }, []);
+  }, [rememberCreatedPage]);
 
   const patchDeletedLibraryFile = useCallback((event: LibraryChangeEvent): boolean => {
     if (event.type !== 'file-deleted') return false;
@@ -1996,11 +2004,33 @@ function WikiSidebar({
       const existsInRoots = rootsResult ? libraryRootsHaveBuiltinRelPath(rootsResult, relPath) : true;
       if (!existsInTree && !existsInRoots) deletedWikiRelPathsRef.current.delete(relPath);
     }
+    for (const [key, pending] of pendingCreatedPagesRef.current) {
+      if (deletedWikiRelPathsRef.current.has(pending.page.relPath)) {
+        pendingCreatedPagesRef.current.delete(key);
+        continue;
+      }
+      if (pending.builtin && nextTree) nextTree = addWikiPageToTree(nextTree, pending.page);
+      if (nextRoots) {
+        nextRoots = pending.builtin
+          ? addWikiPageToLibraryRoots(nextRoots, pending.page)
+          : addPageToLibraryRoot(nextRoots, pending.rootPath, pending.page);
+      }
+
+      const existsInTree = pending.builtin && treeResult
+        ? wikiTreeHasRelPath(treeResult, pending.page.relPath)
+        : false;
+      const existsInRoots = rootsResult
+        ? pending.builtin
+          ? libraryRootsHaveBuiltinRelPath(rootsResult, pending.page.relPath)
+          : libraryRootsHaveRelPath(rootsResult, pending.rootPath, pending.page.relPath)
+        : false;
+      if (existsInTree || existsInRoots) pendingCreatedPagesRef.current.delete(key);
+    }
 
     if (nextTree) setWikiTree(nextTree);
     if (hiddenFoldersResult) setHiddenDefaultFolders(hiddenFoldersResult);
     if (nextRoots) {
-      if (nextRoots.length === 0 && libraryRootsRef.current.length > 0 && reason !== 'empty-roots-retry') {
+      if (nextRoots.length === 0 && reason !== 'empty-roots-retry') {
         traceLibrarySidebar('sidebar-loadTree-empty-roots-retry', {
           reason,
           requestId,
@@ -2111,6 +2141,7 @@ function WikiSidebar({
       const page = (localEvent as CustomEvent<WikiPage>).detail;
       if (!page) return;
       if (deletedWikiRelPathsRef.current.has(page.relPath)) return;
+      rememberCreatedPage(page, libraryRootsRef.current.find((root) => root.builtin)?.path ?? '', true);
       setWikiTree((prev) => {
         return addWikiPageToTree(prev, page);
       });
@@ -2170,6 +2201,9 @@ function WikiSidebar({
     const unsubBookmarks = window.bookmarksAPI?.onChanged?.(() => {
       loadTree('bookmarks:changed');
     });
+    const unsubCommands = window.commandsAPI?.onCommandsChanged?.(() => {
+      loadTree('commands:changed');
+    });
     const onLocalRiverChanged = () => {
       loadTree('river:changed-local');
       loadSharedPins();
@@ -2207,11 +2241,12 @@ function WikiSidebar({
       unsubTaggedDocs?.();
       unsubSharedPins?.();
       unsubBookmarks?.();
+      unsubCommands?.();
       window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener(BROWSER_HELPER_EVENT_STREAM_OPEN_EVENT, onBrowserHelperReconnect);
     };
-  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, pruneDeletedWikiPage]);
+  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, loadSharedPins, patchChangedLibraryFile, patchDeletedLibraryFile, pruneDeletedWikiPage, rememberCreatedPage]);
 
   useEffect(() => {
     if (!persistPreferences) return;
@@ -2432,10 +2467,14 @@ function WikiSidebar({
       if (defaultCreateInFlightRef.current.has(locationKey)) return;
       defaultCreateInFlightRef.current.add(locationKey);
       setDefaultCreateInFlightKeys((prev) => new Set(prev).add(locationKey));
+      onSearchQueryChange('');
       void (async () => {
         try {
           const created = await onCreateDefaultFile(location);
-          if (created !== false) expandCreateLocation(location);
+          if (created !== false) {
+            onSearchQueryChange('');
+            expandCreateLocation(location);
+          }
         } catch (error) {
           console.warn('Failed to create default wiki page:', error);
         } finally {
@@ -2450,10 +2489,11 @@ function WikiSidebar({
       return;
     }
     expandCreateLocation(location);
+    onSearchQueryChange('');
     setCreating({ kind: 'file', location });
     setNewName('');
     setCreateError(null);
-  }, [expandCreateLocation, onCreateDefaultFile, resolveCreateTarget]);
+  }, [expandCreateLocation, onCreateDefaultFile, onSearchQueryChange, resolveCreateTarget]);
 
   const beginCreateDir = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, '');
@@ -2495,9 +2535,14 @@ function WikiSidebar({
         const created = await onCreateFile(creating.location, name);
         if (created !== false) {
           createdSuccessfully = true;
+          onSearchQueryChange('');
           if (creating.location.builtin) {
             expandCreateLocation(creating.location, joinLibraryRelPath(creating.location.relPath, name));
+            if (created && typeof created === 'object') {
+              rememberCreatedPage(created, creating.location.rootPath, true);
+            }
           } else if (created && typeof created === 'object') {
+            rememberCreatedPage(created, creating.location.rootPath, false);
             setLibraryRoots((prev) => addPageToLibraryRoot(prev, creating.location.rootPath, created));
             expandCreateLocation(creating.location, created.relPath);
           } else {
@@ -2510,6 +2555,7 @@ function WikiSidebar({
         const created = await onCreateDir(nextLocation);
         if (created !== false) {
           createdSuccessfully = true;
+          onSearchQueryChange('');
           setLibraryRoots((prev) => addDirToLibraryRoot(prev, nextLocation.rootPath, nextLocation.relPath));
           expandCreateLocation(nextLocation);
           void reloadTreeAndExpandLocation(nextLocation);
@@ -2526,7 +2572,7 @@ function WikiSidebar({
     }
     setCreating(null);
     setNewName('');
-  }, [newName, creating, onCreateFile, onCreateDir, expandCreateLocation, reloadTreeAndExpandLocation, cancelCreate]);
+  }, [newName, creating, onCreateFile, onCreateDir, onSearchQueryChange, rememberCreatedPage, expandCreateLocation, reloadTreeAndExpandLocation, cancelCreate]);
 
   const sidebarRoots = useMemo(() => {
     const roots: SidebarNode[] = [];
@@ -3202,63 +3248,29 @@ function WikiSidebar({
     return () => { archiveControllerRef.current = null; };
   }, [archiveControllerRef, cycleSelectedTodoState, deleteSelectedItems, getActionItems, renameFocusedItem, toggleFocusedSelection, toggleSelectedArchive, undoArchive]);
 
-  const addLibraryRootFromPath = useCallback(async (
-    rawPath: string,
-    reportError: (message: string) => void,
-  ): Promise<boolean> => {
-    const dirPath = rawPath.trim();
-    if (!dirPath) {
-      reportError('Paste a folder path.');
-      return false;
-    }
-    if (hasLibraryRootPath(libraryRootsRef.current, dirPath)) {
-      reportError('That folder is already in Library.');
-      return false;
-    }
+  const addFolderFromPath = useCallback(async () => {
+    closeContextMenu();
+    const picked = await window.libraryAPI?.pickFolder();
+    if (!picked) return;
     let root: LibraryRoot | null | undefined;
     try {
-      root = await window.libraryAPI?.addRoot(dirPath);
+      root = await window.libraryAPI?.addRoot(picked);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : 'Could not add folder.');
-      return false;
+      setMoveError(error instanceof Error ? error.message : 'Could not add folder.');
+      return;
     }
     if (!root) {
-      reportError('Could not add folder. Choose an existing folder that is not already in Library.');
-      return false;
+      setMoveError('Could not add folder. Choose an existing folder that is not already in Library.');
+      return;
     }
-    setMoveError(root.writable === false
-      ? 'Folder added read-only. Field Theory cannot create or move files there until macOS grants write access.'
-      : null);
-    setPathAddError(null);
+    setMoveError(null);
     await loadTree();
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       next.add(`root:${root.path}`);
       return next;
     });
-    return true;
-  }, [loadTree]);
-
-  const addFolderFromFinder = useCallback(async () => {
-    closeContextMenu();
-    const picked = await window.libraryAPI?.pickFolder();
-    if (!picked) return;
-    await addLibraryRootFromPath(picked, setMoveError);
-  }, [addLibraryRootFromPath, closeContextMenu]);
-
-  const openAddFolderFromPath = useCallback(() => {
-    closeContextMenu();
-    setPathAddValue('');
-    setPathAddError(null);
-    setPathAddOpen(true);
-  }, [closeContextMenu]);
-
-  const submitAddFolderFromPath = useCallback(async () => {
-    const added = await addLibraryRootFromPath(pathAddValue, setPathAddError);
-    if (!added) return;
-    setPathAddOpen(false);
-    setPathAddValue('');
-  }, [addLibraryRootFromPath, pathAddValue]);
+  }, [closeContextMenu, loadTree]);
 
   const removeContextRoot = useCallback(() => {
     const target = contextDir;
@@ -3686,12 +3698,39 @@ function WikiSidebar({
             title={RIVER_SHORTCUT_LABEL}
             titleAttr={riverShortcutNode.label}
             count={countSidebarItems(riverShortcutNode.children)}
-            isSelected={selectedId === riverShortcutNode.id}
+            isSelected={selectedId === RIVER_ITEM_ID}
             theme={theme}
             indent={LIBRARY_SIDEBAR_EDGE_PADDING}
             fontWeight={500}
             rowId={riverShortcutNode.id}
-            trailing={<SidebarPeopleChipIcon color={theme.textSecondary} />}
+            trailing={(
+              <button
+                type="button"
+                aria-label="Open River timeline"
+                title="Open River timeline"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectItem(makeRiverItem());
+                }}
+                style={{
+                  width: '22px',
+                  height: '22px',
+                  marginLeft: 'auto',
+                  flexShrink: 0,
+                  border: `1px solid ${selectedId === RIVER_ITEM_ID ? theme.accent : theme.border}`,
+                  borderRadius: '6px',
+                  backgroundColor: selectedId === RIVER_ITEM_ID ? (theme.surface2 ?? theme.bg) : 'transparent',
+                  color: selectedId === RIVER_ITEM_ID ? theme.accent : theme.textSecondary,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                <SidebarRiverIcon color="currentColor" style={{ opacity: 0.72 }} />
+              </button>
+            )}
             onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
             onOpen={() => toggleFolder(riverShortcutNode.id)}
             onContextMenu={(event) => openContextMenu(event, riverShortcutNode)}
@@ -3826,8 +3865,7 @@ function WikiSidebar({
             if (!canCreateInContext) return;
             beginCreateDir(contextCreateTarget);
           }}
-          onAddFolderFromFinder={addFolderFromFinder}
-          onAddFolderFromPath={openAddFolderFromPath}
+          onAddFolder={addFolderFromPath}
           onShowFolderInFinder={showContextFolderInFinder}
           onRenameFile={renameContextFile}
           onOpenFileInNewWindow={() => {
@@ -3889,23 +3927,6 @@ function WikiSidebar({
         request={folderConfirmation}
         theme={theme}
         onClose={() => setFolderConfirmation(null)}
-      />
-      <LibraryPathInputDialog
-        open={pathAddOpen}
-        value={pathAddValue}
-        error={pathAddError}
-        inputRef={pathAddInputRef}
-        theme={theme}
-        onChange={(value) => {
-          setPathAddValue(value);
-          if (pathAddError) setPathAddError(null);
-        }}
-        onSubmit={submitAddFolderFromPath}
-        onClose={() => {
-          setPathAddOpen(false);
-          setPathAddError(null);
-          setPathAddValue('');
-        }}
       />
       {moveError && (
         <div
@@ -4581,131 +4602,6 @@ function LibraryFolderConfirmationDialog({
   );
 }
 
-function LibraryPathInputDialog({
-  open,
-  value,
-  error,
-  inputRef,
-  theme,
-  onChange,
-  onSubmit,
-  onClose,
-}: {
-  open: boolean;
-  value: string;
-  error: string | null;
-  inputRef: MutableRefObject<HTMLInputElement | null>;
-  theme: ReturnType<typeof useTheme>['theme'];
-  onChange: (value: string) => void;
-  onSubmit: () => void | Promise<void>;
-  onClose: () => void;
-}) {
-  if (!open) return null;
-
-  return (
-    <div
-      role="presentation"
-      onMouseDown={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 1200,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.36)' : 'rgba(0,0,0,0.16)',
-      }}
-    >
-      <form
-        role="dialog"
-        aria-modal="true"
-        aria-label="Add folder from path"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void onSubmit();
-        }}
-        onMouseDown={(event) => event.stopPropagation()}
-        style={{
-          width: 'min(380px, calc(100vw - 32px))',
-          padding: '16px',
-          borderRadius: '8px',
-          border: `1px solid ${theme.border}`,
-          backgroundColor: theme.surface2,
-          boxShadow: theme.isDark ? '0 18px 48px rgba(0,0,0,0.5)' : '0 18px 48px rgba(0,0,0,0.2)',
-        }}
-      >
-        <div style={{ fontSize: '14px', fontWeight: 600, color: theme.text, marginBottom: '10px' }}>
-          Add folder from path
-        </div>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
-          Folder path
-          <input
-            ref={inputRef}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                onClose();
-              }
-            }}
-            placeholder="/Users/you/Notes"
-            style={{
-              height: '32px',
-              padding: '0 10px',
-              fontSize: '12px',
-              color: theme.text,
-              backgroundColor: theme.bg,
-              border: `1px solid ${error ? '#dc2626' : theme.border}`,
-              borderRadius: '6px',
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
-          />
-        </label>
-        {error && (
-          <div role="alert" style={{ marginTop: '8px', fontSize: '11px', lineHeight: 1.35, color: '#dc2626' }}>
-            {error}
-          </div>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              height: '28px',
-              padding: '0 10px',
-              fontSize: '12px',
-              color: theme.text,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            style={{
-              height: '28px',
-              padding: '0 10px',
-              fontSize: '12px',
-              color: '#fff',
-              backgroundColor: theme.accent,
-              border: `1px solid ${theme.accent}`,
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
-          >
-            Add folder
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function LibraryContextMenu({
   x,
   y,
@@ -4728,8 +4624,7 @@ function LibraryContextMenu({
   canDeleteDir,
   onNewFile,
   onNewFolder,
-  onAddFolderFromFinder,
-  onAddFolderFromPath,
+  onAddFolder,
   onShowFolderInFinder,
   onRenameFile,
   onOpenFileInNewWindow,
@@ -4766,8 +4661,7 @@ function LibraryContextMenu({
   canDeleteDir: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
-  onAddFolderFromFinder: () => void;
-  onAddFolderFromPath: () => void;
+  onAddFolder: () => void;
   onShowFolderInFinder: () => void;
   onRenameFile: () => void;
   onOpenFileInNewWindow: () => void;
@@ -4894,8 +4788,7 @@ function LibraryContextMenu({
       {pinLabel && pinIsFolder && (
         <button style={itemStyle} onClick={onTogglePin} onMouseEnter={setHover} onMouseLeave={clearHover}>{pinLabel}</button>
       )}
-      <button style={itemStyle} onClick={onAddFolderFromFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from Finder...</button>
-      <button style={itemStyle} onClick={onAddFolderFromPath} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
+      <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
       {canShowFolderInFinder && (
         <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
       )}
@@ -5490,31 +5383,6 @@ function SidebarRiverShareIndicator({
       }}
     >
       <SidebarRiverIcon color="currentColor" style={{ opacity: 0.58 }} />
-    </span>
-  );
-}
-
-function SidebarPeopleChipIcon({ color }: { color: string }) {
-  return (
-    <span
-      title="Shared River"
-      aria-label="Shared River"
-      style={{ color, opacity: 0.62, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-    >
-      <svg width="16" height="14" viewBox="0 0 18 16" fill="none" aria-hidden="true">
-        <path
-          d="M6.75 7.25a2.45 2.45 0 1 0 0-4.9 2.45 2.45 0 0 0 0 4.9zM2.55 13.15c.55-2.45 2.05-3.7 4.2-3.7s3.65 1.25 4.2 3.7"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-        <path
-          d="M11.6 7.05a2.05 2.05 0 1 0 0-4.1M12.85 9.55c1.35.35 2.25 1.45 2.6 3.25"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-      </svg>
     </span>
   );
 }

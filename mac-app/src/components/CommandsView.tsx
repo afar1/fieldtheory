@@ -9,6 +9,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
+import { FEATURE_CLOUD_COMMANDS_ENABLED } from '../featureFlags';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import ContentModeToggleButton from './ContentModeToggleButton';
@@ -507,6 +508,12 @@ export default function CommandsView({
   }, [onFocusChromeActiveChange]);
 
   useEffect(() => {
+    if (!FEATURE_CLOUD_COMMANDS_ENABLED) {
+      setFieldTheorySyncEnabled(false);
+      setViewMode((current) => current === 'popular' ? 'mine' : current);
+      return;
+    }
+
     let alive = true;
     const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
     if (!syncStatusPromise) {
@@ -1587,6 +1594,8 @@ export default function CommandsView({
       targetDir = watchedDirs[0].path;
     }
     if (!targetDir) return;
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(targetDir);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1596,6 +1605,8 @@ export default function CommandsView({
   // Create new command in a specific directory
   // Start inline input for new command
   const startCreatingCommand = useCallback((dirPath: string) => {
+    setSearchQuery('');
+    setSearchOpen(false);
     setCreatingInDir(dirPath);
     setNewCommandName('');
     setNewCommandError(null);
@@ -1627,6 +1638,8 @@ export default function CommandsView({
         filePath: result.path,
       };
       setCommands((current) => upsertCommandItem(current, command));
+      setSearchQuery('');
+      setSearchOpen(false);
       setSelectedPath(result.path);
       const loaded = await window.commandsAPI?.getCommandByPath(result.path);
       if (loaded) {

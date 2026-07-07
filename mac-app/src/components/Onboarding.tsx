@@ -23,7 +23,7 @@ import ParakeetSupportPanel from './ParakeetSupportPanel';
 // Onboarding - 4-phase onboarding flow for Field Theory
 // Phase 1: Permissions (microphone, accessibility, screen recording)
 // Phase 2: Model (voice model selection and download)
-// Phase 3: Account (email sign-in required)
+// Phase 3: Account (optional email sign-in)
 // Phase 4: Shortcuts (keyboard shortcuts reference - no dot indicator)
 // =============================================================================
 
@@ -35,10 +35,23 @@ type PermissionStatus = {
   screenRecording: boolean;
 };
 
-type ModelSize = 'small';
+type OnboardingAuthSession = {
+  displayName?: string;
+  user?: {
+    user_metadata?: Record<string, unknown> | null;
+  } | null;
+} | null;
 
-// Model selection order (used for auto-selecting a downloaded model).
-const MODEL_ORDER: ModelSize[] = ['small'];
+function getSessionDisplayName(session: OnboardingAuthSession): string | null {
+  const metadata = session?.user?.user_metadata;
+  const displayName =
+    session?.displayName ??
+    metadata?.full_name ??
+    metadata?.display_name ??
+    metadata?.name;
+
+  return typeof displayName === 'string' && displayName.trim() ? displayName.trim() : null;
+}
 
 // Phase to step number mapping for persistence.
 const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
@@ -223,12 +236,6 @@ interface AIIntegrationStatus {
 }
 
 interface ModelPhaseProps {
-  selectedModel: ModelSize;
-  modelDownloadStatus: Record<string, boolean>;
-  downloadingModel: string | null;
-  downloadProgress: number;
-  onDownloadModel: (model: ModelSize) => void;
-  onCancelDownload: () => void;
   onFinish: () => void;
   selectedEngine: VisibleTranscriptionEngine;
   onSelectEngine: (engine: VisibleTranscriptionEngine) => void;
@@ -243,12 +250,6 @@ interface ModelPhaseProps {
 }
 
 function ModelPhase({
-  selectedModel,
-  modelDownloadStatus,
-  downloadingModel,
-  downloadProgress,
-  onDownloadModel,
-  onCancelDownload,
   onFinish,
   selectedEngine,
   onSelectEngine,
@@ -261,20 +262,12 @@ function ModelPhase({
   theme,
   styles,
 }: ModelPhaseProps) {
-  const isWhisperReady = modelDownloadStatus[selectedModel] || false;
-
   // Can finish if the chosen engine is ready.
-  const canFinish = selectedEngine === 'whisper'
-    ? isWhisperReady
-    : isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine);
-  const selectedParakeetEngineStatus = selectedEngine === 'whisper'
-    ? null
-    : getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
-  const selectedParakeetProgress = selectedEngine === 'whisper'
-    ? null
-    : parakeetSetupProgress?.engine === selectedEngine
-      ? parakeetSetupProgress
-      : null;
+  const canFinish = isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine);
+  const selectedParakeetEngineStatus = getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
+  const selectedParakeetProgress = parakeetSetupProgress?.engine === selectedEngine
+    ? parakeetSetupProgress
+    : null;
   const selectedParakeetSetupActive = Boolean(
     selectedParakeetProgress &&
     selectedParakeetProgress.stage !== 'completed' &&
@@ -336,7 +329,7 @@ function ModelPhase({
   };
 
   // Show AI integration section when either engine is ready
-  const showAIIntegration = canFinish || downloadingModel !== null;
+  const showAIIntegration = canFinish || settingUpParakeet;
   const hasAnyAITool = aiStatus && (aiStatus.claudeCode.available || aiStatus.cursor.available);
 
   return (
@@ -412,7 +405,7 @@ function ModelPhase({
             </div>
           );
         })}
-        {(selectedParakeetProgress || selectedParakeetSupportSummary) && selectedEngine !== 'whisper' && (
+        {(selectedParakeetProgress || selectedParakeetSupportSummary) && (
           <ParakeetSupportPanel
             theme={theme}
             title={
@@ -432,72 +425,6 @@ function ModelPhase({
           />
         )}
 
-        {/* Whisper fallback - de-emphasized */}
-        <div
-          onClick={() => onSelectEngine('whisper')}
-          style={{
-            ...styles.modelCard,
-            borderColor: selectedEngine === 'whisper' ? (theme.isDark ? '#6b7280' : '#9ca3af') : theme.border,
-            boxShadow: 'none',
-            backgroundColor: selectedEngine === 'whisper'
-              ? (theme.isDark ? 'rgba(107, 114, 128, 0.1)' : '#f9fafb')
-              : 'transparent',
-            opacity: 0.6,
-            cursor: 'pointer',
-          }}
-        >
-          <div style={styles.modelCardCheck}>
-            {selectedEngine === 'whisper' ? (
-              <span style={{ ...styles.checkmark, color: '#6b7280' }}>✓</span>
-            ) : (
-              <span style={styles.unchecked}>○</span>
-            )}
-          </div>
-          <div style={styles.modelCardLeft}>
-            <div style={styles.modelCardHeader}>
-              <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
-                Whisper
-              </span>
-              <span style={{ fontSize: '10px', color: theme.textSecondary }}>Legacy</span>
-            </div>
-            <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-              whisper.cpp — slower, less accurate than Parakeet
-            </div>
-            {selectedEngine === 'whisper' && downloadingModel && (
-              <div style={styles.progressContainer}>
-                <div style={styles.progressBar}>
-                  <div style={{ ...styles.progressFill, width: `${downloadProgress}%` }} />
-                </div>
-                <span style={styles.progressText}>{Math.round(downloadProgress)}%</span>
-              </div>
-            )}
-          </div>
-          <div style={styles.modelCardRight}>
-            {selectedEngine === 'whisper' && (
-              isWhisperReady ? (
-                <span style={{ fontSize: '11px', color: theme.textSecondary, fontWeight: 500 }}>Downloaded</span>
-              ) : downloadingModel ? (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              ) : (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDownloadModel(selectedModel); }}
-                  disabled={downloadingModel !== null}
-                  style={{
-                    ...styles.downloadButton,
-                    opacity: downloadingModel !== null ? 0.5 : 1,
-                  }}
-                >
-                  Download
-                </button>
-              )
-            )}
-          </div>
-        </div>
       </div>
 
       {/* AI Integration Section - shown when either engine is ready */}
@@ -649,7 +576,7 @@ function ModelPhase({
 }
 
 // =============================================================================
-// Phase 3: Account (Email Sign-In)
+// Phase 3: Account (Email Sign-In or Local Setup)
 // =============================================================================
 
 interface AccountPhaseProps {
@@ -685,12 +612,52 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   // Loading state for completing onboarding (clicking "Done")
   const [isCompleting, setIsCompleting] = useState(false);
   const [isCompletingLocalSetup, setIsCompletingLocalSetup] = useState(false);
+  const [accountAuthConfigured, setAccountAuthConfigured] = useState<boolean | null>(null);
+  const accountAuthAvailable = accountAuthConfigured ?? Boolean(supabase);
+  const accountAuthUnavailableMessage = 'You are running a development build. Sign in and sign up are available in the official Field Theory app for account sync.';
+
+  const completeLocalSetup = async () => {
+    if (isCompletingLocalSetup) return;
+    setIsCompletingLocalSetup(true);
+    setError(null);
+    try {
+      await onLocalSetup();
+    } catch (err) {
+      console.error('[Onboarding] Failed to complete local setup:', err);
+      setError('Could not finish local setup. Please try again.');
+      setIsCompletingLocalSetup(false);
+    }
+  };
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
     window.clipboardAPI?.getLaunchAtLogin?.().then((enabled) => {
       setLaunchAtLogin(enabled);
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkAccountAuth = async () => {
+      if (!supabase) {
+        setAccountAuthConfigured(false);
+        return;
+      }
+
+      try {
+        const configured = await window.authAPI?.isConfigured?.();
+        if (!cancelled) setAccountAuthConfigured(configured ?? true);
+      } catch (err) {
+        console.warn('[Onboarding] Failed to check account auth availability:', err);
+        if (!cancelled) setAccountAuthConfigured(false);
+      }
+    };
+
+    void checkAccountAuth();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Check if user is already logged in on mount, and fetch their call sign.
@@ -740,6 +707,10 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || isRequestingOtp) return;
+    if (!accountAuthAvailable) {
+      setError(accountAuthUnavailableMessage);
+      return;
+    }
 
     setIsRequestingOtp(true);
     setError(null);
@@ -763,6 +734,10 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!otpCode.trim() || isVerifyingOtp) return;
+    if (!accountAuthAvailable) {
+      setError(accountAuthUnavailableMessage);
+      return;
+    }
 
     setIsVerifyingOtp(true);
     setError(null);
@@ -776,8 +751,9 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
         setIsVerifyingOtp(false);
         setIsSettingUpSession(true);
 
-        // Fetch profile to check if returning user (has name) or new user
-        let hasExistingProfile = false;
+        // Fetch profile to check if returning user (has name) or new user.
+        // The session display name is the canonical local source; profiles can lag it.
+        let hasExistingProfile = Boolean(getSessionDisplayName(result.session));
         if (supabase && result.session.user?.id) {
           try {
             const { data } = await supabase
@@ -788,7 +764,7 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
             if (data?.callsign) {
               setCallsign(data.callsign);
             }
-            hasExistingProfile = !!data?.full_name;
+            hasExistingProfile = hasExistingProfile || !!data?.full_name;
           } catch (err) {
             console.warn('[Onboarding] Failed to fetch profile:', err);
           }
@@ -1083,143 +1059,178 @@ function AccountPhase({ onFinish, onFinishReturning, onLocalSetup, theme, styles
     <div style={styles.phase}>
       <h1 style={styles.title}>Use Field Theory</h1>
       <p style={styles.subtitle}>
-        Sign in for shared and account-backed features, or continue with local setup.
+        Sign in or sign up with an email code for shared features, or continue with local setup.
       </p>
 
       <div style={styles.accountForm}>
-        {!otpSent ? (
-          <form onSubmit={handleRequestOtp} style={styles.form}>
-            <input
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={isRequestingOtp}
-              style={styles.input}
-              autoFocus
-            />
+        {!accountAuthAvailable ? (
+          <>
+            <div style={styles.infoBanner}>
+              {accountAuthUnavailableMessage}
+            </div>
             <button
-              type="submit"
-              disabled={isRequestingOtp || !email.trim()}
+              type="button"
+              onClick={completeLocalSetup}
+              disabled={isCompletingLocalSetup}
               style={{
                 ...styles.primaryButton,
-                opacity: isRequestingOtp || !email.trim() ? 0.5 : 1,
-                cursor: isRequestingOtp || !email.trim() ? 'not-allowed' : 'pointer',
+                marginTop: '16px',
                 width: '100%',
+                opacity: isCompletingLocalSetup ? 0.6 : 1,
+                cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
               }}
             >
-              {isRequestingOtp ? 'Sending...' : 'Send Verification Code'}
+              {isCompletingLocalSetup ? 'Starting local setup...' : 'Continue with local setup'}
             </button>
-          </form>
+
+            <div style={{ marginTop: '16px' }}>
+              <label style={styles.launchAtLoginLabel}>
+                <input
+                  type="checkbox"
+                  checked={launchAtLogin}
+                  onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+                  style={styles.launchAtLoginCheckbox}
+                />
+                Launch Field Theory on login
+              </label>
+              {launchAtLoginError && (
+                <div style={styles.launchAtLoginError}>
+                  Enable in{' '}
+                  <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                    System Settings
+                  </span>
+                </div>
+              )}
+            </div>
+          </>
         ) : (
-          <form onSubmit={handleVerifyOtp} style={styles.form}>
-            <p style={styles.otpSentText}>
-              Code sent to {email}
-            </p>
-            <input
-              type="text"
-              placeholder="Enter code"
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value)}
-              disabled={isVerifyingOtp}
-              style={styles.otpInput}
-              autoFocus
-            />
-            <button
-              type="submit"
-              disabled={isVerifyingOtp || !otpCode.trim()}
-              style={{
-                ...styles.primaryButton,
-                opacity: isVerifyingOtp || !otpCode.trim() ? 0.5 : 1,
-                cursor: isVerifyingOtp || !otpCode.trim() ? 'not-allowed' : 'pointer',
-                width: '100%',
-              }}
-            >
-              {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setOtpSent(false); setOtpCode(''); setError(null); }}
-              style={styles.secondaryButton}
-            >
-              Use a different email
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                const result = await window.authAPI?.requestOtp(email.trim());
-                if (result?.error) {
-                  setError(result.error);
-                }
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: theme.textSecondary,
-                fontSize: '12px',
-                cursor: 'pointer',
-                marginTop: '8px',
-                textDecoration: 'underline',
-              }}
-            >
-              Resend code
-            </button>
-          </form>
-        )}
+          <>
+            {!otpSent ? (
+              <form onSubmit={handleRequestOtp} style={styles.form}>
+                <input
+                  type="email"
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isRequestingOtp}
+                  style={styles.input}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isRequestingOtp || !email.trim()}
+                  style={{
+                    ...styles.primaryButton,
+                    opacity: isRequestingOtp || !email.trim() ? 0.5 : 1,
+                    cursor: isRequestingOtp || !email.trim() ? 'not-allowed' : 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  {isRequestingOtp ? 'Sending...' : 'Send Verification Code'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyOtp} style={styles.form}>
+                <p style={styles.otpSentText}>
+                  Code sent to {email}
+                </p>
+                <input
+                  type="text"
+                  placeholder="Enter code"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  disabled={isVerifyingOtp}
+                  style={styles.otpInput}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isVerifyingOtp || !otpCode.trim()}
+                  style={{
+                    ...styles.primaryButton,
+                    opacity: isVerifyingOtp || !otpCode.trim() ? 0.5 : 1,
+                    cursor: isVerifyingOtp || !otpCode.trim() ? 'not-allowed' : 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setOtpSent(false); setOtpCode(''); setError(null); }}
+                  style={styles.secondaryButton}
+                >
+                  Use a different email
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setError(null);
+                    const result = await window.authAPI?.requestOtp(email.trim());
+                    if (result?.error) {
+                      setError(result.error);
+                    }
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: theme.textSecondary,
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    marginTop: '8px',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Resend code
+                </button>
+              </form>
+            )}
 
-        {error && (
-          <div style={styles.errorBanner}>
-            {error}
-          </div>
-        )}
-
-        {!otpSent && (
-          <div style={{ marginTop: '16px' }}>
-            <label style={styles.launchAtLoginLabel}>
-              <input
-                type="checkbox"
-                checked={launchAtLogin}
-                onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
-                style={styles.launchAtLoginCheckbox}
-              />
-              Launch Field Theory on login
-            </label>
-            {launchAtLoginError && (
-              <div style={styles.launchAtLoginError}>
-                Enable in{' '}
-                <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
-                  System Settings
-                </span>
+            {error && (
+              <div style={styles.errorBanner}>
+                {error}
               </div>
             )}
-          </div>
-        )}
 
-        {!otpSent && (
-          <a
-            href="#"
-            onClick={async (event) => {
-              event.preventDefault();
-              if (isCompletingLocalSetup) return;
-              setIsCompletingLocalSetup(true);
-              setError(null);
-              try {
-                await onLocalSetup();
-              } catch (err) {
-                console.error('[Onboarding] Failed to complete local setup:', err);
-                setError('Could not finish local setup. Please try again.');
-                setIsCompletingLocalSetup(false);
-              }
-            }}
-            style={{
-              ...styles.localSetupLink,
-              opacity: isCompletingLocalSetup ? 0.6 : 1,
-              cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
-            }}
-          >
-            {isCompletingLocalSetup ? 'Starting local setup...' : 'local setup'}
-          </a>
+            {!otpSent && (
+              <div style={{ marginTop: '16px' }}>
+                <label style={styles.launchAtLoginLabel}>
+                  <input
+                    type="checkbox"
+                    checked={launchAtLogin}
+                    onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+                    style={styles.launchAtLoginCheckbox}
+                  />
+                  Launch Field Theory on login
+                </label>
+                {launchAtLoginError && (
+                  <div style={styles.launchAtLoginError}>
+                    Enable in{' '}
+                    <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                      System Settings
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!otpSent && (
+              <a
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void completeLocalSetup();
+                }}
+                style={{
+                  ...styles.localSetupLink,
+                  opacity: isCompletingLocalSetup ? 0.6 : 1,
+                  cursor: isCompletingLocalSetup ? 'wait' : 'pointer',
+                }}
+              >
+                {isCompletingLocalSetup ? 'Starting local setup...' : 'local setup'}
+              </a>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -1547,12 +1558,6 @@ export default function Onboarding() {
     screenRecording: false,
   });
 
-  // Model state.
-  const [selectedModel, setSelectedModel] = useState<ModelSize>('small');
-  const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
-  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_PARAKEET_ENGINE);
   const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
@@ -1591,35 +1596,8 @@ export default function Onboarding() {
         const state = await window.onboardingAPI.getState();
         setPermissions(state.permissions);
 
-        // Load current hotkeys, selected model, and download status for all models.
+        // Load engine selection and Parakeet status.
         if (window.transcribeAPI) {
-          // Load the currently selected model.
-          let currentModel = await window.transcribeAPI.getSelectedModel();
-
-          // Load download status for all models.
-          const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-          setModelDownloadStatus(downloadStatus);
-
-          // If the current model isn't downloaded but another model is, auto-select a downloaded model.
-          if (currentModel && !downloadStatus[currentModel]) {
-            const downloadedModel = MODEL_ORDER.find(m => downloadStatus[m]);
-            if (downloadedModel) {
-              currentModel = downloadedModel;
-              await window.transcribeAPI.setSelectedModel(downloadedModel);
-            }
-          }
-
-          if (currentModel === 'small') {
-            setSelectedModel(currentModel);
-          }
-
-          // Check if a download is already in progress.
-          const downloadingModels = await window.transcribeAPI.getDownloadingModels?.() ?? [];
-          if (downloadingModels.length > 0) {
-            setDownloadingModel(downloadingModels[0]);
-          }
-
-          // Load engine selection and parakeet status.
           const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
           const normalizedEngine = normalizeVisibleTranscriptionEngine(currentEngine);
           setSelectedEngine(normalizedEngine);
@@ -1635,25 +1613,6 @@ export default function Onboarding() {
     };
     loadState();
   }, []);
-
-  // Listen for model download progress.
-  useEffect(() => {
-    if (!window.transcribeAPI) return;
-
-    const unsubscribe = window.transcribeAPI.onModelDownloadProgress(async (downloaded, total) => {
-      const percent = total > 0 ? (downloaded / total) * 100 : 0;
-      setDownloadProgress(percent);
-
-      // When download completes, refresh the download status.
-      if (downloaded >= total && total > 0 && downloadingModel) {
-        const downloadStatus = await window.transcribeAPI!.getModelDownloadStatus();
-        setModelDownloadStatus(downloadStatus);
-        setDownloadingModel(null);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [downloadingModel]);
 
   useEffect(() => {
     if (!window.transcribeAPI?.onParakeetSetupProgress) return;
@@ -1692,31 +1651,6 @@ export default function Onboarding() {
     await window.onboardingAPI.openScreenRecordingSettings();
   }, []);
 
-  // Model handlers.
-  const downloadModel = useCallback(async (modelToDownload: ModelSize) => {
-    if (!window.transcribeAPI || downloadingModel) return;
-    setDownloadingModel(modelToDownload);
-    setDownloadProgress(0);
-
-    try {
-      await window.transcribeAPI.downloadModel(modelToDownload);
-      // Set as selected model after download completes.
-      setSelectedModel(modelToDownload);
-      await window.transcribeAPI.setSelectedModel(modelToDownload);
-    } catch (error) {
-      console.error('Model download failed:', error);
-      setDownloadingModel(null);
-    }
-  }, [downloadingModel]);
-  
-  // Cancel a download in progress.
-  // Note: This clears the UI state but the download continues in background.
-  // True cancellation would require backend support.
-  const cancelDownload = useCallback(() => {
-    setDownloadingModel(null);
-    setDownloadProgress(0);
-  }, []);
-  
   // Engine selection handlers.
   const handleEngineChange = useCallback((engine: VisibleTranscriptionEngine) => {
     setSelectedEngine(engine);
@@ -1831,12 +1765,6 @@ export default function Onboarding() {
       case 'model':
         return (
           <ModelPhase
-            selectedModel={selectedModel}
-            modelDownloadStatus={modelDownloadStatus}
-            downloadingModel={downloadingModel}
-            downloadProgress={downloadProgress}
-            onDownloadModel={downloadModel}
-            onCancelDownload={cancelDownload}
             onFinish={goToAccount}
             selectedEngine={selectedEngine}
             onSelectEngine={handleEngineChange}
@@ -2313,6 +2241,15 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.textSecondary,
     textAlign: 'center',
     margin: '0 0 4px 0',
+  },
+  infoBanner: {
+    backgroundColor: theme.isDark ? 'rgba(96, 165, 250, 0.12)' : 'rgba(37, 99, 235, 0.08)',
+    border: `1px solid ${theme.isDark ? 'rgba(96, 165, 250, 0.28)' : 'rgba(37, 99, 235, 0.18)'}`,
+    borderRadius: '4px',
+    padding: '8px 12px',
+    fontSize: '12px',
+    color: theme.info,
+    textAlign: 'center',
   },
   errorBanner: {
     backgroundColor: theme.errorBg,

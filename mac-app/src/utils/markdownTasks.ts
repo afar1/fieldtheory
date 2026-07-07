@@ -47,15 +47,10 @@ function cycleTaskLine(line: string, direction: MarkdownTaskCycleDirection): str
 
   const task = parseMarkdownTaskLine(line);
   if (task) {
-    if (direction === 'backward') {
-      if (task.checked) return task.bullet ? `${task.indentation}${task.bullet} [ ] ${task.text}` : `${task.indentation}[ ] ${task.text}`;
-      return `${task.indentation}${task.text}`;
-    }
-    if (task.checked) return `${task.indentation}${task.text}`;
-    return task.bullet ? `${task.indentation}${task.bullet} [x] ${task.text}` : `${task.indentation}[x] ${task.text}`;
+    return `${task.indentation}${task.text}`;
   }
 
-  const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s+(.+)$/);
+  const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s*(.*)$/);
   if (list) return `${list[1]}- [${direction === 'backward' ? 'x' : ' '}] ${list[2]}`;
 
   const plain = line.match(/^(\s*)(.*)$/);
@@ -109,7 +104,14 @@ export function getMarkdownTaskShortcutEdit(
 ): MarkdownTaskShortcutEdit | null {
   const { start, end } = selectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(start, end);
-  if (!block.trim()) return null;
+  if (!block.trim()) {
+    if (selectionStart !== selectionEnd) return null;
+    const indentation = block.match(/^\s*/)?.[0] ?? '';
+    const nextBlock = `${indentation}- [ ] `;
+    const nextValue = `${value.slice(0, start)}${nextBlock}${value.slice(end)}`;
+    const nextSelection = start + nextBlock.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
 
   const nextBlock = block.split('\n').map((line) => cycleTaskLine(line, direction)).join('\n');
   if (nextBlock === block) return null;

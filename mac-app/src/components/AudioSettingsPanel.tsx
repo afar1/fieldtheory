@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import { getSettingsDividerColor } from './settings/SettingsPrimitives';
+import { SETTINGS_CARD_GAP, getSettingsDividerColor } from './settings/SettingsPrimitives';
 
 // Import types for the API exposed via preload.
 // Note: These are available on window.audioAPI and window.platform.
@@ -314,6 +314,9 @@ export default function AudioSettingsPanel() {
 const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: SETTINGS_CARD_GAP,
   },
   card: {
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',

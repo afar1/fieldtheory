@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, resolveLibraryPublishDisabledReason } from './releaseSyncPolicy';
+import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus } from './releaseSyncPolicy';
 
 describe('release sync policy', () => {
   it('keeps Field Theory sync disabled by default', () => {
@@ -37,23 +37,5 @@ describe('release sync policy', () => {
     expect(isFieldTheoryInternalSyncEnvEnabled({ FIELD_THEORY_INTERNAL_SYNC_ENABLED: 'true' })).toBe(true);
     expect(isFieldTheoryInternalSyncEnvEnabled({ FIELD_THEORY_INTERNAL_SYNC: '1' })).toBe(true);
     expect(isFieldTheoryInternalSyncEnvEnabled({ FIELD_THEORY_INTERNAL_SYNC_ENABLED: 'false' })).toBe(false);
-  });
-
-  it('reports not_authenticated before sync-disabled for selected Library publishes', () => {
-    const status = resolveFieldTheorySyncStatus({
-      localEnabled: false,
-      authenticated: false,
-    });
-
-    expect(resolveLibraryPublishDisabledReason(status)).toBe('not_authenticated');
-  });
-
-  it('reports sync_disabled when selected Library publish has auth but local sync is off', () => {
-    const status = resolveFieldTheorySyncStatus({
-      localEnabled: false,
-      authenticated: true,
-    });
-
-    expect(resolveLibraryPublishDisabledReason(status)).toBe('sync_disabled');
   });
 });

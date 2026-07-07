@@ -190,4 +190,30 @@ describe('TrayManager update menu', () => {
     item?.click?.();
     expect(checkForUpdates).toHaveBeenCalledTimes(1);
   });
+
+  it('shows and toggles auto-improve when callbacks are registered', async () => {
+    const { manager, tray } = createTrayManager();
+    const setAutoImprove = vi.fn();
+    let enabled = true;
+
+    manager.setAutoImproveCallbacks({
+      get: () => enabled,
+      set: async (next) => {
+        enabled = next;
+        setAutoImprove(next);
+      },
+    });
+
+    const items = tray.contextMenu as Array<{
+      label?: string;
+      type?: string;
+      checked?: boolean;
+      click?: (item: { checked: boolean }) => void | Promise<void>;
+    }>;
+    const item = items.find((candidate) => candidate.label === 'Auto-Improve Transcripts');
+
+    expect(item).toMatchObject({ type: 'checkbox', checked: true });
+    await item?.click?.({ checked: false });
+    expect(setAutoImprove).toHaveBeenCalledWith(false);
+  });
 });

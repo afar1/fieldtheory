@@ -51,19 +51,6 @@ The native helper source lives under `mac-app/electron/native`. It builds:
 
 `FieldTheoryHelper` links Apple frameworks such as AVFoundation, CoreAudio, AudioToolbox, CoreMedia, and ScreenCaptureKit. Those Apple frameworks are platform SDK dependencies, not repository source code.
 
-## Whisper Models And whisper.cpp Artifacts
-
-The app can download Whisper model files through `mac-app/electron/main/modelManager.ts`.
-
-Current model URLs:
-
-- `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin`
-- `https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin`
-
-Packaging can include Whisper binaries built by `mac-app/scripts/build-whisper.sh`, such as `whisper-cli` and `whisper-server`, when present in the expected build output.
-
-Model files are not tracked in the repository. Docs should treat them as externally downloaded model artifacts governed by their upstream model terms.
-
 ## Gemma And Local LLM Resources
 
 The local command model metadata is in `mac-app/electron/main/localLlmManager.ts`.
@@ -79,16 +66,6 @@ Current local model metadata:
 `mac-app/scripts/setup-gemma.sh` downloads or links the model. Model binaries are ignored by `mac-app/resources/models/.gitignore` and should not be committed.
 
 Model setup scripts should preserve provider terms and avoid committing downloaded model weights unless the relevant license explicitly permits redistribution.
-
-## MLX Whisper
-
-`mac-app/scripts/setup-mlx-whisper.sh` creates a local Python environment, installs `mlx-whisper`, installs MLX wheels, and downloads model weights from:
-
-```text
-mlx-community/whisper-large-v3-turbo
-```
-
-These artifacts are downloaded at setup/runtime and are not tracked source files. Public docs should state that users are responsible for any external model/runtime terms associated with those downloads.
 
 ## Parakeet
 

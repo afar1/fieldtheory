@@ -15,6 +15,7 @@ import {
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_OVERLAY_Z_INDEX,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_SELECTION_HIT_AREA_CLASS,
   MARKDOWN_CODE_EDITOR_LINE_NUMBER_HIT_AREA_Z_INDEX,
+  MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
@@ -82,6 +83,7 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSelectionWithoutTrailingLineStart,
   getMarkdownCodeEditorSourcePosition,
+  getVisualLineNumberOverlayMeasureDelay,
   getVisualLineRowTopsFromLineBox,
   getMarkdownListArrowRightBoundaryEdit,
   getMarkdownListMarkerProtectedDeleteBackwardEdit,
@@ -107,7 +109,9 @@ import {
   getRenderedMarkdownBlockBodyStart,
   getRenderedMarkdownBlockBodyStartForLine,
   getRenderedMarkdownEmptyTaskDeleteBackwardEdit,
-  getRenderedMarkdownTaskMarkerDeleteBackwardEdit,
+  getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit,
+  getRenderedMarkdownSelectedTaskDeleteEdit,
+  getRenderedMarkdownListMarkerDeleteBackwardEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListBodyStartForLine,
@@ -116,23 +120,28 @@ import {
   getRenderedMarkdownListMarkerLayoutStyle,
   getRenderedMarkdownTaskMarkerLayoutStyle,
   getRenderedMarkdownCommandArrowSelection,
+  getRenderedMarkdownTaskEnterEdit,
   getRenderedMarkdownVerticalNavigationEdit,
   handleRenderedMarkdownEditorBeforeInput,
   handleRenderedMarkdownEditorArrowLeft,
   handleMarkdownCodeEditorListArrowRight,
   handleMarkdownCodeEditorListCommandArrowLeft,
   handleMarkdownCodeEditorCommandBackspace,
+  handleRenderedMarkdownTaskEnter,
   handleRenderedMarkdownEditorCommandArrow,
   handleRenderedMarkdownEditorKeyDown,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   isVisualLineNumberRowSelected,
+  shouldIncludeSelectionSnapshotGeometry,
   shouldMoveCaretToDocumentEndFromClick,
   startMarkdownCodeEditorBlankSpaceSelection,
   startMarkdownCodeEditorLineNumberSelection,
   startMarkdownCodeEditorVisualRowSelection,
   trailingLineStartSelectionExtension,
 } from '../MarkdownCodeEditor';
+
+const RENDERED_MARKDOWN_VISIBLE_DECORATION_BUDGET_MS = process.env.CI ? 50 : 16;
 
 describe('MarkdownCodeEditor cursor blink', () => {
   it('leaves cursor animation enabled by default', () => {
@@ -425,6 +434,98 @@ describe('MarkdownCodeEditor cursor telemetry', () => {
     view.destroy();
     parent.remove();
   });
+
+  it('can skip geometry reads for hot-path typing snapshots', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'alpha\nbeta',
+        selection: EditorSelection.cursor(8),
+      }),
+      parent,
+    });
+    const coordsSpy = vi.spyOn(view, 'coordsAtPos');
+    const rectSpy = vi.spyOn(view.dom, 'getBoundingClientRect');
+
+    const snapshot = getMarkdownCodeEditorSelectionSnapshot(view, {
+      docChanged: true,
+      inputType: 'insertText',
+      inputData: 'x',
+      includeGeometry: false,
+    });
+
+    expect(snapshot.selectionHeadSource).toMatchObject({ line: 2, column: 3 });
+    expect(snapshot.caretPosition).toBeNull();
+    expect(snapshot.caretRect).toBeNull();
+    expect(snapshot.selectionRect).toBeNull();
+    expect(coordsSpy).not.toHaveBeenCalled();
+    expect(rectSpy).not.toHaveBeenCalled();
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps selection geometry for completion and range contexts', () => {
+    const completionCases = [
+      { doc: 'See [[Ada', inputData: 'a' },
+      { doc: 'Ask @ada', inputData: 'a' },
+      { doc: 'Mood :smile', inputData: 'e' },
+      { doc: '/draw', inputData: 'w' },
+    ];
+
+    for (const completionCase of completionCases) {
+      const parent = document.createElement('div');
+      document.body.appendChild(parent);
+      const view = new EditorView({
+        state: EditorState.create({
+          doc: completionCase.doc,
+          selection: EditorSelection.cursor(completionCase.doc.length),
+        }),
+        parent,
+      });
+
+      expect(shouldIncludeSelectionSnapshotGeometry(view, {
+        docChanged: true,
+        inputData: completionCase.inputData,
+      })).toBe(true);
+
+      view.destroy();
+      parent.remove();
+    }
+
+    const plainParent = document.createElement('div');
+    document.body.appendChild(plainParent);
+    const plainView = new EditorView({
+      state: EditorState.create({
+        doc: 'plain typing',
+        selection: EditorSelection.cursor('plain typing'.length),
+      }),
+      parent: plainParent,
+    });
+    expect(shouldIncludeSelectionSnapshotGeometry(plainView, {
+      docChanged: true,
+      inputData: 'g',
+    })).toBe(false);
+    plainView.destroy();
+    plainParent.remove();
+
+    const rangeParent = document.createElement('div');
+    document.body.appendChild(rangeParent);
+    const rangeView = new EditorView({
+      state: EditorState.create({
+        doc: 'selected text',
+        selection: EditorSelection.range(0, 8),
+      }),
+      parent: rangeParent,
+    });
+    expect(shouldIncludeSelectionSnapshotGeometry(rangeView, {
+      docChanged: true,
+      inputData: 'x',
+    })).toBe(true);
+    rangeView.destroy();
+    rangeParent.remove();
+  });
 });
 
 describe('MarkdownCodeEditor blank-space clicks', () => {
@@ -716,6 +817,29 @@ describe('MarkdownCodeEditor line numbers', () => {
     );
   });
 
+  it('defers visual line-number measurement after document-only changes', () => {
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: false,
+      geometryChanged: false,
+    })).toBe(MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: false,
+      viewportChanged: false,
+      geometryChanged: false,
+    })).toBe(0);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: true,
+      geometryChanged: false,
+    })).toBe(0);
+    expect(getVisualLineNumberOverlayMeasureDelay({
+      docChanged: true,
+      viewportChanged: false,
+      geometryChanged: true,
+    })).toBe(0);
+  });
+
   it('marks selected line numbers distinctly', () => {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
@@ -928,6 +1052,28 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       insertAt: 0,
       selection: 0,
     });
+  });
+
+  it('lets CodeMirror handle Enter at the top of a rendered plain document', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'Plain text',
+        selection: EditorSelection.cursor(0),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(false);
+    expect(view.state.doc.toString()).toBe('Plain text');
+    expect(view.state.selection.main.from).toBe(0);
+
+    view.destroy();
+    parent.remove();
   });
 
   it('inserts Enter around a first rendered image without splitting its markdown', () => {
@@ -1621,6 +1767,85 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('continues rendered task lines before the markdown keymap can turn them into bullets', () => {
+    const doc = '- hello\n- [ ] yo';
+    expect(getRenderedMarkdownTaskEnterEdit(doc, doc.length, doc.length)).toEqual({
+      from: doc.length,
+      to: doc.length,
+      insert: '\n- [ ] ',
+      nextValue: '- hello\n- [ ] yo\n- [ ] ',
+      selectionStart: 23,
+      selectionEnd: 23,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownTaskEnter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe('- hello\n- [ ] yo\n- [ ] ');
+    expect(view.state.selection.main.from).toBe(23);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('continues rendered task lines from beforeinput insertParagraph too', () => {
+    const doc = '- hello\n- [ ] yo';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertParagraph',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- hello\n- [ ] yo\n- [ ] ');
+    expect(view.state.selection.main.from).toBe(23);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes a rendered task line when Backspace deletes its only body character', () => {
+    expect(getRenderedMarkdownSingleCharacterTaskBodyDeleteBackwardEdit('- [ ] a', 7)).toEqual({
+      from: 0,
+      to: 7,
+      selection: 0,
+    });
+
+    const doc = 'before\n- [ ] a\nafter';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('before\n- [ ] a'.length),
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('before\nafter');
+    expect(view.state.selection.main.from).toBe('before\n'.length);
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('applies list body navigation in source mode too', () => {
     const doc = '- first\n- second';
     expect(getMarkdownListArrowRightBoundaryEdit(doc, '- first'.length)).toEqual({
@@ -2185,18 +2410,53 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('removes a rendered task row when Backspace deletes the last selected task text', () => {
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('- [ ] can', '- [ ] '.length, '- [ ] can'.length)).toEqual({
+      from: 0,
+      to: '- [ ] can'.length,
+      selection: 0,
+    });
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('before\n- [ ] can\nafter', 'before\n- [ ] '.length, 'before\n- [ ] can'.length)).toEqual({
+      from: 'before\n'.length,
+      to: 'before\n- [ ] can\n'.length,
+      selection: 'before\n'.length,
+    });
+    expect(getRenderedMarkdownSelectedTaskDeleteEdit('- [ ] candy', '- [ ] c'.length, '- [ ] candy'.length)).toBeNull();
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [ ] can',
+        selection: EditorSelection.range('- [ ] '.length, '- [ ] can'.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('');
+    expect(view.state.selection.main.from).toBe(0);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[');
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('removes only the rendered task marker on Backspace at task text start', () => {
-    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('- [ ] keep this text', '- [ ] '.length)).toEqual({
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('- [ ] keep this text', '- [ ] '.length)).toEqual({
       from: 0,
       to: '- [ ] '.length,
       insert: '',
       selection: 0,
     });
-    expect(getRenderedMarkdownTaskMarkerDeleteBackwardEdit('before\n  - [x] keep this text', 'before\n  - [x] '.length)).toEqual({
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('before\n  - [x] keep this text', 'before\n  - [x] '.length)).toEqual({
       from: 'before\n'.length,
       to: 'before\n  - [x] '.length,
-      insert: '  ',
-      selection: 'before\n  '.length,
+      insert: '',
+      selection: 'before\n'.length,
     });
 
     const parent = document.createElement('div');
@@ -2205,6 +2465,41 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       state: EditorState.create({
         doc: '- [ ] keep this text',
         selection: EditorSelection.cursor('- [ ] '.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('keep this text');
+    expect(view.state.selection.main.from).toBe(0);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('removes only rendered list markers on Backspace at text start', () => {
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('- keep this text', '- '.length)).toEqual({
+      from: 0,
+      to: '- '.length,
+      insert: '',
+      selection: 0,
+    });
+    expect(getRenderedMarkdownListMarkerDeleteBackwardEdit('1. keep this text', '1. '.length)).toEqual({
+      from: 0,
+      to: '1. '.length,
+      insert: '',
+      selection: 0,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- keep this text',
+        selection: EditorSelection.cursor('- '.length),
         extensions: [renderedMarkdownEditorPresentationExtension],
       }),
       parent,
@@ -2513,7 +2808,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     expect(decorations.size).toBeGreaterThan(0);
     expect(decorations.size).toBeLessThan(500);
-    expect(elapsedMs).toBeLessThan(16);
+    expect(elapsedMs).toBeLessThan(RENDERED_MARKDOWN_VISIBLE_DECORATION_BUDGET_MS);
   });
 
   it('keeps offscreen image lines decorated while rebuilding visible rendered ranges', () => {

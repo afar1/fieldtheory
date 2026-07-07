@@ -1,12 +1,10 @@
 import { EventEmitter } from 'events';
 import { app, globalShortcut, clipboard, nativeImage, Notification, systemPreferences } from 'electron';
 import { getHotkeyManager } from './hotkeyManager';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import http from 'http';
-import net from 'net';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
@@ -36,6 +34,8 @@ import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import { StdioJsonServer } from './stdioJsonServer';
 import { appendTranscriberTrace } from './transcriberTrace';
+import { LiveTypingCoordinator } from './liveTypingCoordinator';
+import { HOT_MIC_DEFAULTS } from './hotMicDefaults';
 import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
@@ -49,6 +49,7 @@ import {
   type TranscriptionEngine,
   type HotMicEngine,
   type ParakeetEngine,
+  type AutoImproveProvider,
 } from './types/transcribe';
 import { runParakeetPythonPreflight } from './parakeetPythonPreflight';
 import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
@@ -65,6 +66,12 @@ const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
 const WHISPER_TIMESTAMP_PATTERN = /\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g;
 const WHISPER_METADATA_PATTERN = /\[(?:id:\s*\d+|start:|end:)[^\]]*\]/gi;
 const WHISPER_SPEAKER_TURN_PATTERN = /\[SPEAKER_TURN\]/gi;
+const AUTO_IMPROVE_PROVIDERS = new Set<AutoImproveProvider>(['local', 'codex', 'claude']);
+
+export type TranscriptImproveRunner = (input: {
+  text: string;
+  provider: AutoImproveProvider;
+}) => Promise<string | null>;
 
 export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
   const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
@@ -118,11 +125,16 @@ type ParakeetProcessError = Error & {
  */
 export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
-type TranscribeWithEngineOptions = {
-  allowWhisperFallback?: boolean;
-  whisperModelOverride?: ModelSize;
-  enableTinyDiarize?: boolean;
-};
+export interface StandardRecordingDiagnostics {
+  status: TranscriptionStatus;
+  source: RecordingInputSource;
+  activeSource: RecordingInputSource | null;
+  recordingAgeMs: number | null;
+  helperRecordingActive: boolean | null;
+  liveTranscriptChars: number;
+  queueDepth: number;
+  chunkProcessingInFlight: boolean;
+}
 
 export interface MeetingCaptureSession {
   startedAt: string;
@@ -146,7 +158,10 @@ type FieldTheoryMarkdownInsertionTarget = {
 type FieldTheoryTerminalInsertionTarget = {
   isAvailable: () => boolean;
   insertText: (text: string) => boolean;
+  submitText?: (text: string, submitMode: LiveTypingSubmitMode) => boolean | Promise<boolean>;
 };
+
+type LiveTypingSubmitMode = 'enter' | 'command-enter';
 
 type MeetingCaptureHotkeyHandler = () => Promise<void>;
 type BeforeRecordingToggleHandler = () => void | Promise<void>;
@@ -164,10 +179,12 @@ export interface TranscriberEvents {
   parakeetSetupProgress: (progress: ParakeetSetupProgress) => void;
   stackChanged: (count: number) => void;
   stackingDisabled: (data: { itemId: number; message: string }) => void;
+  transcriptRecorded: (data: { wordCount: number }) => void;
+  transcriptImproved: (data: { wordCount: number; provider: AutoImproveProvider }) => void;
 }
 
 /**
- * Manages push-to-talk transcription using whisper-cli.
+ * Manages push-to-talk transcription using the local Parakeet runtime.
  * Handles hotkey registration, recording, transcription, and text insertion.
  * Integrates with clipboard history for prompt stacking.
  */
@@ -183,23 +200,10 @@ export class TranscriberManager extends EventEmitter {
   private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
   private secondaryHotkey: string | null = null; // Optional secondary hotkey for transcription
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
-  private whisperProcess: ChildProcess | null = null;
-
-  // Persistent JSON server for MLX Whisper and Parakeet engines.
+  // Persistent JSON server for Parakeet engines.
   // All use the same stdin/stdout JSON protocol via StdioJsonServer.
-  private mlxWhisperServer: StdioJsonServer | null = null;
   private parakeetServer: StdioJsonServer | null = null;
   private parakeetServerEngine: ParakeetEngine | null = null;
-
-  // Persistent whisper-server (HTTP) state for whisper.cpp.
-  private whisperServerProcess: ChildProcess | null = null;
-  private whisperServerPort: number = 0;
-  private whisperServerReady: boolean = false;
-  private whisperServerReadyPromise: Promise<void> | null = null;
-  private whisperServerShutdownPromise: Promise<void> | null = null;
-  private whisperServerLifecycleGeneration: number = 0;
-  private whisperServerDisabledReason: string | null = null;
-  private whisperServerModelPath: string | null = null;
 
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
@@ -244,6 +248,7 @@ export class TranscriberManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
+  private transcriptImproveRunner: TranscriptImproveRunner | null = null;
   private squaresManager: any | null = null;  // SquaresManager for voice-triggered window management
   private hasShownQuotaMessageThisPeriod: boolean = false;
   private recordingStartTime: number = 0;
@@ -264,13 +269,6 @@ export class TranscriberManager extends EventEmitter {
     'com.fieldtheory.experimental',
     'com.github.electron',
   ]);
-  private static readonly WHISPER_SERVER_STOP_TIMEOUT_MS = 2_000;
-  private static readonly WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS = 1_000;
-
-  // GPU fallback: if whisper-cli crashes due to Metal shader compilation failure,
-  // disable GPU and retry with CPU-only mode for the rest of the session.
-  private gpuDisabled: boolean = false;
-  
   // Double-tap detection for silent stacking mode.
   // When user double-taps the hotkey, enters silentStacking instead of recording.
   private doubleTapThresholdMs: number = 300;
@@ -294,6 +292,10 @@ export class TranscriberManager extends EventEmitter {
   private standardChunkCommandTriggered: boolean = false;
   private pendingImmediateSquaresAction: string | null = null;
   private pendingImmediateSquaresText: string = '';
+  private liveTypingCoordinator: LiveTypingCoordinator | null = null;
+  private liveTypingTargetBundleId: string | null = null;
+  private liveTypingPendingCommandText: string = '';
+  private liveTypingOutputSegments: string[] = [];
   private static readonly STANDARD_MAX_CHUNK_QUEUE_DEPTH = 8;
   private static readonly STANDARD_HARVEST_BACKPRESSURE_QUEUE_THRESHOLD = 2;
 
@@ -349,10 +351,47 @@ export class TranscriberManager extends EventEmitter {
     // still paste to the user's target app when recording is toggled from our UI.
     this.nativeHelper.on('frontmostAppChanged', (appInfo: { bundleId?: string | null }) => {
       const bundleId = appInfo?.bundleId ?? null;
+      this.liveTypingCoordinator?.notifyFrontmostChanged(bundleId);
       if (bundleId && !this.isFieldTheoryBundleId(bundleId)) {
         this.lastExternalPasteTargetBundleId = bundleId;
       }
     });
+  }
+
+  setTranscriptImproveRunner(runner: TranscriptImproveRunner | null): void {
+    this.transcriptImproveRunner = runner;
+  }
+
+  private normalizeAutoImproveProvider(value: unknown): AutoImproveProvider {
+    return typeof value === 'string' && AUTO_IMPROVE_PROVIDERS.has(value as AutoImproveProvider)
+      ? value as AutoImproveProvider
+      : 'local';
+  }
+
+  private countWords(text: string): number {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  private async improveTranscriptForPaste(text: string): Promise<string | null> {
+    if (!this.getAutoImprove()) return null;
+    const minWords = this.getAutoImproveMinWords();
+    if (this.countWords(text) < minWords) return null;
+
+    const provider = this.getAutoImproveProvider();
+    if (!this.transcriptImproveRunner) {
+      log.warn('Auto-improve skipped: no transcript improve runner configured');
+      return null;
+    }
+
+    try {
+      this.cursorStatusManager?.showRecordingNote('Improving transcript...');
+      const improved = await this.transcriptImproveRunner({ text, provider });
+      const trimmed = improved?.trim() ?? '';
+      return trimmed.length > 0 ? trimmed : null;
+    } catch (error) {
+      log.warn('Auto-improve failed; using raw transcript:', error);
+      return null;
+    }
   }
   
   /**
@@ -436,27 +475,11 @@ export class TranscriberManager extends EventEmitter {
     // Load preferences
     await this.preferences.load();
     const configuredEngine = this.preferences.getPreference('transcriptionEngine') as string | undefined;
-    if (
-      configuredEngine
-      && configuredEngine !== 'whisper'
-      && !isParakeetEngine(configuredEngine)
-    ) {
-      // Hidden engine (legacy or experimental) — migrate to parakeet if installed, otherwise whisper
-      const target = this.isParakeetInstalled() ? 'parakeet' : 'whisper';
+    if (configuredEngine && !isParakeetEngine(configuredEngine)) {
       log.info(
-        'Transcription engine "%s" is no longer supported; reverting to %s',
-        configuredEngine,
-        target
+        'Transcription engine "%s" is no longer supported; reverting to parakeet',
+        configuredEngine
       );
-      await this.preferences.save({
-        transcriptionEngine: target,
-        hotMicTranscriptionEngine: 'default',
-      });
-    }
-
-    // Auto-migrate existing whisper users to parakeet when parakeet is installed
-    if (configuredEngine === 'whisper' && this.isParakeetInstalled()) {
-      log.info('Auto-migrating from whisper to parakeet (parakeet is installed)');
       await this.preferences.save({
         transcriptionEngine: 'parakeet',
         hotMicTranscriptionEngine: 'default',
@@ -473,7 +496,6 @@ export class TranscriberManager extends EventEmitter {
       await this.preferences.save({ selectedModel: DEFAULT_MODEL_SIZE });
     }
     this.modelManager.setSelectedModel(selectedModel);
-    await this.reapStaleWhisperServerProcesses();
 
     // Overlay style hardcoded to 'rectangle' (cursor status indicator is primary UI)
     this.overlay.setOverlayStyle('rectangle');
@@ -850,22 +872,6 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Block recording if no Whisper model is downloaded.
-    const engineForStart = this.getConfiguredTranscriptionEngine();
-    if (engineForStart === 'whisper') {
-      const modelAvailable = await this.modelManager.isModelAvailable();
-      if (!modelAvailable) {
-        const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
-        this.emit('error', new Error(errorMsg));
-        // Also show a visible note to the user
-        this.cursorStatusManager?.showRecordingNote(errorMsg);
-        if (yieldedHotMic) {
-          this.hotMicDelegate?.resumeAfterTranscriber().catch(() => {});
-        }
-        return;
-      }
-    }
-
     if (recordingSource === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
       const errorMsg = 'System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.';
       this.emit('error', new Error(errorMsg));
@@ -921,6 +927,7 @@ export class TranscriberManager extends EventEmitter {
 
       this.resetStandardRealtimeSession();
       this.activeRecordingSource = recordingSource;
+      this.startLiveTypingSessionIfEligible(recordingSource);
       if (recordingSource === 'microphone') {
         this.attachStandardChunkListener();
         this.setStandardRealtimeHarvestMode();
@@ -934,6 +941,7 @@ export class TranscriberManager extends EventEmitter {
       this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
+      this.resetLiveTypingSession(true);
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
@@ -1017,6 +1025,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private resetStandardRealtimeSession(): void {
+    this.resetLiveTypingSession(true);
     this.standardLiveTranscript = '';
     this.standardLiveSegments = [];
     this.standardPendingChunkQueue = [];
@@ -1031,6 +1040,39 @@ export class TranscriberManager extends EventEmitter {
     this.standardLiveTranscript = '';
     this.standardLiveSegments = [];
     this.emit('standardLiveTranscript', '');
+  }
+
+  private startLiveTypingSessionIfEligible(recordingSource: RecordingInputSource): void {
+    if (!this.getLiveTyping() || recordingSource !== 'microphone') {
+      return;
+    }
+
+    const targetBundleId = this.nativeHelper.getFrontmostApp()?.bundleId ?? null;
+    if (!targetBundleId) {
+      appendTranscriberTrace('liveTyping.skipped', {
+        reason: 'no-frontmost-app',
+        source: recordingSource,
+      });
+      return;
+    }
+
+    this.liveTypingTargetBundleId = targetBundleId;
+    this.liveTypingCoordinator = new LiveTypingCoordinator({
+      insertTextSegment: (bundleId, text) => this.nativeHelper.insertTextSegment(bundleId, text),
+      onTrace: appendTranscriberTrace,
+    });
+    this.liveTypingCoordinator.start(targetBundleId);
+    appendTranscriberTrace('liveTyping.session-start', { targetBundleId });
+  }
+
+  private resetLiveTypingSession(cancelCoordinator: boolean): void {
+    if (cancelCoordinator) {
+      this.liveTypingCoordinator?.cancel();
+    }
+    this.liveTypingCoordinator = null;
+    this.liveTypingTargetBundleId = null;
+    this.liveTypingPendingCommandText = '';
+    this.liveTypingOutputSegments = [];
   }
 
   private attachStandardChunkListener(): void {
@@ -1079,11 +1121,6 @@ export class TranscriberManager extends EventEmitter {
     const queueDepth = this.getStandardRealtimePressureDepth();
     if (queueDepth === 0) {
       return 'dictation';
-    }
-
-    const engine = this.getConfiguredTranscriptionEngine();
-    if (engine === 'mlx-whisper' && queueDepth > 0) {
-      return 'command';
     }
 
     if (queueDepth >= TranscriberManager.STANDARD_HARVEST_BACKPRESSURE_QUEUE_THRESHOLD) {
@@ -1159,8 +1196,9 @@ export class TranscriberManager extends EventEmitter {
       });
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
+      await this.handleLiveTypingChunk(liveChunkText);
 
-      if (this.squaresManager) {
+      if (!this.liveTypingCoordinator && this.squaresManager) {
         const cmdStart = performance.now();
         const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());
         const cmdMs = Math.round(performance.now() - cmdStart);
@@ -1444,6 +1482,16 @@ export class TranscriberManager extends EventEmitter {
       }
       this.activeRecordingSource = null;
 
+      const liveTypingSession = !!this.liveTypingCoordinator;
+      let liveTypingTypedSegmentCount: number | null = null;
+      let liveTypingRemainderText = '';
+      const liveTypingTargetBundleId = this.liveTypingTargetBundleId;
+      if (this.liveTypingCoordinator) {
+        this.flushLiveTypingPendingCommandText();
+        const liveTypingFinish = await this.liveTypingCoordinator.finish();
+        liveTypingTypedSegmentCount = liveTypingFinish.typedSegmentCount;
+      }
+
       const finishPrepMs = Math.round(performance.now() - finishStart);
       const timingMessage = '[timing] finish recording prep: snapshot=%dms snapshotStatus=%s stop=%dms drain=%dms total=%dms source=%s liveChars=%d queueDepth=%d helperActive=%s';
       if (finishPrepMs > 400) {
@@ -1512,19 +1560,8 @@ export class TranscriberManager extends EventEmitter {
           void fs.promises.unlink(wavPath).catch(() => {});
           log.debug('Final-pass: using live transcript (%d chars, tail=%d bytes)', cleanedText.length, tailFileSize);
         } else {
-          // Full-file pass: Whisper benefits from full context; also used when there
-          // are no live chunks (short recording with no harvest).
-          if (engine === 'whisper') {
-            const selectedModel = this.modelManager.getSelectedModel();
-            const modelAvailable = await this.modelManager.isModelAvailable();
-            if (!modelAvailable) {
-              this.clearStandardLiveTranscript();
-              this.setStatus('idle');
-              this.handleOverlayAfterTranscription();
-              this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
-              return;
-            }
-          }
+          // Full-file pass is used when there are no live chunks or the tail has
+          // enough speech to benefit from complete context.
 
           const asrStart = performance.now();
           const text = await this.transcribeWithEngineFallback(wavPath, engine);
@@ -1554,6 +1591,7 @@ export class TranscriberManager extends EventEmitter {
       let deferredSquaresAction = immediateSquaresAction;
       if (cleanedText.length === 0) {
         this.clearStandardLiveTranscript();
+        this.resetLiveTypingSession(false);
         appendTranscriberTrace('finish.no-audio', {
           source: activeRecordingSource,
           totalMs: Math.round(performance.now() - finalPassStart),
@@ -1573,7 +1611,7 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
 
-      if (!deferredSquaresAction && this.squaresManager) {
+      if (!liveTypingSession && !deferredSquaresAction && this.squaresManager) {
         const handled = await this.squaresManager.handleVoiceCommand(cleanedText);
         if (handled) {
           log.info(`Squares voice command executed: "${cleanedText}"`);
@@ -1588,7 +1626,7 @@ export class TranscriberManager extends EventEmitter {
       // If user says "use the debug command", insert [cmd:debug.md] reference.
       const cmdDetectStart = performance.now();
       this.detectedCommands = [];
-      if (this.commandsManager) {
+      if (!liveTypingSession && this.commandsManager) {
         const commandDetection = this.commandsManager.detectCommands(cleanedText);
         if (commandDetection.detected) {
           // Insert [cmd:name.md] references at the end of the cleaned text (trigger phrases removed)
@@ -1613,9 +1651,26 @@ export class TranscriberManager extends EventEmitter {
       // Insert inline [Figure N] references for screenshots taken during recording.
       // IMPORTANT: must happen before clearStandardLiveTranscript() which clears
       // standardLiveSegments needed for inline placement based on timing.
-      const figureSegments = finalTextSource === 'asr' ? [] : this.standardLiveSegments;
-      cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
+      if (!liveTypingSession) {
+        const figureSegments = finalTextSource === 'asr' ? [] : this.standardLiveSegments;
+        cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
+      }
+      if (liveTypingSession && liveTypingTypedSegmentCount !== null) {
+        liveTypingRemainderText = this.computeLiveTypingRemainder(
+          liveTypingTypedSegmentCount,
+          cleanedText,
+          finalTextSource
+        );
+        appendTranscriberTrace('liveTyping.finish-remainder', {
+          typedSegmentCount: liveTypingTypedSegmentCount,
+          totalSegmentCount: this.standardLiveSegments.length,
+          remainderChars: liveTypingRemainderText.length,
+          textSource: finalTextSource,
+        });
+      }
       this.clearStandardLiveTranscript();
+
+      let transcriptItemId = 0;
 
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
@@ -1632,6 +1687,7 @@ export class TranscriberManager extends EventEmitter {
           effectiveStackId
         );
         if (itemId > 0) {
+          transcriptItemId = itemId;
           this.currentStack.push(itemId);
           
           // Auto-stack: if screenshots were taken during recording, group them with transcript.
@@ -1675,8 +1731,24 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
 
-      // Transcript improvement is disabled in this release.
-      const finalText = cleanedText;
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-before-improve', wavPath);
+        return;
+      }
+
+      const improvedText = await this.improveTranscriptForPaste(cleanedText);
+      const finalText = improvedText ?? cleanedText;
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-after-improve', wavPath);
+        return;
+      }
+      if (improvedText && transcriptItemId > 0) {
+        this.clipboardManager?.saveImprovedContent(transcriptItemId, improvedText);
+        this.emit('transcriptImproved', {
+          wordCount: this.countWords(improvedText),
+          provider: this.getAutoImproveProvider(),
+        });
+      }
 
       // Update lastTranscription with the final text.
       this.lastTranscription = finalText;
@@ -1689,15 +1761,37 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       const pasteStart = performance.now();
-      const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
-      await this.notifyPasteStarting();
-      await this.pasteStack(false);
-      this.emit('stackChanged', 0);
+      let accessibilityCheckPromise: Promise<boolean> | null = null;
+      const liveTypingShouldPasteRemainder = liveTypingSession && liveTypingRemainderText.trim().length > 0;
+      const liveTypingShouldPasteScreenshots = liveTypingSession && this.currentStack.some((itemId) => itemId !== transcriptItemId);
+      if (liveTypingShouldPasteRemainder || liveTypingShouldPasteScreenshots || !liveTypingSession) {
+        await this.notifyPasteStarting();
+      }
+
+      if (liveTypingSession) {
+        if (liveTypingShouldPasteRemainder && liveTypingTargetBundleId) {
+          await this.deliverLiveTypingRemainder(liveTypingTargetBundleId, liveTypingRemainderText);
+        }
+
+        if (liveTypingShouldPasteScreenshots) {
+          await this.pasteStack(false, {
+            excludeItemIds: transcriptItemId > 0 ? new Set([transcriptItemId]) : undefined,
+          });
+          this.emit('stackChanged', 0);
+        } else {
+          this.clearStack();
+        }
+      } else {
+        accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
+        await this.pasteStack(false);
+        this.emit('stackChanged', 0);
+      }
       if (deferredSquaresAction && this.squaresManager) {
         await this.squaresManager.executeAction(deferredSquaresAction);
       }
       const pasteMs = Math.round(performance.now() - pasteStart);
       const finalTotalMs = Math.round(performance.now() - finalPassStart);
+      this.emit('transcriptRecorded', { wordCount: this.countWords(cleanedText) });
       this.emit('result', finalText);
 
       log.info(
@@ -1717,6 +1811,10 @@ export class TranscriberManager extends EventEmitter {
         totalMs: finalTotalMs,
         tailBytes: tailFileSize,
         commands: this.detectedCommands.map(c => c.name),
+        liveTyping: liveTypingSession ? {
+          typedSegmentCount: liveTypingTypedSegmentCount,
+          remainderChars: liveTypingRemainderText.length,
+        } : undefined,
       });
 
       // Set status to idle BEFORE emitting paste events.
@@ -1725,7 +1823,7 @@ export class TranscriberManager extends EventEmitter {
       this.handleOverlayAfterTranscription();
 
       // Use accessibility result to choose UI feedback (paste already happened)
-      const hasTextInput = await accessibilityCheckPromise;
+      const hasTextInput = liveTypingSession ? true : await accessibilityCheckPromise;
       if (hasTextInput) {
         this.emit('paste-success', cleanedText);
       } else if (!this.skipNextPasteFailedNotification) {
@@ -1733,6 +1831,7 @@ export class TranscriberManager extends EventEmitter {
       }
       // Reset the skip flag
       this.skipNextPasteFailedNotification = false;
+      this.resetLiveTypingSession(false);
     } catch (error) {
       const noRecordingInProgress =
         error instanceof Error && /no recording in progress/i.test(error.message);
@@ -1750,6 +1849,7 @@ export class TranscriberManager extends EventEmitter {
       this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
+      this.resetLiveTypingSession(true);
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
       if (!noRecordingInProgress) {
@@ -1787,6 +1887,7 @@ export class TranscriberManager extends EventEmitter {
     this.pendingImmediateSquaresAction = null;
     this.pendingImmediateSquaresText = '';
     this.activeRecordingSource = null;
+    this.resetLiveTypingSession(true);
     this.detachStandardChunkListener();
     this.clearStandardLiveTranscript();
     this.clearStack();
@@ -1808,6 +1909,7 @@ export class TranscriberManager extends EventEmitter {
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
       this.activeRecordingSource = null;
+      this.resetLiveTypingSession(true);
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1818,6 +1920,7 @@ export class TranscriberManager extends EventEmitter {
     } catch (error) {
       log.error('Failed to cancel recording:', error);
       this.activeRecordingSource = null;
+      this.resetLiveTypingSession(true);
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1968,7 +2071,7 @@ export class TranscriberManager extends EventEmitter {
    * Set whether to automatically improve transcripts after completion.
    */
   async setAutoImprove(enabled: boolean): Promise<void> {
-    await this.preferences.save({ autoImproveTranscripts: false });
+    await this.preferences.save({ autoImproveTranscripts: enabled });
   }
 
   /**
@@ -1976,7 +2079,34 @@ export class TranscriberManager extends EventEmitter {
    * Default is false (disabled) for new users.
    */
   getAutoImprove(): boolean {
-    return false;
+    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
+  }
+
+  async setAutoImproveProvider(provider: AutoImproveProvider): Promise<void> {
+    await this.preferences.save({
+      autoImproveProvider: this.normalizeAutoImproveProvider(provider),
+    });
+  }
+
+  getAutoImproveProvider(): AutoImproveProvider {
+    return this.normalizeAutoImproveProvider(
+      this.preferences.getPreference('autoImproveProvider')
+    );
+  }
+
+  /**
+   * Set whether standard dictation types finalized segments as they arrive.
+   */
+  async setLiveTyping(enabled: boolean): Promise<void> {
+    await this.preferences.save({ liveTypingEnabled: !!enabled });
+  }
+
+  /**
+   * Get whether live typing is enabled for standard dictation.
+   * Default is false.
+   */
+  getLiveTyping(): boolean {
+    return this.preferences.getPreference('liveTypingEnabled') === true;
   }
 
   /**
@@ -2041,686 +2171,22 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Transcribe with the configured engine, falling back to whisper.cpp when
-   * the selected runtime fails and a Whisper model is available locally.
+   * Transcribe with the configured Parakeet engine.
    */
   private async transcribeWithEngineFallback(
     wavPath: string,
-    engine: TranscriptionEngine,
-    options: TranscribeWithEngineOptions = {}
+    engine: TranscriptionEngine
   ): Promise<string> {
-    const allowWhisperFallback = options.allowWhisperFallback ?? true;
-    const whisperModelOverride = options.whisperModelOverride;
-    const enableTinyDiarize = options.enableTinyDiarize ?? false;
-
-    // Whisper (whisper.cpp) — direct path, no fallback needed.
-    if (engine === 'whisper') {
-      return this.transcribe(wavPath, whisperModelOverride, { enableTinyDiarize });
-    }
-
-    // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr).
-    // Falls back to whisper.cpp if server fails and a model is available.
     if (isParakeetEngine(engine)) {
-      const engineLabel = PARAKEET_ENGINE_LABELS[engine];
-      try {
-        return await this.transcribeWithParakeet(wavPath, engine);
-      } catch (parakeetError) {
-        if (!allowWhisperFallback) throw parakeetError;
-
-        const whisperAvailable = whisperModelOverride
-          ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
-          : await this.modelManager.isModelAvailable();
-        if (!whisperAvailable) throw parakeetError;
-
-        log.warn('%s failed, falling back to whisper.cpp: %s', engineLabel, (parakeetError as Error).message);
-        this.lastHotMicUsedWhisperFallback = true;
-
-        try {
-          return await this.transcribe(wavPath, whisperModelOverride);
-        } catch (whisperError) {
-          throw new Error(
-            `${engineLabel} failed: ${(parakeetError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
-          );
-        }
-      }
+      return this.transcribeWithParakeet(wavPath, engine);
     }
 
-    // MLX Whisper — use the mlx-whisper persistent server.
-    // Falls back to whisper.cpp if server fails and a model is available.
-    if (engine === 'mlx-whisper') {
-      try {
-        return await this.transcribeWithMlxWhisper(wavPath);
-      } catch (mlxError) {
-        if (!allowWhisperFallback) throw mlxError;
-
-        const whisperAvailable = whisperModelOverride
-          ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
-          : await this.modelManager.isModelAvailable();
-        if (!whisperAvailable) throw mlxError;
-
-        log.warn('MLX Whisper failed, falling back to whisper.cpp: %s', (mlxError as Error).message);
-        this.lastHotMicUsedWhisperFallback = true;
-
-        try {
-          return await this.transcribe(wavPath, whisperModelOverride);
-        } catch (whisperError) {
-          throw new Error(
-            `MLX Whisper failed: ${(mlxError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
-          );
-        }
-      }
-    }
-
-    return this.transcribe(wavPath, whisperModelOverride, { enableTinyDiarize });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Persistent whisper-server management
-  //
-  // The whisper-server binary (from whisper.cpp) runs as a local HTTP server
-  // that keeps the GGML model loaded in GPU/CPU memory. This eliminates the
-  // ~500ms cold-start penalty of spawning whisper-cli per chunk, bringing
-  // chunk transcription latency down to ~50-100ms for short audio.
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Find an available TCP port by briefly binding to port 0.
-   */
-  private findFreePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const srv = net.createServer();
-      srv.listen(0, '127.0.0.1', () => {
-        const addr = srv.address();
-        if (!addr || typeof addr === 'string') {
-          srv.close(() => reject(new Error('Could not determine port')));
-          return;
-        }
-        const port = addr.port;
-        srv.close(() => resolve(port));
-      });
-      srv.on('error', reject);
+    log.info('Transcription engine "%s" is no longer supported; using parakeet', engine);
+    await this.preferences.save({
+      transcriptionEngine: 'parakeet',
+      hotMicTranscriptionEngine: 'default',
     });
-  }
-
-  /**
-   * Get the path to the whisper-server binary.
-   */
-  private getWhisperServerPath(): string {
-    if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'whisper-server');
-    } else {
-      const repoRoot = path.resolve(__dirname, '../../..');
-      return path.join(repoRoot, 'build-whisper', 'bin', 'whisper-server');
-    }
-  }
-
-  /**
-   * Check whether whisper-server binary exists on disk.
-   */
-  private isWhisperServerAvailable(): boolean {
-    try {
-      return fs.existsSync(this.getWhisperServerPath());
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Start the persistent whisper-server process.
-   * Loads the model once and listens on a random localhost port.
-   * Returns when the server reports healthy via GET /health.
-   */
-  private async startWhisperServer(modelOverride?: ModelSize): Promise<void> {
-    if (this.whisperServerDisabledReason) {
-      throw new Error(this.whisperServerDisabledReason);
-    }
-
-    const modelPath = modelOverride
-      ? this.modelManager.getModelPathForSize(modelOverride)
-      : this.modelManager.getModelPath();
-
-    if (this.whisperServerShutdownPromise) {
-      await this.whisperServerShutdownPromise;
-    }
-
-    // If the server is already running with the same model, reuse it.
-    if (this.whisperServerReady && this.whisperServerProcess && this.whisperServerModelPath === modelPath) {
-      return;
-    }
-
-    // If currently starting with the same model, wait for it.
-    if (this.whisperServerReadyPromise && this.whisperServerModelPath === modelPath) {
-      return this.whisperServerReadyPromise;
-    }
-
-    // If any tracked server process still exists here, it is stale or uses the
-    // wrong model. Stop it fully before spawning a replacement.
-    if (this.whisperServerProcess) {
-      await this.stopWhisperServer();
-    }
-
-    this.whisperServerModelPath = modelPath;
-    const startupGeneration = ++this.whisperServerLifecycleGeneration;
-
-    this.whisperServerReadyPromise = (async () => {
-      const startupInvalidated = (): boolean => startupGeneration !== this.whisperServerLifecycleGeneration;
-
-      await this.reapStaleWhisperServerProcesses();
-
-      const serverPath = this.getWhisperServerPath();
-      if (!fs.existsSync(serverPath)) {
-        this.whisperServerReadyPromise = null;
-        throw new Error('whisper-server binary not found. Run npm run build:whisper to build it.');
-      }
-
-      const port = await this.findFreePort();
-
-      if (startupInvalidated()) {
-        this.whisperServerReadyPromise = null;
-        throw new Error('whisper-server startup cancelled');
-      }
-
-      const args = [
-        '-m', modelPath,
-        '--host', '127.0.0.1',
-        '--port', String(port),
-        '--language', 'en',
-      ];
-
-      if (this.gpuDisabled) {
-        args.push('-ng');
-      }
-
-      const proc = spawn(serverPath, args, {
-        env: { ...process.env, NO_COLOR: '1' },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      if (startupInvalidated()) {
-        void this.terminateTrackedWhisperServer(proc);
-        this.whisperServerReadyPromise = null;
-        throw new Error('whisper-server startup cancelled');
-      }
-
-      this.whisperServerProcess = proc;
-      this.whisperServerPort = port;
-
-      // Wait for the server to become healthy via polling /health.
-      // The server prints "whisper server listening at ..." to stdout when ready,
-      // but polling /health is more robust.
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        let stderrBuffer = '';
-
-        proc.stderr?.on('data', (data: Buffer) => {
-          stderrBuffer += data.toString();
-        });
-
-        proc.on('error', (error) => {
-          if (!settled) {
-            settled = true;
-            this.whisperServerProcess = null;
-            this.whisperServerReady = false;
-            this.whisperServerReadyPromise = null;
-            reject(new Error(`Failed to start whisper-server: ${error.message}`));
-          }
-        });
-
-        proc.on('close', (code) => {
-          if (startupInvalidated()) {
-            if (!settled) { settled = true; reject(new Error('whisper-server startup cancelled')); }
-            return;
-          }
-          if (!settled) {
-            settled = true;
-            this.whisperServerProcess = null;
-            this.whisperServerReady = false;
-            this.whisperServerReadyPromise = null;
-            const metalCrash = this.isMetalError(stderrBuffer);
-            const hint = metalCrash ? ' (Metal GPU error — will fall back to whisper-cli)' : '';
-            reject(new Error(`whisper-server exited during startup with code ${code}${hint}`));
-          } else {
-            this.whisperServerProcess = null;
-            this.whisperServerReady = false;
-            this.whisperServerReadyPromise = null;
-            log.warn('whisper-server process exited (code %d), will restart on next transcription', code);
-          }
-        });
-
-        // Poll /health every 200ms, give up after 30s.
-        const maxWaitMs = 30_000;
-        const pollIntervalMs = 200;
-        const deadline = Date.now() + maxWaitMs;
-
-        const poll = () => {
-          if (settled || startupInvalidated()) return;
-          if (Date.now() > deadline) {
-            settled = true;
-            void this.stopWhisperServer();
-            reject(new Error('whisper-server startup timed out after 30s'));
-            return;
-          }
-
-          const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
-            let body = '';
-            res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-            res.on('end', () => {
-              if (settled || startupInvalidated()) return;
-              try {
-                const parsed = JSON.parse(body);
-                if (parsed.status === 'ok') {
-                  settled = true;
-                  this.whisperServerReady = true;
-                  log.info('whisper-server ready on port %d (model: %s)', port, path.basename(modelPath));
-                  resolve();
-                  return;
-                }
-              } catch { /* not ready yet */ }
-              setTimeout(poll, pollIntervalMs);
-            });
-          });
-
-          req.on('error', () => {
-            if (!settled && !startupInvalidated()) {
-              setTimeout(poll, pollIntervalMs);
-            }
-          });
-          req.end();
-        };
-
-        setTimeout(poll, pollIntervalMs);
-      });
-    })();
-
-    return this.whisperServerReadyPromise;
-  }
-
-  /**
-   * Kill the persistent whisper-server. Called on suspend/sleep or model change.
-   * The next transcription will restart it automatically.
-   */
-  stopWhisperServer(): Promise<void> {
-    this.whisperServerLifecycleGeneration += 1;
-    this.whisperServerReady = false;
-    this.whisperServerReadyPromise = null;
-
-    if (this.whisperServerShutdownPromise) {
-      return this.whisperServerShutdownPromise;
-    }
-
-    const proc = this.whisperServerProcess;
-    if (!proc) {
-      this.whisperServerPort = 0;
-      this.whisperServerModelPath = null;
-      return Promise.resolve();
-    }
-
-    this.whisperServerShutdownPromise = this.terminateTrackedWhisperServer(proc).finally(() => {
-      if (this.whisperServerProcess === proc) {
-        this.whisperServerProcess = null;
-      }
-      this.whisperServerReady = false;
-      this.whisperServerReadyPromise = null;
-      this.whisperServerShutdownPromise = null;
-      this.whisperServerPort = 0;
-      this.whisperServerModelPath = null;
-    });
-
-    return this.whisperServerShutdownPromise;
-  }
-
-  private terminateTrackedWhisperServer(proc: ChildProcess): Promise<void> {
-    return new Promise((resolve) => {
-      let settled = false;
-      let forceKillTimer: NodeJS.Timeout | null = null;
-      let finishTimer: NodeJS.Timeout | null = null;
-
-      const cleanup = () => {
-        proc.removeListener('close', onExit);
-        proc.removeListener('exit', onExit);
-        if (forceKillTimer) clearTimeout(forceKillTimer);
-        if (finishTimer) clearTimeout(finishTimer);
-      };
-
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-
-      const onExit = () => {
-        finish();
-      };
-
-      proc.once('close', onExit);
-      proc.once('exit', onExit);
-
-      if (proc.exitCode !== null || proc.signalCode !== null) {
-        finish();
-        return;
-      }
-
-      try {
-        proc.kill('SIGTERM');
-      } catch (error) {
-        log.warn('Failed to send SIGTERM to whisper-server: %s', error instanceof Error ? error.message : String(error));
-        finish();
-        return;
-      }
-
-      forceKillTimer = setTimeout(() => {
-        if (settled || proc.exitCode !== null || proc.signalCode !== null) {
-          finish();
-          return;
-        }
-
-        log.warn('whisper-server did not exit after SIGTERM; sending SIGKILL');
-        try {
-          proc.kill('SIGKILL');
-        } catch (error) {
-          log.warn('Failed to send SIGKILL to whisper-server: %s', error instanceof Error ? error.message : String(error));
-          finish();
-          return;
-        }
-
-        finishTimer = setTimeout(() => {
-          log.warn('whisper-server did not report exit after SIGKILL');
-          finish();
-        }, TranscriberManager.WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS);
-        finishTimer.unref?.();
-      }, TranscriberManager.WHISPER_SERVER_STOP_TIMEOUT_MS);
-      forceKillTimer.unref?.();
-    });
-  }
-
-  private async reapStaleWhisperServerProcesses(): Promise<void> {
-    const serverPath = this.getWhisperServerPath();
-
-    try {
-      const { stdout } = await execAsync('ps -axo pid=,command=');
-      const stalePids = stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .map((line) => {
-          const match = line.match(/^(\d+)\s+(.*)$/);
-          if (!match) return null;
-          return {
-            pid: Number(match[1]),
-            command: match[2],
-          };
-        })
-        .filter((entry): entry is { pid: number; command: string } => Boolean(entry))
-        .filter(({ pid, command }) => {
-          if (!Number.isFinite(pid) || pid <= 0) return false;
-          if (this.whisperServerProcess?.pid && pid === this.whisperServerProcess.pid) return false;
-          return command === serverPath || command.startsWith(`${serverPath} `);
-        })
-        .map(({ pid }) => pid);
-
-      if (stalePids.length === 0) return;
-
-      log.warn('Reaping %d stale whisper-server process(es)', stalePids.length);
-      for (const pid of stalePids) {
-        await this.terminatePid(pid);
-      }
-    } catch (error) {
-      log.warn(
-        'Failed to reap stale whisper-server processes: %s',
-        error instanceof Error ? error.message : String(error)
-      );
-    }
-  }
-
-  private async terminatePid(pid: number): Promise<void> {
-    const isRunning = () => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    if (!isRunning()) return;
-
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      return;
-    }
-
-    const deadline = Date.now() + TranscriberManager.WHISPER_SERVER_STOP_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (!isRunning()) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    if (!isRunning()) return;
-
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      return;
-    }
-
-    const killDeadline = Date.now() + TranscriberManager.WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS;
-    while (Date.now() < killDeadline) {
-      if (!isRunning()) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-
-  /**
-   * Transcribe a WAV file via the persistent whisper-server HTTP endpoint.
-   * Sends the file as multipart/form-data to POST /inference.
-   */
-  private transcribeViaWhisperServer(wavPath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const needTimestamps = this.screenshotMetadata.length > 0;
-      const fileContent = fs.readFileSync(wavPath);
-      const boundary = `----FieldTheory${crypto.randomBytes(8).toString('hex')}`;
-
-      // Build multipart body with the audio file and response format.
-      const parts: Buffer[] = [];
-
-      // File part
-      parts.push(Buffer.from(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${path.basename(wavPath)}"\r\n` +
-        `Content-Type: audio/wav\r\n\r\n`
-      ));
-      parts.push(fileContent);
-      parts.push(Buffer.from('\r\n'));
-
-      // Response format — "text" gives us just the transcript text, no JSON wrapper.
-      const format = needTimestamps ? 'verbose_json' : 'text';
-      parts.push(Buffer.from(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
-        `${format}\r\n`
-      ));
-
-      // Temperature 0 for deterministic output (matching whisper-cli defaults).
-      parts.push(Buffer.from(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="temperature"\r\n\r\n` +
-        `0.0\r\n`
-      ));
-
-      parts.push(Buffer.from(`--${boundary}--\r\n`));
-
-      const body = Buffer.concat(parts);
-
-      const req = http.request({
-        hostname: '127.0.0.1',
-        port: this.whisperServerPort,
-        path: '/inference',
-        method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': body.length,
-        },
-        timeout: 120_000,
-      }, (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-        res.on('end', () => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`whisper-server returned HTTP ${res.statusCode}: ${data}`));
-            return;
-          }
-
-          try {
-            if (needTimestamps) {
-              // verbose_json includes segments with start/end times.
-              const parsed = JSON.parse(data);
-              if (parsed.segments && Array.isArray(parsed.segments)) {
-                const timestampedLines = parsed.segments.map((seg: any) => {
-                  const t0 = this.formatSecondsAsTimestamp(seg.start);
-                  const t1 = this.formatSecondsAsTimestamp(seg.end);
-                  return `[${t0} --> ${t1}]${seg.text}`;
-                });
-                resolve(this.parseTimestampedOutput(timestampedLines.join('\n')));
-              } else {
-                resolve((parsed.text || '').trim());
-              }
-            } else {
-              // "text" format returns plain text directly.
-              resolve(data.trim());
-            }
-          } catch {
-            resolve(data.trim());
-          }
-        });
-      });
-
-      req.on('error', (err) => {
-        reject(new Error(`whisper-server request failed: ${err.message}`));
-      });
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('whisper-server request timed out (120s)'));
-      });
-      req.write(body);
-      req.end();
-    });
-  }
-
-  /**
-   * Format seconds as HH:MM:SS.mmm for whisper-server verbose_json timestamps.
-   */
-  private formatSecondsAsTimestamp(seconds: number): string {
-    const totalMs = Math.round(seconds * 1000);
-    const ms = totalMs % 1000;
-    const totalSec = Math.floor(totalMs / 1000);
-    const s = totalSec % 60;
-    const m = Math.floor(totalSec / 60) % 60;
-    const h = Math.floor(totalSec / 3600);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
-  }
-
-  // ---------------------------------------------------------------------------
-  // MLX Whisper server — uses the shared StdioJsonServer JSON protocol.
-  // ---------------------------------------------------------------------------
-
-  private getMlxWhisperPythonPath(): string {
-    if (app.isPackaged) {
-      return path.join(app.getPath('userData'), 'build-mlx-whisper', 'venv', 'bin', 'python');
-    }
-    // __dirname in compiled code is mac-app/electron-dist/main.
-    // Use mac-app root so dev runtime matches setup-mlx-whisper.sh output.
-    const macAppRoot = path.resolve(__dirname, '../..');
-    return path.join(macAppRoot, 'build-mlx-whisper', 'venv', 'bin', 'python');
-  }
-
-  private getMlxWhisperScriptPath(): string {
-    if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'scripts', 'mlx-whisper-transcribe.py');
-    }
-    const macAppRoot = path.resolve(__dirname, '../..');
-    return path.join(macAppRoot, 'scripts', 'mlx-whisper-transcribe.py');
-  }
-
-  isMlxWhisperInstalled(): boolean {
-    try {
-      return fs.existsSync(this.getMlxWhisperPythonPath()) &&
-             fs.existsSync(this.getMlxWhisperScriptPath());
-    } catch {
-      return false;
-    }
-  }
-
-  private getOrCreateMlxWhisperServer(): StdioJsonServer {
-    if (!this.mlxWhisperServer) {
-      this.mlxWhisperServer = new StdioJsonServer({
-        name: 'MLX Whisper',
-        command: this.getMlxWhisperPythonPath(),
-        args: [this.getMlxWhisperScriptPath(), '--server'],
-      });
-    }
-    return this.mlxWhisperServer;
-  }
-
-  private startMlxWhisperServer(): Promise<void> {
-    return this.getOrCreateMlxWhisperServer().start();
-  }
-
-  stopMlxWhisperServer(): void {
-    this.mlxWhisperServer?.stop();
-  }
-
-  private sendMlxWhisperCommand(cmd: Record<string, unknown>) {
-    return this.getOrCreateMlxWhisperServer().send(cmd);
-  }
-
-  /**
-   * Transcribe audio using MLX Whisper persistent server.
-   * Starts the server on first use, auto-restarts on crash (one retry).
-   */
-  private async transcribeWithMlxWhisper(wavPath: string): Promise<string> {
-    const needTimestamps = this.screenshotMetadata.length > 0;
-
-    const doTranscribe = async (): Promise<string> => {
-      await this.startMlxWhisperServer();
-
-      const response = await this.sendMlxWhisperCommand({
-        cmd: 'transcribe',
-        audio: wavPath,
-        timestamps: needTimestamps,
-      });
-
-      if (!response.ok) {
-        throw new Error(`MLX Whisper transcription failed: ${response.error}`);
-      }
-
-      const rawText = response.text || '';
-      if (needTimestamps) {
-        return this.parseTimestampedOutput(rawText);
-      }
-      return rawText.trim();
-    };
-
-    try {
-      return await doTranscribe();
-    } catch (error) {
-      const message = (error as Error)?.message || '';
-      const isFatal = message.includes('not installed') || message.includes('ImportError');
-
-      if (isFatal) {
-        const server = this.getOrCreateMlxWhisperServer();
-        if (!server.disabledReason) {
-          server.disable(message);
-        }
-        throw error;
-      }
-
-      // One retry: restart server and try again.
-      log.warn('MLX Whisper transcription failed, restarting server: %s', message);
-      this.stopMlxWhisperServer();
-      return await doTranscribe();
-    }
+    return this.transcribeWithParakeet(wavPath, 'parakeet');
   }
 
   // ---------------------------------------------------------------------------
@@ -3390,11 +2856,12 @@ export class TranscriberManager extends EventEmitter {
         log.info('Parakeet uninstalled: deleted %s', basePath);
       }
 
-      // If current engine is parakeet, revert to whisper as fallback
+      // Keep the selected engine Parakeet-only even after uninstall. The user can
+      // reinstall the runtime from Settings.
       const currentEngine = this.preferences.getPreference('transcriptionEngine');
       if (isParakeetEngine(currentEngine)) {
         await this.preferences.save({
-          transcriptionEngine: 'whisper',
+          transcriptionEngine: 'parakeet',
           hotMicTranscriptionEngine: 'default',
         });
       }
@@ -3480,164 +2947,6 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Transcribe audio file using Whisper.
-   * Prefers the persistent whisper-server for lower latency. Falls back to
-   * spawning whisper-cli per-invocation if the server is unavailable.
-   */
-  private async transcribe(
-    wavPath: string,
-    whisperModelOverride?: ModelSize,
-    options: { enableTinyDiarize?: boolean } = {},
-  ): Promise<string> {
-    if (options.enableTinyDiarize) {
-      return this.runWhisper(wavPath, whisperModelOverride, { enableTinyDiarize: true });
-    }
-
-    // Try the persistent server first for low-latency transcription.
-    if (this.isWhisperServerAvailable() && !this.whisperServerDisabledReason) {
-      try {
-        await this.startWhisperServer(whisperModelOverride);
-        return await this.transcribeViaWhisperServer(wavPath);
-      } catch (serverError: any) {
-        const message = serverError?.message || '';
-        const isFatal = this.isMetalError(message) || message.includes('binary not found');
-
-        if (isFatal && !this.whisperServerDisabledReason) {
-          this.whisperServerDisabledReason = message;
-          log.warn('Disabling whisper-server for this session: %s', message);
-        }
-
-        log.warn('whisper-server failed, falling back to whisper-cli: %s', message);
-        void this.stopWhisperServer();
-      }
-    }
-
-    // Fallback to the per-invocation whisper-cli.
-    try {
-      return await this.runWhisper(wavPath, whisperModelOverride);
-    } catch (error: any) {
-      if (!this.gpuDisabled && this.isMetalError(error?.message || '')) {
-        log.warn('Metal GPU error detected, retrying with CPU-only mode');
-        this.gpuDisabled = true;
-        return await this.runWhisper(wavPath, whisperModelOverride);
-      }
-      throw error;
-    }
-  }
-
-  private isMetalError(message: string): boolean {
-    return message.includes('MTLLibraryError') ||
-      message.includes('MetalPerformancePrimitives') ||
-      message.includes('metal_library_compile_pipeline') ||
-      message.includes('ggml_metal');
-  }
-
-  private runWhisper(
-    wavPath: string,
-    whisperModelOverride?: ModelSize,
-    options: { enableTinyDiarize?: boolean } = {},
-  ): Promise<string> {
-    const modelPath = whisperModelOverride
-      ? this.modelManager.getModelPathForSize(whisperModelOverride)
-      : this.modelManager.getModelPath();
-    const whisperPath = this.getWhisperPath();
-
-    // If screenshots were captured, we need timestamps to insert figure refs inline.
-    const needTimestamps = this.screenshotMetadata.length > 0;
-
-    return new Promise((resolve, reject) => {
-      // Spawn whisper-cli process
-      // whisper-cli -m model.bin -f audio.wav [--no-timestamps] --language en
-      const args = [
-        '-m', modelPath,
-        '-f', wavPath,
-        '--language', 'en',
-      ];
-
-      if (options.enableTinyDiarize) {
-        args.push('-tdrz');
-      }
-
-      // Only skip timestamps if we don't need them for figure placement or speaker turns.
-      if (!needTimestamps && !options.enableTinyDiarize) {
-        args.push('--no-timestamps');
-      }
-
-      if (this.gpuDisabled) {
-        args.push('-ng');
-      }
-
-      // Disable colors in whisper-cli output
-      this.whisperProcess = spawn(whisperPath, args, {
-        env: { ...process.env, NO_COLOR: '1' }
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      this.whisperProcess.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      this.whisperProcess.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      this.whisperProcess.on('close', (code) => {
-        this.whisperProcess = null;
-
-        if (code !== 0) {
-          reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`));
-          return;
-        }
-
-        // Strip ANSI escape codes (color codes) from output as a fallback.
-        const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
-        let cleanedStdout = stdout.replace(ansiEscapeRegex, '');
-        
-        if (options.enableTinyDiarize) {
-          resolve(formatWhisperSpeakerTurnTranscript(cleanedStdout));
-          return;
-        }
-
-        // Remove metadata-like bracketed content but preserve timestamp patterns for parsing.
-        cleanedStdout = cleanedStdout.replace(/\[(?:SPEAKER_TURN|id:\s*\d+|start:|end:)[^\]]*\]/gi, '');
-
-        let text: string;
-
-        if (needTimestamps) {
-          // Parse timestamped segments for inline figure placement.
-          text = this.parseTimestampedOutput(cleanedStdout);
-        } else {
-          // No screenshots - strip all timestamps and join text.
-          cleanedStdout = cleanedStdout.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
-          
-          const lines = cleanedStdout.trim().split('\n');
-          text = lines
-            .filter(line => {
-              const trimmed = line.trim();
-              if (trimmed.length === 0) return false;
-              if (trimmed.match(/^\[.*-->\s*\]/)) return false;
-              if (trimmed.match(/^\[\d+:\d+:\d+/)) return false;
-              if (trimmed.match(/^(###|Transcription|END|BEGIN)/i)) return false;
-              return true;
-            })
-            .map(line => line.trim())
-            .join(' ')
-            .trim();
-        }
-
-        resolve(text);
-      });
-
-      this.whisperProcess.on('error', (error) => {
-        this.whisperProcess = null;
-        reject(error);
-      });
-    });
-  }
-
-  /**
    * Paste text into the active application using AppleScript.
    */
   private async pasteText(targetBundleId: string | null = null): Promise<void> {
@@ -3653,22 +2962,6 @@ export class TranscriberManager extends EventEmitter {
     } catch (error) {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
       this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
-    }
-  }
-
-  /**
-   * Get the path to the whisper-cli binary.
-   */
-  private getWhisperPath(): string {
-    if (app.isPackaged) {
-      // In packaged app, whisper-cli should be in resources
-      return path.join(process.resourcesPath, 'whisper-cli');
-    } else {
-      // In development, use build-whisper from repo root
-      // __dirname in compiled code is mac-app/electron-dist/main
-      // So we need to go up 3 levels: main -> electron-dist -> mac-app -> repo root
-      const repoRoot = path.resolve(__dirname, '../../..');
-      return path.join(repoRoot, 'build-whisper', 'bin', 'whisper-cli');
     }
   }
 
@@ -3694,6 +2987,23 @@ export class TranscriberManager extends EventEmitter {
     return this.status;
   }
 
+  getStandardRecordingDiagnostics(): StandardRecordingDiagnostics {
+    return {
+      status: this.status,
+      source: this.getRecordingSource(),
+      activeSource: this.activeRecordingSource,
+      recordingAgeMs: this.recordingStartTime > 0
+        ? Math.max(0, Date.now() - this.recordingStartTime)
+        : null,
+      helperRecordingActive: typeof this.nativeHelper.isRecordingActive === 'function'
+        ? this.nativeHelper.isRecordingActive()
+        : null,
+      liveTranscriptChars: this.standardLiveTranscript.trim().length,
+      queueDepth: this.getStandardRealtimePressureDepth(),
+      chunkProcessingInFlight: this.standardChunkProcessingInFlight,
+    };
+  }
+
   /**
    * Get the model manager instance.
    */
@@ -3709,24 +3019,17 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Pre-start transcription engines so the first transcription is fast.
-   * Pre-warms the persistent whisper-server when Whisper is selected and the
-   * server binary is available.
+   * Pre-start the selected Parakeet transcription engine so the first
+   * transcription is fast.
    */
   async warmup(): Promise<void> {
     const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
     const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
-    if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
-      await this.startMlxWhisperServer();
-    }
     const parakeetEngine = engines.find(isParakeetEngine);
     if (parakeetEngine && this.isParakeetInstalled()) {
       await this.warmupParakeetServer(parakeetEngine);
-    }
-    if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
-      await this.startWhisperServer();
     }
   }
 
@@ -3734,42 +3037,29 @@ export class TranscriberManager extends EventEmitter {
    * Restart runtime after engine/model settings change to avoid stale worker state.
    */
   async restartTranscriptionRuntime(): Promise<void> {
-    this.stopMlxWhisperServer();
     this.stopParakeetServer();
-    await this.stopWhisperServer();
 
     const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
     const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
-    if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
-      await this.startMlxWhisperServer();
-    }
     const parakeetEngine = engines.find(isParakeetEngine);
     if (parakeetEngine && this.isParakeetInstalled()) {
       await this.warmupParakeetServer(parakeetEngine);
-    }
-    if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
-      await this.startWhisperServer();
     }
   }
 
   getConfiguredTranscriptionEngine(): TranscriptionEngine {
     const configured = this.preferences.getPreference('transcriptionEngine') as string | undefined;
-    if (isTranscriptionEngine(configured)) {
+    if (isParakeetEngine(configured)) {
       return configured;
     }
-    return this.isParakeetInstalled() ? 'parakeet' : 'whisper';
+    return 'parakeet';
   }
 
   private resolveHotMicTranscriptionEngine(): TranscriptionEngine {
     // Hot Mic now always uses the global transcription engine.
     return this.getConfiguredTranscriptionEngine();
-  }
-
-  private resolveHotMicWhisperModel(): ModelSize {
-    // Hot Mic now follows the global Whisper model selection.
-    return this.modelManager.getSelectedModel();
   }
 
   private buildHotMicEngineStatus(
@@ -3792,72 +3082,7 @@ export class TranscriberManager extends EventEmitter {
   getHotMicEngineStatus(): HotMicEngineStatus {
     const selectedEngine = this.resolveHotMicTranscriptionEngine();
     const whisperModel = this.modelManager.getSelectedModel();
-    const whisperHealth = this.modelManager.getModelHealthForSizeSync(whisperModel);
-    const fallbackAvailable = whisperHealth.status === 'ready';
-
-    if (selectedEngine === 'whisper') {
-      if (whisperHealth.status === 'missing') {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'not-downloaded',
-          `Whisper model "${whisperModel}" is not downloaded`
-        );
-      }
-      if (whisperHealth.status === 'corrupt') {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'corrupt',
-          `Whisper model "${whisperModel}" appears incomplete or corrupted`
-        );
-      }
-      if (this.whisperServerReady) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'ready',
-          'Whisper server is ready'
-        );
-      }
-      if (this.whisperServerReadyPromise) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'warming',
-          'Whisper server is warming up'
-        );
-      }
-      if (this.whisperServerDisabledReason) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'ready',
-          `Whisper server disabled; using whisper-cli (${this.whisperServerDisabledReason})`
-        );
-      }
-      if (this.isWhisperServerAvailable()) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'cold',
-          'Whisper server is idle (starts on first chunk)'
-        );
-      }
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'ready',
-        'Using whisper-cli (persistent server unavailable)'
-      );
-    }
+    const fallbackAvailable = false;
 
     // Parakeet runs on any architecture (ONNX Runtime CPU), no Apple Silicon needed.
     if (isParakeetEngine(selectedEngine)) {
@@ -3918,58 +3143,12 @@ export class TranscriberManager extends EventEmitter {
       );
     }
 
-    if (process.arch !== 'arm64') {
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'unsupported-arch',
-        `${selectedEngine} requires Apple Silicon`
-      );
-    }
-
-    if (!this.isMlxWhisperInstalled()) {
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'not-installed',
-        'MLX Whisper runtime is not installed'
-      );
-    }
-    if (this.mlxWhisperServer?.disabledReason) {
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'disabled',
-        this.mlxWhisperServer.disabledReason
-      );
-    }
-    if (this.mlxWhisperServer?.isReady) {
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'ready',
-        'MLX Whisper server is ready'
-      );
-    }
-    if (this.mlxWhisperServer?.isStarting) {
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'warming',
-        'MLX Whisper server is warming up'
-      );
-    }
     return this.buildHotMicEngineStatus(
       selectedEngine,
       whisperModel,
       fallbackAvailable,
-      'cold',
-      'MLX Whisper server is idle (starts on first chunk)'
+      'not-installed',
+      'Parakeet runtime is not installed'
     );
   }
 
@@ -3978,14 +3157,6 @@ export class TranscriberManager extends EventEmitter {
    */
   async warmupForHotMic(): Promise<void> {
     const engine = this.resolveHotMicTranscriptionEngine();
-    if (engine === 'mlx-whisper') {
-      if (!this.isMlxWhisperInstalled()) {
-        return;
-      }
-      await this.startMlxWhisperServer();
-      return;
-    }
-
     if (isParakeetEngine(engine)) {
       if (!this.isParakeetInstalled()) {
         return;
@@ -3994,26 +3165,15 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    if (engine === 'whisper' && this.isWhisperServerAvailable()) {
-      const whisperModel = this.resolveHotMicWhisperModel();
-      await this.startWhisperServer(whisperModel);
-    }
   }
 
   /**
-   * Transcribe for Hot Mic using the global engine and Whisper model settings.
-   * Hot Mic now uses the selected engine directly and does not silently fall
-   * back to whisper.cpp when another engine fails.
+   * Transcribe for Hot Mic using the global Parakeet engine.
    */
   async transcribeAudioForHotMic(wavPath: string): Promise<string> {
     this.lastHotMicUsedWhisperFallback = false;
     const engine = this.resolveHotMicTranscriptionEngine();
-    const whisperModel = this.resolveHotMicWhisperModel();
-
-    return this.transcribeWithEngineFallback(wavPath, engine, {
-      allowWhisperFallback: false,
-      whisperModelOverride: whisperModel,
-    });
+    return this.transcribeWithEngineFallback(wavPath, engine);
   }
 
   lastHotMicUsedWhisperFallback: boolean = false;
@@ -4047,25 +3207,14 @@ export class TranscriberManager extends EventEmitter {
     }
 
     const configuredEngine = this.getConfiguredTranscriptionEngine();
-    const meetingDiarizationAvailable = this.modelManager.getModelHealthForSizeSync(MEETING_DIARIZATION_MODEL_SIZE).status === 'ready';
-    const transcriptionEngine = meetingDiarizationAvailable ? 'whisper' : configuredEngine;
-    const whisperModelOverride = meetingDiarizationAvailable ? MEETING_DIARIZATION_MODEL_SIZE : null;
-    if (transcriptionEngine === 'whisper') {
-      const modelAvailable = whisperModelOverride
-        ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
-        : await this.modelManager.isModelAvailable();
-      if (!modelAvailable) {
-        const selectedModel = whisperModelOverride ?? this.modelManager.getSelectedModel();
-        throw new Error(`Model "${selectedModel}" not available. Please download the model first.`);
-      }
-    }
+    const transcriptionEngine = isParakeetEngine(configuredEngine) ? configuredEngine : 'parakeet';
 
     this.activeMeetingCapture = {
       startedAt: new Date().toISOString(),
       source,
       transcriptionEngine,
-      whisperModelOverride,
-      speakerDiarizationSupported: meetingDiarizationAvailable,
+      whisperModelOverride: null,
+      speakerDiarizationSupported: false,
     };
 
     try {
@@ -4142,19 +3291,6 @@ export class TranscriberManager extends EventEmitter {
     audioPath: string,
     capture: MeetingCaptureSession,
   ): Promise<{ text: string; speakerDiarizationSupported: boolean }> {
-    if (capture.speakerDiarizationSupported && capture.whisperModelOverride) {
-      try {
-        const text = await this.transcribeWithEngineFallback(audioPath, 'whisper', {
-          allowWhisperFallback: false,
-          whisperModelOverride: capture.whisperModelOverride,
-          enableTinyDiarize: true,
-        });
-        return { text, speakerDiarizationSupported: true };
-      } catch (error) {
-        log.warn('Meeting speaker-turn transcription failed, falling back without diarization: %s', error instanceof Error ? error.message : String(error));
-      }
-    }
-
     const text = await this.transcribeWithEngineFallback(audioPath, capture.transcriptionEngine);
     return { text, speakerDiarizationSupported: false };
   }
@@ -4787,6 +3923,254 @@ export class TranscriberManager extends EventEmitter {
     return true;
   }
 
+  private async deliverLiveTypingRemainder(bundleId: string, text: string): Promise<void> {
+    const payload = this.addFollowupTypingSpace(text);
+    const result = await this.typeIntoAppWithClipboardSync(bundleId, payload, false);
+    if (result.success) {
+      return;
+    }
+
+    clipboard.writeText(payload);
+    this.clipboardManager?.syncClipboardHash();
+    await this.pasteText(bundleId);
+  }
+
+  private async handleLiveTypingChunk(text: string): Promise<void> {
+    if (!this.liveTypingCoordinator) {
+      return;
+    }
+
+    const commandEval = this.evaluateLiveTypingCommand(text);
+    if (commandEval.textToType) {
+      this.enqueueLiveTypingOutputSegment(commandEval.textToType);
+    }
+
+    if (!commandEval.submitMode) {
+      return;
+    }
+
+    const drainResult = await this.liveTypingCoordinator.drain();
+    if (drainResult.bufferedSegmentCount > 0) {
+      appendTranscriberTrace('liveTyping.submit-deferred', {
+        submitMode: commandEval.submitMode,
+        bufferedSegmentCount: drainResult.bufferedSegmentCount,
+      });
+      return;
+    }
+
+    await this.submitLiveTypingTarget(commandEval.submitMode);
+  }
+
+  private evaluateLiveTypingCommand(text: string): {
+    textToType: string;
+    submitMode: LiveTypingSubmitMode | null;
+  } {
+    const pendingText = typeof this.liveTypingPendingCommandText === 'string'
+      ? this.liveTypingPendingCommandText
+      : '';
+    const combined = [pendingText, text.trim()]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(' ');
+    const words = this.liveTypingWords(combined);
+    const commandEnterPhrases = this.getLiveTypingPhraseWords(
+      'hotMicCommandEnterWords',
+      HOT_MIC_DEFAULTS.commandEnterPhrases
+    );
+    const submitPhrases = this.getLiveTypingPhraseWords(
+      'hotMicSubmitWord',
+      HOT_MIC_DEFAULTS.submitPhrases
+    );
+    this.liveTypingPendingCommandText = '';
+
+    const commandEnterMatch = this.matchLiveTypingCommandPhrase(words, commandEnterPhrases);
+    if (commandEnterMatch.matched) {
+      return { textToType: commandEnterMatch.cleanedText, submitMode: 'command-enter' };
+    }
+
+    const submitMatch = this.matchLiveTypingCommandPhrase(words, submitPhrases);
+    if (submitMatch.matched) {
+      return { textToType: submitMatch.cleanedText, submitMode: 'enter' };
+    }
+
+    const phrasePrefix = this.splitTrailingLiveTypingPhrasePrefix(words, [
+      ...commandEnterPhrases,
+      ...submitPhrases,
+    ]);
+    this.liveTypingPendingCommandText = phrasePrefix.pendingText;
+    return { textToType: phrasePrefix.textToType, submitMode: null };
+  }
+
+  private flushLiveTypingPendingCommandText(): void {
+    const pending = typeof this.liveTypingPendingCommandText === 'string'
+      ? this.liveTypingPendingCommandText.trim()
+      : '';
+    this.liveTypingPendingCommandText = '';
+    if (pending) {
+      this.enqueueLiveTypingOutputSegment(pending);
+    }
+  }
+
+  private enqueueLiveTypingOutputSegment(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!Array.isArray(this.liveTypingOutputSegments)) {
+      this.liveTypingOutputSegments = [];
+    }
+    this.liveTypingOutputSegments.push(trimmed);
+    this.liveTypingCoordinator?.enqueueSegment(trimmed);
+  }
+
+  private getLiveTypingPhraseWords(
+    prefKey: 'hotMicCommandEnterWords' | 'hotMicSubmitWord',
+    fallback: string
+  ): string[][] {
+    const pref = this.preferences.getPreference(prefKey);
+    const raw = typeof pref === 'string' && pref.trim() ? pref : fallback;
+    return raw
+      .split(',')
+      .map((phrase) => phrase.trim().toLowerCase())
+      .filter(Boolean)
+      .map((phrase) => phrase.split(/\s+/));
+  }
+
+  private matchLiveTypingCommandPhrase(
+    words: string[],
+    phrases: string[][]
+  ): { matched: boolean; cleanedText: string } {
+    if (words.length === 0) {
+      return { matched: false, cleanedText: '' };
+    }
+
+    for (const phraseWords of phrases) {
+      if (words.length < phraseWords.length) continue;
+      const tail = words.slice(-phraseWords.length);
+      if (!this.liveTypingWordsMatch(tail, phraseWords)) continue;
+      return { matched: true, cleanedText: words.slice(0, -phraseWords.length).join(' ') };
+    }
+
+    return { matched: false, cleanedText: words.join(' ') };
+  }
+
+  private splitTrailingLiveTypingPhrasePrefix(
+    words: string[],
+    phrases: string[][]
+  ): { textToType: string; pendingText: string } {
+    if (words.length === 0) {
+      return { textToType: '', pendingText: '' };
+    }
+
+    const maxPrefixLength = Math.min(words.length, Math.max(...phrases.map((phrase) => phrase.length - 1), 0));
+    for (let count = maxPrefixLength; count > 0; count -= 1) {
+      const suffix = words.slice(-count);
+      const isPrefix = phrases.some((phrase) => (
+        phrase.length > count && this.liveTypingWordsMatch(suffix, phrase.slice(0, count))
+      ));
+      if (isPrefix) {
+        return {
+          textToType: words.slice(0, -count).join(' '),
+          pendingText: suffix.join(' '),
+        };
+      }
+    }
+
+    return { textToType: words.join(' '), pendingText: '' };
+  }
+
+  private async submitLiveTypingTarget(submitMode: LiveTypingSubmitMode): Promise<void> {
+    const targetBundleId = this.liveTypingTargetBundleId;
+    if (!targetBundleId) return;
+
+    if (this.isFieldTheoryBundleId(targetBundleId) && this.fieldTheoryTerminalInsertionTarget?.isAvailable()) {
+      const submitted = await this.fieldTheoryTerminalInsertionTarget.submitText?.('', submitMode);
+      if (submitted) {
+        appendTranscriberTrace('liveTyping.submit', { submitMode, target: 'field-theory-terminal' });
+        return;
+      }
+    }
+
+    const result = await this.nativeHelper.submitTextTarget(targetBundleId, submitMode);
+    appendTranscriberTrace('liveTyping.submit', {
+      submitMode,
+      target: targetBundleId,
+      success: result.success,
+      reason: result.reason,
+    });
+  }
+
+  private computeLiveTypingRemainder(
+    typedSegmentCount: number,
+    finalText: string,
+    finalTextSource: string
+  ): string {
+    const outputSegments = Array.isArray(this.liveTypingOutputSegments)
+      ? this.liveTypingOutputSegments
+      : this.standardLiveSegments.map((segment) => segment.text);
+    const typedPrefixText = outputSegments
+      .slice(0, typedSegmentCount)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .join(' ');
+    const liveSegmentRemainder = outputSegments
+      .slice(typedSegmentCount)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    if (finalTextSource !== 'asr') {
+      return liveSegmentRemainder;
+    }
+
+    const finalTail = this.removeLiveTypingPrefix(finalText, typedPrefixText);
+    return this.mergeLiveTypingRemainder(liveSegmentRemainder, finalTail);
+  }
+
+  private removeLiveTypingPrefix(finalText: string, typedPrefixText: string): string {
+    const finalWords = this.liveTypingWords(finalText);
+    const prefixWords = this.liveTypingWords(typedPrefixText);
+    if (finalWords.length === 0 || prefixWords.length === 0) {
+      return finalText.trim();
+    }
+
+    if (
+      finalWords.length >= prefixWords.length &&
+      this.liveTypingWordsMatch(prefixWords, finalWords.slice(0, prefixWords.length))
+    ) {
+      return finalWords.slice(prefixWords.length).join(' ');
+    }
+
+    return finalText.trim();
+  }
+
+  private mergeLiveTypingRemainder(liveSegmentRemainder: string, finalTail: string): string {
+    const leftWords = this.liveTypingWords(liveSegmentRemainder);
+    const rightWords = this.liveTypingWords(finalTail);
+    if (leftWords.length === 0) return rightWords.join(' ');
+    if (rightWords.length === 0) return leftWords.join(' ');
+
+    const maxOverlap = Math.min(leftWords.length, rightWords.length);
+    for (let count = maxOverlap; count > 0; count -= 1) {
+      if (this.liveTypingWordsMatch(leftWords.slice(-count), rightWords.slice(0, count))) {
+        return [...leftWords, ...rightWords.slice(count)].join(' ');
+      }
+    }
+
+    return [...leftWords, ...rightWords].join(' ');
+  }
+
+  private liveTypingWords(text: string): string[] {
+    return text.trim().split(/\s+/).filter(Boolean);
+  }
+
+  private liveTypingWordsMatch(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((word, index) => this.normalizeLiveTypingWord(word) === this.normalizeLiveTypingWord(right[index]));
+  }
+
+  private normalizeLiveTypingWord(word: string): string {
+    return word.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+  }
+
   /**
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
@@ -4794,7 +4178,10 @@ export class TranscriberManager extends EventEmitter {
    * Skips paste if Field Theory itself is frontmost to avoid pasting into own UI.
    * @param clearAfter - Whether to clear the stack after pasting (default: true for auto-paste, false for manual)
    */
-  async pasteStack(clearAfter: boolean = true): Promise<void> {
+  async pasteStack(
+    clearAfter: boolean = true,
+    options: { excludeItemIds?: Set<number> } = {}
+  ): Promise<void> {
     const sketchModeActive = this.sketchModeChecker?.() ?? false;
 
     if (!this.clipboardManager || this.currentStack.length === 0) {
@@ -4828,7 +4215,10 @@ export class TranscriberManager extends EventEmitter {
 
     const items = this.currentStack
       .map(id => this.clipboardManager!.getItem(id))
-      .filter((item): item is ClipboardItem => item !== null);
+      .filter((item): item is ClipboardItem => {
+        if (!item) return false;
+        return !(options.excludeItemIds?.has(item.id) && (item.type === 'text' || item.type === 'transcript'));
+      });
 
     if (items.length === 0) {
       return;
@@ -5390,12 +4780,6 @@ export class TranscriberManager extends EventEmitter {
     this.registeredHotkey = null;
     this.registeredSecondaryHotkey = null;
 
-    if (this.whisperProcess) {
-      this.whisperProcess.kill();
-      this.whisperProcess = null;
-    }
-    this.stopMlxWhisperServer();
-    void this.stopWhisperServer();
     this.overlay.destroy();
   }
 }

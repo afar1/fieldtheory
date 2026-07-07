@@ -4,6 +4,7 @@ import path from 'path';
 
 import { createLogger } from './logger';
 import { ModelSize } from './modelManager';
+import type { AutoImproveContextFile, AutoImproveEffort, AutoImproveProvider } from './types/transcribe';
 import {
   createDefaultGazeWindowFocusConfig,
   type GazeDebugOverlayBounds,
@@ -211,8 +212,17 @@ interface Preferences {
 
   // Auto-improve transcripts - automatically run AI improvement on completed transcripts
   autoImproveTranscripts?: boolean;
+  autoImproveProvider?: AutoImproveProvider;
+  autoImproveCodexModel?: string;
+  autoImproveCodexEffort?: AutoImproveEffort;
+  autoImproveClaudeModel?: string;
+  autoImproveClaudeEffort?: AutoImproveEffort;
+  autoImproveWritingPreferences?: string;
+  autoImproveContextFiles?: AutoImproveContextFile[];
   // Minimum word count for auto-improve - only improve transcripts with at least this many words
   autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
+  // Live typing - type finalized standard dictation chunks into the target app as they arrive.
+  liveTypingEnabled?: boolean;
 
   // Auto-improve usage stats - cumulative all-time tracking
   autoImproveStats?: {
@@ -403,6 +413,14 @@ const DEFAULT_PREFERENCES: Preferences = {
   scratchpadHotkey: 'Control+Option+Command+Space',
   autoImproveHotkey: 'Command+Shift+\\',
   autoImproveTranscripts: false,
+  autoImproveProvider: 'local',
+  autoImproveCodexModel: '',
+  autoImproveCodexEffort: 'balanced',
+  autoImproveClaudeModel: '',
+  autoImproveClaudeEffort: 'balanced',
+  autoImproveWritingPreferences: '',
+  autoImproveContextFiles: [],
+  liveTypingEnabled: false,
 
   // Sound settings - librarian sound ON by default, other sounds OFF by default
   soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default

@@ -60,6 +60,128 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.21': [
+    'Standard dictation can now type live into the focused app as you speak',
+    'Auto Improve now uses your subscription state and can be toggled from transcription settings',
+    'River shared sync and onboarding paths are more reliable',
+  ],
+  '0.3.20': [
+    'River reader layout now uses more of the page with roomier source filters',
+    'River source toggles now hide matching people and groups from the visible timeline',
+    'Show more now expands to the full shared document body',
+    'River now exposes immersive view from the standard reader toolbar',
+  ],
+  '0.3.19': [
+    'River now has a polished full-page reader with an editorial timeline layout',
+    'River sources can be edited from the reader with quick group and contact filters',
+    'The River sidebar button now opens the reader with the updated reader-style icon',
+    'Fixed quitting Field Theory so Command-Q exits cleanly on the first attempt',
+  ],
+  '0.3.18': [
+    'River sharing now opens with the polished destination picker design',
+    'The picker keeps your default River selected so Enter can share immediately',
+  ],
+  '0.3.17': [
+    'River now has a full timeline view while keeping individual River files navigable in the sidebar',
+    'Sharing to River now uses a destination picker for defaults, contacts, teams, groups, and Public River',
+    'River timeline filters and sharing now support multiple contacts without the old one-team limitation',
+  ],
+  '0.3.16': [
+    'Fixed the River toolbar button showing for entitled markdown documents before a destination is selected',
+  ],
+  '0.3.15': [
+    'River sharing now supports explicit destinations for contacts and teams',
+    'Team and River access can be rolled out to entitled users without exposing it to everyone',
+    'River stays available from the local session when the network is unavailable',
+    'Shared River documents now use explicit recipient grants for tighter access control',
+  ],
+  '0.3.14': [
+    'Fixed a first-open focus race that could hide the Library window immediately after launch',
+    'Startup Library now waits briefly before allowing click-away blur dismissal',
+  ],
+  '0.3.13': [
+    'Fixed the macOS app menu showing fieldtheory-mac instead of Field Theory',
+    'Removed a first-launch migration path that could make startup appear unresponsive',
+  ],
+  '0.3.12': [
+    'Field Theory now stores app data under the branded Field Theory folder on macOS',
+    'Existing local app data is carried forward from the old fieldtheory-mac folder',
+  ],
+  '0.3.11': [
+    'Fixed a delayed auth state update that could move Library back to Clipboard after startup',
+    'Signing out now only leaves auth-backed surfaces instead of interrupting local Library work',
+  ],
+  '0.3.10': [
+    'Fixed a startup race that could drop the Library open request and fall back to Clipboard',
+    'Library view-switch requests now wait for the app window to finish loading',
+  ],
+  '0.3.9': [
+    'Startup preloading now keeps Field Theory on the intended Library view',
+    'Library retries a first empty roots load instead of settling on a partial sidebar',
+  ],
+  '0.3.8': [
+    'Field Theory now opens to Library reliably on startup',
+    'Restored hidden app windows now keep the intended Library view instead of falling back to Clipboard',
+  ],
+  '0.3.7': [
+    'Removed the legacy safe storage prompt from auth startup',
+    'Restored reliable command pastes into the Codex app',
+    'Kept terminal and generic IDE command pastes on their normal paste path',
+  ],
+  '0.3.6': [
+    'New documents and commands now appear in the left nav immediately after you create them',
+    'Packaged builds now launch as a single Field Theory app without the extra native launcher process',
+    'Restart & Install now cleans up local watchers before handing off to the macOS updater',
+  ],
+  '0.3.5': [
+    'New documents and commands now appear in the left nav immediately after you create them',
+    'Packaged builds now launch as a single Field Theory app without the extra native launcher process',
+    'Quitting is more reliable because the obsolete launcher app is no longer bundled',
+  ],
+  '0.3.4': [
+    'Restored missing Librarian artifacts by using one shared artifacts folder across dev and packaged builds',
+    'Safely migrates older user-scoped artifacts without deleting originals or overwriting conflicting files',
+    'Fixed updater install state so failed install attempts return to "Update ready" instead of staying on "Installing..."',
+  ],
+  '0.3.3': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+    'Fixed account sign-in availability in packaged builds',
+    'Fixed paste focus after using clipboard history or the context launcher',
+    'Restored clipboard history for users upgrading from older versions',
+  ],
+  '0.3.2': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+  ],
+  '0.3.1': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+  ],
+  '0.3.0': [
+    'Field Theory is now open source ([GitHub](https://github.com/afar1/fieldtheory))',
+    'New document editor (supports markdown)',
+    'New Codex plugin and integrated "Field Theory Panel"',
+    'New integrated terminal',
+    'Run Gemma 4 12b locally',
+    'Native x.com bookmark viewer',
+    'Upgraded context launcher',
+  ],
   '0.2.1': [
     'Bookmarks canvas, scratchpad, and backlinks are easier to use across the Library',
     'The new markdown editor improves writing, task lists, and keyboard navigation',
@@ -345,6 +467,28 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.21': 'Jul 3 2026',
+  '0.3.20': 'Jun 20 2026',
+  '0.3.19': 'Jun 20 2026',
+  '0.3.18': 'Jun 20 2026',
+  '0.3.17': 'Jun 20 2026',
+  '0.3.16': 'Jun 18 2026',
+  '0.3.15': 'Jun 18 2026',
+  '0.3.14': 'Jun 17 2026',
+  '0.3.13': 'Jun 17 2026',
+  '0.3.12': 'Jun 17 2026',
+  '0.3.11': 'Jun 17 2026',
+  '0.3.10': 'Jun 17 2026',
+  '0.3.9': 'Jun 17 2026',
+  '0.3.8': 'Jun 17 2026',
+  '0.3.7': 'Jun 17 2026',
+  '0.3.6': 'Jun 16 2026',
+  '0.3.5': 'Jun 16 2026',
+  '0.3.4': 'Jun 15 2026',
+  '0.3.3': 'Jun 15 2026',
+  '0.3.2': 'Jun 14 2026',
+  '0.3.1': 'Jun 14 2026',
+  '0.3.0': 'Jun 14 2026',
   '0.2.1': 'May 3 2026',
   '0.1.103': 'Apr 12 2026',
   '0.1.102': 'Apr 12 2026',
@@ -434,6 +578,29 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
 
   const isSectionNote = (note: string) => note.startsWith('__SECTION__:');
   const getSectionTitle = (note: string) => note.replace('__SECTION__:', '');
+  const renderNote = (note: string) => {
+    const match = note.match(/^(.*)\[([^\]]+)\]\((https?:\/\/[^)]+)\)(.*)$/);
+    if (!match) return note;
+
+    const [, before, label, href, after] = match;
+    return (
+      <>
+        {before}
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            color: theme.accent,
+            textDecoration: 'none',
+          }}
+        >
+          {label}
+        </a>
+        {after}
+      </>
+    );
+  };
 
   if (!isVisible) {
     return null;
@@ -584,7 +751,7 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
                 }}>
                   •
                 </span>
-                <span>{note}</span>
+                <span>{renderNote(note)}</span>
               </li>
             )
           ))}

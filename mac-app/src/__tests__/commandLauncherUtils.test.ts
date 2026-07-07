@@ -197,6 +197,16 @@ describe('launcher default panel helpers', () => {
     expect(isLauncherRiverItem({ sourceLabel: 'River (shared)' })).toBe(true);
     expect(isLauncherRiverItem({ source: 'private', sourceLabel: 'Library' })).toBe(false);
   });
+
+  it('includes a launcher action for sharing the current file to River', () => {
+    const action = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, false)
+      .find((item) => item.actionId === 'share-current-file-river');
+
+    expect(action).toMatchObject({
+      displayName: 'Share Current File to River',
+      keywords: expect.arrayContaining(['river', 'share current file', 'team', 'contact']),
+    });
+  });
 });
 
 describe('launcher renderer tracing', () => {
@@ -2078,7 +2088,7 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
     })).toEqual({ kind: 'external', path: '/Users/afar/Notes/Roadmap.md' });
   });
 
-  it('opens handoff markdown files and root file-search markdown files as external Field Theory files', () => {
+  it('opens handoff markdown files and root file-search files as external Field Theory files', () => {
     expect(getLauncherFieldTheoryMarkdownTarget({
       id: 'handoff-daily',
       type: 'handoff',
@@ -2096,6 +2106,24 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
       isDirectory: false,
       keywords: ['note.md'],
     })).toEqual({ kind: 'external', path: '/Users/afar/Downloads/note.md' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-styles',
+      type: 'file',
+      name: 'styles.css',
+      displayName: 'styles.css',
+      filePath: '/Users/afar/Downloads/styles.css',
+      isDirectory: false,
+      keywords: ['styles.css'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/Downloads/styles.css' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-folder',
+      type: 'file',
+      name: 'Downloads',
+      displayName: 'Downloads',
+      filePath: '/Users/afar/Downloads',
+      isDirectory: true,
+      keywords: ['Downloads'],
+    })).toBeNull();
   });
 
   it('keeps wiki pages, artifacts, and commands on their existing target kinds', () => {
@@ -2180,7 +2208,7 @@ describe('SQUARES_ACTION_DEFS', () => {
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'archive-current-library-file', 'undo-library-move', 'toggle-theme',
-      'toggle-line-numbers'];
+      'toggle-line-numbers', 'improve-selected-text', 'toggle-auto-improve'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -2239,6 +2267,21 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'Save Website',
     }));
     expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
+  });
+
+  it('includes auto-improve and selected-text improve actions', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'improve-selected-text')).toEqual(expect.objectContaining({
+      name: 'improve selected text',
+      displayName: 'Improve Selected Text',
+      keywords: expect.arrayContaining(['improve', 'selected text', 'auto improve']),
+    }));
+    expect(actions.find((action) => action.actionId === 'toggle-auto-improve')).toEqual(expect.objectContaining({
+      name: 'auto improve',
+      displayName: 'Toggle Auto-Improve',
+      keywords: expect.arrayContaining(['auto improve', 'transcription cleanup']),
+    }));
   });
 
   it('includes a bookmarks canvas action searchable by bookmarks', () => {

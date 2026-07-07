@@ -1165,6 +1165,7 @@ describe('BrowserHelperServer', () => {
           calls.push(['pin', filePath, pinned]);
           return { success: true, filePath, pinned };
         },
+        getTeamEntitlement: () => ({ allowed: true, stale: false, userId: 'user-1', checkedAt: '2026-06-18T00:00:00.000Z' }),
       },
     });
     servers.push(server);
@@ -1198,6 +1199,7 @@ describe('BrowserHelperServer', () => {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
     });
+    const entitlement = await request(`http://${address.host}:${address.port}/native/team/entitlement?token=test-token`);
     const unshare = await request(`http://${address.host}:${address.port}/native/shared-files/unshare`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
@@ -1212,6 +1214,7 @@ describe('BrowserHelperServer', () => {
     expect(presence.body.users).toEqual([{ userId: 'user-1', initials: 'FT' }]);
     expect(pin.body.result).toEqual({ success: true, filePath: '/tmp/River.md', pinned: true });
     expect(sync.body.result).toEqual({ written: 1, removed: 0, created: 0, errors: [] });
+    expect(entitlement.body.entitlement).toEqual({ allowed: true, stale: false, userId: 'user-1', checkedAt: '2026-06-18T00:00:00.000Z' });
     expect(unshare.body.success).toBe(true);
     expect(calls).toEqual([
       ['share', { filePath: '/tmp/Plan.md', title: 'Plan' }],
@@ -1223,6 +1226,34 @@ describe('BrowserHelperServer', () => {
     ]);
     server.emitNativeEvent({ type: 'sharedFiles:pinsChanged' });
     await expect(pinsEvent).resolves.toContain('sharedFiles:pinsChanged');
+  });
+
+  it('preserves unavailable shared-file availability from the native bridge', async () => {
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([]),
+      token: 'test-token',
+      nativeBridge: {
+        getSharedFilesAvailability: () => ({
+          available: false,
+          canWrite: false,
+          hasTeamMembers: false,
+          reason: 'not_entitled',
+          stale: true,
+        }),
+      },
+    });
+    servers.push(server);
+    const address = await server.start();
+
+    const availability = await request(`http://${address.host}:${address.port}/native/shared-files/availability?token=test-token`);
+
+    expect(availability.body.availability).toEqual({
+      available: false,
+      canWrite: false,
+      hasTeamMembers: false,
+      reason: 'not_entitled',
+      stale: true,
+    });
   });
 
   it('saves native wiki writes with expected-version protection', async () => {
@@ -1397,20 +1428,6 @@ describe('BrowserHelperServer', () => {
     expect(deleteDir.status).toBe(200);
     expect(fs.existsSync(path.join(root, 'Delete Me'))).toBe(false);
     expect(removeRoot.status).toBe(200);
-  });
-
-  it('returns native left-nav root validation errors', async () => {
-    const { address, root } = await startServer();
-    const filePath = path.join(root, 'Plan.md');
-
-    const addRoot = await request(`http://${address.host}:${address.port}/native/library/root`, {
-      method: 'POST',
-      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { dirPath: filePath },
-    });
-
-    expect(addRoot.status).toBe(400);
-    expect(addRoot.body.error).toBe('Choose a folder, not a file.');
   });
 
   it('notifies native listeners when a wiki page is deleted through the browser helper', async () => {
@@ -2770,83 +2787,6 @@ describe('BrowserHelperServer', () => {
       enabled: true,
       reason: 'enabled',
     });
-  });
-
-  it('bridges Library sync status for mobile publish callers', async () => {
-    const root = makeTempDir();
-    const server = new BrowserHelperServer({
-      service: new BrowserHelperDocumentService([root]),
-      token: 'test-token',
-      nativeBridge: {
-        getLibrarySyncStatus: () => ({
-          ready: true,
-          reason: 'enabled',
-          lastSyncAt: 100,
-          lastPushAt: 90,
-          lastError: null,
-          pendingLocalDocumentCount: 2,
-        }),
-      },
-    });
-    servers.push(server);
-    const address = await server.start();
-
-    const response = await request(`http://${address.host}:${address.port}/native/field-theory-sync/library-status?token=test-token`);
-
-    expect(response.status).toBe(200);
-    expect(response.body.status).toEqual({
-      ready: true,
-      reason: 'enabled',
-      lastSyncAt: 100,
-      lastPushAt: 90,
-      lastError: null,
-      pendingLocalDocumentCount: 2,
-    });
-  });
-
-  it('bridges selected Library document publish requests', async () => {
-    const root = makeTempDir();
-    const calls: string[] = [];
-    const server = new BrowserHelperServer({
-      service: new BrowserHelperDocumentService([root]),
-      token: 'test-token',
-      nativeBridge: {
-        publishLibraryDocument: (filePath) => {
-          calls.push(filePath);
-          return {
-            success: true,
-            reason: 'published',
-            uploaded: 1,
-            updated: 0,
-            skipped: 0,
-            sourcePath: 'briefs/New.md',
-            clientId: 'library-client',
-            title: 'New',
-            contentHash: 'hash',
-            errors: [],
-            lastSyncAt: 100,
-            lastPushAt: 100,
-          };
-        },
-      },
-    });
-    servers.push(server);
-    const address = await server.start();
-
-    const response = await request(`http://${address.host}:${address.port}/native/field-theory-sync/publish-library-document`, {
-      method: 'POST',
-      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { filePath: '/tmp/New.md' },
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body.result).toMatchObject({
-      success: true,
-      reason: 'published',
-      uploaded: 1,
-      sourcePath: 'briefs/New.md',
-    });
-    expect(calls).toEqual(['/tmp/New.md']);
   });
 
   it('bridges agent kickoff start, cancel, progress, and status events', async () => {

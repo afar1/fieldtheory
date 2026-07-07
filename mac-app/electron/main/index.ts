@@ -6,6 +6,7 @@ import fs from 'fs';
 import { createLogger } from './logger';
 import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
+import { loadGeneratedPublicRuntimeConfig } from './publicRuntimeConfig';
 import { NativeHelper } from './nativeHelper';
 import { isAlfredApp } from './alfredVisibility';
 import {
@@ -69,6 +70,9 @@ import {
 import {
   isParakeetEngine,
   TranscribeIPCChannels,
+  type AutoImproveContextFile,
+  type AutoImproveModelOptions,
+  type AutoImproveProvider,
   type TranscriptionEngine,
 } from './types/transcribe';
 import {
@@ -108,6 +112,7 @@ import {
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
+import { resolveFieldTheorySelectionText, shouldRejectFieldTheoryPathFallback } from './globalImproveSelection';
 import type { QuotaManager } from './quotaManager';
 import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
@@ -116,20 +121,24 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
+import {
+  getTextImproveProviderStatus,
+  improveText,
+  normalizeAutoImproveContextFiles,
+  normalizeAutoImproveModelOptions,
+  sanitizeAutoImproveWritingPreferences,
+  type TextImproveMode,
+} from './textImproveService';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
 import { registerMeetingsIpc } from './meetingsIpc';
-import { LibrarySyncService, type LibraryDocumentPublishResult, type LibrarySyncStatusDetails } from './librarySyncService';
-import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { LibrarySyncService } from './librarySyncService';
+import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
-import {
-  isFieldTheoryInternalSyncEnvEnabled,
-  resolveFieldTheorySyncStatus,
-  resolveLibraryPublishDisabledReason,
-  type FieldTheorySyncStatus,
-} from './releaseSyncPolicy';
+import { SharedTeamEntitlementService, type SharedTeamEntitlementState } from './sharedTeamEntitlementService';
+import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
@@ -176,6 +185,7 @@ import type { LibrarianManager, LibraryBacklinkRelationDocument, LibraryBacklink
 import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
+import { prepareKindleDelivery, type KindlePrepareResult } from './kindleDeliveryService';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import {
   autoUpdaterAllowsPrereleaseForBuildChannel,
@@ -409,7 +419,7 @@ function fieldTheoryCliEnv(): NodeJS.ProcessEnv {
 
 async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResult> {
   if (!bookmarksManager) return { status: 'unavailable' };
-  if (bookmarkBackgroundSyncInFlight) return { status: 'already-running' };
+  if (bookmarkBackgroundSyncInFlight) return bookmarkBackgroundSyncInFlight;
 
   const now = Date.now();
   if (bookmarkBackgroundSyncLastAttemptAt > 0 && now - bookmarkBackgroundSyncLastAttemptAt < BOOKMARK_BACKGROUND_SYNC_STALE_MS) {
@@ -419,10 +429,10 @@ async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResu
   const cli = findFieldTheoryCli();
   if (!cli) return { status: 'missing-cli' };
 
-  bookmarkBackgroundSyncLastAttemptAt = now;
   bookmarkBackgroundSyncInFlight = (async () => {
     try {
       await execFileAsync(cli, ['sync', '--yes'], { env: fieldTheoryCliEnv(), maxBuffer: 10 * 1024 * 1024 });
+      bookmarkBackgroundSyncLastAttemptAt = Date.now();
       bookmarksManager?.reloadAndEmitChanged();
       return { status: 'synced' as const };
     } catch (error) {
@@ -1601,9 +1611,19 @@ async function runCommandLauncherQualityBenchmark(benchmarkId: string, mode: 'co
   });
 }
 
+type CommandLauncherTargetApp = {
+  bundleId: string;
+  name: string;
+  windowBounds?: { x: number; y: number; width: number; height: number } | null;
+};
+
+function isCodexDesktopApp(bundleId: string | null | undefined): boolean {
+  return bundleId === 'com.openai.codex';
+}
+
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
-  targetApp: { bundleId: string; name: string } | null,
+  targetApp: CommandLauncherTargetApp | null,
   options: {
     beforePaste?: () => void | Promise<void>;
     clipboardTrace?: () => Record<string, unknown>;
@@ -1685,7 +1705,7 @@ async function activateAndPaste(
 }
 
 async function waitForCommandLauncherTargetAppFrontmost(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   tracePrefix: string,
 ): Promise<boolean> {
   if (!nativeHelper) {
@@ -1727,7 +1747,7 @@ function isCommandPayloadTraceEnabled(): boolean {
 
 function appendCommandLauncherVisibilityTrace(
   event: string,
-  targetApp: { bundleId: string; name: string } | null,
+  targetApp: CommandLauncherTargetApp | null,
   data: Record<string, unknown> = {},
 ): void {
   const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
@@ -1747,7 +1767,7 @@ function appendCommandLauncherVisibilityTrace(
 
 async function checkCommandLauncherFocusedTextInput(
   event: string,
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   details: Record<string, unknown> = {},
 ): Promise<boolean> {
   const focusedTextInput = (await nativeHelper?.checkFocusedTextInput().catch(() => false)) ?? false;
@@ -1899,7 +1919,7 @@ function scheduleBrowserLibraryClipboardRestore(input: {
 }
 
 async function activateCommandLauncherTargetApp(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   tracePrefix: string,
 ): Promise<boolean> {
   const bundleId = targetApp.bundleId;
@@ -1929,7 +1949,7 @@ async function activateCommandLauncherTargetApp(
 }
 
 function activateAndPasteFromCommandLauncher(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean; traceDetails?: Record<string, unknown> } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
@@ -1948,7 +1968,7 @@ function activateAndPasteFromCommandLauncher(
 }
 
 async function typeTextFromCommandLauncher(
-  targetApp: { bundleId: string; name: string },
+  targetApp: CommandLauncherTargetApp,
   text: string,
   tracePrefix: 'invoke-command' | 'invoke-handoff',
   traceDetails: Record<string, unknown> = {},
@@ -1998,6 +2018,7 @@ async function typeTextFromCommandLauncher(
     tracePrefix,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
   });
   const frontmostBeforeType = nativeHelper.getFrontmostApp();
   appendCommandLauncherTrace(`${tracePrefix}-native-type-start`, {
@@ -2005,6 +2026,7 @@ async function typeTextFromCommandLauncher(
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
+    hasTargetWindowBounds: Boolean(targetApp.windowBounds),
     textLength: text.length,
     clipboard: readCommandPasteClipboardTrace(),
     frontmostBundleId: frontmostBeforeType?.bundleId ?? null,
@@ -2013,7 +2035,7 @@ async function typeTextFromCommandLauncher(
 
   try {
     const nativeStartedAt = process.hrtime.bigint();
-    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false, undefined, targetApp.windowBounds ?? null);
     const nativeMs = elapsedMsSince(nativeStartedAt);
     const frontmost = nativeHelper.getFrontmostApp();
     appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
@@ -2294,6 +2316,27 @@ function writeTextIntoFocusedCodexTerminal(text: string, sessionId = focusedCode
   return wrote;
 }
 
+async function submitTextIntoFocusedCodexTerminal(
+  text: string,
+  _submitMode: 'enter' | 'command-enter',
+  sessionId = focusedCodexTerminalLauncherSessionId,
+): Promise<boolean> {
+  if (!sessionId) return false;
+  const manager = getCodexTerminalManager();
+  if (text && !manager.writeInput(sessionId, text)) {
+    if (sessionId === focusedCodexTerminalLauncherSessionId) {
+      focusedCodexTerminalLauncherSessionId = null;
+    }
+    return false;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const submitted = manager.writeInput(sessionId, '\r');
+  if (!submitted && sessionId === focusedCodexTerminalLauncherSessionId) {
+    focusedCodexTerminalLauncherSessionId = null;
+  }
+  return submitted;
+}
+
 async function replaceSelectedTextInFieldTheoryMarkdown(input: {
   expectedText: string;
   replacementText: string;
@@ -2477,9 +2520,12 @@ function getOptionalEnvValue(key: string): string | undefined {
 // Load environment variables for Supabase public config.
 // Source/dev builds must not silently fall back to production Cloud.
 function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string } {
-  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
+  const generatedConfig = loadGeneratedPublicRuntimeConfig();
+  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL')
+    ?? generatedConfig.supabaseUrl;
   const supabasePublishableKey = getOptionalEnvValue('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY')
-    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
+    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY')
+    ?? generatedConfig.supabasePublishableKey;
 
   if (supabaseUrl && supabasePublishableKey) {
     return {
@@ -2569,16 +2615,14 @@ function getAutoUpdater(): import('electron-updater').AppUpdater {
   return autoUpdaterInstance;
 }
 
-// Pin userData paths explicitly so auth/session storage is shared across release channels.
+// Pin userData paths explicitly so auth/session storage uses the branded app name.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
 const startupBenchmarkUserData = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim();
 const productionUserData = startupBenchmarkUserData
   ? path.resolve(startupBenchmarkUserData)
-  : path.join(app.getPath('appData'), 'fieldtheory-mac');
+  : path.join(app.getPath('appData'), 'Field Theory');
 app.setPath('userData', productionUserData);
-if (isExperimentalBuild) {
-  app.setName('Field Theory Experimental');
-}
+app.setName(isExperimentalBuild ? 'Field Theory Experimental' : 'Field Theory');
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -3352,34 +3396,92 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       markAllTaggedDocsRead: () => taggedDocsManager?.markAllRead() ?? [],
       rescanTaggedDocs: () => taggedDocsManager?.rescan() ?? [],
       getSharedFilesAvailability: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
-        return sharedSyncService.getAvailability();
+        if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+        return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
       },
       getSharedFileStatus: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         return sharedSyncService.getShareStatus(filePath);
+      },
+      getSharedFileAudience: async (filePath) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+        return sharedSyncService.getAudienceStatus(filePath);
+      },
+      getRiverTimeline: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getTimeline(query as RiverTimelineQuery);
+      },
+      getSharedFileDestinations: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getDestinations(query);
+      },
+      getRiverTargets: async (query) => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverTargets(query);
+      },
+      setRiverDefaultDestinations: async (destinations) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+      },
+      getRiverSourcePreferences: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return [];
+        return sharedSyncService.getRiverSourcePreferences();
+      },
+      updateRiverSourcePreferences: async (preferences) => {
+        if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+        return sharedSyncService.updateRiverSourcePreferences(preferences as any);
       },
       shareSharedFile: async (input) => {
         if (!canWriteFieldTheoryContent()) return { shared: false };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false };
         const result = await sharedSyncService.shareFile(input as SharedFileShareInput);
         if (result.shared) librarianManager?.emit('library:changed');
         return result;
       },
+      updateSharedFileAudience: async (input) => {
+        if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+        const entitlement = await getSharedFeatureEntitlement();
+        refreshFieldTheorySyncServices();
+        if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+        const result = await sharedSyncService.updateAudience(input as SharedFileAudienceUpdateInput);
+        if (!result.error) librarianManager?.emit('library:changed');
+        return result;
+      },
       unshareSharedFile: async (filePath) => {
         if (!canWriteFieldTheoryContent()) return false;
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return false;
+        if (!entitlement.allowed || !sharedSyncService) return false;
         const result = await sharedSyncService.unshareFile(filePath);
         if (result) librarianManager?.emit('library:changed');
         return result;
       },
       syncSharedFiles: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+        if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
         const result = await sharedSyncService.syncOnce();
         if (result.written > 0 || result.removed > 0 || result.created > 0) {
           librarianManager?.emit('library:changed');
@@ -3389,28 +3491,33 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
       },
       updateSharedFileContent: async (sharedId, content, expectedRevision, documentPath) => {
         if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
         const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
         if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
         return result;
       },
       setActivePresence: async (sharedId) => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        if (!entitlement.allowed || !sharedSyncService) return [];
         return sharedSyncService.setActivePresence(sharedId);
       },
       getPinnedItemIds: async () => {
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return [];
+        if (!entitlement.allowed || !sharedSyncService) return [];
         return sharedSyncService.getPinnedSidebarItemIds();
       },
       setPinned: async (filePath, pinned) => {
         if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+        const entitlement = await getSharedFeatureEntitlement();
         refreshFieldTheorySyncServices();
-        if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+        if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
         return sharedSyncService.setPinned(filePath, pinned);
       },
+      getTeamEntitlement: async () => getSharedFeatureEntitlement(),
       initializeCommands: async () => {
         await commandsManager?.initialize();
       },
@@ -3772,8 +3879,6 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
       },
       getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
-      getLibrarySyncStatus: () => getLibrarySyncStatusDetails(),
-      publishLibraryDocument: (filePath) => publishLibraryDocumentToMobile(filePath),
       startAgentKickoff: (args) => {
         if (!agentKickoffManager) {
           return {
@@ -3886,8 +3991,9 @@ let librarySyncService: LibrarySyncService | null = null;
 let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let sharedSyncService: SharedSyncService | null = null;
+let sharedTeamEntitlementService: SharedTeamEntitlementService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
-let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
+let lastExternalCommandTargetApp: CommandLauncherTargetApp | null = null;
 type ActiveLibraryFileContext = {
   type: 'wiki' | 'external';
   rootPath: string;
@@ -4102,6 +4208,7 @@ let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
 let appQuitConfirmedWithLocalWork = false;
 let appQuitConfirmationOpen = false;
+let appQuitInProgress = false;
 let appQuitWatcherCleanupComplete = false;
 let appQuitWatcherCleanupInFlight: Promise<void> | null = null;
 let appMetadataIPCHandlersInstalled = false;
@@ -4486,11 +4593,91 @@ async function ensureLocalImproveCommand(): Promise<PortableCommand | null> {
   return created ? commandsManager.getCommand(created.name) : commandsManager.getCommand('improve');
 }
 
+function getAutoImproveModelOptions(): AutoImproveModelOptions {
+  return normalizeAutoImproveModelOptions({
+    codexModel: preferencesManager?.getPreference('autoImproveCodexModel'),
+    codexEffort: preferencesManager?.getPreference('autoImproveCodexEffort'),
+    claudeModel: preferencesManager?.getPreference('autoImproveClaudeModel'),
+    claudeEffort: preferencesManager?.getPreference('autoImproveClaudeEffort'),
+  });
+}
+
+function getAutoImproveContextFiles(): AutoImproveContextFile[] {
+  return normalizeAutoImproveContextFiles(
+    preferencesManager?.getPreference('autoImproveContextFiles')
+  );
+}
+
+function getAutoImproveWritingPreferences(): string {
+  return sanitizeAutoImproveWritingPreferences(
+    preferencesManager?.getPreference('autoImproveWritingPreferences')
+  );
+}
+
+async function runLocalImproveCommand(input: {
+  text: string;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+  privateGuidance?: string;
+}): Promise<string | null> {
+  const command = await ensureLocalImproveCommand();
+  if (!command || !commandsManager) return null;
+  const loaded = await commandsManager.loadCommandContent(command);
+  if (!loaded) return null;
+
+  const localManager = getLocalLlmManager();
+  return localManager.runSelectionCommand({
+    commandName: loaded.name,
+    commandContent: `${loaded.content}${input.privateGuidance ?? ''}`,
+    targetTitle: input.title ?? (input.mode === 'transcript' ? 'Transcript' : 'Selected text'),
+    targetPath: input.targetPath ?? (input.mode === 'transcript' ? 'fieldtheory://transcript/auto-improve' : 'global-selection'),
+    targetContent: input.text,
+    selectedText: input.text,
+    memorySnapshot: input.memorySnapshot ?? null,
+  });
+}
+
+async function improveWithPreferredProvider(input: {
+  text: string;
+  provider: AutoImproveProvider;
+  mode: TextImproveMode;
+  title?: string;
+  targetPath?: string;
+  memorySnapshot?: string | null;
+}): Promise<string | null> {
+  return improveText({
+    text: input.text,
+    provider: input.provider,
+    mode: input.mode,
+    title: input.title,
+    targetPath: input.targetPath,
+    writingPreferences: getAutoImproveWritingPreferences(),
+    contextFiles: getAutoImproveContextFiles(),
+    modelOptions: getAutoImproveModelOptions(),
+    runLocal: (localInput) => runLocalImproveCommand({
+      ...localInput,
+      memorySnapshot: input.memorySnapshot ?? null,
+    }),
+  });
+}
+
 async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targetApp: { bundleId: string; name: string } | null }> {
   const target = nativeHelper?.getFrontmostApp() ?? null;
   const targetApp = target?.bundleId
     ? { bundleId: target.bundleId, name: target.name ?? target.bundleId }
     : null;
+  const activeContext = getActiveBrowserLibraryPanelContext() ?? activeLibraryFileContext;
+  const fieldTheorySelectionText = resolveFieldTheorySelectionText({
+    targetApp,
+    activeContext,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  });
+  if (fieldTheorySelectionText !== null) {
+    return { text: fieldTheorySelectionText, targetApp };
+  }
+  const previousClipboardText = clipboard.readText();
 
   try {
     await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "c" using command down'], { timeout: 3000 });
@@ -4499,7 +4686,18 @@ async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targe
     return { text: '', targetApp };
   }
   await new Promise(resolve => setTimeout(resolve, 80));
-  return { text: clipboard.readText().trim(), targetApp };
+  const copiedText = clipboard.readText().trim();
+  if (shouldRejectFieldTheoryPathFallback({
+    copiedText,
+    targetApp,
+    activeFilePath: activeContext?.filePath,
+    isFieldTheoryTarget: isFieldTheoryBundleId,
+  })) {
+    clipboard.writeText(previousClipboardText);
+    clipboardManager?.syncClipboardHash();
+    return { text: '', targetApp };
+  }
+  return { text: copiedText, targetApp };
 }
 
 async function pasteTextToGlobalImproveTarget(text: string, targetApp: { bundleId: string; name: string } | null): Promise<boolean> {
@@ -4515,57 +4713,42 @@ async function runGlobalImproveSelection(): Promise<void> {
   if (globalImproveInFlight) return;
   globalImproveInFlight = true;
   try {
-    if (!commandsManager) {
-      cursorStatusManager?.showNoTargetError('Maxwell is not ready');
-      return;
-    }
     const { text, targetApp } = await copySelectedTextFromFrontmostApp();
     if (!text) {
       cursorStatusManager?.showNoTargetError('Select text to improve');
       return;
     }
 
-    const command = await ensureLocalImproveCommand();
-    if (!command) {
-      cursorStatusManager?.showNoTargetError('Improve command not found');
-      return;
-    }
-    const loaded = await commandsManager.loadCommandContent(command);
-    if (!loaded) {
-      cursorStatusManager?.showNoTargetError('Improve command could not be loaded');
-      return;
-    }
+    const provider = transcriberManager?.getAutoImproveProvider() ?? 'local';
+    const providerLabel = provider === 'local' ? 'locally' : `with ${provider === 'codex' ? 'Codex' : 'Claude'}`;
 
     emitLocalCommandStatus({
       status: 'running',
-      message: 'Improving selected text locally...',
-      commandName: loaded.name,
+      message: `Improving selected text ${providerLabel}...`,
+      commandName: 'improve',
       mode: 'selection',
       phase: 'generating',
     });
 
-    const localManager = getLocalLlmManager();
-    const replacement = await localManager.runSelectionCommand({
-      commandName: loaded.name,
-      commandContent: loaded.content,
-      targetTitle: targetApp?.name ?? 'Selected text',
+    const replacement = await improveWithPreferredProvider({
+      provider,
+      mode: 'selection',
+      text,
+      title: targetApp?.name ?? 'Selected text',
       targetPath: targetApp?.bundleId ?? 'global-selection',
-      targetContent: text,
-      selectedText: text,
       memorySnapshot: readMaxwellMemorySnapshot(true),
-    }, {
-      onProgress: (event) => {
-        emitLocalCommandStatus({
-          status: 'running',
-          message: event.message,
-          detail: compactLocalCommandDetail(event.detail),
-          eventKind: event.kind,
-          commandName: loaded.name,
-          mode: 'selection',
-          phase: event.phase ?? 'generating',
-        });
-      },
     });
+    if (!replacement) {
+      cursorStatusManager?.showNoTargetError('Improve did not return replacement text');
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Improve did not return replacement text',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'No replacement text',
+      });
+      return;
+    }
 
     const targetIsFieldTheory = isFieldTheoryBundleId(targetApp?.bundleId);
     const pasted = targetIsFieldTheory
@@ -4583,7 +4766,7 @@ async function runGlobalImproveSelection(): Promise<void> {
       emitLocalCommandStatus({
         status: 'error',
         message: 'Improved text copied; paste failed',
-        commandName: loaded.name,
+        commandName: 'improve',
         mode: 'selection',
         error: 'Paste failed',
       });
@@ -4598,7 +4781,7 @@ async function runGlobalImproveSelection(): Promise<void> {
       message: 'Improved selected text',
       detail: changeSummary.detail,
       eventKind: 'file_change',
-      commandName: loaded.name,
+      commandName: 'improve',
       mode: 'selection',
       phase: 'done',
       changedLines: changeSummary.changedLines,
@@ -4638,72 +4821,42 @@ function getFieldTheorySyncStatus(): FieldTheorySyncStatus {
   });
 }
 
-function disabledLibrarySyncStatus(reason: LibrarySyncStatusDetails['reason']): LibrarySyncStatusDetails {
-  return {
-    ready: false,
-    reason,
-    lastSyncAt: librarySyncService?.getLastSyncAt() ?? null,
-    lastPushAt: librarySyncService?.getLastPushAt() ?? null,
-    lastError: librarySyncService?.getLastError() ?? null,
-    pendingLocalDocumentCount: null,
-  };
-}
-
-async function getLibrarySyncStatusDetails(): Promise<LibrarySyncStatusDetails> {
-  const status = getFieldTheorySyncStatus();
-  const disabledReason = resolveLibraryPublishDisabledReason(status);
-  if (disabledReason === 'not_authenticated') return disabledLibrarySyncStatus('not_authenticated');
-  if (disabledReason === 'sync_disabled') return disabledLibrarySyncStatus('sync_disabled');
-
-  refreshFieldTheorySyncServices();
-  if (!librarySyncService) return disabledLibrarySyncStatus('sync_unavailable');
-  return librarySyncService.getStatusDetails();
-}
-
-function disabledLibraryDocumentPublishResult(
-  reason: LibraryDocumentPublishResult['reason'],
-  error: string,
-): LibraryDocumentPublishResult {
-  return {
-    success: false,
-    reason,
-    uploaded: 0,
-    updated: 0,
-    skipped: 0,
-    error,
-    errors: [error],
-    lastSyncAt: librarySyncService?.getLastSyncAt() ?? null,
-    lastPushAt: librarySyncService?.getLastPushAt() ?? null,
-  };
-}
-
-async function publishLibraryDocumentToMobile(filePath: string): Promise<LibraryDocumentPublishResult> {
-  const status = getFieldTheorySyncStatus();
-  const disabledReason = resolveLibraryPublishDisabledReason(status);
-  if (disabledReason === 'not_authenticated') {
-    return disabledLibraryDocumentPublishResult('not_authenticated', 'Not authenticated');
-  }
-  if (disabledReason === 'sync_disabled') {
-    return disabledLibraryDocumentPublishResult('sync_disabled', 'Field Theory Library sync is disabled');
-  }
-  if (!canWriteFieldTheoryContent()) {
-    blockWrite();
-    return disabledLibraryDocumentPublishResult('read_only', 'Field Theory is read-only');
-  }
-
-  refreshFieldTheorySyncServices();
-  if (!librarySyncService) {
-    return disabledLibraryDocumentPublishResult('sync_unavailable', 'Field Theory Library sync is not available');
-  }
-  return librarySyncService.publishLocalDocument(filePath);
-}
-
 function canUseFieldTheorySync(): boolean {
   return getFieldTheorySyncStatus().enabled;
 }
 
+function getSharedTeamEntitlementService(): SharedTeamEntitlementService | null {
+  if (!authManager) return null;
+  if (!sharedTeamEntitlementService) {
+    sharedTeamEntitlementService = new SharedTeamEntitlementService(authManager);
+  }
+  return sharedTeamEntitlementService;
+}
+
+function getSharedFeatureEntitlementSnapshot(): SharedTeamEntitlementState {
+  const service = getSharedTeamEntitlementService();
+  return service?.getCachedState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
+async function getSharedFeatureEntitlement(): Promise<SharedTeamEntitlementState> {
+  const service = getSharedTeamEntitlementService();
+  return service?.getState() ?? {
+    allowed: false,
+    reason: 'not_authenticated',
+    stale: false,
+    userId: null,
+    checkedAt: null,
+  };
+}
+
 function canUseSharedFeatures(): boolean {
-  return authManager?.isAuthenticated() ?? false;
+  return getSharedFeatureEntitlementSnapshot().allowed;
 }
 
 function fieldTheorySyncDisabledError(): string {
@@ -4713,7 +4866,29 @@ function fieldTheorySyncDisabledError(): string {
 }
 
 function sharedFeaturesDisabledError(): string {
-  return canUseSharedFeatures() ? 'River is not available' : 'Not authenticated';
+  const entitlement = getSharedFeatureEntitlementSnapshot();
+  if (entitlement.reason === 'not_authenticated') return 'Not authenticated';
+  if (entitlement.reason === 'not_entitled') return 'River is not enabled for this account';
+  return 'River is not available';
+}
+
+function sharedUnavailableAvailability(entitlement: SharedTeamEntitlementState) {
+  const availability = {
+    available: false,
+    canWrite: false,
+    hasTeamMembers: false,
+    reason: entitlement.reason ?? 'lookup_failed',
+  };
+  return entitlement.stale ? { ...availability, stale: true } : availability;
+}
+
+function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
+  availability: T,
+  entitlement: SharedTeamEntitlementState,
+): T {
+  return entitlement.stale && availability.stale !== true
+    ? { ...availability, stale: true }
+    : availability;
 }
 
 function refreshFieldTheorySyncServices(): void {
@@ -4786,7 +4961,9 @@ function scheduleSharedFilesSyncAndBroadcastChanges(): void {
 }
 
 async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
-  if (!sharedSyncService) return;
+  const entitlement = await getSharedFeatureEntitlement();
+  refreshFieldTheorySyncServices();
+  if (!entitlement.allowed || !sharedSyncService) return;
   try {
     const result = await sharedSyncService.syncOnce();
     if (result.written > 0 || result.removed > 0 || result.created > 0) {
@@ -5495,13 +5672,14 @@ function getFieldTheoryCommandLauncherLaunchSurface(): CommandLauncherFieldTheor
   return { kind: 'none' };
 }
 
-function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
+function getCommandLauncherTargetApp(): CommandLauncherTargetApp | null {
   const launchOrigin = commandLauncherWindow?.getLaunchOrigin() ?? { kind: 'none' as const };
   if (launchOrigin.kind === 'external-app' && isExternalCommandTargetBundleId(launchOrigin.app.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
       source: 'launch-origin',
       previousBundleId: launchOrigin.app.bundleId,
       previousName: launchOrigin.app.name,
+      hasWindowBounds: Boolean(launchOrigin.app.windowBounds),
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
     });
@@ -5518,7 +5696,7 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
   return null;
 }
 
-function getCommandLauncherInvocationTarget(targetApp: { bundleId: string; name: string } | null) {
+function getCommandLauncherInvocationTarget(targetApp: CommandLauncherTargetApp | null) {
   return resolveCommandLauncherInvocationTarget({
     launchOrigin: commandLauncherWindow?.getLaunchOrigin() ?? null,
     fieldTheoryActive: commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false,
@@ -5613,8 +5791,6 @@ function hideFieldTheoryForAlfred(): void {
 
 /**
  * Check if the configured transcription engine is ready.
- * For parakeet: checks parakeet installation.
- * For whisper (default): checks whisper model availability.
  */
 async function isTranscriptionEngineReady(): Promise<boolean> {
   if (!transcriberManager) return false;
@@ -5622,8 +5798,7 @@ async function isTranscriptionEngineReady(): Promise<boolean> {
   if (isParakeetEngine(engine)) {
     return transcriberManager.isParakeetInstalled();
   }
-  const modelManager = transcriberManager.getModelManager();
-  return modelManager ? modelManager.isModelAvailable() : false;
+  return false;
 }
 
 /**
@@ -5724,6 +5899,10 @@ async function applyInputMode(mode: InputMode): Promise<InputMode> {
     }
   } else if (hotMicManager?.isActive) {
     hotMicManager.stop();
+  }
+
+  if (!shouldEnableHotMic && transcriberManager?.getRecordingSource() === 'system-audio') {
+    await transcriberManager.setRecordingSource('microphone');
   }
 
   broadcastInputMode(normalized);
@@ -5930,16 +6109,32 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 type PendingUpdateStatus = Extract<UpdateStatus, 'available' | 'downloading' | 'ready' | 'installing'>;
 
 let pendingUpdateInfo: { status: PendingUpdateStatus; version: string } | null = null;
+let installFallbackTimer: NodeJS.Timeout | null = null;
+
+function clearInstallFallbackTimer(): void {
+  if (!installFallbackTimer) return;
+  clearTimeout(installFallbackTimer);
+  installFallbackTimer = null;
+}
 
 function shouldApplyUpdaterStatus(next: UpdateStatus): boolean {
   const current = pendingUpdateInfo?.status ?? 'idle';
   return resolveUpdaterStatusTransition(current, next) === next;
 }
 
-function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string): boolean {
-  if (!shouldApplyUpdaterStatus(status)) return false;
+function setPendingUpdateStatus(status: PendingUpdateStatus, version?: string, options: { force?: boolean } = {}): boolean {
+  if (!options.force && !shouldApplyUpdaterStatus(status)) return false;
   pendingUpdateInfo = { status, version: version ?? pendingUpdateInfo?.version ?? '' };
   return true;
+}
+
+function sendUpdateDownloaded(version: string): void {
+  browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version } });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:updateDownloaded', { version });
+    }
+  });
 }
 
 function sendUpdateNotAvailable(): void {
@@ -5954,6 +6149,11 @@ function sendUpdateNotAvailable(): void {
 
 function sendUpdaterErrorMessage(message: string): void {
   if (!shouldApplyUpdaterStatus('error')) return;
+  if (pendingUpdateInfo?.status === 'installing') {
+    pendingUpdateInfo = null;
+    clearInstallFallbackTimer();
+    appQuitConfirmedWithLocalWork = false;
+  }
   browserHelperServer?.emitNativeEvent({ type: 'updater:error', error: message });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
@@ -5985,24 +6185,38 @@ function downloadAppUpdate(): unknown {
 function installAppUpdate(): void {
   if (!isAutoUpdaterEnabled) return;
   if (pendingUpdateInfo && !setPendingUpdateStatus('installing')) return;
+  const version = pendingUpdateInfo?.version ?? '';
+  clearInstallFallbackTimer();
   browserHelperServer?.emitNativeEvent({ type: 'updater:installing' });
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send('updater:installing');
     }
   });
+  installFallbackTimer = setTimeout(() => {
+    installFallbackTimer = null;
+    if (pendingUpdateInfo?.status !== 'installing') return;
+    appQuitConfirmedWithLocalWork = false;
+    log.warn('Update install did not quit the app; returning updater UI to ready state');
+    setPendingUpdateStatus('ready', version, { force: true });
+    sendUpdateDownloaded(version);
+  }, 15000);
   setTimeout(() => {
-    try {
-      appQuitConfirmedWithLocalWork = true;
-      getAutoUpdater().quitAndInstall(false, true);
-    } catch (err) {
-      appQuitConfirmedWithLocalWork = false;
-      reportAutoUpdaterError('Update install failed', err);
-    }
+    void (async () => {
+      try {
+        appQuitConfirmedWithLocalWork = true;
+        await cleanupFileWatchersBeforeQuit();
+        getAutoUpdater().quitAndInstall(false, true);
+      } catch (err) {
+        appQuitConfirmedWithLocalWork = false;
+        reportAutoUpdaterError('Update install failed', err);
+      }
+    })();
   }, 250);
 }
 
 function dismissAppUpdate(): void {
+  clearInstallFallbackTimer();
   pendingUpdateInfo = null;
 }
 
@@ -6090,6 +6304,38 @@ function migrateFromLegacyPaths(): void {
   const newUserData = app.getPath('userData');
   const migrationMarker = path.join(newUserData, '.migration-v1-complete');
 
+  const copyFileIfMissing = (source: string, target: string): boolean => {
+    if (!fs.existsSync(source) || fs.existsSync(target)) return false;
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+      return true;
+    } catch (err) {
+      log.error(`Failed to copy ${path.basename(source)}: ${err}`);
+      return false;
+    }
+  };
+
+  const copySqliteSetIfMissing = (sourceDb: string, targetDb: string): boolean => {
+    if (!copyFileIfMissing(sourceDb, targetDb)) return false;
+    for (const suffix of ['-wal', '-shm']) {
+      copyFileIfMissing(`${sourceDb}${suffix}`, `${targetDb}${suffix}`);
+    }
+    return true;
+  };
+
+  const legacyCurrentUserCallsign = (legacyPath: string): string | null => {
+    try {
+      const currentUserPath = path.join(legacyPath, 'current-user.json');
+      const parsed = JSON.parse(fs.readFileSync(currentUserPath, 'utf8')) as { callsign?: unknown };
+      return typeof parsed.callsign === 'string' && parsed.callsign.trim().length > 0
+        ? parsed.callsign.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
   // Skip if already migrated
   if (fs.existsSync(migrationMarker)) {
     return;
@@ -6097,11 +6343,13 @@ function migrateFromLegacyPaths(): void {
 
   const homeDir = app.getPath('home');
   const legacyPaths = [
+    path.join(homeDir, 'Library', 'Application Support', 'fieldtheory-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'littleai-mac'),
     path.join(homeDir, 'Library', 'Application Support', 'Oscar'),
   ];
 
   let migrated = false;
+  fs.mkdirSync(newUserData, { recursive: true });
 
   for (const legacyPath of legacyPaths) {
     if (!fs.existsSync(legacyPath)) {
@@ -6120,27 +6368,50 @@ function migrateFromLegacyPaths(): void {
       }
     }
 
-    // Migrate clipboard.db
-    const legacyDb = path.join(legacyPath, 'clipboard.db');
-    const newDb = path.join(newUserData, 'clipboard.db');
-    if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
-      try {
-        fs.copyFileSync(legacyDb, newDb);
-        migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy clipboard.db: ${err}`);
-      }
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'current-user.json'),
+      path.join(newUserData, 'current-user.json')
+    )) {
+      migrated = true;
     }
 
-    // Migrate preferences.json (for very old versions)
-    const legacyPrefs = path.join(legacyPath, 'preferences.json');
-    const newPrefs = path.join(newUserData, 'preferences.json');
-    if (fs.existsSync(legacyPrefs) && !fs.existsSync(newPrefs)) {
-      try {
-        fs.copyFileSync(legacyPrefs, newPrefs);
+    if (copyFileIfMissing(
+      path.join(legacyPath, 'supabase-session.json'),
+      path.join(newUserData, 'supabase-session.json')
+    )) {
+      migrated = true;
+    }
+
+    const callsign = legacyCurrentUserCallsign(legacyPath);
+    const sourceDirs = callsign
+      ? [path.join(legacyPath, 'users', callsign), legacyPath]
+      : [legacyPath];
+    const filesToMigrate = [
+      'preferences.json',
+      'user-metrics.json',
+      'librarian-settings.json',
+      'librarian-index.json',
+      'commands-settings.json',
+      'recent.json',
+      'browser-library-renderer-storage.json',
+      'library-index.db',
+      'artifact-embeddings.db',
+      'tagged.db',
+      'maxwell.db',
+    ];
+
+    for (const sourceDir of sourceDirs) {
+      for (const file of filesToMigrate) {
+        if (copyFileIfMissing(path.join(sourceDir, file), path.join(newUserData, file))) {
+          migrated = true;
+        }
+      }
+
+      if (copySqliteSetIfMissing(
+        path.join(sourceDir, 'clipboard.db'),
+        path.join(newUserData, 'clipboard.db')
+      )) {
         migrated = true;
-      } catch (err) {
-        log.error(`Failed to copy preferences.json: ${err}`);
       }
     }
   }
@@ -7110,6 +7381,7 @@ function showClipboardHistoryOnStartup(): void {
   }
 
   appendVisibilityTrace('app-startup.show-clipboard.action', { action: 'show', initialViewMode: 'library' });
+  clipboardHistoryWindow?.suppressBlurDismiss(1500);
   showClipboardHistoryOnActivate();
 }
 
@@ -7214,6 +7486,7 @@ function showClipboardHistoryOnActivate(): void {
     commandLauncherExternalInvocationSuppressed,
   });
   const preflightSkipReason = getClipboardHistoryActivationPreflightSkipReason({
+    appQuitInProgress,
     onboardingComplete: prefs?.onboardingComplete === true,
     commandLauncherExternalInvocationSuppressed,
     commandLauncherShowingOrVisible,
@@ -7234,7 +7507,7 @@ function showClipboardHistoryOnActivate(): void {
     return;
   }
 
-  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.restoreExistingAppWindow('app-activate')) {
+  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.restoreExistingAppWindow('app-activate', 'library')) {
     appendVisibilityTrace('app-activate.show-clipboard.action', { action: 'restore-existing-app-window' });
     cursorStatusManager?.refreshWindowProperties();
     dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-app-activate');
@@ -7427,6 +7700,35 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getReading(filePath);
   });
 
+  ipcMain.handle('librarian:prepareKindleDelivery', async (_event, filePath: string): Promise<KindlePrepareResult | { status: 'error'; message: string }> => {
+    if (!librarianManager) {
+      return { status: 'error', message: 'Library is not available.' };
+    }
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return { status: 'error', message: 'Choose a Library document first.' };
+    }
+    try {
+      return await prepareKindleDelivery(filePath, {
+        libraryRoots: currentLibraryRootPaths(),
+      });
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('librarian:traceNavigation', (_event, stage: string, payload: Record<string, unknown> = {}): void => {
+    log.info('[LibraryNavigationTrace] %s %j', stage, payload);
+    try {
+      const tracePath = path.join(app.getPath('userData'), 'librarian-navigation-trace.log');
+      fs.appendFileSync(tracePath, `${JSON.stringify({ timestamp: Date.now(), stage, payload })}\n`);
+    } catch (error) {
+      log.warn('[LibraryNavigationTrace] failed to append trace file:', error);
+    }
+  });
+
   // Save reading content to disk
   ipcMain.handle('librarian:saveReading', (_event, filePath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
     if (!librarianManager) {
@@ -7571,8 +7873,9 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     if (isMoveIntoRiver(kind, sourceRelPath, targetDirRelPath)) {
+      const entitlement = await getSharedFeatureEntitlement();
       refreshFieldTheorySyncServices();
-      if (!sharedSyncService || !canUseSharedFeatures()) return null;
+      if (!entitlement.allowed || !sharedSyncService) return null;
       return moveLibraryFileIntoRiver({
         librarianManager,
         sharedSyncService,
@@ -7626,8 +7929,9 @@ function setupLibrarianIPCHandlers(): void {
     const localConflict = documentSaveConflictIfVersionChanged(filePath, expectedVersion);
     if (localConflict) return localConflict;
 
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'error' };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: 'error' };
 
     const result = await sharedSyncService.updateSharedContent(
       sharedMeta.sharedId,
@@ -8739,38 +9043,104 @@ function setupLibrarianIPCHandlers(): void {
   // ===========================================================================
 
   ipcMain.handle('sharedFiles:getAvailability', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { available: false, canWrite: false, hasTeamMembers: false, reason: 'not_authenticated' };
-    return sharedSyncService.getAvailability();
+    if (!entitlement.allowed || !sharedSyncService) return sharedUnavailableAvailability(entitlement);
+    return sharedAvailabilityWithEntitlement(await sharedSyncService.getAvailability(), entitlement);
   });
 
   ipcMain.handle('sharedFiles:getStatus', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     return sharedSyncService.getShareStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getAudience', async (_event, filePath: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [] };
+    return sharedSyncService.getAudienceStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:getTimeline', async (_event, query: RiverTimelineQuery) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getTimeline(query);
+  });
+
+  ipcMain.handle('sharedFiles:getDestinations', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getDestinations(query);
+  });
+
+  ipcMain.handle('sharedFiles:getTargets', async (_event, query?: string) => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverTargets(query);
+  });
+
+  ipcMain.handle('sharedFiles:setDefaultDestinations', async (_event, destinations: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.setRiverDefaultDestinations(destinations as any);
+  });
+
+  ipcMain.handle('sharedFiles:getSourcePreferences', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return [];
+    return sharedSyncService.getRiverSourcePreferences();
+  });
+
+  ipcMain.handle('sharedFiles:updateSourcePreferences', async (_event, preferences: unknown[]) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
+    return sharedSyncService.updateRiverSourcePreferences(preferences as any);
   });
 
   ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {
     if (!canWriteFieldTheoryContent()) return { shared: false };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false };
     const result = await sharedSyncService.shareFile(input);
     if (result.shared) librarianManager?.emit('library:changed');
     return result;
   });
 
+  ipcMain.handle('sharedFiles:updateAudience', async (_event, input: SharedFileAudienceUpdateInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false, targets: [], error: 'Field Theory content is read-only' };
+    const entitlement = await getSharedFeatureEntitlement();
+    refreshFieldTheorySyncServices();
+    if (!entitlement.allowed || !sharedSyncService) return { shared: false, targets: [], error: sharedFeaturesDisabledError() };
+    const result = await sharedSyncService.updateAudience(input);
+    if (!result.error) librarianManager?.emit('library:changed');
+    return result;
+  });
+
   ipcMain.handle('sharedFiles:unshare', async (_event, filePath: string): Promise<boolean> => {
     if (!canWriteFieldTheoryContent()) return false;
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return false;
+    if (!entitlement.allowed || !sharedSyncService) return false;
     const result = await sharedSyncService.unshareFile(filePath);
     if (result) librarianManager?.emit('library:changed');
     return result;
   });
 
   ipcMain.handle('sharedFiles:sync', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
+    if (!entitlement.allowed || !sharedSyncService) return { written: 0, removed: 0, created: 0, errors: [sharedFeaturesDisabledError()] };
     const result = await sharedSyncService.syncOnce();
     if (result.written > 0 || result.removed > 0 || result.created > 0) {
       librarianManager?.emit('library:changed');
@@ -8781,29 +9151,33 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, error: sharedFeaturesDisabledError() };
     const result = await sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
     if (result.cachePath || result.conflictPath) librarianManager?.emit('library:changed');
     return result;
   });
 
   ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return [];
+    if (!entitlement.allowed || !sharedSyncService) return [];
     return sharedSyncService.setActivePresence(sharedId);
   });
 
   ipcMain.handle('sharedFiles:getPinnedItemIds', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return [];
+    if (!entitlement.allowed || !sharedSyncService) return [];
     return sharedSyncService.getPinnedSidebarItemIds();
   });
 
   ipcMain.handle('sharedFiles:setPinned', async (_event, filePath: string, pinned: boolean) => {
     if (!canWriteFieldTheoryContent()) return { ok: false, reason: 'read_only' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, reason: 'not_authenticated' };
+    if (!entitlement.allowed || !sharedSyncService) return { ok: false, reason: entitlement.reason === 'not_entitled' ? 'not_entitled' : 'not_authenticated' };
     return sharedSyncService.setPinned(filePath, pinned);
   });
 
@@ -8811,13 +9185,16 @@ function setupLibrarianIPCHandlers(): void {
   // Team Membership
   // ===========================================================================
 
+  ipcMain.handle('team:getEntitlement', async () => getSharedFeatureEntitlement());
+
   ipcMain.handle('team:getState', async () => {
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) {
+    if (!entitlement.allowed || !sharedTeamService) {
       return {
         available: false,
         currentTeamScopeUserId: null,
-        reason: 'not_authenticated',
+        reason: entitlement.reason ?? 'lookup_failed',
         isOwner: false,
         members: [],
         pendingIncoming: [],
@@ -8829,29 +9206,33 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('team:inviteMember', async (_event, email: string): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.inviteMember(email));
   });
 
   ipcMain.handle('team:respondToInvite', async (_event, contactId: string, accept: boolean): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.respondToInvite(contactId, accept));
   });
 
   ipcMain.handle('team:removeMember', async (_event, contactId: string): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.removeMember(contactId));
   });
 
   ipcMain.handle('team:leaveTeam', async (): Promise<SharedTeamMutationResult> => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    const entitlement = await getSharedFeatureEntitlement();
     refreshFieldTheorySyncServices();
-    if (!sharedTeamService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
+    if (!entitlement.allowed || !sharedTeamService) return { ok: false, error: sharedFeaturesDisabledError() };
     return afterTeamMutation(sharedTeamService.leaveTeam());
   });
 
@@ -9480,20 +9861,97 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
-    return false;
+    return transcriberManager?.getAutoImprove() ?? false;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async () => {
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
     if (!transcriberManager) return;
-    await transcriberManager.setAutoImprove(false);
+    await transcriberManager.setAutoImprove(enabled);
+    trayManager?.refreshMenu();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER, () => {
+    return transcriberManager?.getAutoImproveProvider() ?? 'local';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, async (_event, provider: AutoImproveProvider) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveProvider(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, async (_event, provider: AutoImproveProvider) => {
+    return getTextImproveProviderStatus(provider);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS, () => {
+    return getAutoImproveModelOptions();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, async (_event, options: Partial<AutoImproveModelOptions>) => {
+    const normalized = normalizeAutoImproveModelOptions({
+      ...getAutoImproveModelOptions(),
+      ...(options ?? {}),
+    });
+    await preferencesManager?.save({
+      autoImproveCodexModel: normalized.codexModel,
+      autoImproveCodexEffort: normalized.codexEffort,
+      autoImproveClaudeModel: normalized.claudeModel,
+      autoImproveClaudeEffort: normalized.claudeEffort,
+    });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES, () => {
+    return getAutoImproveWritingPreferences();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, async (_event, writingPreferences: string) => {
+    const sanitized = sanitizeAutoImproveWritingPreferences(writingPreferences);
+    await preferencesManager?.save({ autoImproveWritingPreferences: sanitized });
+    return sanitized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES, () => {
+    return getAutoImproveContextFiles();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, async (_event, files: AutoImproveContextFile[]) => {
+    const normalized = normalizeAutoImproveContextFiles(files);
+    await preferencesManager?.save({ autoImproveContextFiles: normalized });
+    return normalized;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose Auto-Improve Context Files',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return getAutoImproveContextFiles();
+    const next = normalizeAutoImproveContextFiles([
+      ...getAutoImproveContextFiles(),
+      ...result.filePaths.map((filePath) => ({ path: filePath, enabled: true })),
+    ]);
+    await preferencesManager?.save({ autoImproveContextFiles: next });
+    return next;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_LIVE_TYPING, () => {
+    return transcriberManager?.getLiveTyping() ?? false;
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_LIVE_TYPING, async (_event, enabled: boolean) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setLiveTyping(enabled);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
-    return 0;
+    return transcriberManager?.getAutoImproveMinWords() ?? 70;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async () => {
-    return;
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async (_event, minWords: number) => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImproveMinWords(minWords);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS, () => {
@@ -9516,16 +9974,17 @@ function setupTranscribeIPCHandlers(): void {
   ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
     return transcriberManager?.getConfiguredTranscriptionEngine()
       ?? preferencesManager?.getPreference('transcriptionEngine')
-      ?? 'whisper';
+      ?? 'parakeet';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
-    log.info('Transcription engine set: %s', engine);
+    const nextEngine = isParakeetEngine(engine) ? engine : 'parakeet';
+    log.info('Transcription engine set: %s', nextEngine);
     await preferencesManager.save({
-      transcriptionEngine: engine,
+      transcriptionEngine: nextEngine,
       hotMicTranscriptionEngine: 'default',
     });
     await transcriberManager?.restartTranscriptionRuntime();
@@ -9570,33 +10029,11 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED, async () => {
-    if (!transcriberManager) {
-      return false;
-    }
-    return transcriberManager.isMlxWhisperInstalled();
+    return false;
   });
 
   ipcMain.handle(TranscribeIPCChannels.SETUP_MLX_WHISPER, async () => {
-    const macAppRoot = path.resolve(__dirname, '../..');
-    const scriptPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'scripts', 'setup-mlx-whisper.sh')
-      : path.join(macAppRoot, 'scripts', 'setup-mlx-whisper.sh');
-    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
-
-    if (!fs.existsSync(scriptPath)) {
-      return { success: false, error: `MLX Whisper setup script not found at: ${scriptPath}` };
-    }
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
-        if (error) {
-          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
-          resolve({ success: false, error: details });
-        } else {
-          resolve({ success: true });
-        }
-      });
-    });
+    return { success: false, error: 'MLX Whisper is no longer supported. Use Parakeet instead.' };
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_PARAKEET_INSTALLED, async () => {
@@ -10694,53 +11131,28 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // Mobile Sync IPC Handlers - Sync iOS transcriptions to clipboard history
+  // Mobile Sync IPC Handlers - disabled for public release.
   // =========================================================================
 
-  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
-    if (!authManager) {
-      return false;
-    }
-    await authManager.setSession(accessToken, refreshToken);
-    return true;
+  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async () => {
+    return false;
   });
 
   ipcMain.handle(ClipboardIPCChannels.CLEAR_SYNC_SESSION, async () => {
-    if (authManager) {
-      authManager.clearSession();
-    }
     return true;
   });
 
-  // Get session from main process for recovery when renderer localStorage is cleared.
-  // This allows the renderer to recover auth state without re-login.
   ipcMain.handle(ClipboardIPCChannels.GET_SYNC_SESSION, async () => {
-    if (!authManager) {
-      return null;
-    }
-    const session = authManager.getSession();
-    if (!session) {
-      return null;
-    }
-    // Only return tokens if session is not expired.
-    const now = Math.floor(Date.now() / 1000);
-    if (session.expires_at && session.expires_at <= now) {
-      return null;
-    }
-    return {
-      accessToken: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresAt: session.expires_at,
-      user: session.user ? {
-        id: session.user.id,
-        email: session.user.email,
-      } : null,
-    };
+    return null;
   });
 
   // =========================================================================
   // Password Authentication IPC Handlers
   // =========================================================================
+
+  ipcMain.handle('auth:isConfigured', () => {
+    return Boolean(authManager?.getSupabaseClient());
+  });
 
   ipcMain.handle('auth:signUp', async (_event, email: string, password: string) => {
     if (!authManager) {
@@ -12387,6 +12799,16 @@ function setupClipboardIPCHandlers(): void {
     return runNativeLocalCommand(rawRequest);
   });
 
+  ipcMain.handle(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION, async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await runGlobalImproveSelection();
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Improve selected text failed';
+      return { success: false, error: message };
+    }
+  });
+
   ipcMain.handle(CommandsIPCChannels.LIST_MAXWELL_RUNS, (_event, rawLimit?: unknown): MaxwellRunSummary[] => {
     return listNativeMaxwellRuns(rawLimit);
   });
@@ -12574,6 +12996,7 @@ function setupClipboardIPCHandlers(): void {
       return await runWithCommandLauncherExternalInvocation(async () => {
         const isTerminal = isTerminalApp(targetApp.bundleId);
         const isIDE = isIDEWithTerminal(targetApp.bundleId);
+        const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
         const pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
         const handoffText = formatCommandFilePasteText({
           kind: 'handoff',
@@ -12600,9 +13023,13 @@ function setupClipboardIPCHandlers(): void {
 
         let pasted = false;
         let fallbackRan = false;
-        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
         if (pasteDelivery === 'native-helper') {
           pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+          if (!pasted) {
+            cursorStatusManager?.showNoTargetError('Portable command paste failed');
+            return { success: false, error: 'Could not paste into target app' };
+          }
         } else {
           appendCommandLauncherTrace('invoke-handoff-native-type-skipped', {
             filePath,
@@ -12610,15 +13037,6 @@ function setupClipboardIPCHandlers(): void {
             targetName: targetApp.name,
             contentMode: pasteMode,
             delivery: pasteDelivery,
-          });
-        }
-        if (!pasted) {
-          fallbackRan = true;
-          appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
-            filePath,
-            targetBundleId: targetApp.bundleId,
-            targetName: targetApp.name,
-            contentMode: pasteMode,
           });
         }
         if (!pasted) {
@@ -12737,6 +13155,7 @@ function setupClipboardIPCHandlers(): void {
       }
       const isTerminal = isTerminalApp(targetApp.bundleId);
       const isIDE = isIDEWithTerminal(targetApp.bundleId);
+      const isCodexApp = isCodexDesktopApp(targetApp.bundleId);
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
@@ -12773,9 +13192,13 @@ function setupClipboardIPCHandlers(): void {
           });
 
           let pasted = false;
-          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE, isCodexApp });
           if (pasteDelivery === 'native-helper') {
             pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command', invocationTrace);
+            if (!pasted) {
+              cursorStatusManager?.showNoTargetError('Portable command paste failed');
+              return { success: false, error: 'Could not paste into target app' };
+            }
           } else {
             appendCommandLauncherTrace('invoke-command-native-type-skipped', {
               ...invocationTrace,
@@ -12784,16 +13207,6 @@ function setupClipboardIPCHandlers(): void {
               targetName: targetApp.name,
               contentMode: pasteMode,
               delivery: pasteDelivery,
-            });
-          }
-          if (!pasted) {
-            fallbackRan = true;
-            appendCommandLauncherTrace('invoke-command-native-type-fallback', {
-              ...invocationTrace,
-              commandName,
-              targetBundleId: targetApp.bundleId,
-              targetName: targetApp.name,
-              contentMode: pasteMode,
             });
           }
           if (!pasted) {
@@ -13066,8 +13479,6 @@ function setupClipboardIPCHandlers(): void {
         refreshFieldTheorySyncServices();
       }
     },
-    getLibraryStatus: getLibrarySyncStatusDetails,
-    publishLibraryDocument: publishLibraryDocumentToMobile,
   });
 }
 
@@ -13443,10 +13854,14 @@ function broadcastTranscribeEvents(): void {
     });
     // Send final transcript to the dynamic island for display.
     dynamicIslandManager?.sendTranscript(text, true);
+  });
 
-    // Record transcription metrics
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-    metricsManager?.recordTranscription(wordCount);
+  transcriberManager.on('transcriptRecorded', (data: { wordCount: number }) => {
+    metricsManager?.recordTranscription(data.wordCount);
+  });
+
+  transcriberManager.on('transcriptImproved', (data: { wordCount: number }) => {
+    metricsManager?.recordWordsImproved(data.wordCount);
   });
 
   transcriberManager.on('verbalCommand', () => {
@@ -14240,6 +14655,20 @@ async function initTranscriberSystem(): Promise<void> {
   log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   const { TranscriberManager } = require('./transcriberManager') as typeof import('./transcriberManager');
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
+  transcriberManager.setTranscriptImproveRunner(({ text, provider }) => improveWithPreferredProvider({
+    text,
+    provider,
+    mode: 'transcript',
+    title: 'Transcript',
+    targetPath: 'fieldtheory://transcript/auto-improve',
+  }));
+  trayManager?.setAutoImproveCallbacks({
+    get: () => transcriberManager?.getAutoImprove() ?? false,
+    set: async (enabled: boolean) => {
+      await transcriberManager?.setAutoImprove(enabled);
+      trayManager?.refreshMenu();
+    },
+  });
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
@@ -14247,6 +14676,7 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager.setFieldTheoryTerminalInsertionTarget({
     isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
     insertText: writeTextIntoFocusedCodexTerminal,
+    submitText: submitTextIntoFocusedCodexTerminal,
   });
   transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
     const result = await getMeetingManager().stopActiveMeeting();
@@ -14297,6 +14727,11 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.setFieldTheoryMarkdownInsertionTarget({
       isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
       insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+    });
+    hotMicManager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => Boolean(focusedCodexTerminalLauncherSessionId),
+      insertText: writeTextIntoFocusedCodexTerminal,
+      submitText: submitTextIntoFocusedCodexTerminal,
     });
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setMetricsWordsRecorder((wordCount: number) => {
@@ -14468,6 +14903,7 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
     diagnosticsCollector.setTranscriberManager(transcriberManager);
   }
+  diagnosticsCollector.setHotMicRuntimeStatusGetter(getHotMicRuntimeStatusSnapshot);
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
   }
@@ -14859,8 +15295,7 @@ async function initTranscriberSystem(): Promise<void> {
       clearTimeout(wakeOverlayRefreshTimeout);
       wakeOverlayRefreshTimeout = null;
     }
-    transcriberManager?.stopMlxWhisperServer();
-    void transcriberManager?.stopWhisperServer();
+    transcriberManager?.stopParakeetServer();
   });
 
   powerMonitor.on('resume', () => {
@@ -15787,12 +16222,12 @@ if (!gotTheLock) {
       return KNOWN_TERMINALS;
     });
 
-    ipcMain.handle('hotmic:start', async () => {
-      return await applyInputMode('hot-mic');
+    ipcMain.handle('hotmic:start', () => {
+      applyHotMicMode('activate');
     });
 
-    ipcMain.handle('hotmic:stop', async () => {
-      return await applyInputMode('standard');
+    ipcMain.handle('hotmic:stop', () => {
+      applyHotMicMode('deactivate');
     });
 
     ipcMain.handle('hotmic:isHookInstalled', () => {
@@ -15987,7 +16422,7 @@ if (!gotTheLock) {
     if (!clipboardHistoryWindow) {
       clipboardHistoryWindow = initClipboardHistoryWindow();
       const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.preload(boundsToUse);
+      clipboardHistoryWindow.preload(boundsToUse, 'library');
     }
     startupMark('clipboard-window-preload-called');
     maybeExitStartupBenchmark('clipboard-window-preload-called');
@@ -16093,12 +16528,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('update-downloaded', (info) => {
         if (!setPendingUpdateStatus('ready', info.version)) return;
-        browserHelperServer?.emitNativeEvent({ type: 'updater:updateDownloaded', info: { version: info.version } });
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (!window.isDestroyed()) {
-            window.webContents.send('updater:updateDownloaded', { version: info.version });
-          }
-        });
+        sendUpdateDownloaded(info.version);
       });
     }
 
@@ -16324,6 +16754,7 @@ if (!gotTheLock) {
   });
 
   app.on('before-quit', (event) => {
+    appQuitInProgress = true;
     const blockingActivities = getQuitBlockingActivities();
     if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
       event.preventDefault();
@@ -16351,9 +16782,12 @@ if (!gotTheLock) {
         if (response === 0) {
           appQuitConfirmedWithLocalWork = true;
           app.quit();
+        } else {
+          appQuitInProgress = false;
         }
       }).catch((error) => {
         appQuitConfirmationOpen = false;
+        appQuitInProgress = false;
         log.warn('Quit confirmation failed: %s', error instanceof Error ? error.message : String(error));
       });
       return;

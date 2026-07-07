@@ -47,6 +47,7 @@ describe('Field Theory path contract', () => {
         FT_IDEAS_DIR: '/tmp/ft-ideas',
         FT_KINDLE_DELIVERY_DIR: '/tmp/ft-kindle',
         FT_KINDLE_DELIVERY_STATE_PATH: '/tmp/ft-kindle-state.json',
+        FT_KINDLE_ARTIFACT_DIR: '/tmp/ft-kindle-artifacts',
       },
     };
 
@@ -58,7 +59,7 @@ describe('Field Theory path contract', () => {
     expect(ideasDir(options)).toBe('/tmp/ft-ideas');
     expect(kindleDeliveryDir(options)).toBe('/tmp/ft-kindle');
     expect(kindleDeliveryStatePath(options)).toBe('/tmp/ft-kindle-state.json');
-    expect(kindleArtifactDir(options)).toBe(path.join('/tmp/ft-kindle', 'artifacts'));
+    expect(kindleArtifactDir(options)).toBe('/tmp/ft-kindle-artifacts');
   });
 
   it('places default commands inside a custom Library root', () => {

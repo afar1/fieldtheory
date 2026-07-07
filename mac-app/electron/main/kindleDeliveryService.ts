@@ -304,40 +304,63 @@ function sendPreflightFor(title: string, artifactPath: string, options: KindlePr
   };
 }
 
+function ebookConvertCandidates(): string[] {
+  return [
+    process.env.FT_EBOOK_CONVERT_PATH,
+    'ebook-convert',
+    '/opt/homebrew/bin/ebook-convert',
+    '/usr/local/bin/ebook-convert',
+    '/Applications/calibre.app/Contents/MacOS/ebook-convert',
+  ].filter((candidate): candidate is string => Boolean(candidate));
+}
+
 function convertWithEbookConvert(input: KindleConversionInput): KindleConversionResult {
   fs.mkdirSync(path.dirname(input.artifactPath), { recursive: true });
-  const result = spawnSync('ebook-convert', [
+  const args = [
     input.sourcePath,
     input.artifactPath,
     '--title',
     input.title,
     '--authors',
     input.author,
-  ], { encoding: 'utf8' });
+  ];
 
-  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
-    return {
-      ok: false,
-      reason: 'converter_unavailable',
-      message: 'ebook-convert is not installed or not on PATH.',
-    };
-  }
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      reason: 'conversion_failed',
-      message: result.stderr?.trim() || result.stdout?.trim() || 'ebook-convert failed.',
-    };
-  }
-  if (!fs.existsSync(input.artifactPath)) {
-    return {
-      ok: false,
-      reason: 'artifact_missing',
-      message: 'ebook-convert completed without creating the Kindle artifact.',
-    };
+  for (const candidate of ebookConvertCandidates()) {
+    const result = spawnSync(candidate, args, { encoding: 'utf8' });
+
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
+      continue;
+    }
+    if (result.error) {
+      return {
+        ok: false,
+        reason: 'conversion_failed',
+        message: result.error.message,
+      };
+    }
+    if (result.status !== 0) {
+      return {
+        ok: false,
+        reason: 'conversion_failed',
+        message: result.stderr?.trim() || result.stdout?.trim() || 'ebook-convert failed.',
+      };
+    }
+    if (!fs.existsSync(input.artifactPath)) {
+      return {
+        ok: false,
+        reason: 'artifact_missing',
+        message: 'ebook-convert completed without creating the Kindle artifact.',
+      };
+    }
+
+    return { ok: true };
   }
 
-  return { ok: true };
+  return {
+    ok: false,
+    reason: 'converter_unavailable',
+    message: 'ebook-convert is not installed or not on PATH.',
+  };
 }
 
 export async function prepareKindleDelivery(target: string, options: KindlePrepareOptions = {}): Promise<KindlePrepareResult> {
@@ -354,7 +377,7 @@ export async function prepareKindleDelivery(target: string, options: KindlePrepa
   const state = loadKindleDeliveryState(options);
   const existingRecord = state.deliveries.find((record) => record.key === key && (record.status === 'prepared' || record.status === 'sent'));
 
-  if (existingRecord && !options.force) {
+  if (existingRecord && !options.force && (existingRecord.status === 'sent' || fs.existsSync(existingRecord.artifactPath))) {
     return {
       status: existingRecord.status === 'sent' ? 'already_sent' : 'already_prepared',
       document,

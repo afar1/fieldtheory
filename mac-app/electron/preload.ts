@@ -86,6 +86,7 @@ const BROWSER_LIBRARY_RENDERER_STORAGE_KEYS = [
   'darkMode',
   'glassEffect',
   'accentPreset',
+  'themeStylePreset',
   'darkModeIntensity',
   'fieldtheory-rendered-editor-debug',
 ] as const;
@@ -187,6 +188,18 @@ const TranscribeIPCChannels = {
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_PROVIDER: 'transcribe:getAutoImproveProvider',
+  SET_AUTO_IMPROVE_PROVIDER: 'transcribe:setAutoImproveProvider',
+  GET_AUTO_IMPROVE_PROVIDER_STATUS: 'transcribe:getAutoImproveProviderStatus',
+  GET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:getAutoImproveModelOptions',
+  SET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:setAutoImproveModelOptions',
+  GET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:getAutoImproveWritingPreferences',
+  SET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:setAutoImproveWritingPreferences',
+  GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
+  SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
+  CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -507,6 +520,25 @@ type AutoImproveStats = {
   apiCalls: number;
   inputTokens: number;
   outputTokens: number;
+};
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+type AutoImproveModelOptions = {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+};
+type AutoImproveContextFile = {
+  path: string;
+  enabled: boolean;
+};
+type AutoImproveProviderStatus = {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
 };
 
 // Sound configuration for recording actions.
@@ -904,6 +936,18 @@ export interface TranscribeAPI {
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences: () => Promise<string>;
+  setAutoImproveWritingPreferences: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping: () => Promise<boolean>;
+  setLiveTyping: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
@@ -1411,6 +1455,54 @@ const transcribeAPI: TranscribeAPI = {
 
   setAutoImprove: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
+  },
+
+  getAutoImproveProvider: async (): Promise<AutoImproveProvider> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER);
+  },
+
+  setAutoImproveProvider: async (provider: AutoImproveProvider): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_PROVIDER, provider);
+  },
+
+  getAutoImproveProviderStatus: async (provider: AutoImproveProvider): Promise<AutoImproveProviderStatus> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_PROVIDER_STATUS, provider);
+  },
+
+  getAutoImproveModelOptions: async (): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_MODEL_OPTIONS);
+  },
+
+  setAutoImproveModelOptions: async (options: Partial<AutoImproveModelOptions>): Promise<AutoImproveModelOptions> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_MODEL_OPTIONS, options);
+  },
+
+  getAutoImproveWritingPreferences: async (): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_WRITING_PREFERENCES);
+  },
+
+  setAutoImproveWritingPreferences: async (preferences: string): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_WRITING_PREFERENCES, preferences);
+  },
+
+  getAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  setAutoImproveContextFiles: async (files: AutoImproveContextFile[]): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_CONTEXT_FILES, files);
+  },
+
+  chooseAutoImproveContextFiles: async (): Promise<AutoImproveContextFile[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.CHOOSE_AUTO_IMPROVE_CONTEXT_FILES);
+  },
+
+  getLiveTyping: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_LIVE_TYPING);
+  },
+
+  setLiveTyping: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_LIVE_TYPING, enabled);
   },
 
   getAutoImproveMinWords: async (): Promise<number> => {
@@ -2514,6 +2606,10 @@ type TaggedDocsAPI = typeof taggedDocsAPI;
 // =============================================================================
 
 const authAPI = {
+  // Whether account-backed auth is configured in this build.
+  isConfigured: (): Promise<boolean> =>
+    ipcRenderer.invoke('auth:isConfigured'),
+
   // Sign up with email and password.
   signUp: (email: string, password: string) =>
     ipcRenderer.invoke('auth:signUp', email, password),
@@ -3001,51 +3097,9 @@ type FieldTheorySyncStatus = {
   reason: 'enabled' | 'local_disabled' | 'not_authenticated';
 };
 
-type LibrarySyncStatusDetails = {
-  ready: boolean;
-  reason: 'enabled' | 'not_authenticated' | 'sync_disabled' | 'sync_unavailable';
-  lastSyncAt: number | null;
-  lastPushAt: number | null;
-  lastError: string | null;
-  pendingLocalDocumentCount: number | null;
-};
-
-type LibraryDocumentPublishResult = {
-  success: boolean;
-  reason:
-    | 'published'
-    | 'up_to_date'
-    | 'not_authenticated'
-    | 'sync_disabled'
-    | 'sync_unavailable'
-    | 'sync_in_progress'
-    | 'invalid_path'
-    | 'outside_library'
-    | 'shared_path'
-    | 'not_markdown'
-    | 'not_found'
-    | 'read_failed'
-    | 'remote_newer'
-    | 'upload_failed'
-    | 'read_only';
-  uploaded: number;
-  updated: number;
-  skipped: number;
-  sourcePath?: string;
-  clientId?: string;
-  title?: string;
-  contentHash?: string;
-  error?: string;
-  errors: string[];
-  lastSyncAt: number | null;
-  lastPushAt: number | null;
-};
-
 const fieldTheorySyncAPI = {
   getStatus: (): Promise<FieldTheorySyncStatus> => ipcRenderer.invoke('fieldTheorySync:getStatus'),
   setLocalEnabled: (enabled: boolean): Promise<FieldTheorySyncStatus> => ipcRenderer.invoke('fieldTheorySync:setLocalEnabled', enabled),
-  getLibraryStatus: (): Promise<LibrarySyncStatusDetails> => ipcRenderer.invoke('fieldTheorySync:getLibraryStatus'),
-  publishLibraryDocument: (filePath: string): Promise<LibraryDocumentPublishResult> => ipcRenderer.invoke('fieldTheorySync:publishLibraryDocument', filePath),
 };
 
 type FieldTheorySyncAPI = typeof fieldTheorySyncAPI;
@@ -3175,6 +3229,7 @@ const CommandsIPCChannels = {
   GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
   SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  RUN_GLOBAL_IMPROVE_SELECTION: 'commands:runGlobalImproveSelection',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
   GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
   SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
@@ -3601,6 +3656,10 @@ const commandsAPI = {
     return ipcRenderer.invoke(CommandsIPCChannels.RUN_LOCAL_COMMAND, request);
   },
 
+  runGlobalImproveSelection: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RUN_GLOBAL_IMPROVE_SELECTION);
+  },
+
   listMaxwellRuns: async (limit?: number): Promise<MaxwellRunSummary[]> => {
     return ipcRenderer.invoke(CommandsIPCChannels.LIST_MAXWELL_RUNS, limit);
   },
@@ -3864,6 +3923,26 @@ interface Reading extends ReadingMeta {
   documentVersion: DocumentVersion;
 }
 
+interface KindleDeliveryPrepareResult {
+  status: 'dry_run' | 'prepared' | 'already_prepared' | 'already_sent' | 'blocked' | 'error';
+  document?: {
+    title: string;
+    sourcePath: string;
+    sourceRelPath: string;
+  };
+  deliveryKey?: string;
+  artifactPath?: string;
+  statePath?: string;
+  sendPreflight?: {
+    recipientEmail: string;
+    senderEmail: string;
+    subject: string;
+    attachmentPath: string;
+  };
+  reason?: string;
+  message?: string;
+}
+
 // Watched directory configuration
 // Path is the identity - no numeric IDs
 interface WatchedDir {
@@ -3889,6 +3968,12 @@ const librarianAPI = {
 
   // Get a single reading with full content (by path)
   getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
+
+  prepareKindleDelivery: (filePath: string): Promise<KindleDeliveryPrepareResult> =>
+    ipcRenderer.invoke('librarian:prepareKindleDelivery', filePath),
+
+  traceNavigation: (stage: string, payload: Record<string, unknown>): Promise<void> =>
+    ipcRenderer.invoke('librarian:traceNavigation', stage, payload),
 
   // Save reading content to disk
   saveReading: (filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
@@ -4181,6 +4266,100 @@ type SharedFileStatus = {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
+};
+
+type SharedFileAudienceStatus = {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+};
+
+type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
+
+type SharedFileShareTarget = {
+  id: string;
+  kind: SharedFileDestinationKind;
+};
+
+type RiverShareTarget = {
+  id: string;
+  kind: RiverTargetKind;
+};
+
+type RiverTarget = {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+};
+
+type RiverDefaultDestination = {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+};
+
+type RiverSourcePreference = {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+};
+
+type RiverMutationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+type RiverTimelineQuery = {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+};
+
+type RiverTimelineItem = {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+};
+
+type SharedFileDestination = {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
 };
 
 type SharedFileShareInput = {
@@ -4188,6 +4367,14 @@ type SharedFileShareInput = {
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
+};
+
+type SharedFileAudienceUpdateInput = {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
 };
 
 type SharedFileUpdateResult = {
@@ -4209,14 +4396,15 @@ type SharedFilesAvailability = {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
+  stale?: boolean;
 };
 
 type SharedFilePinResult = {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 };
 
@@ -4225,8 +4413,24 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:getAvailability'),
   getStatus: (filePath: string): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  getAudience: (filePath: string): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:getAudience', filePath),
+  getTimeline: (query: RiverTimelineQuery): Promise<RiverTimelineItem[]> =>
+    ipcRenderer.invoke('sharedFiles:getTimeline', query),
+  getDestinations: (query?: string): Promise<SharedFileDestination[]> =>
+    ipcRenderer.invoke('sharedFiles:getDestinations', query),
+  getTargets: (query?: string): Promise<RiverTarget[]> =>
+    ipcRenderer.invoke('sharedFiles:getTargets', query),
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:setDefaultDestinations', destinations),
+  getSourcePreferences: (): Promise<RiverSourcePreference[]> =>
+    ipcRenderer.invoke('sharedFiles:getSourcePreferences'),
+  updateSourcePreferences: (preferences: RiverSourcePreference[]): Promise<RiverMutationResult> =>
+    ipcRenderer.invoke('sharedFiles:updateSourcePreferences', preferences),
   share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
     ipcRenderer.invoke('sharedFiles:share', input),
+  updateAudience: (input: SharedFileAudienceUpdateInput): Promise<SharedFileAudienceStatus> =>
+    ipcRenderer.invoke('sharedFiles:updateAudience', input),
   unshare: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('sharedFiles:unshare', filePath),
   sync: (): Promise<{ written: number; removed: number; created: number; errors: string[] }> =>
@@ -4255,10 +4459,19 @@ type SharedFilesAPI = typeof sharedFilesAPI;
 
 type SharedTeamUnavailableReason =
   | 'not_authenticated'
+  | 'not_entitled'
   | 'no_team_members'
   | 'pending_only'
   | 'ambiguous_team_scope'
   | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
 
 interface SharedTeamMember {
   contactId: string;
@@ -4293,6 +4506,8 @@ interface SharedTeamMutationResult {
 }
 
 const teamAPI = {
+  getEntitlement: (): Promise<SharedTeamEntitlementState> =>
+    ipcRenderer.invoke('team:getEntitlement'),
   getState: (): Promise<SharedTeamState> =>
     ipcRenderer.invoke('team:getState'),
   inviteMember: (email: string): Promise<SharedTeamMutationResult> =>

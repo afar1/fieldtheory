@@ -18,6 +18,7 @@ export interface FieldTheoryTestEnv {
   bookmarkDataDir: string;
   ideasDir: string;
   kindleDeliveryDir: string;
+  kindleArtifactDir: string;
   env: NodeJS.ProcessEnv;
   assertInsideTestRoot: (candidatePath: string) => void;
   assertNoRealFieldTheoryPath: (candidatePath: string) => void;
@@ -35,13 +36,14 @@ export function createFieldTheoryTestEnv(prefix = 'fieldtheory-test-'): FieldThe
   const bookmarkDataDir = path.join(fieldTheoryDir, 'bookmarks');
   const ideasDir = path.join(fieldTheoryDir, 'ideas');
   const kindleDeliveryDir = path.join(fieldTheoryDir, 'kindle');
+  const kindleArtifactDir = path.join(kindleDeliveryDir, 'artifacts');
 
   fs.mkdirSync(commandsDir, { recursive: true });
   fs.mkdirSync(sharedFilesRootDir, { recursive: true });
   fs.mkdirSync(sharedFilesCacheDir, { recursive: true });
   fs.mkdirSync(bookmarkDataDir, { recursive: true });
   fs.mkdirSync(ideasDir, { recursive: true });
-  fs.mkdirSync(kindleDeliveryDir, { recursive: true });
+  fs.mkdirSync(kindleArtifactDir, { recursive: true });
 
   const assertInsideTestRoot = (candidatePath: string): void => {
     if (!isInsidePath(candidatePath, rootDir)) {
@@ -67,6 +69,7 @@ export function createFieldTheoryTestEnv(prefix = 'fieldtheory-test-'): FieldThe
     bookmarkDataDir,
     ideasDir,
     kindleDeliveryDir,
+    kindleArtifactDir,
     env: {
       FT_DATA_DIR: bookmarkDataDir,
       FT_LIBRARY_DIR: libraryDir,
@@ -76,6 +79,7 @@ export function createFieldTheoryTestEnv(prefix = 'fieldtheory-test-'): FieldThe
       FT_IDEAS_DIR: ideasDir,
       FT_KINDLE_DELIVERY_DIR: kindleDeliveryDir,
       FT_KINDLE_DELIVERY_STATE_PATH: path.join(kindleDeliveryDir, 'state.json'),
+      FT_KINDLE_ARTIFACT_DIR: kindleArtifactDir,
     },
     assertInsideTestRoot,
     assertNoRealFieldTheoryPath,

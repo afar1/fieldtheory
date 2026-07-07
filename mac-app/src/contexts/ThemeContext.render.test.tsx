@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, useTheme } from './ThemeContext';
 
 function ThemeProbe() {
-  const { theme, accentPreset, darkModeIntensity } = useTheme();
+  const { theme, accentPreset, themeStylePreset, darkModeIntensity } = useTheme();
   return (
     <div>
       <span data-testid="is-dark">{String(theme.isDark)}</span>
       <span data-testid="glass-enabled">{String(theme.glassEnabled)}</span>
       <span data-testid="accent-preset">{accentPreset}</span>
+      <span data-testid="theme-style-preset">{themeStylePreset}</span>
       <span data-testid="dark-mode-intensity">{darkModeIntensity}</span>
     </div>
   );
@@ -49,6 +50,7 @@ describe('ThemeProvider native renderer-storage sync', () => {
     window.localStorage.setItem('darkMode', 'false');
     window.localStorage.setItem('glassEffect', 'true');
     window.localStorage.setItem('accentPreset', 'forest');
+    window.localStorage.setItem('themeStylePreset', 'default');
     window.localStorage.setItem('darkModeIntensity', '50');
 
     render(
@@ -60,6 +62,7 @@ describe('ThemeProvider native renderer-storage sync', () => {
     expect(screen.getByTestId('is-dark').textContent).toBe('false');
     expect(screen.getByTestId('glass-enabled').textContent).toBe('true');
     expect(screen.getByTestId('accent-preset').textContent).toBe('forest');
+    expect(screen.getByTestId('theme-style-preset').textContent).toBe('default');
     expect(screen.getByTestId('dark-mode-intensity').textContent).toBe('50');
 
     act(() => {
@@ -75,6 +78,10 @@ describe('ThemeProvider native renderer-storage sync', () => {
       window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
         detail: { key: 'accentPreset', value: 'ocean' },
       }));
+      window.localStorage.setItem('themeStylePreset', 'cool');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'themeStylePreset', value: 'cool' },
+      }));
       window.localStorage.setItem('darkModeIntensity', '75');
       window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
         detail: { key: 'darkModeIntensity', value: '75' },
@@ -84,11 +91,13 @@ describe('ThemeProvider native renderer-storage sync', () => {
     await waitFor(() => expect(screen.getByTestId('is-dark').textContent).toBe('true'));
     expect(screen.getByTestId('glass-enabled').textContent).toBe('false');
     expect(screen.getByTestId('accent-preset').textContent).toBe('ocean');
+    expect(screen.getByTestId('theme-style-preset').textContent).toBe('cool');
     expect(screen.getByTestId('dark-mode-intensity').textContent).toBe('75');
   });
 
   it('ignores unrelated and invalid native renderer preference changes', async () => {
     window.localStorage.setItem('accentPreset', 'forest');
+    window.localStorage.setItem('themeStylePreset', 'default');
     window.localStorage.setItem('darkModeIntensity', '50');
 
     render(
@@ -106,6 +115,10 @@ describe('ThemeProvider native renderer-storage sync', () => {
       window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
         detail: { key: 'darkModeIntensity', value: '500' },
       }));
+      window.localStorage.setItem('themeStylePreset', 'invalid');
+      window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
+        detail: { key: 'themeStylePreset', value: 'invalid' },
+      }));
       window.localStorage.setItem('bookmarks-view-mode', 'list');
       window.dispatchEvent(new CustomEvent('fieldtheory:renderer-storage-changed', {
         detail: { key: 'bookmarks-view-mode', value: 'list' },
@@ -113,6 +126,7 @@ describe('ThemeProvider native renderer-storage sync', () => {
     });
 
     await waitFor(() => expect(screen.getByTestId('accent-preset').textContent).toBe('forest'));
+    expect(screen.getByTestId('theme-style-preset').textContent).toBe('default');
     expect(screen.getByTestId('dark-mode-intensity').textContent).toBe('50');
   });
 });

@@ -16,14 +16,15 @@ npm run dev
 `npm run dev` starts Vite on port `5173` and launches Electron against the dev server.
 
 Login is optional for local tools. Fill in Supabase values in `.env.local` only when testing authenticated or account-backed surfaces.
+For maintainer auth testing, `npm run dev -- --env login` verifies `mac-app/.env.local` and can copy ignored config from a sibling private checkout when available.
 
 ## Useful Commands
 
 ```bash
 npm run dev
+npm run dev -- --env login
 npm run dev:verbose
 npm run dev:active
-npm run dev:native
 npm run dev:experimental
 ```
 
@@ -69,14 +70,14 @@ Supabase-backed features include auth, profile/session state, feedback, account 
 
 The Supabase publishable key is public client configuration. It is not a service-role secret. Access control belongs in auth, row-level security, Edge Functions, and server-side checks.
 
+Teams and River are account-backed and entitlement-gated. Production database policy and RLS own the eligibility decision for each signed-in account; the Mac app only reads the current account's allowed/not-allowed result. If the entitlement cannot be read, the app fails closed and hides Teams/River controls, except that a same-user last-known allowed result may keep the UI visible during offline or network loss until the app can read the online result again. A successful online revocation wins over any local last-known state.
+
 ## Internal, Disabled, and Experimental Surfaces
 
 These surfaces exist in code but should not be treated as default public contributor features:
 
 - full Library sync, gated by `fieldTheoryInternalSyncEnabled` or `FIELD_THEORY_INTERNAL_SYNC_ENABLED`;
-- command mobile sync and todo setup, also tied to internal sync policy;
 - shared clipboard, currently disabled in the public-facing preload shape;
-- mobile transcript sync, currently inert in preload;
 - experimental updater access, which depends on private maintainer GitHub access or `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN`.
 
 ## Packaging and Releases

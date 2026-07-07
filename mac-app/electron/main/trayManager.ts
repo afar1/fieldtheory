@@ -6,6 +6,7 @@ import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
 import type { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
+import { formatCompactPriorityMicName } from '../shared/audioDeviceLabels';
 
 const log = createLogger('Tray');
 const TRAY_ICON_WIDTH = 16;
@@ -54,6 +55,8 @@ export class TrayManager {
   private takeScreenshotCallback: (() => void) | null = null;
   private takeFullScreenCallback: (() => void) | null = null;
   private takeActiveWindowCallback: (() => void) | null = null;
+  private getAutoImproveCallback: (() => boolean) | null = null;
+  private setAutoImproveCallback: ((enabled: boolean) => Promise<void> | void) | null = null;
   private openDevToolsCallback: (() => void) | null = null;
   private isLoggedInCallback: (() => boolean) | null = null;
   private historyHotkey: string = 'Option+Space';
@@ -140,6 +143,15 @@ export class TrayManager {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
+  }
+
+  setAutoImproveCallbacks(callbacks: {
+    get: () => boolean;
+    set: (enabled: boolean) => Promise<void> | void;
+  }): void {
+    this.getAutoImproveCallback = callbacks.get;
+    this.setAutoImproveCallback = callbacks.set;
+    this.refreshMenu();
   }
 
   setRecordingActive(active: boolean): void {
@@ -297,7 +309,7 @@ export class TrayManager {
     }
 
     if (priorityDeviceId && priorityDevice) {
-      const abbrev = priorityDevice.name.slice(0, 3);
+      const abbrev = formatCompactPriorityMicName(priorityDevice.name);
       this.tray.setTitle(`:${abbrev}${unreadTitle}`);
     } else {
       this.tray.setTitle(unreadTitle.trimStart());
@@ -495,6 +507,18 @@ export class TrayManager {
         }
       },
     });
+
+    if (this.getAutoImproveCallback && this.setAutoImproveCallback) {
+      items.push({
+        label: 'Auto-Improve Transcripts',
+        type: 'checkbox',
+        checked: this.getAutoImproveCallback(),
+        click: async (item) => {
+          await this.setAutoImproveCallback?.(item.checked);
+          this.refreshMenu();
+        },
+      });
+    }
 
     items.push({
       label: 'Take Screenshot',

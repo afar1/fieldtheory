@@ -13,7 +13,9 @@ import {
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  resolveInitialViewMode,
   shouldKeepLibrarianMounted,
+  viewModeAfterSignedOut,
 } from '../utils/clipboardHistoryRestore';
 
 function createStorage(initial: Record<string, string> = {}) {
@@ -34,6 +36,13 @@ function createStorage(initial: Record<string, string> = {}) {
 }
 
 describe('clipboardHistoryRestore', () => {
+  it('uses explicit initial view params before persisted restore state', () => {
+    expect(resolveInitialViewMode('?initialView=library')).toBe('librarian');
+    expect(resolveInitialViewMode('?initialView=clipboard')).toBe('clipboard');
+    expect(resolveInitialViewMode('?initialView=feedback')).toBeNull();
+    expect(resolveInitialViewMode('')).toBeNull();
+  });
+
   it('restores settings while dropping the retired Commands surface as the base view', () => {
     const storage = createStorage({
       [FIELD_THEORY_VIEW_STORAGE_KEY]: 'commands',
@@ -119,6 +128,14 @@ describe('clipboardHistoryRestore', () => {
     expect(shouldKeepLibrarianMounted({ viewMode: 'clipboard', librarianEverRendered: true })).toBe(true);
     expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: false })).toBe(true);
     expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: true })).toBe(false);
+  });
+
+  it('keeps local surfaces in place when auth signs out later', () => {
+    expect(viewModeAfterSignedOut('librarian')).toBe('librarian');
+    expect(viewModeAfterSignedOut('clipboard')).toBe('clipboard');
+    expect(viewModeAfterSignedOut('possible')).toBe('possible');
+    expect(viewModeAfterSignedOut('feedback')).toBe('clipboard');
+    expect(viewModeAfterSignedOut('todo')).toBe('clipboard');
   });
 
   it('recognizes plain Command bracket navigation only', () => {

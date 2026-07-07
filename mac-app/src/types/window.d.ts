@@ -199,6 +199,25 @@ interface GazeAPI {
  * Transcription status.
  */
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+type AutoImproveProvider = 'local' | 'codex' | 'claude';
+type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+interface AutoImproveModelOptions {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+}
+interface AutoImproveContextFile {
+  path: string;
+  enabled: boolean;
+}
+interface AutoImproveProviderStatus {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+}
 
 /**
  * Model download status.
@@ -308,6 +327,18 @@ interface TranscribeAPI {
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
   getAutoImprove?: () => Promise<boolean>;
   setAutoImprove?: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider?: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider?: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus?: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions?: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions?: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences?: () => Promise<string>;
+  setAutoImproveWritingPreferences?: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles?: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles?: () => Promise<AutoImproveContextFile[]>;
+  getLiveTyping?: () => Promise<boolean>;
+  setLiveTyping?: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
@@ -828,6 +859,7 @@ interface AuthSessionState {
 }
 
 interface AuthAPI {
+  isConfigured?: () => Promise<boolean>;
   prepareForNewLogin: () => Promise<void>;
   requestOtp: (email: string) => Promise<{ error: string | null }>;
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: AuthSessionState | null }>;
@@ -1558,6 +1590,7 @@ interface CommandsAPI {
   getLauncherSettings?: () => Promise<LauncherSettings>;
   setLauncherSettings?: (settings: LauncherSettings) => Promise<LauncherSettings>;
   runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
+  runGlobalImproveSelection?: () => Promise<{ success: boolean; error?: string }>;
   listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
   getMaxwellMemory?: () => Promise<MaxwellMemoryState>;
   saveMaxwellMemory?: (request: MaxwellMemorySaveRequest) => Promise<MaxwellMemorySaveResult>;
@@ -1814,6 +1847,8 @@ interface ThemeAPI {
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
+  prepareKindleDelivery?: (path: string) => Promise<KindleDeliveryPrepareResult>;
+  traceNavigation?: (stage: string, payload: Record<string, unknown>) => Promise<void>;
   saveReading: (path: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   deleteReading: (path: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
@@ -1933,11 +1968,114 @@ interface SharedFileStatus {
   error?: string;
 }
 
+interface SharedFileAudienceStatus {
+  shared: boolean;
+  sharedId?: string;
+  targets: RiverTarget[];
+  error?: string;
+}
+
+type SharedFileDestinationKind = 'contact' | 'team';
+type RiverTargetKind = 'person' | 'group' | 'public';
+type RiverTargetStatus = 'accepted' | 'pending' | 'unavailable';
+type RiverSourcePreferenceValue = 'include' | 'mute' | 'hide';
+type RiverTimelineScope = 'private' | 'public';
+type RiverSourceKind = 'all' | 'mine' | 'group' | 'person' | 'public' | 'muted' | 'legacy';
+
+interface SharedFileShareTarget {
+  id: string;
+  kind: SharedFileDestinationKind;
+}
+
+interface RiverShareTarget {
+  id: string;
+  kind: RiverTargetKind;
+}
+
+interface RiverTarget {
+  id: string;
+  kind: RiverTargetKind;
+  targetId: string;
+  label: string;
+  detail?: string;
+  callsign?: string | null;
+  initials?: string | null;
+  avatarUrl?: string | null;
+  tint?: string | null;
+  status: RiverTargetStatus;
+  committable: boolean;
+  isDefault?: boolean;
+  sourcePreference?: RiverSourcePreferenceValue | null;
+  recipientUserIds: string[];
+  memberCount?: number;
+  legacyTeam?: boolean;
+}
+
+interface RiverDefaultDestination {
+  kind: RiverTargetKind;
+  targetId: string;
+  position?: number;
+}
+
+interface RiverSourcePreference {
+  sourceKind: 'mine' | RiverTargetKind;
+  sourceId: string;
+  preference: RiverSourcePreferenceValue;
+  position?: number;
+}
+
+interface RiverMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+interface RiverTimelineQuery {
+  scope: RiverTimelineScope;
+  sourceIds: string[];
+  limit: number;
+  cursor?: string | null;
+}
+
+interface RiverTimelineItem {
+  documentId: string;
+  cachePath?: string;
+  title: string;
+  excerpt: string;
+  content?: string;
+  authorUserId?: string | null;
+  authorCallsign?: string | null;
+  authorInitials?: string | null;
+  sourceLabel?: string | null;
+  sourceKind: RiverSourceKind;
+  sharedAt: string;
+  pinned: boolean;
+  public: boolean;
+}
+
+interface SharedFileDestination {
+  id: string;
+  kind: SharedFileDestinationKind;
+  label: string;
+  detail?: string;
+  status: 'accepted' | 'pending';
+  recipientUserIds: string[];
+  memberCount?: number;
+  isDefault?: boolean;
+}
+
 interface SharedFileShareInput {
   filePath: string;
   title?: string;
   content: string;
   type?: SharedFileType;
+  destinations?: SharedFileShareTarget[];
+  targets?: RiverShareTarget[];
+}
+
+interface SharedFileAudienceUpdateInput {
+  filePath?: string;
+  sharedId?: string;
+  targets: RiverShareTarget[];
 }
 
 interface SharedFileUpdateResult {
@@ -1959,21 +2097,30 @@ interface SharedFilesAvailability {
   available: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
-  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
   currentTeamScopeUserId?: string | null;
+  stale?: boolean;
 }
 
 interface SharedFilePinResult {
   ok: boolean;
   pinned?: boolean;
-  reason?: 'not_authenticated' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
+  reason?: 'not_authenticated' | 'not_entitled' | 'not_shared' | 'not_available' | 'read_only' | 'request_failed';
   error?: string;
 }
 
 interface SharedFilesAPI {
   getAvailability: () => Promise<SharedFilesAvailability>;
   getStatus: (filePath: string) => Promise<SharedFileStatus>;
+  getAudience: (filePath: string) => Promise<SharedFileAudienceStatus>;
+  getTimeline: (query: RiverTimelineQuery) => Promise<RiverTimelineItem[]>;
+  getDestinations: (query?: string) => Promise<SharedFileDestination[]>;
+  getTargets: (query?: string) => Promise<RiverTarget[]>;
+  setDefaultDestinations: (destinations: RiverDefaultDestination[]) => Promise<RiverMutationResult>;
+  getSourcePreferences: () => Promise<RiverSourcePreference[]>;
+  updateSourcePreferences: (preferences: RiverSourcePreference[]) => Promise<RiverMutationResult>;
   share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
+  updateAudience: (input: SharedFileAudienceUpdateInput) => Promise<SharedFileAudienceStatus>;
   unshare: (filePath: string) => Promise<boolean>;
   sync: () => Promise<{ written: number; removed: number; created: number; errors: string[] }>;
   updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => Promise<SharedFileUpdateResult>;
@@ -1986,10 +2133,19 @@ interface SharedFilesAPI {
 
 type SharedTeamUnavailableReason =
   | 'not_authenticated'
+  | 'not_entitled'
   | 'no_team_members'
   | 'pending_only'
   | 'ambiguous_team_scope'
   | 'lookup_failed';
+
+interface SharedTeamEntitlementState {
+  allowed: boolean;
+  reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
+  stale: boolean;
+  userId: string | null;
+  checkedAt: string | null;
+}
 
 interface SharedTeamMember {
   contactId: string;
@@ -2024,6 +2180,7 @@ interface SharedTeamMutationResult {
 }
 
 interface TeamAPI {
+  getEntitlement: () => Promise<SharedTeamEntitlementState>;
   getState: () => Promise<SharedTeamState>;
   inviteMember: (email: string) => Promise<SharedTeamMutationResult>;
   respondToInvite: (contactId: string, accept: boolean) => Promise<SharedTeamMutationResult>;
@@ -2068,6 +2225,26 @@ declare global {
   interface Reading extends ReadingMeta {
     content: string;
     documentVersion: DocumentVersion;
+  }
+
+  interface KindleDeliveryPrepareResult {
+    status: 'dry_run' | 'prepared' | 'already_prepared' | 'already_sent' | 'blocked' | 'error';
+    document?: {
+      title: string;
+      sourcePath: string;
+      sourceRelPath: string;
+    };
+    deliveryKey?: string;
+    artifactPath?: string;
+    statePath?: string;
+    sendPreflight?: {
+      recipientEmail: string;
+      senderEmail: string;
+      subject: string;
+      attachmentPath: string;
+    };
+    reason?: string;
+    message?: string;
   }
 
   /**
@@ -2790,51 +2967,9 @@ declare global {
     reason: 'enabled' | 'local_disabled' | 'not_authenticated';
   }
 
-  interface LibrarySyncStatusDetails {
-    ready: boolean;
-    reason: 'enabled' | 'not_authenticated' | 'sync_disabled' | 'sync_unavailable';
-    lastSyncAt: number | null;
-    lastPushAt: number | null;
-    lastError: string | null;
-    pendingLocalDocumentCount: number | null;
-  }
-
-  interface LibraryDocumentPublishResult {
-    success: boolean;
-    reason:
-      | 'published'
-      | 'up_to_date'
-      | 'not_authenticated'
-      | 'sync_disabled'
-      | 'sync_unavailable'
-      | 'sync_in_progress'
-      | 'invalid_path'
-      | 'outside_library'
-      | 'shared_path'
-      | 'not_markdown'
-      | 'not_found'
-      | 'read_failed'
-      | 'remote_newer'
-      | 'upload_failed'
-      | 'read_only';
-    uploaded: number;
-    updated: number;
-    skipped: number;
-    sourcePath?: string;
-    clientId?: string;
-    title?: string;
-    contentHash?: string;
-    error?: string;
-    errors: string[];
-    lastSyncAt: number | null;
-    lastPushAt: number | null;
-  }
-
   interface FieldTheorySyncAPI {
     getStatus: () => Promise<FieldTheorySyncStatus>;
     setLocalEnabled: (enabled: boolean) => Promise<FieldTheorySyncStatus>;
-    getLibraryStatus: () => Promise<LibrarySyncStatusDetails>;
-    publishLibraryDocument: (filePath: string) => Promise<LibraryDocumentPublishResult>;
   }
 
   interface CodexTerminalHistoryEntry {

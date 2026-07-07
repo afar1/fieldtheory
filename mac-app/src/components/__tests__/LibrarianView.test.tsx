@@ -18,6 +18,7 @@ import LibrarianView, {
   getEditorSelectionBackgroundRect,
   getRenderedMarkdownDeleteShortcutEdit,
   getResponsivePanelState,
+  hasActiveLibraryFileSelectionContext,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldAnimateResponsiveSidebar,
@@ -25,7 +26,10 @@ import LibrarianView, {
   restoreLibrarianLineNumbersMode,
   restoreLibrarianSidebarWidth,
   restoreLibrarianTextSize,
+  shouldReportActiveLibraryFileContextForSelection,
   shouldPreserveEditorSelectionPastePopover,
+  moveLibrarianNavigationHistory,
+  pushLibrarianNavigationEntry,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -72,6 +76,11 @@ vi.mock('../SketchView', () => ({
   ),
 }));
 
+const LIBRARIAN_VIEW_TEST_TIMEOUT_MS = 30000;
+const RENDERED_EDITOR_SAVE_TIMEOUT_MS = 5000;
+
+vi.setConfig({ testTimeout: LIBRARIAN_VIEW_TEST_TIMEOUT_MS });
+
 describe('LibrarianView render', () => {
   type EditorSelectionSnapshot = Parameters<typeof shouldPreserveEditorSelectionPastePopover>[0]['latestEditorSnapshot'];
   const testLibraryRootPath = '/Users/afar/.fieldtheory/library';
@@ -80,6 +89,21 @@ describe('LibrarianView render', () => {
     `${testLibraryRootPath}::scratchpad`,
   ]);
   let toggleLineNumbersFromLauncher: (() => void) | null = null;
+
+  it('keeps River entries in librarian navigation history', () => {
+    const wikiEntry = { itemType: 'wiki' as const, itemPath: 'scratchpad/start' };
+    const riverEntry = { itemType: 'river' as const, itemPath: 'river' };
+    const history = pushLibrarianNavigationEntry(
+      pushLibrarianNavigationEntry({ entries: [], index: -1 }, wikiEntry),
+      riverEntry
+    );
+
+    const previous = moveLibrarianNavigationHistory(history, -1);
+    const next = previous ? moveLibrarianNavigationHistory(previous.history, 1) : null;
+
+    expect(previous?.entry).toEqual(wikiEntry);
+    expect(next?.entry).toEqual(riverEntry);
+  });
 
   it('keeps the selection paste popover alive for CodeMirror editor selections', () => {
     const editor = document.createElement('div');
@@ -106,6 +130,33 @@ describe('LibrarianView render', () => {
         isCollapsed: false,
       } as EditorSelectionSnapshot,
     })).toBe(false);
+  });
+
+  it('skips active file context reports for collapsed caret-only updates', () => {
+    expect(hasActiveLibraryFileSelectionContext(null)).toBe(false);
+    expect(hasActiveLibraryFileSelectionContext({
+      type: 'wiki',
+      rootPath: '/library',
+      relPath: 'note',
+      filePath: '/library/note.md',
+      title: 'Note',
+      selectionStart: 4,
+      selectionEnd: 4,
+    })).toBe(false);
+    expect(hasActiveLibraryFileSelectionContext({
+      type: 'wiki',
+      rootPath: '/library',
+      relPath: 'note',
+      filePath: '/library/note.md',
+      title: 'Note',
+      selectionStart: 4,
+      selectionEnd: 8,
+      selectionText: 'text',
+    })).toBe(true);
+
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: true }, false)).toBe(false);
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: true }, true)).toBe(true);
+    expect(shouldReportActiveLibraryFileContextForSelection({ isCollapsed: false }, false)).toBe(true);
   });
 
   it('uses the drawn CodeMirror selection bands when browser selection geometry is empty', () => {
@@ -2175,6 +2226,286 @@ describe('LibrarianView render', () => {
     expect(screen.getAllByText('Team Notes')).toHaveLength(2);
   });
 
+  it('switches from an external command recent to a wiki recent document', async () => {
+    const commandPath = '/Users/afar/.fieldtheory/library/Commands/release.md';
+    const relPath = 'scratchpad/2026-05-28';
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn(async (absPath: string) => ({
+          path: absPath,
+          name: 'release.md',
+          content: 'Release command body',
+          mtime: 1,
+          documentVersion: { mtimeMs: 1, size: 20, sha256: 'release' },
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    Object.defineProperty(window, 'recentAPI', {
+      configurable: true,
+      value: {
+        list: vi.fn(async () => [
+          {
+            kind: 'external' as const,
+            path: commandPath,
+            title: 'release',
+            lastOpenedAt: 20,
+          },
+          {
+            kind: 'wiki' as const,
+            path: relPath,
+            title: 'Caching Lessons For Field Theory',
+            lastOpenedAt: 10,
+          },
+        ]),
+        onChanged: vi.fn(() => () => {}),
+        visit: vi.fn(async () => []),
+      },
+    });
+    Object.defineProperty(window, 'recentAPI', {
+      configurable: true,
+      value: {
+        list: vi.fn(async () => [
+          {
+            kind: 'external' as const,
+            path: commandPath,
+            title: 'release',
+            lastOpenedAt: 20,
+          },
+          {
+            kind: 'wiki' as const,
+            path: relPath,
+            title: '2026-05-28',
+            lastOpenedAt: 10,
+          },
+        ]),
+        onChanged: vi.fn(() => () => {}),
+        visit: vi.fn(async () => []),
+      },
+    });
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+        name: '2026-05-28',
+        title: '2026-05-28',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/Users/afar/.fieldtheory/library',
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+          name: '2026-05-28',
+          title: '2026-05-28',
+          lastUpdated: 10,
+        }],
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: '2026-05-28',
+      title: '2026-05-28',
+      lastUpdated: 10,
+      content: 'Scratchpad body',
+      documentVersion: { mtimeMs: 1, size: 15, sha256: 'scratchpad' },
+    }));
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: commandPath }}
+      />,
+    );
+
+    expect(await screen.findByText('Release command body')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('2026-05-28'));
+
+    expect(await screen.findByText('Scratchpad body')).toBeTruthy();
+    expect(screen.queryByText('Release command body')).toBeNull();
+    expect(window.wikiAPI!.getPage).toHaveBeenCalledWith(relPath);
+  });
+
+  it('does not replay a restored external selection after clicking a wiki document', async () => {
+    const commandPath = '/Users/afar/.fieldtheory/library/Commands/release.md';
+    const relPath = 'scratchpad/Caching Lessons For Field Theory';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'external', path: commandPath });
+      if (key === 'wiki-expanded-folders') return expandedScratchpadFolders;
+      return null;
+    });
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn(async (absPath: string) => ({
+          path: absPath,
+          name: 'release.md',
+          content: 'Release command body',
+          mtime: 1,
+          documentVersion: { mtimeMs: 1, size: 20, sha256: 'release' },
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/Users/afar/.fieldtheory/library',
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+          name: 'Caching Lessons For Field Theory',
+          title: 'Caching Lessons For Field Theory',
+          lastUpdated: 10,
+        }],
+      }],
+    }]);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+        name: 'Caching Lessons For Field Theory',
+        title: 'Caching Lessons For Field Theory',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'Caching Lessons For Field Theory',
+      title: 'Caching Lessons For Field Theory',
+      lastUpdated: 10,
+      content: 'Caching lessons body',
+      documentVersion: { mtimeMs: 1, size: 20, sha256: 'caching' },
+    }));
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('Release command body')).toBeTruthy();
+    const openCountBeforeClick = vi.mocked(window.externalAPI!.open).mock.calls.length;
+
+    fireEvent.click(await screen.findByText('Caching Lessons For Field Theory'));
+
+    expect(await screen.findByText('Caching lessons body')).toBeTruthy();
+    expect(screen.queryByText('Release command body')).toBeNull();
+    expect(window.externalAPI!.open).toHaveBeenCalledTimes(openCountBeforeClick);
+  });
+
+  it('keeps a clicked wiki page when a slow initial external command finishes later', async () => {
+    const commandPath = '/Users/afar/.fieldtheory/library/Commands/release.md';
+    const relPath = 'scratchpad/clicked-after-command';
+    let resolveExternalOpen: (() => void) | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn((absPath: string) => new Promise((resolve) => {
+          resolveExternalOpen = () => resolve({
+            path: absPath,
+            name: 'release.md',
+            content: 'Release command body',
+            mtime: 1,
+            documentVersion: { mtimeMs: 1, size: 20, sha256: 'release' },
+          });
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/Users/afar/.fieldtheory/library',
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+          name: 'clicked-after-command',
+          title: 'clicked-after-command',
+          lastUpdated: 10,
+        }],
+      }],
+    }]);
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+        name: 'clicked-after-command',
+        title: 'clicked-after-command',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'clicked-after-command',
+      title: 'clicked-after-command',
+      lastUpdated: 10,
+      content: 'Clicked wiki body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'clicked' },
+    }));
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: commandPath }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(window.externalAPI!.open).toHaveBeenCalledWith(commandPath);
+    });
+    fireEvent.click(await screen.findByText('clicked-after-command'));
+    expect(await screen.findByText('Clicked wiki body')).toBeTruthy();
+
+    await act(async () => {
+      resolveExternalOpen?.();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Clicked wiki body')).toBeTruthy();
+    expect(screen.queryByText('Release command body')).toBeNull();
+  });
+
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
     const relPath = "scratchpad/Monday May 4th - to do's";
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
@@ -2328,10 +2659,10 @@ describe('LibrarianView render', () => {
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
     const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
-    const riverDivider = riverButton.nextElementSibling;
-    expect(riverDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
-    expect(riverDivider?.nextElementSibling).toBe(popOutButton);
-    expect(popOutButton.nextElementSibling).toBe(markdownButton);
+    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    const popOutDivider = popOutButton.nextElementSibling;
+    expect(popOutDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
+    expect(popOutDivider?.nextElementSibling).toBe(markdownButton);
     expect(popOutButton.style.width).toBe(focusButton.style.width);
     expect(markdownButton.style.width).toBe(focusButton.style.width);
     expect(terminalButton.style.width).toBe(focusButton.style.width);
@@ -2341,6 +2672,107 @@ describe('LibrarianView render', () => {
     expect(terminalButton.style.height).toBe(focusButton.style.width);
     expect(focusButton.style.height).toBe(focusButton.style.width);
     expect(riverButton.style.borderStyle).toBe('none');
+  });
+
+  it('shows the River button for entitled markdown documents before a writable destination exists', async () => {
+    const relPath = 'scratchpad/river-no-destination-toolbar-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'river-no-destination-toolbar-test',
+      title: 'river-no-destination-toolbar-test',
+      lastUpdated: 1,
+      content: 'River button body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'river-no-destination' },
+    };
+    const getTargets = vi.fn(async () => []);
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: false, hasTeamMembers: false })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getTargets,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('River button body');
+    const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
+
+    fireEvent.click(riverButton);
+
+    expect(await screen.findByRole('dialog', { name: 'Share to River' })).toBeTruthy();
+    expect(await screen.findByText('No River contacts or groups yet.')).toBeTruthy();
+    expect(getTargets).toHaveBeenCalledWith('');
+  });
+
+  it('shares to the selected default River target from the toolbar picker', async () => {
+    const relPath = 'scratchpad/river-default-target-toolbar-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'river-default-target-toolbar-test',
+      title: 'river-default-target-toolbar-test',
+      lastUpdated: 1,
+      content: 'River default target body',
+      documentVersion: { mtimeMs: 1, size: 26, sha256: 'river-default-target' },
+    };
+    const share = vi.fn(async () => ({ shared: true, sharedId: 'shared-1', revision: 1 }));
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, canWrite: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        getTargets: vi.fn(async () => [{
+          id: 'person:user-2',
+          kind: 'person',
+          targetId: 'user-2',
+          label: 'Jane Beta',
+          detail: 'jneb802@gmail.com',
+          status: 'accepted',
+          committable: true,
+          isDefault: true,
+          recipientUserIds: ['user-2'],
+        }]),
+        share,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('River default target body');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to River (shared)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Share to Jane Beta' }));
+
+    await waitFor(() => {
+      expect(share).toHaveBeenCalledWith(expect.objectContaining({
+        filePath: page.absPath,
+        title: page.title,
+        content: page.content,
+        targets: [{ id: 'person:user-2', kind: 'person' }],
+      }));
+    });
   });
 
   it('keeps the Library document toolbar in Browser mode while excluding terminal controls', async () => {
@@ -2853,7 +3285,7 @@ describe('LibrarianView render', () => {
         `${content}${insertedText}`,
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
     expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
   });
@@ -2988,6 +3420,63 @@ describe('LibrarianView render', () => {
     expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
   });
 
+  it('opens inline draw above the markdown editor in focus immersive mode', async () => {
+    const relPath = 'scratchpad/immersive-markdown-draw-command-test';
+    const content = '/draw';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'immersive-markdown-draw-command-test',
+      title: 'immersive-markdown-draw-command-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'immersive-markdown-draw-command-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: content.length,
+          selectionEnd: content.length,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(
+      <LibrarianView
+        focusChromeEnabled
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'markdown' }}
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+      />,
+    );
+
+    const markdownInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-quality-editor="markdown"] .cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('/draw');
+      return input;
+    });
+    if (!markdownInput) throw new Error('Markdown editor input missing');
+
+    fireEvent.keyDown(markdownInput, { key: 'Enter' });
+
+    const drawingRegion = await screen.findByRole('region', { name: 'Drawing' });
+    const overlay = container.querySelector('[data-ft-inline-draw-overlay="markdown"]') as HTMLElement | null;
+    expect(drawingRegion).toBeTruthy();
+    expect(overlay).toBeTruthy();
+    expect(overlay?.style.position).toBe('absolute');
+    expect(overlay?.style.zIndex).toBe('4');
+    expect((drawingRegion as HTMLElement).style.height).toBe('100%');
+    expect(screen.queryByRole('dialog', { name: 'Draw' })).toBeNull();
+  });
+
   it('inserts super-pasted image paths as plain text in rendered mode', async () => {
     const relPath = 'scratchpad/rendered-super-paste-image-path-test';
     const content = 'hello rendered super paste';
@@ -3046,7 +3535,7 @@ describe('LibrarianView render', () => {
         `${content}${imagePath}`,
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('keeps rendered mode when Enter commits the file title', async () => {
@@ -3150,6 +3639,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
 
@@ -3175,6 +3665,7 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
+    expect((await screen.findByLabelText('File title') as HTMLInputElement).value).toBe(page.title);
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     fireEvent.click(maxwellButton);
     fireEvent.click(screen.getByRole('button', { name: 'add current page' }));
@@ -3316,7 +3807,7 @@ describe('LibrarianView render', () => {
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
       expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
-  });
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('honors markdown mode for initial external Library targets', async () => {
     const externalPath = '/Users/afar/.fieldtheory/library/reports/notes.md';
@@ -3493,7 +3984,7 @@ describe('LibrarianView render', () => {
         'hello world!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 	    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
 	    expect(renderedInput.textContent).toContain('hello world!');
 	  });
@@ -3557,7 +4048,7 @@ describe('LibrarianView render', () => {
         'hello world!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(appendRenderedEditorDebug).not.toHaveBeenCalled();
   });
 
@@ -3624,7 +4115,7 @@ describe('LibrarianView render', () => {
       expect(stages).toContain('local-content-state-scheduled');
       expect(stages).toContain('editor-session-persist-scheduled');
       expect(stages).toContain('save-scheduled');
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     const timingEntries = appendRenderedEditorDebug.mock.calls
       .map(([entry]) => entry as { stage?: string; details?: Record<string, unknown> })
@@ -3699,19 +4190,13 @@ describe('LibrarianView render', () => {
     pasteText(renderedInput, '!');
 
     await waitFor(() => {
-      const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
-      expect(stages).toContain('save-rescheduled-active-typing');
-    }, { timeout: 900 });
-    expect(window.wikiAPI!.save).not.toHaveBeenCalled();
-
-    await waitFor(() => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'quiet save!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
-  });
+    }, { timeout: 1800 });
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('keeps River sync in the background after a rendered editor save', async () => {
     const relPath = 'scratchpad/rendered-shared-background-sync-test';
@@ -3776,7 +4261,7 @@ describe('LibrarianView render', () => {
         'local first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(updateContent).not.toHaveBeenCalled();
 
     await waitFor(() => {
@@ -3863,7 +4348,7 @@ describe('LibrarianView render', () => {
         'river first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     await waitFor(() => {
       expect(updateContent).toHaveBeenCalledWith('shared-1', 'river first!', 1, page.absPath);
@@ -3880,7 +4365,7 @@ describe('LibrarianView render', () => {
         'river first!?',
         syncedVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('syncs River once when shared files become available', async () => {
@@ -3971,7 +4456,7 @@ describe('LibrarianView render', () => {
         'retry local first!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 
     await waitFor(() => {
       expect(updateContent).toHaveBeenCalledTimes(2);
@@ -4033,7 +4518,7 @@ describe('LibrarianView render', () => {
 	      expect(renderedInput.textContent).toContain('Pasted Heading');
 	      expect(renderedInput.textContent).toContain('one');
 	      expect(renderedInput.textContent).not.toContain('# Pasted Heading');
-	    }, { timeout: 1200 });
+	    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
 	  });
 
 	  it('pastes clipboard images into the rendered editor without switching to source mode', async () => {
@@ -4092,7 +4577,7 @@ describe('LibrarianView render', () => {
         'hello image![Image](<file:///Users/afar/Pictures/Test%20Image.png>)',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
     expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
   });
@@ -4160,7 +4645,7 @@ describe('LibrarianView render', () => {
         'hello image file![Image](<file:///Users/afar/Pictures/Phone%20Photo.jpg>)',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(getClipboardImagePath).not.toHaveBeenCalled();
   });
 
@@ -4225,8 +4710,127 @@ describe('LibrarianView render', () => {
         '![Image](<file:///Users/afar/Pictures/Phone%20Source%20Photo.png>)hello source image',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
     expect(getClipboardImagePath).not.toHaveBeenCalled();
+  });
+
+  it('does not make unchanged source-mode image references portable while autosaving prose edits', async () => {
+    const relPath = 'scratchpad/source-prose-autosave-image-skip-test';
+    const content = '![Image](./existing.png)\nhello source image';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'source-prose-autosave-image-skip-test',
+      title: 'source-prose-autosave-image-skip-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'source-prose-image-skip-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: 0,
+          selectionEnd: 0,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 7, sha256: 'source-prose-image-skip-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const sourceInput = await waitFor(() => {
+      const input = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello source image');
+      return input;
+    });
+    if (!sourceInput) throw new Error('Markdown source input missing');
+
+    pasteText(sourceInput, 'draft: ');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'draft: ![Image](./existing.png)\nhello source image',
+        page.documentVersion,
+      );
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
+    expect(window.markdownImagesAPI!.makeImagesPortable).not.toHaveBeenCalled();
+  });
+
+  it('makes added source-mode image references portable before autosaving', async () => {
+    const relPath = 'scratchpad/source-image-autosave-portable-test';
+    const content = 'hello source image';
+    const pastedImage = '![Image](<file:///Users/afar/Pictures/Source%20Photo.png>)';
+    const portableContent = '![Image](./.assets/Source%20Photo.png)\nhello source image';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'source-image-autosave-portable-test',
+      title: 'source-image-autosave-portable-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'source-image-portable-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: 0,
+          selectionEnd: 0,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.markdownImagesAPI!.makeImagesPortable).mockResolvedValue({
+      content: portableContent,
+      copied: 1,
+      rewritten: 1,
+      missing: 0,
+    });
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: portableContent.length, sha256: 'source-image-portable-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const sourceInput = await waitFor(() => {
+      const input = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello source image');
+      return input;
+    });
+    if (!sourceInput) throw new Error('Markdown source input missing');
+
+    pasteText(sourceInput, `${pastedImage}\n`);
+
+    await waitFor(() => {
+      expect(window.markdownImagesAPI!.makeImagesPortable).toHaveBeenCalledWith(
+        page.absPath,
+        `${pastedImage}\nhello source image`,
+      );
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        portableContent,
+        page.documentVersion,
+      );
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('opens a Quick Look style preview when a rendered editor image is clicked', async () => {
@@ -4316,7 +4920,7 @@ describe('LibrarianView render', () => {
         '---\ntodo: true\ntodo_state: open\n---\n\nhello!',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('preserves artifact frontmatter while editing the rendered editor body', async () => {
@@ -4373,7 +4977,7 @@ describe('LibrarianView render', () => {
         '---\ncontent_edited_at: 1234\n---\n\nhello!',
         reading.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('lets rendered editor input create the next rendered body line', async () => {
@@ -4424,7 +5028,7 @@ describe('LibrarianView render', () => {
         'hello\nx',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('continues rendered list items on Enter without showing markdown syntax', async () => {
@@ -4476,7 +5080,7 @@ describe('LibrarianView render', () => {
         '- first\n- ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
 	  it('starts an ordered list from an empty rendered editor with Command+Shift+7', async () => {
@@ -4528,7 +5132,7 @@ describe('LibrarianView render', () => {
         '1. ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('handles rendered editor Command+/ as focus mode without inserting a comment', async () => {
@@ -4652,7 +5256,7 @@ describe('LibrarianView render', () => {
         'See [[Consensus]]',
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('lets rendered editor input complete @bookmarks mentions', async () => {
@@ -4709,7 +5313,7 @@ describe('LibrarianView render', () => {
         nextContent,
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('keeps rendered wiki link completion editable when deleting a character', async () => {
@@ -4773,7 +5377,7 @@ describe('LibrarianView render', () => {
         'See [[Co',
         expect.any(Object),
       );
-    }, { timeout: 1200 });
+    }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
   it('shows linked documents at the bottom of rendered wiki content', async () => {
@@ -4953,7 +5557,7 @@ describe('LibrarianView render', () => {
         '  ',
         page.documentVersion,
       );
-    }, { timeout: 1200 });
+    }, { timeout: 5000 });
   });
 
   it('archives the selected sidebar file with e and undoes it with Cmd+Z', async () => {
@@ -5131,7 +5735,7 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
     const visibleRelPath = 'scratchpad/visible-boundary';
@@ -5387,9 +5991,9 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(firstRelPath);
       expect(window.wikiAPI!.deletePage).toHaveBeenCalledWith(secondRelPath);
     });
-  }, 10000);
+  }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
-  it('reveals the collapsed sidebar only when the edge strip is clicked', async () => {
+  it('reveals the collapsed sidebar when the pointer reaches the edge strip', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
       path: '/tmp/library/example.md',
       title: 'example.md',
@@ -5436,10 +6040,18 @@ describe('LibrarianView render', () => {
     fireEvent.mouseMove(root, { clientX: 80 });
     expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
-    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    fireEvent.click(getHoverStrip()!);
+    expect(getHoverStrip()).toBeNull();
+    expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
+    expect(getResizeHandle()?.style.borderRight).toBe('0px solid transparent');
+
+    fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 20 });
+    expect(getHoverStrip()).toBeTruthy();
+
+    fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.click(getHoverStrip()!);

@@ -32,6 +32,14 @@ export function getStoredViewMode(storage: StorageReader): ViewMode {
   return isRestorableViewMode(savedView) ? savedView : 'clipboard';
 }
 
+export function resolveInitialViewMode(search: string): ViewMode | null {
+  const params = new URLSearchParams(search);
+  const initialView = params.get('initialView');
+  if (initialView === 'library') return 'librarian';
+  if (initialView === 'clipboard') return 'clipboard';
+  return null;
+}
+
 export function resolveClipboardRestoreState(storage: StorageReader & StorageWriter): ClipboardRestoreState {
   const shouldShowFields = storage.getItem(SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY) === 'true';
   if (shouldShowFields) {
@@ -89,6 +97,10 @@ export function shouldKeepLibrarianMounted(state: { viewMode: ViewMode; libraria
 
 export function isLibrarianSurfaceVisible(state: { viewMode: ViewMode; showSettings: boolean }): boolean {
   return !state.showSettings && state.viewMode === 'librarian';
+}
+
+export function viewModeAfterSignedOut(viewMode: ViewMode): ViewMode {
+  return viewMode === 'feedback' || viewMode === 'todo' ? 'clipboard' : viewMode;
 }
 
 export function getAppBracketNavigationDirection(event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): -1 | 1 | null {

@@ -84,6 +84,22 @@ describe('ContentToolbar', () => {
     }
   });
 
+  it('runs the Kindle preparation action from the toolbar', () => {
+    const onPrepareKindle = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        showKindle
+        onPrepareKindle={onPrepareKindle}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Prepare Kindle EPUB'));
+
+    expect(onPrepareKindle).toHaveBeenCalledTimes(1);
+  });
+
   it('reports when the text style menu opens and closes', async () => {
     const onTypographyMenuOpenChange = vi.fn();
 
@@ -255,6 +271,11 @@ describe('ContentToolbar', () => {
     );
 
     expect(container.querySelectorAll('[data-content-toolbar-divider]')).toHaveLength(3);
+    const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
+    const newWindowButton = screen.getByRole('button', { name: 'Open in New Window' });
+    const nextDivider = newWindowButton.nextElementSibling;
+    expect(fieldTheoryButton.compareDocumentPosition(newWindowButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(nextDivider?.hasAttribute('data-content-toolbar-divider')).toBe(true);
 
     rerender(
       <ContentToolbar

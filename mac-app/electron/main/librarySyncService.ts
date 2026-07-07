@@ -67,54 +67,6 @@ export interface LibrarySyncResult {
   errors: string[];
 }
 
-export type LibraryDocumentPublishReason =
-  | 'published'
-  | 'up_to_date'
-  | 'not_authenticated'
-  | 'sync_disabled'
-  | 'sync_unavailable'
-  | 'sync_in_progress'
-  | 'invalid_path'
-  | 'outside_library'
-  | 'shared_path'
-  | 'not_markdown'
-  | 'not_found'
-  | 'read_failed'
-  | 'remote_newer'
-  | 'upload_failed'
-  | 'read_only';
-
-export interface LibraryDocumentPublishResult {
-  success: boolean;
-  reason: LibraryDocumentPublishReason;
-  uploaded: number;
-  updated: number;
-  skipped: number;
-  sourcePath?: string;
-  clientId?: string;
-  title?: string;
-  contentHash?: string;
-  error?: string;
-  errors: string[];
-  lastSyncAt: number | null;
-  lastPushAt: number | null;
-}
-
-export type LibrarySyncStatusReason =
-  | 'enabled'
-  | 'not_authenticated'
-  | 'sync_disabled'
-  | 'sync_unavailable';
-
-export interface LibrarySyncStatusDetails {
-  ready: boolean;
-  reason: LibrarySyncStatusReason;
-  lastSyncAt: number | null;
-  lastPushAt: number | null;
-  lastError: string | null;
-  pendingLocalDocumentCount: number | null;
-}
-
 export interface LibrarySyncKnownDocument {
   clientId: string;
   sourcePath: string;
@@ -288,25 +240,6 @@ function rowContentHash(row: LibraryDocumentRow): string {
   return row.content_hash || sha256(row.content ?? '');
 }
 
-function publishFailure(
-  reason: LibraryDocumentPublishReason,
-  error: string,
-  lastSyncAt: number | null,
-  lastPushAt: number | null,
-): LibraryDocumentPublishResult {
-  return {
-    success: false,
-    reason,
-    uploaded: 0,
-    updated: 0,
-    skipped: 0,
-    error,
-    errors: [error],
-    lastSyncAt,
-    lastPushAt,
-  };
-}
-
 export function getRowsToTombstoneForMissingLocalDocs(
   remoteRows: LibraryDocumentRow[],
   localDocs: LocalLibraryDocument[],
@@ -387,8 +320,6 @@ export class LibrarySyncService {
   private authManager: AuthManager;
   private isSyncing = false;
   private lastSyncAt: number | null = null;
-  private lastPushAt: number | null = null;
-  private lastError: string | null = null;
   private pendingSyncTimeout: ReturnType<typeof setTimeout> | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private readonly handleSessionChanged = (session: unknown): void => {
@@ -420,14 +351,6 @@ export class LibrarySyncService {
     return this.lastSyncAt;
   }
 
-  getLastPushAt(): number | null {
-    return this.lastPushAt;
-  }
-
-  getLastError(): string | null {
-    return this.lastError;
-  }
-
   dispose(): void {
     if (this.pendingSyncTimeout) {
       clearTimeout(this.pendingSyncTimeout);
@@ -438,55 +361,6 @@ export class LibrarySyncService {
       this.pollInterval = null;
     }
     this.authManager.off('sessionChanged', this.handleSessionChanged);
-  }
-
-  async getStatusDetails(): Promise<LibrarySyncStatusDetails> {
-    if (!this.authManager.isAuthenticated()) {
-      return {
-        ready: false,
-        reason: 'not_authenticated',
-        lastSyncAt: this.lastSyncAt,
-        lastPushAt: this.lastPushAt,
-        lastError: this.lastError,
-        pendingLocalDocumentCount: null,
-      };
-    }
-
-    const session = this.authManager.getSession();
-    if (!session?.user?.id) {
-      return {
-        ready: false,
-        reason: 'not_authenticated',
-        lastSyncAt: this.lastSyncAt,
-        lastPushAt: this.lastPushAt,
-        lastError: this.lastError,
-        pendingLocalDocumentCount: null,
-      };
-    }
-
-    try {
-      const remoteRows = await this.fetchRemoteRows(session.user.id);
-      const localDocs = this.scanLocalDocuments(remoteRows);
-      return {
-        ready: true,
-        reason: 'enabled',
-        lastSyncAt: this.lastSyncAt,
-        lastPushAt: this.lastPushAt,
-        lastError: this.lastError,
-        pendingLocalDocumentCount: this.countPendingLocalDocuments(localDocs, remoteRows),
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      this.lastError = message;
-      return {
-        ready: false,
-        reason: 'sync_unavailable',
-        lastSyncAt: this.lastSyncAt,
-        lastPushAt: this.lastPushAt,
-        lastError: this.lastError,
-        pendingLocalDocumentCount: null,
-      };
-    }
   }
 
   scheduleSync(delayMs = DEBOUNCE_MS): void {
@@ -636,65 +510,6 @@ export class LibrarySyncService {
     });
   }
 
-  private localDocumentForFilePath(filePath: string, remoteRows: LibraryDocumentRow[]): LocalLibraryDocument | LibraryDocumentPublishResult {
-    if (typeof filePath !== 'string' || filePath.trim().length === 0) {
-      return publishFailure('invalid_path', 'Missing Library document path', this.lastSyncAt, this.lastPushAt);
-    }
-
-    const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.toLowerCase().endsWith('.md')) {
-      return publishFailure('not_markdown', 'Selected Library document must be a markdown file', this.lastSyncAt, this.lastPushAt);
-    }
-    if (shouldSkipPrivateLibrarySyncPath(resolvedPath)) {
-      return publishFailure('shared_path', 'River shared cache files are not published through Library mobile sync', this.lastSyncAt, this.lastPushAt);
-    }
-    if (!fs.existsSync(resolvedPath)) {
-      return publishFailure('not_found', 'Selected Library document does not exist', this.lastSyncAt, this.lastPushAt);
-    }
-
-    const remoteBySourcePath = new Map<string, LibraryDocumentRow>();
-    for (const row of remoteRows) {
-      const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
-      if (sourcePath) remoteBySourcePath.set(sourcePath, row);
-    }
-
-    for (const root of getLibrarySyncSourceRoots()) {
-      const relPath = relativeMarkdownPath(root.dirPath, resolvedPath);
-      if (!relPath) continue;
-      const sourcePath = sourcePathForLibrarySyncSourceRoot(root, relPath);
-      const existingRemote = remoteBySourcePath.get(sourcePath);
-
-      try {
-        const content = fs.readFileSync(resolvedPath, 'utf-8');
-        const stats = fs.statSync(resolvedPath);
-        return {
-          clientId: existingRemote?.client_id ?? clientIdForLibrarySourcePath(sourcePath),
-          sourcePath,
-          title: parseMarkdownTitle(resolvedPath),
-          content,
-          contentHash: sha256(content),
-          createdAtMs: existingRemote?.client_created_at_ms ?? Math.floor(stats.birthtimeMs || stats.ctimeMs || stats.mtimeMs),
-          updatedAtMs: Math.floor(stats.mtimeMs),
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        return publishFailure('read_failed', message, this.lastSyncAt, this.lastPushAt);
-      }
-    }
-
-    return publishFailure('outside_library', 'Selected document is not inside a synced Field Theory Library root', this.lastSyncAt, this.lastPushAt);
-  }
-
-  private countPendingLocalDocuments(localDocs: LocalLibraryDocument[], remoteRows: LibraryDocumentRow[]): number {
-    const remoteByClientId = new Map(remoteRows.map((row) => [row.client_id, row]));
-    return localDocs.filter((doc) => {
-      const remote = remoteByClientId.get(doc.clientId);
-      if (!remote || remote.deleted_at) return true;
-      if (rowContentHash(remote) === doc.contentHash) return false;
-      return doc.updatedAtMs > remoteUpdatedAtMs(remote) + CLOCK_SKEW_MS;
-    }).length;
-  }
-
   private async fetchRemoteRows(userId: string): Promise<LibraryDocumentRow[]> {
     const supabase = this.authManager.getSupabaseClient();
     if (!supabase) return [];
@@ -706,128 +521,6 @@ export class LibrarySyncService {
 
     if (error) throw error;
     return (data ?? []) as LibraryDocumentRow[];
-  }
-
-  private libraryDocumentUpsertRow(userId: string, doc: LocalLibraryDocument): object {
-    return {
-      user_id: userId,
-      title: doc.title,
-      content: doc.content,
-      tags: [],
-      source_path: doc.sourcePath,
-      source_kind: 'laptop',
-      content_hash: doc.contentHash,
-      client_id: doc.clientId,
-      client_created_at_ms: doc.createdAtMs,
-      deleted_at: null,
-    };
-  }
-
-  private async upsertSelectedLocalDocument(
-    userId: string,
-    doc: LocalLibraryDocument,
-    remoteRows: LibraryDocumentRow[],
-  ): Promise<LibraryDocumentPublishResult> {
-    const supabase = this.authManager.getSupabaseClient();
-    if (!supabase) {
-      return publishFailure('not_authenticated', 'Not authenticated', this.lastSyncAt, this.lastPushAt);
-    }
-
-    const remoteByClientId = new Map(remoteRows.map((row) => [row.client_id, row]));
-    const remote = remoteByClientId.get(doc.clientId);
-    if (remote && !remote.deleted_at && rowContentHash(remote) === doc.contentHash) {
-      this.lastError = null;
-      return {
-        success: true,
-        reason: 'up_to_date',
-        uploaded: 0,
-        updated: 0,
-        skipped: 1,
-        sourcePath: doc.sourcePath,
-        clientId: doc.clientId,
-        title: doc.title,
-        contentHash: doc.contentHash,
-        errors: [],
-        lastSyncAt: this.lastSyncAt,
-        lastPushAt: this.lastPushAt,
-      };
-    }
-    if (remote && !remote.deleted_at && doc.updatedAtMs <= remoteUpdatedAtMs(remote) + CLOCK_SKEW_MS) {
-      return publishFailure('remote_newer', 'Remote Library document is newer than the selected local file', this.lastSyncAt, this.lastPushAt);
-    }
-
-    const uploaded = remote && !remote.deleted_at ? 0 : 1;
-    const updated = remote && !remote.deleted_at ? 1 : 0;
-    const { error } = await supabase
-      .from('library_documents')
-      .upsert([this.libraryDocumentUpsertRow(userId, doc)], { onConflict: 'user_id,client_id' });
-    if (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return publishFailure('upload_failed', message, this.lastSyncAt, this.lastPushAt);
-    }
-
-    const now = Date.now();
-    this.lastSyncAt = now;
-    this.lastPushAt = now;
-    this.lastError = null;
-
-    return {
-      success: true,
-      reason: 'published',
-      uploaded,
-      updated,
-      skipped: 0,
-      sourcePath: doc.sourcePath,
-      clientId: doc.clientId,
-      title: doc.title,
-      contentHash: doc.contentHash,
-      errors: [],
-      lastSyncAt: this.lastSyncAt,
-      lastPushAt: this.lastPushAt,
-    };
-  }
-
-  async publishLocalDocument(filePath: string): Promise<LibraryDocumentPublishResult> {
-    if (!this.authManager.isAuthenticated()) {
-      this.lastError = 'Not authenticated';
-      return publishFailure('not_authenticated', 'Not authenticated', this.lastSyncAt, this.lastPushAt);
-    }
-
-    if (this.isSyncing) {
-      return publishFailure('sync_in_progress', 'Library sync is already in progress', this.lastSyncAt, this.lastPushAt);
-    }
-
-    const session = this.authManager.getSession();
-    if (!session?.user?.id) {
-      this.lastError = 'No session user';
-      return publishFailure('not_authenticated', 'No session user', this.lastSyncAt, this.lastPushAt);
-    }
-
-    this.isSyncing = true;
-    try {
-      const remoteRows = await this.fetchRemoteRows(session.user.id);
-      const localDoc = this.localDocumentForFilePath(filePath, remoteRows);
-      if ('success' in localDoc) {
-        this.lastError = localDoc.error ?? localDoc.errors[0] ?? null;
-        return localDoc;
-      }
-
-      const result = await this.upsertSelectedLocalDocument(session.user.id, localDoc, remoteRows);
-      if (result.success) {
-        const freshRemoteRows = await this.fetchRemoteRows(session.user.id);
-        this.updateKnownDocuments(session.user.id, freshRemoteRows, [localDoc]);
-      } else {
-        this.lastError = result.error ?? result.errors[0] ?? null;
-      }
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      this.lastError = message;
-      log.error('Selected Library document publish failed:', error);
-      return publishFailure('upload_failed', message, this.lastSyncAt, this.lastPushAt);
-    } finally {
-      this.isSyncing = false;
-    }
   }
 
   private async tombstoneLocalDeletions(userId: string, rows: LibraryDocumentRow[], result: LibrarySyncResult): Promise<void> {
@@ -894,12 +587,6 @@ export class LibrarySyncService {
       const remote = remoteByClientId.get(doc.clientId);
       if (!remote) {
         result.uploaded++;
-      } else if (remote.deleted_at) {
-        // A tombstone never outvotes a file that exists on disk. Without
-        // this, files whose rows were tombstoned during a past migration are
-        // skipped forever because the tombstone's updated_at beats their
-        // mtime (this stranded briefs/ and most of scratchpad/).
-        result.uploaded++;
       } else if (rowContentHash(remote) !== doc.contentHash) {
         if (doc.updatedAtMs <= remoteUpdatedAtMs(remote) + CLOCK_SKEW_MS) {
           result.skipped++;
@@ -912,36 +599,26 @@ export class LibrarySyncService {
       }
 
       rowsToUpsert.push({
-        ...this.libraryDocumentUpsertRow(userId, doc),
+        user_id: userId,
+        title: doc.title,
+        content: doc.content,
+        tags: [],
+        source_path: doc.sourcePath,
+        source_kind: 'laptop',
+        content_hash: doc.contentHash,
+        client_id: doc.clientId,
+        client_created_at_ms: doc.createdAtMs,
+        deleted_at: null,
       });
     }
 
     if (rowsToUpsert.length === 0) return;
 
-    // Chunked upserts: one oversized or rejected document must not silently
-    // block every other pending upload (which is how newly created folders
-    // stopped reaching mobile).
-    const UPSERT_CHUNK_SIZE = 20;
-    for (let i = 0; i < rowsToUpsert.length; i += UPSERT_CHUNK_SIZE) {
-      const chunk = rowsToUpsert.slice(i, i + UPSERT_CHUNK_SIZE);
-      const { error } = await supabase
-        .from('library_documents')
-        .upsert(chunk, { onConflict: 'user_id,client_id' });
-      if (!error) continue;
+    const { error } = await supabase
+      .from('library_documents')
+      .upsert(rowsToUpsert, { onConflict: 'user_id,client_id' });
 
-      // Retry rows individually so only the genuinely bad row is skipped,
-      // and its path is named in the log.
-      for (const row of chunk) {
-        const { error: rowError } = await supabase
-          .from('library_documents')
-          .upsert([row], { onConflict: 'user_id,client_id' });
-        if (rowError) {
-          const sourcePath = (row as { source_path?: string }).source_path ?? 'unknown';
-          result.errors.push(`Upload failed for ${sourcePath}: ${rowError.message}`);
-          log.error(`Library sync upload failed for ${sourcePath}:`, rowError.message);
-        }
-      }
-    }
+    if (error) throw error;
   }
 
   private applyRemoteTombstones(
@@ -1063,20 +740,17 @@ export class LibrarySyncService {
 
     if (!this.authManager.isAuthenticated()) {
       result.errors.push('Not authenticated');
-      this.lastError = 'Not authenticated';
       return result;
     }
 
     if (this.isSyncing) {
       result.errors.push('Sync already in progress');
-      this.lastError = 'Sync already in progress';
       return result;
     }
 
     const session = this.authManager.getSession();
     if (!session?.user?.id) {
       result.errors.push('No session user');
-      this.lastError = 'No session user';
       return result;
     }
 
@@ -1117,15 +791,10 @@ export class LibrarySyncService {
 
       result.success = result.errors.length === 0;
       this.lastSyncAt = Date.now();
-      if (result.uploaded > 0 || result.updated > 0 || result.tombstoned > 0) {
-        this.lastPushAt = this.lastSyncAt;
-      }
-      this.lastError = result.errors[0] ?? null;
       log.debug('Library sync complete:', result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       result.errors.push(message);
-      this.lastError = message;
       log.error('Library sync failed:', error);
     } finally {
       this.isSyncing = false;

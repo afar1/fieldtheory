@@ -43,8 +43,8 @@ Field's Mac app is an **Electron application** with three main layers:
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────┘  │
 │                                                                             │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐  │
-│  │ MobileSync  │ │ SocialSync  │ │ Audio       │ │ Preferences         │  │
-│  │ (iOS todos) │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
+│  │ LibrarySync │ │ SocialSync  │ │ Audio       │ │ Preferences         │  │
+│  │ (internal)  │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────┘  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -94,6 +94,8 @@ window.sharedClipboardAPI.onTeamItemAdded((item) => { /* update state */ });
 
 For collaborative features that are enabled, we use **Supabase Realtime** instead of polling.
 Shared clipboard is historical and disabled for release; clipboard items must remain local-only.
+
+Teams and River are account-backed and entitlement-gated before their normal team membership, River availability, and write checks run. The production database and RLS policies own the eligibility answer for the signed-in account; the app does not encode rollout membership locally. If the entitlement read fails or is denied, main-process IPC and renderer UI fail closed. The only exception is offline continuity: a same-user last-known allowed entitlement can keep Teams/River UI visible during offline or network loss, and a later successful online revocation overrides that cached allowance.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -216,9 +218,9 @@ Each "domain" has a dedicated manager class:
 |---------|---------------|-----------|-----------|
 | `ClipboardManager` | Local clipboard history (SQLite) | No | No |
 | `SharedClipboardSync` | Team clipboard collaboration | Yes | **Yes** |
-| `MobileSync` | iOS transcripts, todos, sketches | Yes | **Yes** (todos) |
+| `LibrarySync` | Internal shared Library/River surfaces | Yes | Optional |
 | `SocialSync` | DMs, Hot Mic, Contacts | Yes | **Yes** |
-| `TranscriberManager` | Whisper transcription | No | No |
+| `TranscriberManager` | Parakeet transcription | No | No |
 | `VisionProcessor` | MLX image captioning | No | No |
 | `GazeTrackingManager` | Gaze capture/vision lifecycle + stream rebroadcast | No | No |
 | `AudioManager` | Priority mic, device mgmt | No | No |
@@ -353,9 +355,9 @@ mac-app/
 │   │   ├── index.ts             # Entry point, IPC handlers, app lifecycle
 │   │   ├── clipboardManager.ts  # Local clipboard history (SQLite)
 │   │   ├── sharedClipboardSync.ts # Team clipboard (Supabase + Realtime)
-│   │   ├── mobileSync.ts        # iOS transcript sync
+│   │   ├── fieldTheorySync.ts   # Internal shared Library/River sync
 │   │   ├── socialSync.ts        # DMs, Hot Mic (Supabase + Realtime)
-│   │   ├── transcriberManager.ts # Whisper voice transcription
+│   │   ├── transcriberManager.ts # Parakeet voice transcription
 │   │   ├── gaze/                 # Gaze capture/calibration/focus managers
 │   │   │   ├── gazeTrackingManager.ts
 │   │   │   ├── gazeCalibrationEngine.ts

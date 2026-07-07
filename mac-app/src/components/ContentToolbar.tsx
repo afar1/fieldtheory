@@ -20,13 +20,13 @@ const CONTENT_TOOLBAR_REVEAL_DISTANCE_PX = 104;
 const CONTENT_TOOLBAR_FULL_OPACITY_DISTANCE_PX = 18;
 const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 
-type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
+type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'kindle' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
 
-const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
+const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'fieldtheory', 'agent', 'share', 'kindle', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
 const DEFAULT_PINNED_TOOLBAR_ACTIONS: ToolbarActionId[] = PINNED_TOOLBAR_ACTION_ORDER;
 const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: ToolbarActionId[] }> = [
   { id: 'format', label: 'Format', actions: ['textstyle', 'contentmode', 'htmllayout'] },
-  { id: 'copy', label: 'Copy', actions: ['copypath', 'copy', 'share'] },
+  { id: 'copy', label: 'Copy', actions: ['copypath', 'copy', 'share', 'kindle'] },
   { id: 'field', label: 'Field Theory', actions: ['fieldtheory', 'agent'] },
   { id: 'tools', label: 'Tools', actions: ['terminal'] },
   { id: 'view', label: 'View', actions: ['newwindow', 'immersive'] },
@@ -34,8 +34,8 @@ const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: Toolbar
 ];
 const VISIBLE_TOOLBAR_ACTION_GROUPS: Array<{ id: string; actions: ToolbarActionId[] }> = [
   { id: 'document', actions: ['textstyle', 'copypath'] },
-  { id: 'field', actions: ['fieldtheory', 'agent', 'share'] },
-  { id: 'view', actions: ['newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive'] },
+  { id: 'field', actions: ['fieldtheory', 'agent', 'share', 'kindle', 'newwindow'] },
+  { id: 'view', actions: ['contentmode', 'htmllayout', 'terminal', 'immersive'] },
   { id: 'file', actions: ['copy', 'folder', 'rename', 'edit'] },
 ];
 const KNOWN_TOOLBAR_ACTIONS = new Set(TOOLBAR_ACTION_GROUPS.flatMap((group) => group.actions));
@@ -158,6 +158,7 @@ interface ContentToolbarProps {
   // View state
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  forceVisibleActions?: ToolbarActionId[];
   dragSpacer?: boolean;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
@@ -235,6 +236,10 @@ interface ContentToolbarProps {
   sharedLabel?: string;
   shareTitle?: string;
   sharedTitle?: string;
+  onPrepareKindle?: () => void | Promise<void>;
+  showKindle?: boolean;
+  kindlePreparing?: boolean;
+  kindleTitle?: string;
 
   onCopyPath?: () => void | Promise<void>;
   copyPathCopied?: boolean;
@@ -593,6 +598,7 @@ export default function ContentToolbar({
   filePath,
   isFullScreen = false,
   onToggleFullScreen,
+  forceVisibleActions = [],
   dragSpacer = true,
   canNavigateBack = false,
   canNavigateForward = false,
@@ -635,6 +641,10 @@ export default function ContentToolbar({
   showShare = false,
   shareTitle = 'Add to Shared',
   sharedTitle = 'Remove from Shared',
+  onPrepareKindle,
+  showKindle = false,
+  kindlePreparing = false,
+  kindleTitle = 'Prepare Kindle EPUB',
   onCopyPath,
   copyPathCopied = false,
   copyPathTitle = 'Copy file path (⌘C)',
@@ -781,6 +791,7 @@ export default function ContentToolbar({
     if (id === 'copypath') return Boolean(onCopyPath);
     if (id === 'copy') return Boolean(showCopy && onCopy);
     if (id === 'share') return Boolean(showShare && onToggleShare && !isEditing);
+    if (id === 'kindle') return Boolean(showKindle && onPrepareKindle && !isEditing);
     if (id === 'fieldtheory') return Boolean(maxwellItems.length || maxwellCanAddCurrent);
     if (id === 'agent') return Boolean(onOpenAgent);
     if (id === 'terminal') return Boolean(onToggleTerminal);
@@ -800,6 +811,7 @@ export default function ContentToolbar({
     if (id === 'copypath') return copyPathActive ? 'Copied' : copyPathTitle;
     if (id === 'copy') return copied ? 'Copied' : (copyLabel ?? 'Copy');
     if (id === 'share') return shareStatus?.shared ? sharedTitle : shareTitle;
+    if (id === 'kindle') return kindlePreparing ? 'Preparing Kindle EPUB' : kindleTitle;
     if (id === 'fieldtheory') return 'Field Theory';
     if (id === 'agent') return 'Run a local agent';
     if (id === 'terminal') return terminalVisible ? 'Close Terminal' : 'Open Terminal';
@@ -818,6 +830,7 @@ export default function ContentToolbar({
     if (id === 'copypath') void handleCopyPath();
     if (id === 'copy') handleCopy();
     if (id === 'share' && !isSharing) onToggleShare?.();
+    if (id === 'kindle' && !kindlePreparing) void onPrepareKindle?.();
     if (id === 'agent') onOpenAgent?.();
     if (id === 'terminal') onToggleTerminal?.();
     if (id === 'meeting' && !meetingDisabled) void onMeetingClick?.();
@@ -833,11 +846,13 @@ export default function ContentToolbar({
   };
 
   const availableToolbarActions = PINNED_TOOLBAR_ACTION_ORDER.filter(canUseToolbarAction);
-  const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id));
+  const forcedVisibleActionSet = new Set(forceVisibleActions);
+  const visiblePinnedActions = availableToolbarActions.filter((id) => pinnedActions.includes(id) || forcedVisibleActionSet.has(id));
   const hasCustomizeMenuActions = availableToolbarActions.length > 0 || Boolean(showDelete && onDelete);
   const pillBackground = theme.isDark ? theme.surface2 : theme.bgSecondary;
   const menuBackground = theme.isDark ? '#1f1f23' : '#f8f7f4';
   const pillBorder = theme.border;
+  const toolbarDivider = theme.isDark ? 'rgba(255,255,255,0.22)' : '#d6d1c8';
   const toolbarIconMuted = theme.textSecondary;
   const toolbarIconPrimary = theme.textSecondary;
   const toolbarIconStrong = theme.text;
@@ -853,7 +868,7 @@ export default function ContentToolbar({
   );
 
   const renderToolbarDivider = (key?: string) => (
-    <span key={key} data-content-toolbar-divider aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: pillBorder, flexShrink: 0 }} />
+    <span key={key} data-content-toolbar-divider aria-hidden="true" style={{ width: '1px', height: '16px', margin: '0 4px', backgroundColor: toolbarDivider, flexShrink: 0 }} />
   );
 
   const typographyMenuRowStyle: CSSProperties = {
@@ -962,6 +977,15 @@ export default function ContentToolbar({
     }
     if (id === 'copy') return copied ? 'Copied' : (copyLabel ?? 'Copy');
     if (id === 'share') return <SidebarRiverIcon color={riverShareColor} style={{ opacity: isSharing ? 0.35 : riverShareActive ? 1 : 0.48 }} />;
+    if (id === 'kindle') {
+      return (
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="3.25" y="1.75" width="9.5" height="12.5" rx="1.4" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M5.25 4.75h5.5M5.25 7.25h4.25M5.25 9.75h3" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
+          <path d="M7 12.1h2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+        </svg>
+      );
+    }
     if (id === 'fieldtheory') {
       return (
         <ContentToolbarMaxwellButton
@@ -1031,10 +1055,10 @@ export default function ContentToolbar({
         </span>
       );
     }
-    const active = (id === 'textstyle' && typographyMenuOpen) || (id === 'contentmode' && contentMode === 'markdown') || (id === 'htmllayout' && htmlLayoutActive) || (id === 'copypath' && copyPathActive) || (id === 'copy' && copied) || (id === 'share' && riverShareActive) || (id === 'terminal' && terminalVisible) || (id === 'meeting' && meetingRecording) || (id === 'immersive' && isFullScreen);
+    const active = (id === 'textstyle' && typographyMenuOpen) || (id === 'contentmode' && contentMode === 'markdown') || (id === 'htmllayout' && htmlLayoutActive) || (id === 'copypath' && copyPathActive) || (id === 'copy' && copied) || (id === 'share' && riverShareActive) || (id === 'kindle' && kindlePreparing) || (id === 'terminal' && terminalVisible) || (id === 'meeting' && meetingRecording) || (id === 'immersive' && isFullScreen);
     const textButton = id === 'copy' || id === 'edit';
     const primary = DEFAULT_PINNED_TOOLBAR_ACTIONS.includes(id);
-    const disabled = (id === 'contentmode' && contentModeDisabled) || (id === 'meeting' && meetingDisabled);
+    const disabled = (id === 'contentmode' && contentModeDisabled) || (id === 'meeting' && meetingDisabled) || (id === 'kindle' && kindlePreparing);
     const baseButtonStyle = toolbarButtonStyle(active, primary, textButton);
     const actionColor = id === 'share' ? riverShareColor : id === 'meeting' && meetingRecording ? '#dc2626' : id === 'terminal' && terminalVisible && !theme.isDark ? '#10b981' : id === 'copy' && copied ? (theme.success ?? '#16a34a') : id === 'copypath' && copyPathActive ? (theme.success ?? '#16a34a') : baseButtonStyle.color;
     return (

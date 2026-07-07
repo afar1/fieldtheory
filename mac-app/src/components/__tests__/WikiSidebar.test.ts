@@ -5,9 +5,11 @@ import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   BOOKMARKS_SHORTCUT_FOLDER_ID,
+  RIVER_ITEM_ID,
   addDirToLibraryRoot,
   canDropLibraryItem,
   collectSidebarIconTargetIds,
+  dispatchLocalWikiAdded,
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
   getMovedLibraryFileSelectionItem,
@@ -16,6 +18,7 @@ import WikiSidebar, {
   getSidebarShortcutVisibility,
   type LibraryCreateLocation,
   type WikiArchiveController,
+  type WikiCreationController,
   type UnifiedItem,
   isPointerNearRect,
   isRiverSidebarItemId,
@@ -107,9 +110,6 @@ function mockSidebarNativeApis(
     configurable: true,
     value: {
       getRoots: vi.fn(async () => roots),
-      addRoot: vi.fn(async () => null),
-      pickFolder: vi.fn(async () => null),
-      removeRoot: vi.fn(async () => false),
       moveItem: vi.fn(async () => null),
       getHiddenFolders: vi.fn(async () => []),
       onRootsChanged: vi.fn(() => undefined),
@@ -154,6 +154,12 @@ function mockSidebarNativeApis(
       onChanged: vi.fn(() => undefined),
     },
   });
+  Object.defineProperty(window, 'commandsAPI', {
+    configurable: true,
+    value: {
+      onCommandsChanged: vi.fn(() => undefined),
+    },
+  });
 }
 
 function renderSidebarForTest(options: {
@@ -162,6 +168,9 @@ function renderSidebarForTest(options: {
   selectedId?: string | null;
   onSelectItem?: (item: UnifiedItem) => void;
   onCreateFile?: (location: LibraryCreateLocation, fileName: string) => boolean | Promise<boolean>;
+  searchQuery?: string;
+  onSearchQueryChange?: (query: string) => void;
+  creationControllerRef?: { current: WikiCreationController | null };
   archiveControllerRef?: { current: WikiArchiveController | null };
 } = {}) {
   mockSidebarNativeApis(options.tree ?? [], options.roots);
@@ -173,8 +182,9 @@ function renderSidebarForTest(options: {
     onCreateFile: options.onCreateFile ?? vi.fn(async () => false),
     onCreateDir: vi.fn(async () => false),
     flatItemsRef,
-    searchQuery: '',
-    onSearchQueryChange: vi.fn(),
+    searchQuery: options.searchQuery ?? '',
+    onSearchQueryChange: options.onSearchQueryChange ?? vi.fn(),
+    creationControllerRef: options.creationControllerRef,
     archiveControllerRef: options.archiveControllerRef,
   }));
 }
@@ -228,6 +238,7 @@ afterEach(() => {
   delete (window as Partial<Window>).taggedDocsAPI;
   delete (window as Partial<Window>).sharedFilesAPI;
   delete (window as Partial<Window>).bookmarksAPI;
+  delete (window as Partial<Window>).commandsAPI;
 });
 
 function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${name}/note`, 'note')]): TestSidebarNode {
@@ -277,94 +288,6 @@ describe('WikiSidebar River root helpers', () => {
         }],
       }],
     }]);
-  });
-
-  it('splits Finder and pasted path folder add actions', async () => {
-    const newRoot = {
-      path: '/Users/afar/Projects/Notes',
-      label: 'Notes',
-      builtin: false,
-      tree: [],
-    } as LibraryRoot;
-    const { container } = renderSidebarForTest();
-    vi.mocked(window.libraryAPI!.pickFolder).mockResolvedValue(newRoot.path);
-    vi.mocked(window.libraryAPI!.addRoot).mockResolvedValue(newRoot);
-
-    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
-    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
-
-    expect(screen.getByRole('button', { name: 'Add folder from Finder...' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Add folder from path...' })).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Add folder from Finder...' }));
-    });
-
-    expect(window.libraryAPI?.pickFolder).toHaveBeenCalledTimes(1);
-    expect(window.libraryAPI?.addRoot).toHaveBeenCalledWith(newRoot.path);
-  });
-
-  it('adds a pasted folder path and shows the new root in the sidebar', async () => {
-    const newRoot = {
-      path: '/Users/afar/Projects/Notes',
-      label: 'Notes',
-      builtin: false,
-      tree: [],
-    } as LibraryRoot;
-    let roots: LibraryRoot[] = [{
-      path: libraryRootPath,
-      label: 'Library',
-      builtin: true,
-      tree: [],
-    } as LibraryRoot];
-    const { container } = renderSidebarForTest({ roots });
-    vi.mocked(window.libraryAPI!.getRoots).mockImplementation(async () => roots);
-    vi.mocked(window.libraryAPI!.addRoot).mockImplementation(async (dirPath) => {
-      expect(dirPath).toBe(newRoot.path);
-      roots = [...roots, newRoot];
-      return newRoot;
-    });
-
-    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
-    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
-    fireEvent.click(screen.getByRole('button', { name: 'Add folder from path...' }));
-
-    const input = screen.getByLabelText('Folder path') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: newRoot.path } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
-    });
-
-    expect(window.libraryAPI?.pickFolder).not.toHaveBeenCalled();
-    expect(window.libraryAPI?.addRoot).toHaveBeenCalledWith(newRoot.path);
-    expect(await screen.findByText('Notes')).toBeTruthy();
-  });
-
-  it('validates empty and duplicate pasted folder paths before addRoot', async () => {
-    const roots = [{
-      path: libraryRootPath,
-      label: 'Library',
-      builtin: true,
-      tree: [],
-    }] as LibraryRoot[];
-    const { container } = renderSidebarForTest({ roots });
-
-    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
-    fireEvent.contextMenu(container.firstElementChild!, { clientX: 8, clientY: 8 });
-    fireEvent.click(screen.getByRole('button', { name: 'Add folder from path...' }));
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
-    });
-    expect(screen.getByRole('alert').textContent).toContain('Paste a folder path');
-
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: libraryRootPath } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Add folder' }));
-    });
-
-    expect(screen.getByRole('alert').textContent).toContain('already in Library');
-    expect(window.libraryAPI?.addRoot).not.toHaveBeenCalled();
   });
 
   it('keeps newer sidebar tree state when an older reload finishes last', async () => {
@@ -687,10 +610,57 @@ describe('WikiSidebar River root helpers', () => {
       await rootsLoad.promise;
     });
 
+    expect(screen.queryByText(/No pages yet/)).toBeNull();
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/No pages yet/)).toBeTruthy();
   });
 
-  it('accepts empty library roots when there is no previous sidebar state to preserve', async () => {
+  it('retries a first empty library roots load before settling the sidebar', async () => {
+    const notesTree: LibraryRoot['tree'] = [{
+      kind: 'dir',
+      name: 'Notes',
+      relPath: 'Notes',
+      children: [{
+        kind: 'file',
+        relPath: 'Notes/note',
+        absPath: `${libraryRootPath}/Notes/note.md`,
+        name: 'note',
+        title: 'note',
+        lastUpdated: 1,
+      }],
+    }];
+    mockSidebarNativeApis([], [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: notesTree,
+    }]);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockImplementationOnce(async () => [])
+      .mockImplementation(async () => ([{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: notesTree,
+      }]));
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByText('Notes'));
+    expect(await screen.findByText('note')).toBeTruthy();
+  });
+
+  it('accepts empty library roots after the cold-start retry is still empty', async () => {
     mockSidebarNativeApis([], []);
 
     render(createElement(WikiSidebar, {
@@ -704,10 +674,8 @@ describe('WikiSidebar River root helpers', () => {
       onSearchQueryChange: vi.fn(),
     }));
 
-    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/No pages yet/)).toBeTruthy();
-    await new Promise((resolve) => window.setTimeout(resolve, 350));
-    expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
   });
 
   it('ignores duplicate builtin library change payloads after wiki deltas', async () => {
@@ -834,6 +802,159 @@ describe('WikiSidebar River root helpers', () => {
 
     expect(screen.getByText('Instant')).toBeTruthy();
     expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a locally added wiki file when an older root reload finishes later', async () => {
+    const notesRoot = {
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Notes',
+        relPath: 'Notes',
+        children: [],
+      }],
+    };
+    const staleRootsLoad = deferred<TestLibraryRoot[]>();
+    let rootsChanged: (() => void) | undefined;
+    mockSidebarNativeApis([], [notesRoot]);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockResolvedValueOnce([notesRoot])
+      .mockImplementationOnce(async () => staleRootsLoad.promise)
+      .mockResolvedValue([notesRoot]);
+    vi.mocked(window.libraryAPI!.onRootsChanged).mockImplementation((callback: () => void) => {
+      rootsChanged = callback;
+      return () => undefined;
+    });
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    fireEvent.click(await screen.findByText('Notes'));
+    act(() => {
+      rootsChanged?.();
+    });
+    await waitFor(() => expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      dispatchLocalWikiAdded({
+        relPath: 'Notes/Instant',
+        absPath: `${libraryRootPath}/Notes/Instant.md`,
+        name: 'Instant',
+        title: 'Instant',
+        lastUpdated: 2,
+        content: '',
+        documentVersion: { mtimeMs: 2, size: 0, sha256: 'instant' },
+      });
+    });
+    expect(await screen.findByText('Instant')).toBeTruthy();
+
+    await act(async () => {
+      staleRootsLoad.resolve([notesRoot]);
+      await staleRootsLoad.promise;
+    });
+
+    expect(screen.getByText('Instant')).toBeTruthy();
+  });
+
+  it('reloads the library sidebar when command files change', async () => {
+    let commandsChanged: (() => void) | undefined;
+    const initialRoots: TestLibraryRoot[] = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Commands',
+        relPath: 'Commands',
+        children: [],
+      }],
+    }];
+    const commandRoots: TestLibraryRoot[] = [{
+      path: libraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'Commands',
+        relPath: 'Commands',
+        children: [{
+          kind: 'file' as const,
+          relPath: 'Commands/review',
+          absPath: `${libraryRootPath}/Commands/review.md`,
+          name: 'review',
+          title: 'review',
+          lastUpdated: 2,
+        }],
+      }],
+    }];
+
+    mockSidebarNativeApis([], initialRoots);
+    vi.mocked(window.libraryAPI!.getRoots)
+      .mockResolvedValueOnce(initialRoots)
+      .mockResolvedValue(commandRoots);
+    vi.mocked(window.commandsAPI!.onCommandsChanged).mockImplementation((callback) => {
+      commandsChanged = () => callback([]);
+      return () => undefined;
+    });
+
+    render(createElement(WikiSidebar, {
+      active: true,
+      onSelectItem: vi.fn(),
+      selectedId: null,
+      onCreateFile: vi.fn(async () => false),
+      onCreateDir: vi.fn(async () => false),
+      flatItemsRef: { current: [] as UnifiedItem[] },
+      searchQuery: '',
+      onSearchQueryChange: vi.fn(),
+    }));
+
+    fireEvent.click(await screen.findByText('Commands'));
+    expect(screen.queryByText('review')).toBeNull();
+
+    act(() => {
+      commandsChanged?.();
+    });
+
+    expect(await screen.findByText('review')).toBeTruthy();
+    expect(window.libraryAPI?.getRoots).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears library search when file creation starts', async () => {
+    const onSearchQueryChange = vi.fn();
+    const creationControllerRef = { current: null as WikiCreationController | null };
+    renderSidebarForTest({
+      tree: [{
+        kind: 'dir',
+        name: 'Projects',
+        relPath: 'Projects',
+        children: [],
+      }],
+      searchQuery: 'does-not-match-new-page',
+      onSearchQueryChange,
+      creationControllerRef,
+    });
+
+    await waitFor(() => expect(creationControllerRef.current).not.toBeNull());
+
+    act(() => {
+      creationControllerRef.current?.beginCreateFile({
+        rootPath: libraryRootPath,
+        relPath: 'Projects',
+        builtin: true,
+      });
+    });
+
+    expect(onSearchQueryChange).toHaveBeenCalledWith('');
   });
 
   it('patches external library file delete deltas without reloading the tree', async () => {
@@ -1353,6 +1474,48 @@ describe('WikiSidebar River root helpers', () => {
 
     expect(riverShortcutNode).toBe(river);
     expect(visibleRoots).toEqual([scratchpad]);
+  });
+
+  it('opens the River timeline from the shortcut button while keeping files navigable', async () => {
+    const onSelectItem = vi.fn();
+    renderSidebarForTest({
+      onSelectItem,
+      roots: [{
+        path: libraryRootPath,
+        label: 'Library',
+        builtin: true,
+        tree: [{
+          kind: 'dir',
+          name: 'River (shared)',
+          relPath: 'River (shared)',
+          children: [{
+            kind: 'file',
+            relPath: 'River (shared)/brief',
+            absPath: `${libraryRootPath}/River (shared)/brief.md`,
+            name: 'brief',
+            title: 'brief',
+            lastUpdated: 1,
+          }],
+        }],
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open River timeline' }));
+
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: RIVER_ITEM_ID,
+      type: 'river',
+      title: 'River',
+    }));
+
+    fireEvent.click(screen.getByTitle('River (shared)'));
+    fireEvent.click(await screen.findByText('brief'));
+
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'wiki:River (shared)/brief',
+      type: 'wiki',
+      relPath: 'River (shared)/brief',
+    }));
   });
 
   it('includes the promoted River shortcut when applying sidebar icon colors to all', () => {

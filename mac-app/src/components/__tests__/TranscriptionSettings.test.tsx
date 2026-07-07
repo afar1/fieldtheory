@@ -1,6 +1,7 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ParakeetSetupProgress, ParakeetStatus } from '../../types/window';
+import { SETTINGS_CARD_GAP } from '../settings/SettingsPrimitives';
 import TranscriptionSettings from '../TranscriptionSettings';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -66,6 +67,10 @@ function makeTranscribeApi(overrides: Partial<Window['transcribeAPI']> = {}) {
     getDownloadingModels: vi.fn(async () => []),
     downloadModel: vi.fn(async () => undefined),
     getAbandonHotkey: vi.fn(async () => 'Escape'),
+    getRecordingSource: vi.fn(async () => 'microphone'),
+    setRecordingSource: vi.fn(async () => undefined),
+    getLiveTyping: vi.fn(async () => false),
+    setLiveTyping: vi.fn(async () => undefined),
     getTranscriptionEngine: vi.fn(async () => 'parakeet'),
     getParakeetStatus: vi.fn(async () => makeParakeetStatus()),
     setupParakeet: vi.fn(async () => ({ success: true })),
@@ -129,6 +134,41 @@ describe('TranscriptionSettings Parakeet labels', () => {
     });
   });
 
+  it('uses the shared settings card gap between transcription cards', async () => {
+    (window as any).transcribeAPI = makeTranscribeApi();
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    const { container } = render(<TranscriptionSettings />);
+
+    await screen.findByText('Capture');
+    expect(screen.queryByText('Auto-improve')).toBeNull();
+
+    const cardStack = container.firstElementChild as HTMLElement;
+    expect(cardStack.style.display).toBe('flex');
+    expect(cardStack.style.flexDirection).toBe('column');
+    expect(cardStack.style.gap).toBe(SETTINGS_CARD_GAP);
+  });
+
+  it('renders the auto-improve card by itself for the Auto Improve settings section', async () => {
+    (window as any).transcribeAPI = makeTranscribeApi();
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    const { container } = render(<TranscriptionSettings mode="auto-improve" />);
+
+    await screen.findByText('Auto-improve');
+    expect(screen.getByText('Codex model')).toBeTruthy();
+    expect(screen.getByText('Codex reasoning')).toBeTruthy();
+    expect(screen.getByText('Claude model')).toBeTruthy();
+    expect(screen.getByText('Claude reasoning')).toBeTruthy();
+    expect(screen.queryByText('Capture')).toBeNull();
+    expect(screen.queryByText('Transcription')).toBeNull();
+
+    const cardStack = container.firstElementChild as HTMLElement;
+    expect(cardStack.style.display).toBe('flex');
+    expect(cardStack.style.flexDirection).toBe('column');
+    expect(cardStack.style.gap).toBe(SETTINGS_CARD_GAP);
+  });
+
   it('uses Selected and Installed badges for healthy engines', async () => {
     (window as any).transcribeAPI = makeTranscribeApi({
       getParakeetStatus: vi.fn(async () =>
@@ -165,6 +205,24 @@ describe('TranscriptionSettings Parakeet labels', () => {
       expect(screen.getByText('Selected')).toBeTruthy();
       expect(screen.getByText('Installed')).toBeTruthy();
     });
+  });
+
+  it('loads and saves the live typing toggle', async () => {
+    const setLiveTyping = vi.fn(async () => undefined);
+    (window as any).transcribeAPI = makeTranscribeApi({ setLiveTyping });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings />);
+
+    const liveTypingSwitch = await screen.findByRole('switch', { name: 'Live typing' });
+    expect(liveTypingSwitch.getAttribute('aria-checked')).toBe('false');
+
+    await act(async () => {
+      liveTypingSwitch.click();
+    });
+
+    expect(setLiveTyping).toHaveBeenCalledWith(true);
+    expect(liveTypingSwitch.getAttribute('aria-checked')).toBe('true');
   });
 
   it('shows retry guidance for timeout failures instead of a reinstall-only message', async () => {
@@ -334,6 +392,26 @@ describe('TranscriptionSettings Parakeet labels', () => {
 
     expect(await screen.findByText('Parakeet English')).toBeTruthy();
     expect(screen.queryByText('Meeting speaker turns')).toBeNull();
+  });
+
+  it('persists auto-improve writing preferences as the user types', async () => {
+    const setAutoImproveWritingPreferences = vi.fn(async (preferences: string) => preferences.trim());
+    (window as any).transcribeAPI = makeTranscribeApi({
+      getAutoImproveWritingPreferences: vi.fn(async () => ''),
+      setAutoImproveWritingPreferences,
+    });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings mode="auto-improve" />);
+
+    const preferencesInput = await screen.findByLabelText(/Writing preferences/i);
+    fireEvent.change(preferencesInput, {
+      target: { value: 'no ai slop, no em dashes' },
+    });
+
+    await waitFor(() => {
+      expect(setAutoImproveWritingPreferences).toHaveBeenCalledWith('no ai slop, no em dashes');
+    });
   });
 
   it('shows the Python recovery command and preserves raw setup detail', async () => {

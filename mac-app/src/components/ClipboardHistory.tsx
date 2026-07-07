@@ -42,8 +42,9 @@ import {
   readStoredCodexTerminalDarkMode,
   writeStoredCodexTerminalDarkMode,
 } from './codexTerminalTheme';
+import { formatCompactPriorityMicName } from '../../electron/shared/audioDeviceLabels';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_MOBILE_SYNC_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
@@ -110,7 +111,9 @@ import {
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  resolveInitialViewMode,
   shouldKeepLibrarianMounted,
+  viewModeAfterSignedOut,
   type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
 import {
@@ -488,8 +491,14 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
+  const [autoImproveEnabled, setAutoImproveEnabled] = useState(false);
+  const [autoImproveAvailable, setAutoImproveAvailable] = useState(false);
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => initialLibraryOpenTarget ? 'librarian' : resolveClipboardRestoreState(localStorage).viewMode);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (
+    initialLibraryOpenTarget
+      ? 'librarian'
+      : resolveInitialViewMode(window.location.search) ?? resolveClipboardRestoreState(localStorage).viewMode
+  ));
   const [librarianEverRendered, setLibrarianEverRendered] = useState(() => viewMode === 'librarian');
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
@@ -831,10 +840,11 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   
   // Sign-in prompt modal - shown when user tries to share without being logged in.
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+  const [showSyncLoginPrompt, setShowSyncLoginPrompt] = useState(false);
   
   const handleRendererSignedOut = useCallback(() => {
     setHasUnreadFeedback(false);
-    setViewMode('clipboard');
+    setViewMode(viewModeAfterSignedOut);
   }, []);
 
   const {
@@ -844,6 +854,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     supabase,
     onSignedOut: handleRendererSignedOut,
   });
+  const shouldShowFooterLoginButton = sessionInitialized && !authSession;
 
   // User's callsign from profile
   const [userCallsign, setUserCallsign] = useState<string | null>(null);
@@ -1316,6 +1327,33 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshAutoImprove = async () => {
+      if (!window.transcribeAPI?.getAutoImprove) {
+        if (!cancelled) setAutoImproveAvailable(false);
+        return;
+      }
+      try {
+        const enabled = await window.transcribeAPI.getAutoImprove();
+        if (cancelled) return;
+        setAutoImproveEnabled(enabled);
+        setAutoImproveAvailable(Boolean(window.transcribeAPI?.setAutoImprove));
+      } catch (err) {
+        console.error('[ClipboardHistory] Failed to load auto-improve state:', err);
+        if (!cancelled) setAutoImproveAvailable(false);
+      }
+    };
+
+    void refreshAutoImprove();
+    window.addEventListener('focus', refreshAutoImprove);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refreshAutoImprove);
+    };
+  }, []);
+
   // Fetch and subscribe to audio state for Priority Mic dropdown.
   useEffect(() => {
     if (!window.audioAPI) return;
@@ -1625,6 +1663,24 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     setActionFeedback(message);
     feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
   }, []);
+
+  const handleToggleAutoImprove = useCallback(async () => {
+    if (!window.transcribeAPI?.setAutoImprove) {
+      showFeedback('auto improve unavailable');
+      return;
+    }
+
+    const next = !autoImproveEnabled;
+    setAutoImproveEnabled(next);
+    try {
+      await window.transcribeAPI.setAutoImprove(next);
+      showFeedback(next ? 'auto improve on' : 'auto improve off');
+    } catch (err) {
+      console.error('[ClipboardHistory] Failed to toggle auto-improve:', err);
+      setAutoImproveEnabled(!next);
+      showFeedback('could not toggle auto improve');
+    }
+  }, [autoImproveEnabled, showFeedback]);
 
   const handleCreateMarkdownFromItems = useCallback(async (
     sourceItems: ClipboardItem[],
@@ -2149,18 +2205,28 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
-    const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
-    if (syncStatusPromise) {
-      syncStatusPromise.then(status => {
-        setFieldTheorySyncEnabled(status.enabled);
-        if (!status.enabled) {
-          setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
-        }
-      }).catch(() => setFieldTheorySyncEnabled(false));
+    if (FEATURE_MOBILE_SYNC_ENABLED) {
+      const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
+      if (syncStatusPromise) {
+        syncStatusPromise.then(status => {
+          setFieldTheorySyncEnabled(status.enabled);
+          if (!status.enabled) {
+            setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+          }
+        }).catch(() => setFieldTheorySyncEnabled(false));
+      }
+    } else {
+      setFieldTheorySyncEnabled(false);
+      setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
     }
 
     // Listen for todo view switch event (triggered when Cmd+Shift+T enables Tasks tab).
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
+      if (!FEATURE_MOBILE_SYNC_ENABLED) {
+        setFieldTheorySyncEnabled(false);
+        setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+        return;
+      }
       void (async () => {
         const status = await window.fieldTheorySyncAPI?.getStatus?.();
         if (!status?.enabled) return;
@@ -2642,69 +2708,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     });
   }, [setLocalCommandStatus]);
 
-  const runLocalImproveSelection = useCallback(async () => {
-    if (viewMode !== 'librarian' || showSettings) {
-      setLocalCommandStatus({
-        status: 'error',
-        message: 'Open a Field Theory document to improve text',
-        commandName: 'improve',
-        mode: 'selection',
-        error: 'Open a Field Theory document to improve text',
-        updatedAt: Date.now(),
-      });
-      return;
-    }
-    if (!window.commandsAPI?.runLocalCommand) {
-      setLocalCommandStatus({
-        status: 'error',
-        message: 'Local commands are unavailable',
-        commandName: 'improve',
-        mode: 'selection',
-        error: 'Local commands are unavailable',
-        updatedAt: Date.now(),
-      });
-      return;
-    }
-    const context = getAgentImproveContext();
-    const selectedText = context?.kind === 'selection' ? context.content : '';
-    try {
-      const activeContext = await window.commandsAPI.getActiveLibraryFileContext?.();
-      if (!activeContext && context?.filePath) {
-        const normalizedPath = context.filePath.replace(/\\/g, '/');
-        const slashIndex = normalizedPath.lastIndexOf('/');
-        const rootPath = slashIndex > 0 ? normalizedPath.slice(0, slashIndex) : normalizedPath;
-        const relPath = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
-        await window.commandsAPI.setActiveLibraryFileContext?.({
-          type: 'external',
-          rootPath,
-          relPath,
-          filePath: context.filePath,
-          title: context.title ?? context.filePath.split('/').pop() ?? 'Document',
-        });
-      }
-      const selection = typeof context?.selectionStart === 'number' && typeof context.selectionEnd === 'number'
-        ? { start: context.selectionStart, end: context.selectionEnd }
-        : selectedText.trim()
-          ? { text: selectedText }
-          : null;
-      await window.commandsAPI.runLocalCommand({
-        commandName: 'improve',
-        mode: 'selection',
-        selection,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Local improve failed';
-      setLocalCommandStatus({
-        status: 'error',
-        message,
-        commandName: 'improve',
-        mode: 'selection',
-        error: message,
-        updatedAt: Date.now(),
-      });
-    }
-  }, [showSettings, viewMode]);
-
   const openAgentImproveDialog = useCallback(() => {
     const context = getAgentImproveContext();
     if (!context) {
@@ -2771,10 +2774,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       const activeElement = document.activeElement;
       const isTypingInTextEntry = isTextEntryElement(activeElement);
 
-      // Cmd+Shift+I: improve selected text with the local model.
+      // Cmd+Shift+I: improve selected text with the configured Auto-improve provider.
       if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
         e.preventDefault();
-        void runLocalImproveSelection();
+        void window.commandsAPI?.runGlobalImproveSelection?.();
         return;
       }
 
@@ -3662,7 +3665,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, theme.isDark, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, showSettings, librarianSurfaceVisible, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, theme.isDark, toggleDarkMode, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds, navigateAppHistory]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -3927,7 +3930,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           </svg>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {priorityDeviceId
-              ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
+              ? formatCompactPriorityMicName(audioDevices.find(d => d.id === priorityDeviceId)?.name)
               : 'None'}
           </span>
           <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -4044,7 +4047,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                   }}>
-                    {device.name}
+                    {formatCompactPriorityMicName(device.name)}
                   </span>
                 </button>
               ))}
@@ -4332,6 +4335,50 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
 
           {renderPriorityMicControl()}
 
+          {/* Auto Improve toggle */}
+          <button
+            onClick={() => void handleToggleAutoImprove()}
+            disabled={!autoImproveAvailable}
+            tabIndex={0}
+            aria-pressed={autoImproveEnabled}
+            style={{
+              padding: '5px',
+              width: '24px',
+              height: '24px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: '3px',
+              cursor: autoImproveAvailable ? 'pointer' : 'not-allowed',
+              transition: 'background-color 0.15s ease, opacity 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: autoImproveAvailable ? (autoImproveEnabled ? 1 : 0.46) : 0.28,
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+            }}
+            onMouseEnter={(e) => {
+              if (autoImproveAvailable) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            title={autoImproveEnabled ? 'Auto Improve on' : 'Auto Improve off'}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z" />
+              <path d="M20 3v4" />
+              <path d="M22 5h-4" />
+              <path d="M4 17v2" />
+              <path d="M5 18H3" />
+            </svg>
+          </button>
+
           {/* Feedback button */}
           <button
             onClick={() => {
@@ -4596,6 +4643,9 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             active={librarianSurfaceVisible}
             onSwitchToClipboard={handleLibrarianSwitchToClipboard}
             onSwitchToSettings={handleLibrarianSwitchToSettings}
+            onNavigateToSignIn={() => {
+              window.onboardingAPI?.showSignIn();
+            }}
             onFullScreenChange={setLibrarianImmersive}
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
             onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
@@ -6627,41 +6677,24 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           })
         )}
         
-        {/* Load more - gated for free users */}
+        {/* Load more */}
         {hasMore && listRows.length > 0 && (
-          cachedTier === 'pro' ? (
-            <button
-              onClick={handleLoadMore}
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.text,
-                cursor: loading ? 'wait' : 'pointer',
-                fontSize: '12px',
-              }}
-            >
-              {loading ? 'Loading...' : 'Load More'}
-            </button>
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: 'none',
-                borderTop: `1px solid ${theme.border}`,
-                backgroundColor: theme.bgSecondary,
-                color: theme.textSecondary,
-                fontSize: '12px',
-                textAlign: 'center',
-              }}
-            >
-              Load More <span style={{ opacity: 0.7 }}>(Full history available with Pro plan)</span>
-            </div>
-          )
+          <button
+            onClick={handleLoadMore}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: 'none',
+              borderTop: `1px solid ${theme.border}`,
+              backgroundColor: theme.bgSecondary,
+              color: theme.text,
+              cursor: loading ? 'wait' : 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {loading ? 'Loading...' : 'Load More'}
+          </button>
         )}
         </div>
         </div>
@@ -6793,6 +6826,26 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             shortcutLabel="⌘."
           />
           {renderMaxwellHistoryButton()}
+          {shouldShowFooterLoginButton && (
+            <button
+              type="button"
+              onClick={() => setShowSyncLoginPrompt(true)}
+              style={{
+                height: '22px',
+                padding: '0 8px',
+                borderRadius: '5px',
+                border: `1px solid ${theme.border}`,
+                backgroundColor: theme.bg,
+                color: theme.textSecondary,
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 600,
+                lineHeight: 1,
+              }}
+            >
+              Log in
+            </button>
+          )}
           {/* Plan info - always show for logged in users */}
           {localCommandStatus ? (
                 <LibraryFooterLocalCommandStatusControls
@@ -7045,7 +7098,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                       e.currentTarget.style.opacity = '1';
                     }}
                   >
-                    {updateStatus === 'ready' ? 'Install' : 'Update'}
+                    {updateStatus === 'ready' ? 'Restart & Install' : 'Update'}
                   </button>
                 </>
               )}
@@ -7393,6 +7446,85 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                 }}
               >
                 Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSyncLoginPrompt && (
+        <div
+          onClick={() => setShowSyncLoginPrompt(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.45)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sync-login-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '10px',
+              padding: '22px',
+              maxWidth: '340px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.28)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 id="sync-login-title" style={{ margin: '0 0 10px 0', fontSize: '16px', color: theme.text, fontWeight: 650 }}>
+              Log in to authenticate
+            </h3>
+            <p style={{ margin: '0 0 18px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              Log in to reconnect your Field Theory account. River and shared files will sync when a connection is available.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowSyncLoginPrompt(false)}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSyncLoginPrompt(false);
+                  window.onboardingAPI?.showSignIn();
+                }}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Log in
               </button>
             </div>
           </div>

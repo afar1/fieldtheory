@@ -15,7 +15,6 @@ import {
   SettingsDivider,
   SettingsNotice,
   SettingsSectionHeading,
-  SettingsToggle,
 } from './settings/SettingsPrimitives';
 
 type PortableCommandInfo = {
@@ -27,7 +26,6 @@ type PortableCommandInfo = {
 type WatchedDir = {
   path: string;
   enabled: boolean;
-  mobileSyncEnabled: boolean;
 };
 
 export default function CommandsSettings() {
@@ -45,11 +43,6 @@ export default function CommandsSettings() {
 
   // Path input for adding new directories.
   const [newPath, setNewPath] = useState('');
-
-  // Mobile sync state.
-  const [syncingDir, setSyncingDir] = useState<string | null>(null);
-  const [remoteCount, setRemoteCount] = useState<number>(0);
-  const [fieldTheorySyncEnabled, setFieldTheorySyncEnabled] = useState(false);
 
   // Count commands per directory.
   const commandCountsByDir = useMemo(() => {
@@ -70,13 +63,9 @@ export default function CommandsSettings() {
     Promise.all([
       window.commandsAPI.getWatchedDirs(),
       window.commandsAPI.getCommands(),
-      window.fieldTheorySyncAPI?.getStatus(),
-    ]).then(async ([dirs, cmds, syncStatus]) => {
-      const syncEnabled = syncStatus?.enabled === true;
+    ]).then(([dirs, cmds]) => {
       setWatchedDirs(dirs || []);
       setCommands(cmds);
-      setFieldTheorySyncEnabled(syncEnabled);
-      setRemoteCount(syncEnabled ? await window.commandsAPI!.getRemoteCommandCount() : 0);
       setLoading(false);
     }).catch((err) => {
       console.error('Failed to load commands settings:', err);
@@ -139,39 +128,11 @@ export default function CommandsSettings() {
         // Refresh commands
         const cmds = await window.commandsAPI.getCommands();
         setCommands(cmds);
-        // Update remote count
-        const count = await window.commandsAPI.getRemoteCommandCount();
-        setRemoteCount(count);
       } else {
         setError('Failed to remove directory');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }, []);
-
-  // Handle toggling mobile sync for a directory.
-  const handleToggleMobileSync = useCallback(async (dirPath: string, enabled: boolean) => {
-    if (!window.commandsAPI) return;
-
-    setSyncingDir(dirPath);
-    setError(null);
-    try {
-      const success = await window.commandsAPI.setMobileSync(dirPath, enabled);
-      if (success) {
-        setWatchedDirs((prev) => prev.map((d) =>
-          d.path === dirPath ? { ...d, mobileSyncEnabled: enabled } : d
-        ));
-        // Update remote count after sync
-        const count = await window.commandsAPI.getRemoteCommandCount();
-        setRemoteCount(count);
-      } else {
-        setError('Failed to update mobile sync setting');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setSyncingDir(null);
     }
   }, []);
 
@@ -199,8 +160,6 @@ export default function CommandsSettings() {
 
   const renderPathRow = (dir: WatchedDir, index: number) => {
     const count = commandCountsByDir[dir.path] || 0;
-    const isSyncing = syncingDir === dir.path;
-
     return (
       <div key={dir.path}>
         <div
@@ -272,30 +231,6 @@ export default function CommandsSettings() {
             ×
           </button>
         </div>
-        {fieldTheorySyncEnabled && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              padding: '0 0 10px 19px',
-              marginTop: '-3px',
-            }}
-          >
-            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Available on mobile
-            </span>
-            <SettingsToggle
-              theme={theme}
-              checked={dir.mobileSyncEnabled}
-              onClick={() => handleToggleMobileSync(dir.path, !dir.mobileSyncEnabled)}
-              disabled={isSyncing}
-              activeColor={theme.success}
-              title={isSyncing ? 'Syncing...' : undefined}
-            />
-          </div>
-        )}
         {index < watchedDirs.length - 1 && <SettingsDivider theme={theme} margin="0" />}
       </div>
     );
@@ -390,13 +325,6 @@ export default function CommandsSettings() {
       {error && (
         <SettingsNotice theme={theme} tone="warning">
           {error}
-        </SettingsNotice>
-      )}
-
-      {/* Mobile sync status */}
-      {remoteCount > 0 && (
-        <SettingsNotice theme={theme} tone="success">
-          <strong>{remoteCount}</strong> command{remoteCount !== 1 ? 's' : ''} synced to mobile
         </SettingsNotice>
       )}
 

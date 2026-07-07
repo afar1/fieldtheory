@@ -20,6 +20,7 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
+import { hardenWindow } from './windowHardening';
 import {
   isExternalCommandTargetBundleId,
   isFieldTheoryCommandTargetBundleId,
@@ -41,6 +42,7 @@ const COMMAND_LAUNCHER_CENTER_Y_OFFSET = -50;
 export interface RunningApp {
   bundleId: string;
   name: string;
+  windowBounds?: AnchorBounds | null;
 }
 
 type AnchorBounds = {
@@ -300,6 +302,7 @@ export class CommandLauncherWindow {
           this.previousApp = {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
+            ...(frontmostApp.windowBounds ? { windowBounds: frontmostApp.windowBounds } : {}),
           };
           this.launchOrigin = {
             kind: 'external-app',
@@ -311,6 +314,7 @@ export class CommandLauncherWindow {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
             hasWindowBounds: Boolean(frontmostApp.windowBounds),
+            windowBounds: frontmostApp.windowBounds ?? null,
           });
         } else {
           const fieldTheorySurface = this.fieldTheoryActiveOnShow
@@ -337,7 +341,7 @@ export class CommandLauncherWindow {
       let y: number;
 
       let freshWindowBounds: AnchorBounds | null = null;
-      if (!options.anchorBounds && this.nativeHelper && !frontmostApp?.windowBounds) {
+      if (!options.anchorBounds && this.nativeHelper) {
         const boundsStartedAt = Date.now();
         try {
           freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds(COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS);
@@ -632,6 +636,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.window);
     appendCommandLauncherTrace('create-window-complete');
     
     // Stay on top of everything.
@@ -755,6 +760,7 @@ export class CommandLauncherWindow {
         additionalArguments: [initialTheme.argument],
       },
     });
+    hardenWindow(this.previewWindow);
     appendCommandLauncherTrace('preview-create-window-complete');
 
     this.previewWindow.setAlwaysOnTop(true, 'screen-saver', 1);

@@ -15,14 +15,14 @@ import {
 } from './transcriptionEngines';
 
 describe('transcriptionEngines utils', () => {
-  it('normalizes unsupported engines to whisper', () => {
+  it('normalizes unsupported engines to the default Parakeet engine', () => {
     expect(normalizeVisibleTranscriptionEngine('qwen')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
+    expect(normalizeVisibleTranscriptionEngine('whisper')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
     expect(normalizeVisibleTranscriptionEngine('mlx-whisper')).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
     expect(normalizeVisibleTranscriptionEngine(undefined)).toBe(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
   });
 
   it('preserves visible engines', () => {
-    expect(normalizeVisibleTranscriptionEngine('whisper')).toBe('whisper');
     expect(normalizeVisibleTranscriptionEngine('parakeet')).toBe('parakeet');
     expect(normalizeVisibleTranscriptionEngine('parakeet-multilingual')).toBe('parakeet-multilingual');
   });

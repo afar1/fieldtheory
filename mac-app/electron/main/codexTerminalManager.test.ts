@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexTerminalIPCChannels, CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
+import { CodexTerminalIPCChannels, CodexTerminalManager, isCodexTerminalModelRunActive, isCodexTerminalPromptReady, quoteForPosixShell, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
 
 const { sentMessages } = vi.hoisted(() => ({ sentMessages: [] as Array<{ channel: string; payload: any }> }));
 
@@ -84,6 +84,11 @@ describe('CodexTerminalManager', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('quotes source paths for POSIX shell commands', () => {
+    expect(quoteForPosixShell('/tmp/Sunday Jun 14th.md')).toBe("'/tmp/Sunday Jun 14th.md'");
+    expect(quoteForPosixShell("/tmp/Andrew's note.md")).toBe("'/tmp/Andrew'\\''s note.md'");
   });
 
   it('buffers PTY output so a renderer can replay scrollback after remount', () => {
@@ -538,9 +543,17 @@ describe('CodexTerminalManager', () => {
       expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
       expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
-      expect(ptys[0].written.at(-1)).toContain(`Manifest: ${result.filePath}`);
+      expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json (v1 envelope; use data.content, data.version.sha256, and data.lineNumbers).');
+      expect(ptys[0].written.at(-1)).toContain('Edit current document command: ft current update --stdin --expected-sha256 <data.version.sha256>');
+      expect(ptys[0].written.at(-1)).toContain('Line-number questions: inspect ft current --json data.lineNumbers.');
+      expect(ptys[0].written.at(-1)).toContain('After each successful JSON edit, use the newly printed data.version.sha256 for the next edit to the same document.');
+      expect(ptys[0].written.at(-1)).toContain('If an edit reports that the file changed on disk, run ft current --json again');
+      expect(ptys[0].written.at(-1)).toContain('Pipe multiline Markdown on stdin; do not pass Markdown as command arguments.');
+      expect(ptys[0].written.at(-1)).toContain('Do not use sed, awk, cat against the source path, apply_patch');
       expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
-      expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
+      expect(ptys[0].written.at(-1)).toContain('For user-requested edits to the current Field Theory document, use only the current-document commands above.');
+      expect(ptys[0].written.at(-1)).not.toContain('Manifest:');
+      expect(ptys[0].written.at(-1)).not.toContain('Source:');
 
       const updatedResult = manager.attachPageContext(session.id, {
         title: 'Panel idea',
@@ -555,6 +568,35 @@ describe('CodexTerminalManager', () => {
       expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(ptys[0].written).toHaveLength(1);
+    } finally {
+      rmSync(contextDirPath, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps shell-safe context paths in the manifest for files with spaces', () => {
+    const contextDirPath = mkdtempSync(join(tmpdir(), 'codex-terminal-context-spaces-'));
+    const { manager, ptys } = createManager(1024, {
+      contextDirPath,
+    });
+    const session = manager.createSession();
+
+    try {
+      const sourcePath = '/Users/afar/.fieldtheory/library/scratchpad/Sunday Jun 14th.md';
+      const result = manager.attachPageContext(session.id, {
+        title: 'Sunday Jun 14th',
+        path: sourcePath,
+        kind: 'wiki',
+        contentMode: 'markdown',
+        content: 'Draft notes.',
+      });
+
+      const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
+      expect(manifest.activeDocument.shellQuotedPath).toBe(quoteForPosixShell(sourcePath));
+      expect(manifest.activeDocument.shellQuotedContentPath).toBe(quoteForPosixShell(join(contextDirPath, 'sessions', session.id, 'active.md')));
+      expect(ptys[0].written.at(-1)).toContain('Read current document command: ft current --json (v1 envelope');
+      expect(ptys[0].written.at(-1)).not.toContain('Read source command: cat');
+      expect(ptys[0].written.at(-1)).not.toContain('Read content copy command: cat');
+      expect(ptys[0].written.at(-1)).not.toContain('When using shell commands, copy the command lines above');
     } finally {
       rmSync(contextDirPath, { recursive: true, force: true });
     }

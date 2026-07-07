@@ -53,7 +53,6 @@ const TERMINAL_LINE_HEIGHT = 1.28;
 const TERMINAL_APPROX_CHAR_WIDTH = 7.2;
 const TERMINAL_PADDING_X = 24;
 const TERMINAL_PADDING_Y = 20;
-const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 const HISTORY_OVERLAY_WIDTH = 420;
 const INITIAL_REPLAY_RESIZE_SUPPRESSION_MS = 600;
 const INITIAL_REPLAY_ECHO_DEDUPE_MS = 900;
@@ -350,14 +349,15 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
   const terminalBodyRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
+  const pendingInputRef = useRef(new Map<string, string>());
   const suppressBackendResizeUntilRef = useRef(new Map<string, number>());
   const fitFrameRef = useRef<number | null>(null);
+  const inputFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     onResizeActiveChange?.(isResizing);
   }, [isResizing, onResizeActiveChange]);
   const autoAttachedContextRef = useRef(new Set<string>());
-  const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
   const onVisibilityToggleShortcutRef = useRef<CodexTerminalPanelProps['onVisibilityToggleShortcut']>(undefined);
   const terminalFocusRequestedRef = useRef(false);
@@ -465,6 +465,22 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
     fitFrameRef.current = window.requestAnimationFrame(fitActiveTerminal);
   }, [fitActiveTerminal]);
 
+  const flushPendingTerminalInput = useCallback(() => {
+    inputFrameRef.current = null;
+    const entries = Array.from(pendingInputRef.current.entries());
+    pendingInputRef.current.clear();
+    for (const [sessionId, data] of entries) {
+      void window.codexTerminalAPI?.input(sessionId, data);
+    }
+  }, []);
+
+  const queueTerminalInput = useCallback((sessionId: string, data: string) => {
+    if (!data) return;
+    pendingInputRef.current.set(sessionId, `${pendingInputRef.current.get(sessionId) ?? ''}${data}`);
+    if (inputFrameRef.current !== null) return;
+    inputFrameRef.current = window.requestAnimationFrame(flushPendingTerminalInput);
+  }, [flushPendingTerminalInput]);
+
   useEffect(() => (
     () => {
       if (fitFrameRef.current === null) return;
@@ -472,6 +488,16 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       fitFrameRef.current = null;
     }
   ), []);
+
+  useEffect(() => (
+    () => {
+      if (inputFrameRef.current !== null) {
+        window.cancelAnimationFrame(inputFrameRef.current);
+        inputFrameRef.current = null;
+      }
+      flushPendingTerminalInput();
+    }
+  ), [flushPendingTerminalInput]);
 
   const focusActiveTerminal = useCallback(() => {
     if (!activeSessionId) return false;
@@ -913,9 +939,9 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       }, 30);
     });
     term.onData((data) => {
-      void window.codexTerminalAPI?.input(sessionId, data);
+      queueTerminalInput(sessionId, data);
     });
-  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, scheduleFitActiveTerminal, terminalDarkMode]);
+  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, queueTerminalInput, scheduleFitActiveTerminal, terminalDarkMode]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);
@@ -975,32 +1001,6 @@ export default function CodexTerminalPanel({ visible, visibleIntent = visible, p
       cancelled = true;
     };
   }, [activeSession, pageContext, refreshSessions, visible]);
-
-  useEffect(() => {
-    if (liveContextUpdateRef.current !== null) {
-      window.clearTimeout(liveContextUpdateRef.current);
-      liveContextUpdateRef.current = null;
-    }
-    if (!pageContext || !activeSession || activeSession.restored || activeSession.exitedAt) return;
-    const hasLiveAttachment = activeSession.attachedContexts.some((context) => context.sourcePath === pageContext.path);
-    if (!hasLiveAttachment) return;
-
-    liveContextUpdateRef.current = window.setTimeout(() => {
-      liveContextUpdateRef.current = null;
-      void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext, { notifyTerminal: false }).then((result) => {
-        if (!result?.ok) {
-          setTerminalStatus(result?.error ?? 'Could not refresh current document context.');
-        }
-      });
-    }, LIVE_CONTEXT_UPDATE_DELAY_MS);
-
-    return () => {
-      if (liveContextUpdateRef.current !== null) {
-        window.clearTimeout(liveContextUpdateRef.current);
-        liveContextUpdateRef.current = null;
-      }
-    };
-  }, [activeSession, pageContext]);
 
   const compactRightDockToolbar = shouldUseCompactRightDockToolbar({ dockSide, dockSideOverride, rightWidth });
   const panelSize: CSSProperties = effectiveDockSide === 'bottom'

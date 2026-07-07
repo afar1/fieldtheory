@@ -213,7 +213,7 @@ describe('SharedTeamService', () => {
     });
   });
 
-  it('returns an explicit unsupported state for multiple pending incoming team scopes', async () => {
+  it('keeps multiple pending incoming team scopes available for review', async () => {
     const { authManager } = makeAuthManager({
       contacts: [
         {
@@ -237,9 +237,10 @@ describe('SharedTeamService', () => {
 
     const state = await new SharedTeamService(authManager).getTeamState();
 
-    expect(state.available).toBe(false);
-    expect(state.currentTeamScopeUserId).toBeNull();
-    expect(state.reason).toBe('ambiguous_team_scope');
+    expect(state.available).toBe(true);
+    expect(state.currentTeamScopeUserId).toBe('owner-1');
+    expect(state.reason).toBeUndefined();
+    expect(state.pendingIncoming.map((invite) => invite.ownerUserId)).toEqual(['owner-1', 'owner-2']);
   });
 
   it('resolves the owner user as team scope after an accepted owned contact exists', async () => {
@@ -498,7 +499,7 @@ describe('SharedTeamService', () => {
     });
   });
 
-  it('returns an explicit unsupported state for multiple accepted owner scopes', async () => {
+  it('keeps multiple accepted owner scopes available as contacts', async () => {
     const { authManager } = makeAuthManager({
       contacts: [
         {
@@ -522,8 +523,9 @@ describe('SharedTeamService', () => {
 
     const state = await new SharedTeamService(authManager).getTeamState();
 
-    expect(state.available).toBe(false);
-    expect(state.currentTeamScopeUserId).toBeNull();
-    expect(state.reason).toBe('ambiguous_team_scope');
+    expect(state.available).toBe(true);
+    expect(state.currentTeamScopeUserId).toBe('owner-1');
+    expect(state.reason).toBeUndefined();
+    expect(state.members.map((member) => member.userId)).toEqual(['owner-1', 'owner-2']);
   });
 });

@@ -13,6 +13,25 @@ export type TranscriptionEngine =
 export type RecordingInputSource = 'microphone' | 'system-audio';
 export type HotMicEngine = 'default' | TranscriptionEngine;
 export type ParakeetEngine = Extract<TranscriptionEngine, 'parakeet' | 'parakeet-multilingual'>;
+export type AutoImproveProvider = 'local' | 'codex' | 'claude';
+export type AutoImproveEffort = 'fast' | 'balanced' | 'deep';
+export interface AutoImproveModelOptions {
+  codexModel: string;
+  codexEffort: AutoImproveEffort;
+  claudeModel: string;
+  claudeEffort: AutoImproveEffort;
+}
+export interface AutoImproveContextFile {
+  path: string;
+  enabled: boolean;
+}
+export interface AutoImproveProviderStatus {
+  provider: AutoImproveProvider;
+  installed: boolean;
+  authenticated: boolean;
+  available: boolean;
+  message: string;
+}
 
 export type ParakeetSetupErrorCode =
   | 'missing-python'
@@ -118,6 +137,18 @@ export const TranscribeIPCChannels = {
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_PROVIDER: 'transcribe:getAutoImproveProvider',
+  SET_AUTO_IMPROVE_PROVIDER: 'transcribe:setAutoImproveProvider',
+  GET_AUTO_IMPROVE_PROVIDER_STATUS: 'transcribe:getAutoImproveProviderStatus',
+  GET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:getAutoImproveModelOptions',
+  SET_AUTO_IMPROVE_MODEL_OPTIONS: 'transcribe:setAutoImproveModelOptions',
+  GET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:getAutoImproveWritingPreferences',
+  SET_AUTO_IMPROVE_WRITING_PREFERENCES: 'transcribe:setAutoImproveWritingPreferences',
+  GET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:getAutoImproveContextFiles',
+  SET_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:setAutoImproveContextFiles',
+  CHOOSE_AUTO_IMPROVE_CONTEXT_FILES: 'transcribe:chooseAutoImproveContextFiles',
+  GET_LIVE_TYPING: 'transcribe:getLiveTyping',
+  SET_LIVE_TYPING: 'transcribe:setLiveTyping',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
@@ -233,6 +264,16 @@ export interface TranscribeAPI {
   toggleRecording: () => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveProvider: () => Promise<AutoImproveProvider>;
+  setAutoImproveProvider: (provider: AutoImproveProvider) => Promise<void>;
+  getAutoImproveProviderStatus: (provider: AutoImproveProvider) => Promise<AutoImproveProviderStatus>;
+  getAutoImproveModelOptions: () => Promise<AutoImproveModelOptions>;
+  setAutoImproveModelOptions: (options: Partial<AutoImproveModelOptions>) => Promise<AutoImproveModelOptions>;
+  getAutoImproveWritingPreferences: () => Promise<string>;
+  setAutoImproveWritingPreferences: (preferences: string) => Promise<string>;
+  getAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
+  setAutoImproveContextFiles: (files: AutoImproveContextFile[]) => Promise<AutoImproveContextFile[]>;
+  chooseAutoImproveContextFiles: () => Promise<AutoImproveContextFile[]>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;

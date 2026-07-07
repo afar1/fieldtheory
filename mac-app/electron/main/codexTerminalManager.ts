@@ -208,6 +208,10 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
+export function quoteForPosixShell(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function writePageContextBundle(contextDirPath: string, sessionId: string, context: CodexTerminalPageContext): string {
   const dir = path.join(contextDirPath, 'sessions', sessionId);
   const manifestPath = path.join(dir, 'context.json');
@@ -234,10 +238,12 @@ function writePageContextBundle(contextDirPath: string, sessionId: string, conte
     activeDocument: {
       title: context.title || 'Field Theory Page',
       path: context.path || 'unknown',
+      shellQuotedPath: quoteForPosixShell(context.path || 'unknown'),
       kind: context.kind,
       contentMode: context.contentMode || 'unknown',
       contentHash: crypto.createHash('sha256').update(context.content || '').digest('hex'),
       contentPath: activePath,
+      shellQuotedContentPath: quoteForPosixShell(activePath),
       lineMapping: context.lineMapping ?? null,
     },
     selection: selectionText
@@ -733,11 +739,16 @@ export class CodexTerminalManager {
     const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
     const prompt = shouldNotifyTerminal ? [
       `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
-      `Source: ${context.path || 'unknown'}`,
-      `Manifest: ${filePath}`,
+      'Read current document command: ft current --json (v1 envelope; use data.content, data.version.sha256, and data.lineNumbers).',
+      'Edit current document command: ft current update --stdin --expected-sha256 <data.version.sha256>',
+      'Line-number questions: inspect ft current --json data.lineNumbers. If data.lineNumbers.activeLineKind is renderedVisual, answer from visibleLine because rendered rows may not match Markdown source newlines.',
+      'After each successful JSON edit, use the newly printed data.version.sha256 for the next edit to the same document.',
+      'If an edit reports that the file changed on disk, run ft current --json again, merge the requested change into data.content, and retry once with the new data.version.sha256.',
       'Do not summarize or explain the attached context just because it exists.',
       'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
-      'Read the manifest or content files only when the user asks something that needs document details.',
+      'For user-requested edits to the current Field Theory document, use only the current-document commands above. Pipe multiline Markdown on stdin; do not pass Markdown as command arguments. Do not use sed, awk, cat against the source path, apply_patch, direct filesystem writes, context-cache files, temp-file rewrites, or invented ft edit commands.',
+      'Field Theory command .md files are instruction documents, not executables. Read command docs through the Field Theory CLI; do not run them as shell commands.',
+      'Use ft current when the user asks something that needs document details.',
       '',
     ].join('\n') + '\r' : undefined;
     if (prompt) session.process?.write(prompt);

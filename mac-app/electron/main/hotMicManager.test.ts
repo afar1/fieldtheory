@@ -349,6 +349,34 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('submits buffered text into the focused Field Theory terminal', async () => {
+    const { manager, nativeHelper } = createManager();
+    const insertTerminalText = vi.fn(() => true);
+    const submitTerminalText = vi.fn(() => true);
+    const insertMarkdownText = vi.fn(() => true);
+    (manager as any).state = 'listening';
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+    manager.setFieldTheoryTerminalInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertTerminalText,
+      submitText: submitTerminalText,
+    });
+    manager.setFieldTheoryMarkdownInsertionTarget({
+      isAvailable: () => true,
+      insertText: insertMarkdownText,
+    });
+
+    await (manager as any).processListeningChunk('alpha beta go ahead');
+
+    expect(submitTerminalText).toHaveBeenCalledWith('alpha beta', 'enter');
+    expect(insertTerminalText).not.toHaveBeenCalled();
+    expect(insertMarkdownText).not.toHaveBeenCalled();
+    expect(nativeHelper.typeIntoApp).not.toHaveBeenCalled();
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
   it('submits buffered text with Command-Enter when command-enter phrase is spoken', async () => {
     const { manager, nativeHelper } = createManager();
     (manager as any).state = 'listening';
@@ -821,7 +849,7 @@ describe('HotMicManager transcript dismissal', () => {
     expect((manager as any).transcriptBuffer).toEqual([]);
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
     expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 0, '');
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
 
     manager.destroy();
   });
@@ -1413,6 +1441,19 @@ describe('HotMicManager runtime condition', () => {
     manager.destroy();
   });
 
+  it('activates without a current target and resolves the target later', async () => {
+    const { manager, nativeHelper } = createManager();
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+
+    manager.activate();
+    await flushAsyncWork();
+
+    expect(manager.getState()).toBe('listening');
+    expect(manager.getCondition()).toBe('ready');
+    expect(nativeHelper.startRecording).toHaveBeenCalled();
+    manager.destroy();
+  });
+
   it('sets condition to yielded during transcriber handoff', async () => {
     const { manager, nativeHelper } = createManager();
     (manager as any).state = 'listening';
@@ -1552,7 +1593,7 @@ describe('HotMicManager runtime status', () => {
     const status = manager.getRuntimeStatus();
 
     expect(status.engine).toMatchObject({
-      selectedEngine: 'mlx-whisper',
+      selectedEngine: 'parakeet',
       source: 'global',
       readiness: 'disabled',
       fallbackAvailable: false,
@@ -1716,7 +1757,7 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', 0);
     manager.destroy();
   });
 
@@ -1727,7 +1768,7 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).setRealtimeHarvestMode();
 
     expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
     manager.destroy();
   });
 
@@ -1742,8 +1783,8 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).chunkProcessingInFlight = false;
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', undefined);
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', 0);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', 0);
     manager.destroy();
   });
 
@@ -1781,11 +1822,11 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
-  it('uses longer forced snapshot interval for mlx and under queue pressure', () => {
+  it('uses longer forced snapshot interval under queue pressure', () => {
     const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
     const queue = (manager as any).pendingChunkQueue;
 
-    expect((manager as any).getForcedSnapshotMaxMs()).toBe(1000);
+    expect((manager as any).getForcedSnapshotMaxMs()).toBe(700);
 
     queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
     expect((manager as any).getForcedSnapshotMaxMs()).toBe(1400);

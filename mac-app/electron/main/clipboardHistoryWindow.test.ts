@@ -196,6 +196,46 @@ describe('ClipboardHistoryWindow helper methods', () => {
     });
   });
 
+  it('queues view switch events until the renderer has finished loading', () => {
+    const send = vi.fn();
+    const didFinishLoadCallbacks: Array<() => void> = [];
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      webContents: {
+        isLoadingMainFrame: vi.fn(() => true),
+        once: vi.fn((event: string, callback: () => void) => {
+          if (event === 'did-finish-load') {
+            didFinishLoadCallbacks.push(callback);
+          }
+        }),
+        send,
+      },
+    };
+
+    (window as any).sendRendererEvent('clipboard:showLibrary');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(didFinishLoadCallbacks).toHaveLength(1);
+    didFinishLoadCallbacks[0]();
+    expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
+  });
+
+  it('temporarily suppresses blur dismissal', () => {
+    vi.useFakeTimers();
+    try {
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+
+      window.suppressBlurDismiss(1500);
+
+      expect(window.shouldAutoHideOnBlur()).toBe(false);
+
+      vi.advanceTimersByTime(1501);
+      expect(window.shouldAutoHideOnBlur()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refreshes the default paste target when a visible app window sees a new external app', () => {
     const appWindow = new ClipboardHistoryWindow({
       get: vi.fn(() => ({ fieldTheoryWindowMode: 'app', clickAwayToDismiss: true })),
@@ -472,13 +512,15 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
-  it('keeps the app-mode window visible after paste', () => {
+  it('hides the app-mode window after paste so the target keeps focus', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const hide = vi.spyOn(window, 'hide').mockImplementation(() => {});
+    const disableFocus = vi.spyOn(window, 'temporarilyDisableAppWindowFocus').mockReturnValue(true);
 
     window.hideAfterPaste('paste-item');
 
-    expect(hide).not.toHaveBeenCalled();
+    expect(disableFocus).toHaveBeenCalledWith('hide-after-paste:paste-item');
+    expect(hide).toHaveBeenCalledWith(false, 'paste-item');
   });
 
   it('keeps the Dock and application visible when hiding the app-mode window', () => {
@@ -600,6 +642,15 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.capturePreviousAppAndShow).toHaveBeenCalledWith(bounds, false, true, false, false, 'library');
   });
 
+  it('preloads with the requested initial view mode', () => {
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    const createWindow = vi.spyOn(window as any, 'createWindow').mockImplementation(() => {});
+
+    window.preload(bounds, 'library');
+
+    expect(createWindow).toHaveBeenCalledWith(bounds, false, true, false, true, 'library');
+  });
+
   it('activates panel mode with app.focus instead of app.show', () => {
     attachExistingWindow(window, vi.fn());
 
@@ -638,19 +689,20 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('restores a hidden app-mode window without resetting renderer state', () => {
+  it('restores a hidden app-mode window with an explicit library view', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const send = vi.fn();
     const windowRef = attachExistingWindow(window, send);
     windowRef.isVisible.mockReturnValue(false);
 
-    expect(window.restoreExistingAppWindow('app-activate')).toBe(true);
+    expect(window.restoreExistingAppWindow('app-activate', 'library')).toBe(true);
 
+    expect(send).toHaveBeenCalledWith('clipboard:showLibrary');
     expect(windowRef.show).toHaveBeenCalled();
     expect(windowRef.moveTop).toHaveBeenCalled();
     expect(windowRef.focus).toHaveBeenCalled();
     expect(mockApp.show).toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(windowRef.show.mock.invocationCallOrder[0]);
   });
 
   it('does not restore a hidden panel-mode window through app activation', () => {

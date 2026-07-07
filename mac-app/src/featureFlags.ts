@@ -22,6 +22,18 @@ export const FEATURE_MESSAGE_SHORTCUT_ENABLED = false;
 export const FEATURE_SHARING_ENABLED = false;
 
 /**
+ * Mobile task/command sync surfaces.
+ * Hidden for the main app until the mobile path is ready.
+ */
+export const FEATURE_MOBILE_SYNC_ENABLED = false;
+
+/**
+ * Cloud-backed command discovery.
+ * Hidden for users until team/cloud features are ready.
+ */
+export const FEATURE_CLOUD_COMMANDS_ENABLED = false;
+
+/**
  * Narration feature - text-to-speech for Librarian readings.
  * Disabled by default. Uses ElevenLabs API.
  */

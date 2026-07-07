@@ -20,9 +20,6 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
     echo "#!/bin/bash" > "$BUILD_DIR/FieldTheoryHelper"
     echo "echo '{\"type\":\"error\",\"message\":\"Native helper not available on this platform\"}'" >> "$BUILD_DIR/FieldTheoryHelper"
     chmod +x "$BUILD_DIR/FieldTheoryHelper"
-    echo "#!/bin/bash" > "$BUILD_DIR/FieldTheoryLauncher"
-    echo "echo 'Native launcher not available on this platform'" >> "$BUILD_DIR/FieldTheoryLauncher"
-    chmod +x "$BUILD_DIR/FieldTheoryLauncher"
     exit 0
 fi
 
@@ -41,19 +38,17 @@ swift build -c release
 
 # Create build output directory.
 mkdir -p "$BUILD_DIR"
+rm -f "$BUILD_DIR/FieldTheoryLauncher"
 
 # Copy the built binaries.
 cp ".build/release/FieldTheoryHelper" "$BUILD_DIR/"
-cp ".build/release/FieldTheoryLauncher" "$BUILD_DIR/"
 
 codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryHelper"
-codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryLauncher"
 
 echo "✅ Built FieldTheoryHelper at $BUILD_DIR/FieldTheoryHelper"
-echo "✅ Built FieldTheoryLauncher at $BUILD_DIR/FieldTheoryLauncher"
 
 # Verify the binaries.
-for binary in FieldTheoryHelper FieldTheoryLauncher; do
+for binary in FieldTheoryHelper; do
     if [[ -x "$BUILD_DIR/$binary" ]]; then
         echo "   $binary is executable ✓"
     else

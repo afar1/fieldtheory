@@ -41,6 +41,13 @@ export function getBookmarks(): Promise<BookmarksSnapshot> {
   return inflight;
 }
 
+/** Forces a fresh IPC snapshot read after a sync has completed. */
+export function refreshBookmarks(): Promise<BookmarksSnapshot> {
+  cached = null;
+  inflight = null;
+  return getBookmarks();
+}
+
 /** Fire-and-forget prefetch; safe to call repeatedly. */
 export function prefetchBookmarks(): void {
   if (cached || inflight) return;

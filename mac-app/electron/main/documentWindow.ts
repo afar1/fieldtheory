@@ -3,6 +3,7 @@ import path from 'path';
 import { createLogger } from './logger';
 import { isDevServerConnectionRefused, loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { ClipboardHistoryBounds } from './preferences';
+import { hardenWindow } from './windowHardening';
 
 const log = createLogger('LibraryDocumentWindow');
 
@@ -99,6 +100,7 @@ export class LibraryDocumentWindowManager {
     };
 
     const win = new BrowserWindow(options);
+    hardenWindow(win);
     existingWindows.add(win);
     this.windowsByKey.set(key, existingWindows);
 

@@ -1664,7 +1664,7 @@ export function getLauncherFieldTheoryMarkdownTarget(
   if (item.type === 'handoff' && item.filePath) {
     return { kind: 'external', path: item.filePath };
   }
-  if (item.type === 'file' && item.filePath && !item.isDirectory && /\.(md|markdown)$/i.test(item.filePath)) {
+  if (item.type === 'file' && item.filePath && !item.isDirectory) {
     return { kind: 'external', path: item.filePath };
   }
   return null;
@@ -1767,6 +1767,24 @@ export function buildBuiltInLauncherActions(
       actionId: 'start-recording',
     },
     {
+      id: 'action-improve-selected-text',
+      type: 'action',
+      name: 'improve selected text',
+      displayName: 'Improve Selected Text',
+      keywords: ['improve', 'rewrite', 'polish', 'selection', 'selected text', 'auto improve'],
+      hotkey: 'Command+Shift+I',
+      hotkeyDisplay: '⌘ ⇧ I',
+      actionId: 'improve-selected-text',
+    },
+    {
+      id: 'action-toggle-auto-improve',
+      type: 'action',
+      name: 'auto improve',
+      displayName: 'Toggle Auto-Improve',
+      keywords: ['auto improve', 'auto-improve', 'transcript improve', 'transcription cleanup', 'dictation cleanup'],
+      actionId: 'toggle-auto-improve',
+    },
+    {
       id: 'action-superpaste',
       type: 'action',
       name: 'terminal image paste',
@@ -1819,6 +1837,14 @@ export function buildBuiltInLauncherActions(
       displayName: 'Save Website',
       keywords: ['save website', 'save web page', 'save page', 'bookmark page', 'bookmark website', 'current tab', 'browser', 'markdown'],
       actionId: 'save-current-website',
+    },
+    {
+      id: 'action-share-current-file-river',
+      type: 'action',
+      name: 'share river',
+      displayName: 'Share Current File to River',
+      keywords: ['river', 'share', 'share river', 'share current file', 'share to river', 'team', 'contact'],
+      actionId: 'share-current-file-river',
     },
     {
       id: 'action-move-current-library-file',

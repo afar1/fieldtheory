@@ -69,7 +69,7 @@ export function kindleDeliveryStatePath(options?: FieldTheoryPathOptions): strin
 }
 
 export function kindleArtifactDir(options?: FieldTheoryPathOptions): string {
-  return path.join(kindleDeliveryDir(options), 'artifacts');
+  return pathEnv(options).FT_KINDLE_ARTIFACT_DIR ?? path.join(kindleDeliveryDir(options), 'artifacts');
 }
 
 export function bookmarkDataDir(options?: FieldTheoryPathOptions): string {

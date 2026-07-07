@@ -2,6 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BookmarksPane from '../BookmarksPane';
+import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -44,6 +45,7 @@ const bookmark: Bookmark = {
 
 describe('BookmarksPane native preference sync', () => {
   beforeEach(() => {
+    resetBookmarksCacheForTests();
     const storage = new Map<string, string>();
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
@@ -80,7 +82,110 @@ describe('BookmarksPane native preference sync', () => {
 
   afterEach(() => {
     delete window.bookmarksAPI;
+    resetBookmarksCacheForTests();
     vi.restoreAllMocks();
+  });
+
+  it('shows syncing and then up to date while opening bookmarks runs a background sync', async () => {
+    let resolveSync: (value: { status: string }) => void = () => {};
+    window.bookmarksAPI!.syncIfStale = vi.fn(() => new Promise<{ status: string }>((resolve) => {
+      resolveSync = resolve;
+    }));
+
+    render(<BookmarksPane active />);
+
+    const syncLabel = await screen.findByText('Syncing bookmarks...');
+    expect(syncLabel.previousElementSibling?.classList.contains('bookmarks-sync-dot--syncing')).toBe(true);
+    expect(syncLabel.compareDocumentPosition(screen.getByText('Text')) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => {
+      resolveSync({ status: 'too-recent' });
+    });
+
+    await waitFor(() => expect(screen.getByText('Up to date')).toBeTruthy());
+  });
+
+  it('shows network offline when bookmark sync fails from a network error', async () => {
+    window.bookmarksAPI!.syncIfStale = vi.fn(async () => ({
+      status: 'failed',
+      error: 'ENOTFOUND api.x.com',
+    }));
+
+    render(<BookmarksPane active />);
+
+    expect(await screen.findByText('Network offline')).toBeTruthy();
+  });
+
+  it('shows a retry icon after bookmark sync fails', async () => {
+    window.bookmarksAPI!.syncIfStale = vi.fn()
+      .mockResolvedValueOnce({ status: 'failed', error: 'HTTP 500' })
+      .mockResolvedValueOnce({ status: 'too-recent' });
+
+    render(<BookmarksPane active />);
+
+    expect(await screen.findByText('Sync failed')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Retry bookmark sync'));
+
+    await waitFor(() => expect(window.bookmarksAPI!.syncIfStale).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText('Up to date')).toBeTruthy());
+  });
+
+  it('holds newly synced bookmarks behind a reveal button', async () => {
+    const syncedBookmark: Bookmark = {
+      ...bookmark,
+      id: 'bookmark-2',
+      text: 'A newer saved note',
+    };
+    const initialSnapshot: BookmarksSnapshot = {
+      bookmarks: [bookmark],
+      folders: [],
+      xLastSyncedAt: null,
+    };
+    const syncedSnapshot: BookmarksSnapshot = {
+      bookmarks: [syncedBookmark, bookmark],
+      folders: [],
+      xLastSyncedAt: '2026-07-01T12:00:00.000Z',
+    };
+    let nativeChanged: (() => void) | null = null;
+    let resolveSync: (value: { status: string }) => void = () => {};
+
+    window.bookmarksAPI!.getAll = vi.fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValue(syncedSnapshot);
+    window.bookmarksAPI!.syncIfStale = vi.fn(() => new Promise<{ status: string }>((resolve) => {
+      resolveSync = resolve;
+    }));
+    window.bookmarksAPI!.onChanged = vi.fn((callback: () => void) => {
+      nativeChanged = callback;
+      return vi.fn();
+    });
+
+    render(<BookmarksPane active />);
+
+    expect(await screen.findByText('1 bookmarks')).toBeTruthy();
+
+    act(() => {
+      if (!nativeChanged) throw new Error('Expected native bookmark change callback');
+      nativeChanged();
+    });
+
+    const revealButton = await screen.findByText('Show 1 new bookmark');
+    expect(screen.getByText('1 bookmarks')).toBeTruthy();
+    expect(screen.queryByText('Syncing bookmarks...')).toBeNull();
+    expect(revealButton.compareDocumentPosition(screen.getByText('Text')) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => {
+      resolveSync({ status: 'synced' });
+    });
+
+    expect(await screen.findByText('Show 1 new bookmark')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Show 1 new bookmark'));
+
+    await waitFor(() => expect(screen.getByText('2 bookmarks')).toBeTruthy());
+    expect(screen.queryByText('Show 1 new bookmark')).toBeNull();
+    expect(screen.getByText('Up to date')).toBeTruthy();
   });
 
   it('updates a mounted bookmarks pane when native bookmark display preferences change', async () => {

@@ -131,19 +131,12 @@ export class BrowserHelperDocumentService {
   }
 
   addLibraryRoot(dirPath: string): BrowserHelperLibraryRoot | null {
-    const trimmed = dirPath.trim();
-    if (!trimmed) throw new Error('Paste a folder path.');
-    const resolved = path.resolve(trimmed);
-    let stats: fs.Stats;
-    try {
-      stats = fs.statSync(resolved);
-    } catch {
-      throw new Error('Folder path does not exist.');
-    }
-    if (!stats.isDirectory()) throw new Error('Choose a folder, not a file.');
+    const resolved = path.resolve(dirPath);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return null;
     const existing = this.resolveRootByPath(resolved);
-    if (existing) throw new Error('That folder is already in Library.');
-    this.roots.push({ id: `root-${this.roots.length + 1}`, path: resolved });
+    if (!existing) {
+      this.roots.push({ id: `root-${this.roots.length + 1}`, path: resolved });
+    }
     return this.getLibraryRoots().find((root) => root.path === resolved) ?? null;
   }
 
