@@ -98,7 +98,7 @@ struct RootView: View {
                 }
         )
         .overlay {
-            if selectedTab != .voice {
+            if selectedTab != .voice && selectedTab != .goals {
                 DraggableMicOverlay()
             }
         }

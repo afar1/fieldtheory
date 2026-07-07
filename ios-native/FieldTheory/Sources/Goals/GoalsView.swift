@@ -8,7 +8,7 @@ struct GoalsView: View {
 
     @State private var selectedProject: GoalProject?
     @State private var feedCards: [GoalCard] = []
-    @State private var scrolledCardId: String?
+    @State private var currentIndex = 0
     @State private var contextCard: GoalCard?
     @State private var detailCard: GoalCard?
 
@@ -58,34 +58,32 @@ struct GoalsView: View {
     // MARK: - Feed
 
     private var feed: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(feedCards) { card in
-                    SwipeToTriageRow(
-                        onSwipeRight: { Task { await record(card, action: .useful, context: nil) } },
-                        onSwipeLeft: { Task { await record(card, action: .notUseful, context: nil) } }
-                    ) {
-                        GoalCardPage(
-                            card: card,
-                            judgment: judgment(for: card),
-                            pursued: model.goals.pursuedCardIds.contains(card.id),
-                            position: position(of: card),
-                            onUseful: { Task { await record(card, action: .useful, context: nil) } },
-                            onNotUseful: { Task { await record(card, action: .notUseful, context: nil) } },
-                            onContext: { contextCard = card },
-                            onPursue: { Task { await pursue(card) } },
-                            onOpen: { detailCard = card }
-                        )
-                    }
-                    .containerRelativeFrame(.vertical)
-                    .id(card.id)
+        Group {
+            if let card = currentCard {
+                GoalJudgmentSwipeRow(
+                    onSwipeRight: { Task { await record(card, action: .useful, context: nil) } },
+                    onSwipeLeft: { Task { await record(card, action: .notUseful, context: nil) } },
+                    onSwipeUp: { advanceDeck(by: 1) },
+                    onSwipeDown: { advanceDeck(by: -1) },
+                    canSwipeUp: currentIndex < feedCards.count - 1,
+                    canSwipeDown: currentIndex > 0
+                ) {
+                    GoalCardPage(
+                        card: card,
+                        judgment: judgment(for: card),
+                        pursued: model.goals.pursuedCardIds.contains(card.id),
+                        position: position(of: card),
+                        onUseful: { Task { await record(card, action: .useful, context: nil) } },
+                        onNotUseful: { Task { await record(card, action: .notUseful, context: nil) } },
+                        onContext: { contextCard = card },
+                        onPursue: { Task { await pursue(card) } },
+                        onOpen: { detailCard = card }
+                    )
                 }
+                .id(card.id)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
-            .scrollTargetLayout()
         }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $scrolledCardId)
-        .scrollIndicators(.hidden)
         .background(Theme.background(colorScheme))
     }
 
@@ -124,6 +122,7 @@ struct GoalsView: View {
             .foregroundStyle(Theme.accent(model.settings.accentPreset, colorScheme))
         }
         .onChange(of: selectedProject) {
+            currentIndex = 0
             Task { await reloadFeed() }
         }
     }
@@ -132,7 +131,7 @@ struct GoalsView: View {
 
     private func reloadFeed() async {
         await model.goals.reload()
-        refreshFeed(anchorAfter: nil)
+        refreshFeed()
     }
 
     private func judgment(for card: GoalCard) -> GoalFeedbackAction? {
@@ -146,12 +145,17 @@ struct GoalsView: View {
         return "\(index)/\(feedCards.count)"
     }
 
+    private var currentCard: GoalCard? {
+        guard feedCards.indices.contains(currentIndex) else { return feedCards.first }
+        return feedCards[currentIndex]
+    }
+
     private func record(_ card: GoalCard, action: GoalFeedbackAction, context: String?) async {
         guard judgment(for: card) == nil else { return }
         await model.goals.record(card: card, action: action, context: context)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
-            refreshFeed(anchorAfter: card)
+            refreshFeed()
         }
     }
 
@@ -161,23 +165,155 @@ struct GoalsView: View {
         toast.show("Goal copied", symbol: "flag.checkered")
     }
 
-    private func refreshFeed(anchorAfter card: GoalCard?) {
-        let previousCards = feedCards
-        let previousIndex = card.flatMap { previousCards.firstIndex(of: $0) }
+    private func refreshFeed() {
         feedCards = model.goals.unjudgedCards(for: selectedProject)
+        currentIndex = min(max(0, currentIndex), max(0, feedCards.count - 1))
+    }
 
-        guard let previousIndex else {
-            scrolledCardId = feedCards.first?.id
-            return
+    private func advanceDeck(by delta: Int) {
+        let nextIndex = min(max(0, currentIndex + delta), max(0, feedCards.count - 1))
+        guard nextIndex != currentIndex else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+            currentIndex = nextIndex
         }
-
-        let remainingIds = Set(feedCards.map(\.id))
-        let nextCard = previousCards.dropFirst(previousIndex + 1).first { remainingIds.contains($0.id) }
-        scrolledCardId = nextCard?.id ?? feedCards.first?.id
     }
 }
 
 // MARK: - Card page
+
+struct GoalJudgmentSwipeRow<Content: View>: View {
+    let onSwipeRight: () -> Void
+    let onSwipeLeft: () -> Void
+    let onSwipeUp: () -> Void
+    let onSwipeDown: () -> Void
+    let canSwipeUp: Bool
+    let canSwipeDown: Bool
+    @ViewBuilder let content: () -> Content
+
+    @State private var offset: CGSize = .zero
+    @State private var dragAxis: DragAxis?
+
+    private enum DragAxis {
+        case horizontal
+        case vertical
+    }
+
+    private let intentDistance: CGFloat = 18
+    private let commitDistance: CGFloat = 58
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                reveal
+                content()
+                    .offset(offset)
+            }
+            .contentShape(Rectangle())
+            .gesture(dragGesture(width: geometry.size.width))
+        }
+    }
+
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                guard !startedAtScreenEdge(value, width: width) else { return }
+                updateAxisIfNeeded(value)
+                switch dragAxis {
+                case .horizontal:
+                    offset = CGSize(width: damped(value.translation.width, commitDistance: commitDistance), height: 0)
+                case .vertical:
+                    offset = CGSize(width: 0, height: damped(value.translation.height, commitDistance: commitDistance))
+                case nil:
+                    break
+                }
+            }
+            .onEnded { value in
+                defer {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        offset = .zero
+                    }
+                    dragAxis = nil
+                }
+
+                guard !startedAtScreenEdge(value, width: width) else { return }
+
+                switch dragAxis {
+                case .horizontal:
+                    let projected = value.translation.width + value.predictedEndTranslation.width * 0.3
+                    guard abs(projected) > commitDistance,
+                          abs(projected) > abs(value.translation.height) * 1.25 else { return }
+                    if projected > 0 {
+                        onSwipeRight()
+                    } else {
+                        onSwipeLeft()
+                    }
+                case .vertical:
+                    let projected = value.translation.height + value.predictedEndTranslation.height * 0.3
+                    guard abs(projected) > commitDistance,
+                          abs(projected) > abs(value.translation.width) * 1.25 else { return }
+                    if projected < 0, canSwipeUp {
+                        onSwipeUp()
+                    } else if projected > 0, canSwipeDown {
+                        onSwipeDown()
+                    }
+                case nil:
+                    break
+                }
+            }
+    }
+
+    private func damped(_ distance: CGFloat, commitDistance: CGFloat) -> CGFloat {
+        let past = max(0, abs(distance) - commitDistance)
+        let value = min(abs(distance), commitDistance) + past * 0.3
+        return (distance < 0 ? -1 : 1) * value
+    }
+
+    private func updateAxisIfNeeded(_ value: DragGesture.Value) {
+        guard dragAxis == nil else { return }
+        let dx = abs(value.translation.width)
+        let dy = abs(value.translation.height)
+        guard max(dx, dy) >= intentDistance else { return }
+
+        if dx > dy * 1.25 {
+            dragAxis = .horizontal
+        } else if dy > dx * 1.05 {
+            dragAxis = .vertical
+        }
+    }
+
+    private func startedAtScreenEdge(_ value: DragGesture.Value, width: CGFloat) -> Bool {
+        return value.startLocation.x < EdgeSwipe.zoneWidth
+            || value.startLocation.x > width - EdgeSwipe.zoneWidth
+    }
+
+    private var reveal: some View {
+        let horizontalOffset = offset.width
+        let committed = abs(horizontalOffset) >= commitDistance
+        return HStack {
+            Label("Useful", systemImage: "hand.thumbsup.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.leading, 22)
+                .opacity(horizontalOffset > 10 ? 1 : 0)
+                .scaleEffect(horizontalOffset > 0 && committed ? 1.08 : 1)
+            Spacer()
+            Label("Not useful", systemImage: "hand.thumbsdown.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.trailing, 22)
+                .opacity(horizontalOffset < -10 ? 1 : 0)
+                .scaleEffect(horizontalOffset < 0 && committed ? 1.08 : 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(horizontalOffset > 0 ? Theme.markRead : Theme.unread)
+                .opacity(abs(horizontalOffset) > 10 ? (committed ? 1 : 0.75) : 0)
+        )
+        .animation(.easeOut(duration: 0.12), value: committed)
+    }
+}
 
 struct GoalCardPage: View {
     let card: GoalCard
@@ -194,41 +330,118 @@ struct GoalCardPage: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var accent: Color { Theme.accent(model.settings.accentPreset, colorScheme) }
+    private let bottomChromeHeight: CGFloat = 116
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        GeometryReader { geometry in
+            cardSurface
+                .frame(
+                    width: max(0, geometry.size.width - 24),
+                    height: min(max(0, geometry.size.height - 10), 720),
+                    alignment: .topLeading
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(alignment: .topTrailing) { judgmentBadge.padding(26) }
+                .contentShape(Rectangle())
+                .onTapGesture { onOpen() }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+        }
+    }
+
+    private var cardSurface: some View {
+        GeometryReader { geometry in
+            let contentHeight = max(0, geometry.size.height - bottomChromeHeight)
+            VStack(alignment: .leading, spacing: 10) {
+                fittedContent
+                    .frame(maxWidth: .infinity, minHeight: contentHeight, maxHeight: contentHeight, alignment: .topLeading)
+                    .clipped()
+                ScoreAxesView(scores: card.scores)
+                    .layoutPriority(2)
+                actionBar
+                    .layoutPriority(3)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Theme.backgroundAlt(colorScheme))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(judgmentBorder, lineWidth: 1.5)
+                    )
+            )
+        }
+    }
+
+    private var fittedContent: some View {
+        ViewThatFits(in: .vertical) {
+            contentVariant(
+                titleSize: 21,
+                bodySize: 14,
+                labelSize: 10,
+                spacing: 9,
+                titleLimit: 2,
+                whyLimit: nil,
+                goalLimit: nil,
+                firstTestLimit: nil
+            )
+            contentVariant(
+                titleSize: 20,
+                bodySize: 13,
+                labelSize: 9.5,
+                spacing: 7,
+                titleLimit: 2,
+                whyLimit: nil,
+                goalLimit: nil,
+                firstTestLimit: nil
+            )
+            contentVariant(
+                titleSize: 18.5,
+                bodySize: 12.5,
+                labelSize: 9,
+                spacing: 6,
+                titleLimit: 2,
+                whyLimit: nil,
+                goalLimit: nil,
+                firstTestLimit: nil
+            )
+            contentVariant(
+                titleSize: 18,
+                bodySize: 12.5,
+                labelSize: 8.5,
+                spacing: 6,
+                titleLimit: 1,
+                whyLimit: 5,
+                goalLimit: 12,
+                firstTestLimit: 3
+            )
+        }
+    }
+
+    private func contentVariant(
+        titleSize: CGFloat,
+        bodySize: CGFloat,
+        labelSize: CGFloat,
+        spacing: CGFloat,
+        titleLimit: Int,
+        whyLimit: Int?,
+        goalLimit: Int?,
+        firstTestLimit: Int?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: spacing) {
             header
             Text(card.title)
-                .font(.custom("Source Serif 4", size: 23).weight(.semibold))
+                .font(.custom("Source Serif 4", size: titleSize).weight(.semibold))
                 .foregroundStyle(Theme.text(colorScheme))
-                .lineLimit(3)
+                .lineLimit(titleLimit)
 
             sourceRow
 
-            section("Why now", card.whyNow, lineLimit: 3)
-            section("Goal", card.goal, lineLimit: 6)
-            section("First test", card.firstTest, lineLimit: 2)
-
-            ScoreAxesView(scores: card.scores)
-
-            Spacer(minLength: 0)
-            actionBar
+            section("Why now", card.whyNow, bodySize: bodySize, labelSize: labelSize, lineLimit: whyLimit)
+            section("Goal", card.goal, bodySize: bodySize, labelSize: labelSize, lineLimit: goalLimit)
+            section("First test", card.firstTest, bodySize: bodySize, labelSize: labelSize, lineLimit: firstTestLimit)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Theme.backgroundAlt(colorScheme))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(judgmentBorder, lineWidth: 1.5)
-                )
-        )
-        .overlay(alignment: .topTrailing) { judgmentBadge.padding(26) }
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen() }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private var judgmentBorder: Color {
@@ -286,16 +499,16 @@ struct GoalCardPage: View {
         }
     }
 
-    private func section(_ label: String, _ text: String, lineLimit: Int) -> some View {
+    private func section(_ label: String, _ text: String, bodySize: CGFloat, labelSize: CGFloat, lineLimit: Int?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label.uppercased())
-                .font(.system(size: 10.5, weight: .bold))
+                .font(.system(size: labelSize, weight: .bold))
                 .foregroundStyle(.tertiary)
                 .kerning(0.8)
             Text(text)
-                .font(.custom("Source Sans 3", size: 15))
+                .font(.custom("Source Sans 3", size: bodySize))
                 .foregroundStyle(Theme.text(colorScheme))
-                .lineSpacing(2.5)
+                .lineSpacing(1.5)
                 .lineLimit(lineLimit)
         }
     }
