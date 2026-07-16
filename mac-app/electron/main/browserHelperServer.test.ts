@@ -933,17 +933,17 @@ describe('BrowserHelperServer', () => {
       service: new BrowserHelperDocumentService([root]),
       token: 'test-token',
       nativeBridge: {
-        getShareStatus: (filePath) => ({ shared: true, slug: 'plan-123', url: `https://librarian.fieldtheory.dev/${path.basename(filePath)}` }),
-        shareReading: (filePath) => {
-          calls.push(['share', filePath]);
-          return { slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/plan-123' };
+        getShareStatus: (filePath) => ({ shared: true, slug: 'plan-123', url: `https://librarian.fieldtheory.dev/${path.basename(filePath)}`, visibility: 'unlisted' }),
+        shareReading: (filePath, visibility) => {
+          calls.push(['share', filePath, visibility]);
+          return { slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/plan-123', visibility };
         },
         unshareReading: (filePath) => {
           calls.push(['unshare', filePath]);
           return true;
         },
-        updateSharedReading: (filePath, content, title) => {
-          calls.push(['update', filePath, content, title]);
+        updateSharedReading: (filePath, content, title, visibility) => {
+          calls.push(['update', filePath, content, title, visibility]);
           return true;
         },
         pollLibrarianStatus: () => ({
@@ -971,12 +971,22 @@ describe('BrowserHelperServer', () => {
     const share = await request(`http://${address.host}:${address.port}/native/librarian/share-reading`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { filePath: '/tmp/Plan.md' },
+      body: { filePath: '/tmp/Plan.md', visibility: 'unlisted' },
     });
     const update = await request(`http://${address.host}:${address.port}/native/librarian/update-shared-reading`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
-      body: { filePath: '/tmp/Plan.md', content: '# Updated\n', title: 'Plan' },
+      body: { filePath: '/tmp/Plan.md', content: '# Updated\n', title: 'Plan', visibility: 'unlisted' },
+    });
+    const invalidShare = await request(`http://${address.host}:${address.port}/native/librarian/share-reading`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { filePath: '/tmp/Plan.md', visibility: 'private' },
+    });
+    const invalidUpdate = await request(`http://${address.host}:${address.port}/native/librarian/update-shared-reading`, {
+      method: 'POST',
+      headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+      body: { filePath: '/tmp/Plan.md', content: '# Updated\n', title: 'Plan', visibility: 'private' },
     });
     const status = await request(`http://${address.host}:${address.port}/native/librarian/status?token=test-token`);
     const mutedBefore = await request(`http://${address.host}:${address.port}/native/librarian/muted-for-today?token=test-token`);
@@ -994,9 +1004,11 @@ describe('BrowserHelperServer', () => {
       body: { filePath: '/tmp/Plan.md' },
     });
 
-    expect(shareStatus.body.status).toEqual({ shared: true, slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/Plan.md' });
-    expect(share.body.result).toEqual({ slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/plan-123' });
+    expect(shareStatus.body.status).toEqual({ shared: true, slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/Plan.md', visibility: 'unlisted' });
+    expect(share.body.result).toEqual({ slug: 'plan-123', url: 'https://librarian.fieldtheory.dev/plan-123', visibility: 'unlisted' });
     expect(update.body.success).toBe(true);
+    expect(invalidShare.body.result).toBeNull();
+    expect(invalidUpdate.body.success).toBe(false);
     expect(status.body.status).toEqual({
       pendingPath: '/tmp/Auto.md',
       edits: 3,
@@ -1008,8 +1020,8 @@ describe('BrowserHelperServer', () => {
     expect(unmute.body.muted).toBe(false);
     expect(unshare.body.success).toBe(true);
     expect(calls).toEqual([
-      ['share', '/tmp/Plan.md'],
-      ['update', '/tmp/Plan.md', '# Updated\n', 'Plan'],
+      ['share', '/tmp/Plan.md', 'unlisted'],
+      ['update', '/tmp/Plan.md', '# Updated\n', 'Plan', 'unlisted'],
       ['unshare', '/tmp/Plan.md'],
     ]);
   });

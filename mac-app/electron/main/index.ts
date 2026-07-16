@@ -198,6 +198,13 @@ import {
 } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import {
+  isPublicReadingVisibility,
+  publicReadingSlug,
+  resolvePublicReadingDocument,
+  resolvePublicReadingSourcePath,
+  type PublicReadingVisibility,
+} from './publicReadingDocument';
 import { setMarkdownArchivedState, stampMarkdownContentEditIfBodyChanged } from '../shared/markdownFrontmatter';
 import { resolveUpdaterStatusTransition, type UpdateStatus } from '../shared/updaterState';
 import {
@@ -2754,15 +2761,23 @@ function renameExternalLibraryFile(absPath: string, newName: string): { path: st
   }
 }
 
-async function shareLibrarianReading(filePath: string): Promise<{ slug: string; url: string } | null> {
+async function shareLibrarianReading(
+  filePath: string,
+  visibility: PublicReadingVisibility = 'listed',
+): Promise<{ slug: string; url: string; visibility: PublicReadingVisibility } | null> {
   if (!authManager?.isAuthenticated()) {
     return null;
   }
 
-  const reading = librarianManager?.getReading(filePath);
+  const reading = resolvePublicReadingDocument(
+    filePath,
+    librarianManager?.getReading(filePath) ?? null,
+    librarianManager?.getLibraryRootPaths() ?? [libraryDir()],
+  );
   if (!reading) {
     return null;
   }
+  const sourcePath = reading.path;
 
   const supabase = authManager.getSupabaseClient();
   const session = authManager.getSession();
@@ -2788,37 +2803,43 @@ async function shareLibrarianReading(filePath: string): Promise<{ slug: string; 
 
   const { data: existing } = await supabase
     .from('shared_readings')
-    .select('slug, is_public')
-    .eq('source_path', filePath)
+    .select('slug, is_public, visibility')
+    .eq('source_path', sourcePath)
     .eq('user_id', session.user.id)
     .single();
 
   if (existing) {
-    if (!existing.is_public) {
-      await supabase
-        .from('shared_readings')
-        .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
-        .eq('source_path', filePath)
-        .eq('user_id', session.user.id);
+    const nextSlug = publicReadingSlug(reading.title, visibility, {
+      slug: existing.slug,
+      visibility: isPublicReadingVisibility(existing.visibility) ? existing.visibility : undefined,
+    });
+    const { data: refreshed, error: updateError } = await supabase
+      .from('shared_readings')
+      .update({
+        is_public: true,
+        content: reading.content,
+        title: reading.title,
+        author_name: authorName,
+        visibility,
+        slug: nextSlug,
+      })
+      .eq('source_path', sourcePath)
+      .eq('user_id', session.user.id)
+      .select('slug')
+      .single();
+    if (updateError || !refreshed) {
+      log.error('Librarian share refresh failed:', updateError);
+      return null;
     }
     return {
-      slug: existing.slug,
-      url: `https://librarian.fieldtheory.dev/${existing.slug}`,
+      slug: refreshed.slug,
+      url: `https://librarian.fieldtheory.dev/${refreshed.slug}`,
+      visibility,
     };
   }
 
-  const slugify = (text: string): string =>
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50);
-
-  const baseSlug = slugify(reading.title);
-
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const randomSuffix = crypto.randomBytes(3).toString('hex');
-    const slug = `${baseSlug}-${randomSuffix}`;
+    const slug = publicReadingSlug(reading.title, visibility);
 
     const { data, error } = await supabase
       .from('shared_readings')
@@ -2828,8 +2849,9 @@ async function shareLibrarianReading(filePath: string): Promise<{ slug: string; 
         title: reading.title,
         content: reading.content,
         author_name: authorName,
-        source_path: filePath,
+        source_path: sourcePath,
         is_public: true,
+        visibility,
       })
       .select('slug')
       .single();
@@ -2839,10 +2861,44 @@ async function shareLibrarianReading(filePath: string): Promise<{ slug: string; 
       return {
         slug: data.slug,
         url: `https://librarian.fieldtheory.dev/${data.slug}`,
+        visibility,
       };
     }
 
     if (error?.code === '23505') {
+      const { data: concurrent } = await supabase
+        .from('shared_readings')
+        .select('slug, visibility')
+        .eq('source_path', sourcePath)
+        .eq('user_id', session.user.id)
+        .single();
+      if (concurrent?.slug) {
+        const nextSlug = publicReadingSlug(reading.title, visibility, {
+          slug: concurrent.slug,
+          visibility: isPublicReadingVisibility(concurrent.visibility) ? concurrent.visibility : undefined,
+        });
+        const { data: refreshed, error: updateError } = await supabase
+          .from('shared_readings')
+          .update({
+            is_public: true,
+            content: reading.content,
+            title: reading.title,
+            author_name: authorName,
+            visibility,
+            slug: nextSlug,
+          })
+          .eq('source_path', sourcePath)
+          .eq('user_id', session.user.id)
+          .select('slug')
+          .single();
+        if (!updateError && refreshed) {
+          return {
+            slug: refreshed.slug,
+            url: `https://librarian.fieldtheory.dev/${refreshed.slug}`,
+            visibility,
+          };
+        }
+      }
       continue;
     }
 
@@ -2875,7 +2931,12 @@ async function unshareLibrarianReading(filePath: string): Promise<boolean> {
   return true;
 }
 
-async function getLibrarianShareStatus(filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> {
+async function getLibrarianShareStatus(filePath: string): Promise<{
+  shared: boolean;
+  slug?: string;
+  url?: string;
+  visibility?: PublicReadingVisibility;
+} | null> {
   if (!authManager?.isAuthenticated()) return null;
 
   const supabase = authManager.getSupabaseClient();
@@ -2884,7 +2945,7 @@ async function getLibrarianShareStatus(filePath: string): Promise<{ shared: bool
 
   const { data, error } = await supabase
     .from('shared_readings')
-    .select('slug, is_public')
+    .select('slug, is_public, visibility')
     .eq('source_path', filePath)
     .eq('user_id', session.user.id)
     .single();
@@ -2901,6 +2962,7 @@ async function getLibrarianShareStatus(filePath: string): Promise<{ shared: bool
     shared: true,
     slug: data.slug,
     url: `https://librarian.fieldtheory.dev/${data.slug}`,
+    visibility: isPublicReadingVisibility(data.visibility) ? data.visibility : undefined,
   };
 }
 
@@ -2924,7 +2986,12 @@ async function getCurrentUserCallsign(): Promise<string | null> {
   }
 }
 
-async function updateSharedLibrarianReading(filePath: string, content: string, title: string): Promise<boolean> {
+async function updateSharedLibrarianReading(
+  filePath: string,
+  content: string,
+  title: string,
+  visibility?: PublicReadingVisibility,
+): Promise<boolean> {
   if (!authManager?.isAuthenticated()) return false;
 
   const supabase = authManager.getSupabaseClient();
@@ -2947,14 +3014,42 @@ async function updateSharedLibrarianReading(filePath: string, content: string, t
     // Ignore profile fetch errors.
   }
 
-  const { error } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('shared_readings')
-    .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
+    .select('slug, visibility')
     .eq('source_path', filePath)
     .eq('user_id', session.user.id)
-    .eq('is_public', true);
+    .eq('is_public', true)
+    .maybeSingle();
+  if (existingError || !existing?.slug) {
+    log.error('Librarian update shared reading lookup failed:', existingError);
+    return false;
+  }
 
-  if (error) {
+  const updates: Record<string, unknown> = {
+    content,
+    title,
+    author_name: authorName,
+    updated_at: new Date().toISOString(),
+  };
+  if (visibility) {
+    updates.visibility = visibility;
+    updates.slug = publicReadingSlug(title, visibility, {
+      slug: existing.slug,
+      visibility: isPublicReadingVisibility(existing.visibility) ? existing.visibility : undefined,
+    });
+  }
+
+  const { data, error } = await supabase
+    .from('shared_readings')
+    .update(updates)
+    .eq('source_path', filePath)
+    .eq('user_id', session.user.id)
+    .eq('is_public', true)
+    .select('slug')
+    .maybeSingle();
+
+  if (error || !data) {
     log.error('Librarian update shared reading failed:', error);
     return false;
   }
@@ -2966,6 +3061,11 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   if (!librarianManager || browserHelperServer) return;
 
   const manager = librarianManager;
+  const resolveSharedReadingPath = (filePath: string): string | null => resolvePublicReadingSourcePath(
+    filePath,
+    manager.getReading(filePath),
+    manager.getLibraryRootPaths(),
+  );
   const createFallbackDocumentService = () => new BrowserHelperDocumentService(manager.getLibraryRoots().map((root) => root.path));
   const nativeWikiPage = (page: ReturnType<LibrarianManager['getWikiPage']>) => page
     ? {
@@ -3280,10 +3380,22 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         }
         return librarianManager?.deleteReading(filePath) ?? false;
       },
-      getShareStatus: (filePath) => getLibrarianShareStatus(filePath),
-      shareReading: (filePath) => shareLibrarianReading(filePath),
-      unshareReading: (filePath) => unshareLibrarianReading(filePath),
-      updateSharedReading: (filePath, content, title) => updateSharedLibrarianReading(filePath, content, title),
+      getShareStatus: (filePath) => {
+        const sourcePath = resolveSharedReadingPath(filePath);
+        return sourcePath ? getLibrarianShareStatus(sourcePath) : null;
+      },
+      shareReading: (filePath, visibility) => {
+        const sourcePath = resolveSharedReadingPath(filePath);
+        return sourcePath ? shareLibrarianReading(sourcePath, visibility) : null;
+      },
+      unshareReading: (filePath) => {
+        const sourcePath = resolveSharedReadingPath(filePath);
+        return sourcePath ? unshareLibrarianReading(sourcePath) : false;
+      },
+      updateSharedReading: (filePath, content, title, visibility) => {
+        const sourcePath = resolveSharedReadingPath(filePath);
+        return sourcePath ? updateSharedLibrarianReading(sourcePath, content, title, visibility) : false;
+      },
       isLibrarianEnabled: () => librarianManager?.isEnabled() ?? false,
       setLibrarianEnabled: (enabled) => {
         if (!canWriteFieldTheoryContent()) {

@@ -14,6 +14,7 @@ import {
   shouldReturnLocalImageNotModified,
 } from './localImageProtocol';
 import { isPathInside } from './pathSafety';
+import { isPublicReadingVisibility, type PublicReadingVisibility } from './publicReadingDocument';
 import type { RecentEntry, RecentKind } from './recentManager';
 import { isAllowedExternalShellUrl } from './shellIpc';
 
@@ -145,9 +146,9 @@ export type BrowserHelperNativeBridge = {
   saveReading?: (filePath: string, content: string, expectedVersion?: unknown) => unknown | Promise<unknown>;
   deleteReading?: (filePath: string) => boolean | Promise<boolean>;
   getShareStatus?: (filePath: string) => unknown | Promise<unknown>;
-  shareReading?: (filePath: string) => unknown | Promise<unknown>;
+  shareReading?: (filePath: string, visibility: PublicReadingVisibility) => unknown | Promise<unknown>;
   unshareReading?: (filePath: string) => boolean | Promise<boolean>;
-  updateSharedReading?: (filePath: string, content: string, title: string) => boolean | Promise<boolean>;
+  updateSharedReading?: (filePath: string, content: string, title: string, visibility?: PublicReadingVisibility) => boolean | Promise<boolean>;
   isLibrarianEnabled?: () => boolean | Promise<boolean>;
   setLibrarianEnabled?: (enabled: boolean) => boolean | Promise<boolean>;
   isLibrarianSetupComplete?: () => boolean | Promise<boolean>;
@@ -1041,7 +1042,12 @@ export class BrowserHelperServer {
       if (req.method === 'POST' && parsed.pathname === '/native/librarian/share-reading') {
         const body = await readJsonBody(req);
         const filePath = typeof body.filePath === 'string' ? body.filePath : '';
-        const result = filePath ? await this.nativeBridge.shareReading?.(filePath) ?? null : null;
+        const visibility = body.visibility === undefined
+          ? 'listed'
+          : isPublicReadingVisibility(body.visibility) ? body.visibility : null;
+        const result = filePath && visibility
+          ? await this.nativeBridge.shareReading?.(filePath, visibility) ?? null
+          : null;
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
@@ -1059,8 +1065,11 @@ export class BrowserHelperServer {
         const filePath = typeof body.filePath === 'string' ? body.filePath : '';
         const content = typeof body.content === 'string' ? body.content : null;
         const title = typeof body.title === 'string' ? body.title : '';
-        const success = filePath && content !== null && title
-          ? await this.nativeBridge.updateSharedReading?.(filePath, content, title) ?? false
+        const visibility = body.visibility === undefined
+          ? undefined
+          : isPublicReadingVisibility(body.visibility) ? body.visibility : null;
+        const success = filePath && content !== null && title && visibility !== null
+          ? await this.nativeBridge.updateSharedReading?.(filePath, content, title, visibility) ?? false
           : false;
         writeJson(res, 200, { ok: true, success }, req.headers.origin);
         return;
