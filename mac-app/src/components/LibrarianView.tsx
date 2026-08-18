@@ -3242,6 +3242,16 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
+function kindleJobFeedbackLabel(job: KindleDeliveryJob): string {
+  if (job.status === 'queued') return 'Queued for Codex send...';
+  if (job.status === 'running') return 'Sending to Kindle with Codex...';
+  if (job.status === 'verifying') return 'Verifying Gmail Sent...';
+  if (job.status === 'sent') return 'Sent to Kindle';
+  const firstLine = (job.error ?? '').split('\n').find(Boolean)?.trim();
+  if (!firstLine) return 'Kindle send failed';
+  return `Kindle send failed: ${firstLine.length > 88 ? `${firstLine.slice(0, 87)}...` : firstLine}`;
+}
+
 function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onNavigateToSignIn, browserLibrarySurface = false, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onActionFeedback, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0, shortcutsHelpRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
@@ -3444,6 +3454,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
+  const kindleProgressTimerRef = useRef<number | null>(null);
   const markdownEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
   const renderedEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
 
@@ -3472,6 +3483,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
   const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
   const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [isPreparingKindle, setIsPreparingKindle] = useState(false);
+  const [kindleDeliveryJobPath, setKindleDeliveryJobPath] = useState<string | null>(null);
+  const [kindleProgressLabel, setKindleProgressLabel] = useState<string | null>(null);
   const [riverSharePickerOpen, setRiverSharePickerOpen] = useState(false);
   const [riverTargets, setRiverTargets] = useState<RiverTarget[]>([]);
   const [selectedRiverTargetIds, setSelectedRiverTargetIds] = useState<string[]>([]);
@@ -5061,6 +5075,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
   const activeIsHtmlDocument = activeDocumentKind === 'html';
   const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
+  const kindleToolbarVisible = activeIsMarkdownDocument && contentMode === 'rendered';
+  const kindleBusy = isPreparingKindle || kindleDeliveryJobPath !== null;
   const activeHtmlLayout: LibrarianHtmlLayout = activeIsHtmlDocument && activeReadingPath
     ? htmlLayoutByPath[activeReadingPath] ?? 'full'
     : 'contained';
@@ -6711,6 +6727,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     await navigator.clipboard?.writeText(text);
+  }, []);
+
+  const finishKindleProgress = useCallback((label: string) => {
+    setKindleProgressLabel(label);
+    setKindleDeliveryJobPath(null);
+    setIsPreparingKindle(false);
+    if (kindleProgressTimerRef.current !== null) {
+      window.clearTimeout(kindleProgressTimerRef.current);
+    }
+    kindleProgressTimerRef.current = window.setTimeout(() => {
+      setKindleProgressLabel(null);
+      kindleProgressTimerRef.current = null;
+    }, COPY_PATH_FEEDBACK_MS);
   }, []);
 
   const pasteTextToCodexTerminal = useCallback(async (text: string) => {
@@ -9693,6 +9722,102 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [activeReading?.path, flashCopyFeedback, writeTextToClipboard]);
 
+  const sendActiveReadingToKindle = useCallback(async () => {
+    if (!activeReadingPath || !activeIsMarkdownDocument || kindleBusy) return;
+    const sendKindleDelivery = window.librarianAPI?.sendKindleDelivery;
+    if (!sendKindleDelivery) {
+      flashCopyFeedback('Kindle unavailable');
+      return;
+    }
+
+    setIsPreparingKindle(true);
+    setKindleDeliveryJobPath(null);
+    if (kindleProgressTimerRef.current !== null) {
+      window.clearTimeout(kindleProgressTimerRef.current);
+      kindleProgressTimerRef.current = null;
+    }
+    setKindleProgressLabel('Preparing Kindle EPUB...');
+    try {
+      await flushCurrentEdit();
+      const result = await sendKindleDelivery(activeReadingPath);
+      if (result.status === 'error' || result.status === 'blocked') {
+        finishKindleProgress(result.message ?? 'Kindle send failed');
+        return;
+      }
+      if (result.status === 'already_sent') {
+        finishKindleProgress('Already sent to Kindle');
+        return;
+      }
+      if (result.jobPath) {
+        setKindleDeliveryJobPath(result.jobPath);
+        setKindleProgressLabel(result.job ? kindleJobFeedbackLabel(result.job) : 'Queued for Codex send...');
+        setIsPreparingKindle(false);
+        return;
+      }
+      finishKindleProgress('Kindle send failed: no Codex job was created');
+    } catch (err) {
+      console.warn('[Librarian] Failed to send Kindle delivery:', err);
+      finishKindleProgress('Kindle send failed');
+    }
+  }, [activeIsMarkdownDocument, activeReadingPath, finishKindleProgress, flashCopyFeedback, flushCurrentEdit, kindleBusy]);
+
+  useEffect(() => {
+    if (!kindleDeliveryJobPath) return;
+    const getKindleDeliveryJob = window.librarianAPI?.getKindleDeliveryJob;
+    if (!getKindleDeliveryJob) {
+      finishKindleProgress('Kindle send status unavailable');
+      return;
+    }
+
+    let cancelled = false;
+    let intervalId: number | null = null;
+    const poll = async () => {
+      try {
+        const result = await getKindleDeliveryJob(kindleDeliveryJobPath);
+        if (cancelled) return;
+        if (result.status === 'missing') {
+          finishKindleProgress('Kindle send failed: job disappeared');
+          return;
+        }
+        if (result.status === 'error' || !result.job) {
+          finishKindleProgress(result.message ?? 'Kindle send status failed');
+          return;
+        }
+        const label = kindleJobFeedbackLabel(result.job);
+        setKindleProgressLabel(label);
+        if (result.job.status === 'sent' || result.job.status === 'failed') {
+          finishKindleProgress(label);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[Librarian] Failed to read Kindle delivery job:', err);
+          finishKindleProgress('Kindle send status failed');
+        }
+      }
+    };
+
+    void poll();
+    intervalId = window.setInterval(() => { void poll(); }, 2000);
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) window.clearInterval(intervalId);
+    };
+  }, [finishKindleProgress, kindleDeliveryJobPath]);
+
+  useEffect(() => {
+    return () => {
+      if (kindleProgressTimerRef.current !== null) {
+        window.clearTimeout(kindleProgressTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!kindleDeliveryJobPath) {
+      setIsPreparingKindle(false);
+    }
+  }, [kindleDeliveryJobPath]);
+
   useEffect(() => {
     return () => {
       if (copyPathFeedbackTimerRef.current !== null) {
@@ -11226,7 +11351,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     </div>
   ) : null;
 
-  const readerStatusFeedback = copyFeedbackLabel ? (
+  const readerStatusFeedbackLabel = kindleProgressLabel ?? copyFeedbackLabel;
+  const readerStatusFeedback = readerStatusFeedbackLabel ? (
     <div
       role="status"
       data-ft-reader-status-feedback="true"
@@ -11245,7 +11371,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         zIndex: 6,
       }}
     >
-      {copyFeedbackLabel}
+      {readerStatusFeedbackLabel}
     </div>
   ) : null;
 
@@ -11795,6 +11921,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   isFullScreen={isFullScreen || focusImmersive}
                   onToggleFullScreen={toggleFocusChromeShortcut}
                   dragSpacer={!focusChromeActive}
+                  forceVisibleActions={kindleToolbarVisible ? ['kindle'] : []}
                   textSize={textSize}
                   onTextSizeChange={setTextSize}
                   showTextSize
@@ -11833,6 +11960,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   showShare={sharedFilesAvailable && activeIsMarkdownDocument}
                   shareTitle="Add to River (shared)"
                   sharedTitle="Edit River audience (shared)"
+                  onPrepareKindle={sendActiveReadingToKindle}
+                  showKindle={kindleToolbarVisible}
+                  kindlePreparing={kindleBusy}
+                  kindleTitle={kindleProgressLabel ?? 'Send to Kindle'}
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                   onOpenInNewWindow={activeReadingPath && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external') ? openActiveDocumentInWindow : undefined}

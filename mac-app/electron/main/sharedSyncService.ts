@@ -1092,21 +1092,28 @@ export class SharedSyncService extends EventEmitter {
     ensureDir(root);
     if (createdRoot) result.created = 1;
 
-    let data: unknown[] | null = null;
+    let data: unknown[] = [];
+    let canonicalInventoryComplete = false;
     try {
       const response = await supabase
         .from('river_documents')
-        .select('*')
+        .select('*', { count: 'exact' })
         .is('deleted_at', null);
-      data = response.data;
-      if (response.error) return this.syncLegacyOnce(result);
-    } catch {
-      return this.syncLegacyOnce(result);
+      const hasRows = Array.isArray(response.data);
+      data = Array.isArray(response.data) ? response.data : [];
+      if (response.error) {
+        result.errors.push(response.error.message);
+      } else {
+        canonicalInventoryComplete = hasRows && typeof response.count === 'number' && response.count === data.length;
+        if (!canonicalInventoryComplete) result.errors.push('Canonical River inventory was incomplete');
+      }
+    } catch (err) {
+      result.errors.push(err instanceof Error ? err.message : String(err));
     }
 
     const activeIds = new Set<string>();
     let currentUserCallsign: Promise<string | null> | null = null;
-    for (const row of (data ?? []) as RiverDocumentRow[]) {
+    for (const row of data as RiverDocumentRow[]) {
       try {
         let cacheRow = row;
         if (!row.author_callsign && row.created_by === session.user.id) {
@@ -1118,12 +1125,15 @@ export class SharedSyncService extends EventEmitter {
         activeIds.add(row.id);
         result.written++;
       } catch (err) {
+        canonicalInventoryComplete = false;
         result.errors.push(err instanceof Error ? err.message : String(err));
       }
     }
 
-    await this.syncLegacyRows(result, activeIds);
-    result.removed = this.removeStaleCacheFiles(activeIds);
+    const legacyInventoryComplete = await this.syncLegacyRows(result, activeIds);
+    if (canonicalInventoryComplete && legacyInventoryComplete) {
+      result.removed = this.removeStaleCacheFiles(activeIds);
+    }
     return result;
   }
 
@@ -1183,41 +1193,53 @@ export class SharedSyncService extends EventEmitter {
   private async syncLegacyRows(
     result: { written: number; removed: number; created: number; errors: string[] },
     activeIds: Set<string>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
-    if (!supabase || !session?.user?.id) return;
+    if (!supabase || !session?.user?.id) return false;
     const teamScopeUserId = await this.getReadableTeamScopeUserId();
-    if (!teamScopeUserId) return;
-
-    const { data, error } = await supabase
-      .from('team_documents')
-      .select('*')
-      .eq('team_scope_user_id', teamScopeUserId)
-      .is('deleted_at', null);
-
-    if (error) {
-      result.errors.push(error.message);
-      return;
+    if (!teamScopeUserId) {
+      if (this.getCachedTeamScopeUserIds().length > 0) {
+        result.errors.push('Legacy River inventory scope was unavailable');
+        return false;
+      }
+      return true;
     }
 
-    for (const row of (data ?? []) as TeamDocumentRow[]) {
+    let response;
+    try {
+      response = await supabase
+        .from('team_documents')
+        .select('*', { count: 'exact' })
+        .eq('team_scope_user_id', teamScopeUserId)
+        .is('deleted_at', null);
+    } catch (err) {
+      result.errors.push(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+
+    const hasRows = Array.isArray(response.data);
+    const rows = Array.isArray(response.data) ? response.data : [];
+    let inventoryComplete = false;
+    if (response.error) {
+      result.errors.push(response.error.message);
+    } else {
+      inventoryComplete = hasRows && typeof response.count === 'number' && response.count === rows.length;
+      if (!inventoryComplete) result.errors.push('Legacy River inventory was incomplete');
+    }
+
+    for (const row of rows as TeamDocumentRow[]) {
       try {
         if (activeIds.has(row.id)) continue;
         this.writeRowToCache(row);
         activeIds.add(row.id);
         result.written++;
       } catch (err) {
+        inventoryComplete = false;
         result.errors.push(err instanceof Error ? err.message : String(err));
       }
     }
-  }
-
-  private async syncLegacyOnce(result: { written: number; removed: number; created: number; errors: string[] }): Promise<{ written: number; removed: number; created: number; errors: string[] }> {
-    const activeIds = new Set<string>();
-    await this.syncLegacyRows(result, activeIds);
-    result.removed = this.removeStaleCacheFiles(activeIds);
-    return result;
+    return inventoryComplete;
   }
 
   cachePathForRow(row: Pick<RiverDocumentLike, 'id' | 'title' | 'shared_name' | 'author_initials'>): string {

@@ -1871,6 +1871,9 @@ interface ThemeAPI {
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
+  prepareKindleDelivery?: (path: string) => Promise<KindleDeliveryPrepareResult>;
+  sendKindleDelivery?: (path: string) => Promise<KindleDeliverySendResult>;
+  getKindleDeliveryJob?: (jobPath: string) => Promise<KindleDeliveryJobReadResult>;
   traceNavigation?: (stage: string, payload: Record<string, unknown>) => Promise<void>;
   saveReading: (path: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   deleteReading: (path: string) => Promise<boolean>;
@@ -2248,6 +2251,65 @@ declare global {
   interface Reading extends ReadingMeta {
     content: string;
     documentVersion: DocumentVersion;
+  }
+
+  interface KindleDeliveryPrepareResult {
+    status: 'dry_run' | 'prepared' | 'already_prepared' | 'already_sent' | 'blocked' | 'error';
+    document?: {
+      title: string;
+      sourcePath: string;
+      sourceRelPath: string;
+    };
+    deliveryKey?: string;
+    artifactPath?: string;
+    statePath?: string;
+    sendPreflight?: {
+      recipientEmail: string;
+      senderEmail: string;
+      subject: string;
+      attachmentPath: string;
+    };
+    reason?: string;
+    message?: string;
+  }
+
+  interface KindleDeliveryJob {
+    version: 1;
+    status: 'queued' | 'running' | 'verifying' | 'sent' | 'failed';
+    createdAt: string;
+    updatedAt: string;
+    sourcePath: string;
+    sourceRelPath: string;
+    deliveryKey: string;
+    artifactPath: string;
+    title: string;
+    author: string;
+    recipientEmail: string;
+    senderEmail: string;
+    requestedBy: 'field-theory-mac-app';
+    pid?: number;
+    startedAt?: string;
+    finishedAt?: string;
+    sentAt?: string;
+    sentMessageId?: string;
+    sentAttachmentPath?: string;
+    error?: string;
+  }
+
+  interface KindleDeliverySendResult {
+    status: 'queued' | 'already_sent' | 'blocked' | 'error';
+    deliveryKey?: string;
+    artifactPath?: string;
+    jobPath?: string;
+    job?: KindleDeliveryJob;
+    message?: string;
+  }
+
+  interface KindleDeliveryJobReadResult {
+    status: 'ok' | 'missing' | 'error';
+    jobPath?: string;
+    job?: KindleDeliveryJob;
+    message?: string;
   }
 
   /**

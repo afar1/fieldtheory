@@ -14,6 +14,34 @@ export function isExternalCommandTargetBundleId(bundleId: string | null | undefi
     !isDockCommandTargetBundleId(bundleId);
 }
 
+export type ExternalCommandTargetApp = {
+  bundleId: string;
+  name: string;
+  windowBounds?: { x: number; y: number; width: number; height: number } | null;
+};
+
+type ExternalCommandTargetCandidate = {
+  bundleId?: string | null;
+  name?: string | null;
+  windowBounds?: { x: number; y: number; width: number; height: number } | null;
+};
+
+export function findExternalCommandTargetForBundleId(
+  bundleId: string,
+  candidates: Array<ExternalCommandTargetCandidate | null | undefined>,
+): ExternalCommandTargetApp | null {
+  const lowerBundleId = bundleId.toLowerCase();
+  const matchingCandidates = candidates.filter((item): item is ExternalCommandTargetApp => Boolean(
+    item?.bundleId &&
+    item.name &&
+    item.bundleId.toLowerCase() === lowerBundleId &&
+    isExternalCommandTargetBundleId(item.bundleId)
+  ));
+  const candidate = matchingCandidates.find(item => item.windowBounds) ?? matchingCandidates[0];
+  if (candidate) return candidate;
+  return isExternalCommandTargetBundleId(bundleId) ? { bundleId, name: bundleId } : null;
+}
+
 export type CommandLauncherInvocationTarget =
   | { kind: 'field-theory-terminal'; sessionId: string | null }
   | { kind: 'field-theory-markdown' }

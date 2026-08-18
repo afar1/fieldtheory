@@ -84,6 +84,38 @@ describe('ContentToolbar', () => {
     }
   });
 
+  it('runs the Kindle preparation action from the toolbar', () => {
+    const onPrepareKindle = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        showKindle
+        onPrepareKindle={onPrepareKindle}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Send to Kindle'));
+
+    expect(onPrepareKindle).toHaveBeenCalledTimes(1);
+  });
+
+  it('can force the Kindle action visible outside saved pinned actions', () => {
+    window.localStorage.setItem('fieldtheory.contentToolbar.pinnedActions.v2', JSON.stringify(['copypath']));
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        showKindle
+        forceVisibleActions={['kindle']}
+        onCopyPath={vi.fn()}
+        onPrepareKindle={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Send to Kindle')).toBeTruthy();
+  });
+
   it('reports when the text style menu opens and closes', async () => {
     const onTypographyMenuOpenChange = vi.fn();
 

@@ -4,6 +4,7 @@ export const COMMAND_CLIPBOARD_RESTORE_DELAY_MS = 1500;
 
 export type CommandFilePasteMode = 'text-reference' | 'markdown-content' | 'wiki-link';
 export type CommandFilePasteDelivery = 'native-helper' | 'clipboard-paste';
+export type NativePasteEventTarget = 'pid';
 
 export type CommandFilePasteSource =
   | { kind: 'command'; name: string; filePath: string }
@@ -169,6 +170,10 @@ export function shouldUseNativeCommandLauncherClipboardTextPaste(input: {
   hasTextContent: boolean;
 }): boolean {
   return input.commandLauncherPaste && input.hasTextContent;
+}
+
+export function resolveCommandLauncherNativePasteEventTarget(_bundleId: string): NativePasteEventTarget {
+  return 'pid';
 }
 
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {

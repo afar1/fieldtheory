@@ -3965,6 +3965,65 @@ interface Reading extends ReadingMeta {
   documentVersion: DocumentVersion;
 }
 
+interface KindleDeliveryPrepareResult {
+  status: 'dry_run' | 'prepared' | 'already_prepared' | 'already_sent' | 'blocked' | 'error';
+  document?: {
+    title: string;
+    sourcePath: string;
+    sourceRelPath: string;
+  };
+  deliveryKey?: string;
+  artifactPath?: string;
+  statePath?: string;
+  sendPreflight?: {
+    recipientEmail: string;
+    senderEmail: string;
+    subject: string;
+    attachmentPath: string;
+  };
+  reason?: string;
+  message?: string;
+}
+
+interface KindleDeliveryJob {
+  version: 1;
+  status: 'queued' | 'running' | 'verifying' | 'sent' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  sourcePath: string;
+  sourceRelPath: string;
+  deliveryKey: string;
+  artifactPath: string;
+  title: string;
+  author: string;
+  recipientEmail: string;
+  senderEmail: string;
+  requestedBy: 'field-theory-mac-app';
+  pid?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  sentAt?: string;
+  sentMessageId?: string;
+  sentAttachmentPath?: string;
+  error?: string;
+}
+
+interface KindleDeliverySendResult {
+  status: 'queued' | 'already_sent' | 'blocked' | 'error';
+  deliveryKey?: string;
+  artifactPath?: string;
+  jobPath?: string;
+  job?: KindleDeliveryJob;
+  message?: string;
+}
+
+interface KindleDeliveryJobReadResult {
+  status: 'ok' | 'missing' | 'error';
+  jobPath?: string;
+  job?: KindleDeliveryJob;
+  message?: string;
+}
+
 // Watched directory configuration
 // Path is the identity - no numeric IDs
 interface WatchedDir {
@@ -3990,6 +4049,15 @@ const librarianAPI = {
 
   // Get a single reading with full content (by path)
   getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
+
+  prepareKindleDelivery: (filePath: string): Promise<KindleDeliveryPrepareResult> =>
+    ipcRenderer.invoke('librarian:prepareKindleDelivery', filePath),
+
+  sendKindleDelivery: (filePath: string): Promise<KindleDeliverySendResult> =>
+    ipcRenderer.invoke('librarian:sendKindleDelivery', filePath),
+
+  getKindleDeliveryJob: (jobPath: string): Promise<KindleDeliveryJobReadResult> =>
+    ipcRenderer.invoke('librarian:getKindleDeliveryJob', jobPath),
 
   traceNavigation: (stage: string, payload: Record<string, unknown>): Promise<void> =>
     ipcRenderer.invoke('librarian:traceNavigation', stage, payload),

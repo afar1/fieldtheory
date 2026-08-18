@@ -183,6 +183,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
 import {
   type CommandLauncherFieldTheoryLaunchSurface,
+  findExternalCommandTargetForBundleId,
   isExternalCommandTargetBundleId,
   isFieldTheoryCommandTargetBundleId,
   resolveCommandLauncherInvocationTarget,
@@ -194,6 +195,8 @@ import type { LibrarianManager, LibraryBacklinkRelationDocument, LibraryBacklink
 import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
+import { prepareKindleDelivery, type KindlePrepareResult } from './kindleDeliveryService';
+import { readKindleCodexJobResult, startKindleCodexSend, type KindleCodexJobReadResult, type KindleCodexSendResult } from './kindleCodexBridge';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import {
   autoUpdaterAllowsPrereleaseForBuildChannel,
@@ -234,6 +237,7 @@ import {
   formatCommandFilePasteText,
   resolveCommandFilePasteDelivery,
   resolveCommandFilePasteMode,
+  resolveCommandLauncherNativePasteEventTarget,
   shouldUseNativeCommandLauncherClipboardTextPaste,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
@@ -2043,7 +2047,14 @@ async function typeTextFromCommandLauncher(
 
   try {
     const nativeStartedAt = process.hrtime.bigint();
-    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false, undefined, targetApp.windowBounds ?? null);
+    const result = await nativeHelper.typeIntoApp(
+      targetApp.bundleId,
+      text,
+      false,
+      undefined,
+      targetApp.windowBounds ?? null,
+      resolveCommandLauncherNativePasteEventTarget(targetApp.bundleId),
+    );
     const nativeMs = elapsedMsSince(nativeStartedAt);
     const frontmost = nativeHelper.getFrontmostApp();
     appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
@@ -2193,8 +2204,7 @@ async function runWithCommandLauncherExternalInvocation<T>(operation: () => Prom
   }
 }
 
-function findRunningAppForBundleId(bundleId: string): { bundleId: string; name: string } | null {
-  const lowerBundleId = bundleId.toLowerCase();
+function findRunningAppForBundleId(bundleId: string): CommandLauncherTargetApp | null {
   const candidates = [
     commandLauncherWindow?.getPreviousApp(),
     getCommandLauncherTargetApp(),
@@ -2203,23 +2213,7 @@ function findRunningAppForBundleId(bundleId: string): { bundleId: string; name: 
     nativeHelper?.getFrontmostApp(),
   ];
 
-  for (const candidate of candidates) {
-    if (
-      candidate?.bundleId &&
-      candidate.name &&
-      candidate.bundleId.toLowerCase() === lowerBundleId &&
-      isExternalCommandTargetBundleId(candidate.bundleId)
-    ) {
-      return {
-        bundleId: candidate.bundleId,
-        name: candidate.name,
-      };
-    }
-  }
-
-  return isExternalCommandTargetBundleId(bundleId)
-    ? { bundleId, name: bundleId }
-    : null;
+  return findExternalCommandTargetForBundleId(bundleId, candidates);
 }
 
 async function pasteClipboardFromCommandLauncher(
@@ -7775,6 +7769,52 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     return librarianManager.getReading(filePath);
+  });
+
+  ipcMain.handle('librarian:prepareKindleDelivery', async (_event, filePath: string): Promise<KindlePrepareResult | { status: 'error'; message: string }> => {
+    if (!librarianManager) {
+      return { status: 'error', message: 'Library is not available.' };
+    }
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return { status: 'error', message: 'Choose a Library document first.' };
+    }
+    try {
+      return await prepareKindleDelivery(filePath, {
+        libraryRoots: currentLibraryRootPaths(),
+      });
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('librarian:sendKindleDelivery', async (_event, filePath: string): Promise<KindleCodexSendResult | { status: 'error'; message: string }> => {
+    if (!librarianManager) {
+      return { status: 'error', message: 'Library is not available.' };
+    }
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return { status: 'error', message: 'Choose a Library document first.' };
+    }
+    try {
+      const prepared = await prepareKindleDelivery(filePath, {
+        libraryRoots: currentLibraryRootPaths(),
+      });
+      return startKindleCodexSend(prepared);
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('librarian:getKindleDeliveryJob', (_event, jobPath: string): KindleCodexJobReadResult => {
+    if (typeof jobPath !== 'string' || !jobPath.trim()) {
+      return { status: 'error', message: 'Choose a Kindle delivery job first.' };
+    }
+    return readKindleCodexJobResult(jobPath);
   });
 
   ipcMain.handle('librarian:traceNavigation', (_event, stage: string, payload: Record<string, unknown> = {}): void => {

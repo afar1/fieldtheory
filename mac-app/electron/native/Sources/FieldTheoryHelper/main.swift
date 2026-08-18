@@ -71,6 +71,7 @@ struct IncomingMessage: Codable {
     let pressEnter: Bool?       // For typeIntoApp
     let submitMode: String?     // For typeIntoApp ("none", "enter", "command-enter")
     let targetWindowBounds: WindowBoundsInput? // For typeIntoApp window disambiguation
+    let pasteEventTarget: String? // For typeIntoApp ("pid")
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
     let silenceMs: Int?         // For setHarvestMode — optional silence override (nil = use default)
@@ -2290,7 +2291,13 @@ final class MessageHandler {
             }
             let pressEnter = message.pressEnter ?? false
             let submitMode = message.submitMode ?? (pressEnter ? "enter" : "none")
-            typeIntoApp(bundleId: bundleId, text: text, submitMode: submitMode, targetWindowBounds: message.targetWindowBounds)
+            typeIntoApp(
+                bundleId: bundleId,
+                text: text,
+                submitMode: submitMode,
+                targetWindowBounds: message.targetWindowBounds,
+                pasteEventTarget: message.pasteEventTarget ?? "pid"
+            )
 
         case .insertTextSegment:
             guard let bundleId = message.bundleId, let text = message.text else {
@@ -2392,7 +2399,13 @@ final class MessageHandler {
 
     /// Type text into a target application using pasteboard + CGEvent key simulation.
     /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally submit.
-    private func typeIntoApp(bundleId: String, text: String, submitMode: String, targetWindowBounds: WindowBoundsInput?) {
+    private func typeIntoApp(
+        bundleId: String,
+        text: String,
+        submitMode: String,
+        targetWindowBounds: WindowBoundsInput?,
+        pasteEventTarget: String
+    ) {
         let accessibilityTrusted = AXIsProcessTrusted()
 
         func sendTypeResult(
@@ -2420,6 +2433,13 @@ final class MessageHandler {
                 success: false,
                 error: "Accessibility permission not granted",
                 targetFrontmost: false
+            )
+            return
+        }
+        guard pasteEventTarget == "pid" else {
+            sendTypeResult(
+                success: false,
+                error: "Unsupported paste event target: \(pasteEventTarget)"
             )
             return
         }
@@ -2717,15 +2737,12 @@ final class MessageHandler {
     }
 
     private func postCommandVToPid(source: CGEventSource?, pid: pid_t) -> Bool {
-        let commandKey: CGKeyCode = 0x37
         let vKey: CGKeyCode = 0x09
 
-        let commandDownPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: true, flags: .maskCommand, pid: pid)
         let pasteKeyDownPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: true, flags: .maskCommand, pid: pid)
         let pasteKeyUpPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: false, flags: .maskCommand, pid: pid)
-        let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
 
-        return commandDownPosted && pasteKeyDownPosted && pasteKeyUpPosted && commandUpPosted
+        return pasteKeyDownPosted && pasteKeyUpPosted
     }
 
     private func postUnicodeTextToPid(source: CGEventSource?, text: String, pid: pid_t) -> Bool {

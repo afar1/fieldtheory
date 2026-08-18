@@ -598,6 +598,7 @@ export interface TypeIntoAppCommand {
     width: number;
     height: number;
   };
+  pasteEventTarget?: 'pid';
 }
 
 /**

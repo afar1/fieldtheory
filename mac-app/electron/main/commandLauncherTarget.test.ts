@@ -3,6 +3,7 @@ import {
   isDockCommandTargetBundleId,
   isExternalCommandTargetBundleId,
   isFieldTheoryCommandTargetBundleId,
+  findExternalCommandTargetForBundleId,
   resolveCommandLauncherInvocationTarget,
 } from './commandLauncherTarget';
 
@@ -34,6 +35,29 @@ describe('isExternalCommandTargetBundleId', () => {
   it('allows ordinary external apps', () => {
     expect(isExternalCommandTargetBundleId('com.apple.TextEdit')).toBe(true);
     expect(isExternalCommandTargetBundleId('com.superhuman.electron')).toBe(true);
+  });
+});
+
+describe('findExternalCommandTargetForBundleId', () => {
+  it('preserves the captured Codex window bounds when multiple app windows exist', () => {
+    const capturedCodexWindow = {
+      bundleId: 'com.openai.codex',
+      name: 'ChatGPT',
+      windowBounds: { x: 1028, y: 39, width: 1028, height: 1290 },
+    };
+
+    expect(findExternalCommandTargetForBundleId('com.openai.codex', [
+      { bundleId: 'com.openai.codex', name: 'ChatGPT' },
+      null,
+      capturedCodexWindow,
+    ])).toEqual(capturedCodexWindow);
+  });
+
+  it('uses an eligible bundle-only fallback when no captured app target exists', () => {
+    expect(findExternalCommandTargetForBundleId('com.apple.TextEdit', [])).toEqual({
+      bundleId: 'com.apple.TextEdit',
+      name: 'com.apple.TextEdit',
+    });
   });
 });
 

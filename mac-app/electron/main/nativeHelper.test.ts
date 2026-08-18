@@ -243,6 +243,44 @@ describe('NativeHelper recording command sequencing', () => {
     await expect(typePromise).resolves.toMatchObject({ success: true });
   });
 
+  it('requests a process-targeted paste for long Codex composer input without changing the payload', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const targetWindowBounds = { x: 200, y: 160, width: 1200, height: 820 };
+    const longCommandInput = `[review.md] /Users/afar/.fieldtheory/library/Commands/review.md\n${'context '.repeat(5000)}`;
+
+    const typePromise = helper.typeIntoApp(
+      'com.openai.codex',
+      longCommandInput,
+      false,
+      undefined,
+      targetWindowBounds,
+      'pid',
+    );
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.openai.codex',
+      text: longCommandInput,
+      pressEnter: false,
+      targetWindowBounds,
+      pasteEventTarget: 'pid',
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+      focusedTextInput: true,
+      eventTarget: 'pid',
+    });
+
+    await expect(typePromise).resolves.toMatchObject({
+      success: true,
+      focusedTextInput: true,
+      eventTarget: 'pid',
+    });
+  });
+
   it('passes live typing segments to the native helper and returns insert diagnostics', async () => {
     const { helper, sentCommands } = createHelperHarness();
 

@@ -675,7 +675,8 @@ export class NativeHelper extends EventEmitter {
     text: string,
     pressEnter: boolean,
     submitMode?: 'none' | 'enter' | 'command-enter',
-    targetWindowBounds?: { x: number; y: number; width: number; height: number } | null
+    targetWindowBounds?: { x: number; y: number; width: number; height: number } | null,
+    pasteEventTarget?: 'pid',
   ): Promise<{
     success: boolean;
     error?: string;
@@ -724,6 +725,9 @@ export class NativeHelper extends EventEmitter {
       }
       if (targetWindowBounds) {
         command.targetWindowBounds = targetWindowBounds;
+      }
+      if (pasteEventTarget) {
+        command.pasteEventTarget = pasteEventTarget;
       }
       this.send(command);
     });
