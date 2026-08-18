@@ -86,3 +86,6 @@ mac-app/build-parakeet
 
 # Librarian status files (local edit tracking)
 .librarian/.status.json
+
+# Working plan docs (local only)
+docs/plans/

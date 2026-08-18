@@ -13,6 +13,7 @@ import {
   formatCommandFilePasteText,
   restoreClipboardSnapshot,
   resolveCommandFilePasteDelivery,
+  resolveCommandLauncherNativePasteEventTarget,
   resolveCommandFilePasteMode,
   shouldUseNativeCommandLauncherClipboardTextPaste,
   shouldUseNativeCommandFileTyping,
@@ -304,6 +305,16 @@ describe('shouldUseNativeCommandLauncherClipboardTextPaste', () => {
       commandLauncherPaste: true,
       hasTextContent: false,
     })).toBe(false);
+  });
+});
+
+describe('resolveCommandLauncherNativePasteEventTarget', () => {
+  it('keeps native Codex composer paste targeted to the captured process', () => {
+    expect(resolveCommandLauncherNativePasteEventTarget('com.openai.codex')).toBe('pid');
+  });
+
+  it('keeps other native-helper targets on process-directed paste events', () => {
+    expect(resolveCommandLauncherNativePasteEventTarget('com.mitchellh.ghostty')).toBe('pid');
   });
 });
 

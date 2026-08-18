@@ -45,6 +45,21 @@ function makeLegacyTimelineRow(id: string) {
   };
 }
 
+function writeCachedRiverFile(root: string, fileName: string, sharedId: string, teamId?: string): string {
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, [
+    '---',
+    'shared: true',
+    `shared_id: "${sharedId}"`,
+    'shared_type: "document"',
+    ...(teamId ? [`shared_team_id: "${teamId}"`] : []),
+    '---',
+    '',
+    'Cached body',
+  ].join('\n'));
+  return filePath;
+}
+
 function makeTimelineSupabase(dataByTable: Record<string, unknown[]>) {
   const operations: Array<{ table: string; op: string; args: unknown[] }> = [];
   const supabase = {
@@ -366,7 +381,7 @@ describe('SharedSyncService cache behavior', () => {
         select() { return this; },
         eq() { return this; },
         async is() {
-          return { data: [], error: null };
+          return { data: [], count: 0, error: null };
         },
       }),
     };
@@ -525,6 +540,7 @@ describe('SharedSyncService cache behavior', () => {
               author_callsign: 'afar',
               revision: 2,
             }],
+            count: 1,
             error: null,
           };
         },
@@ -612,7 +628,8 @@ describe('SharedSyncService cache behavior', () => {
             return this;
           },
           async is() {
-            return { data: rowsByTable[table] ?? [], error: null };
+            const rows = rowsByTable[table] ?? [];
+            return { data: rows, count: rows.length, error: null };
           },
         };
       },
@@ -642,6 +659,214 @@ describe('SharedSyncService cache behavior', () => {
     expect(queries).toContainEqual({ table: 'team_documents', eq: ['team_scope_user_id', 'owner-1'] });
     expect(fs.readFileSync(path.join(root, 'Canonical AF.md'), 'utf-8')).toContain('Canonical body');
     expect(fs.readFileSync(path.join(root, 'Legacy SS.md'), 'utf-8')).toContain('Legacy body');
+  });
+
+  it('preserves canonical cache files when the canonical inventory fails', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const canonicalCachePath = writeCachedRiverFile(root, 'Canonical AF.md', 'canonical-1');
+    const legacyCachePath = writeCachedRiverFile(root, 'Legacy SS.md', 'legacy-1', 'owner-1');
+    const legacyRow = makeLegacyTimelineRow('legacy-1');
+    const supabase = {
+      from(table: string) {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async is() {
+            return table === 'river_documents'
+              ? { data: null, count: null, error: { message: 'canonical inventory failed' } }
+              : { data: [legacyRow], count: 1, error: null };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 1,
+      removed: 0,
+      created: 0,
+      errors: ['canonical inventory failed'],
+    });
+    expect(fs.existsSync(canonicalCachePath)).toBe(true);
+    expect(fs.existsSync(legacyCachePath)).toBe(true);
+  });
+
+  it('preserves legacy cache files when the legacy inventory fails', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const canonicalCachePath = writeCachedRiverFile(root, 'Canonical AF.md', 'canonical-1');
+    const legacyCachePath = writeCachedRiverFile(root, 'Legacy SS.md', 'legacy-1', 'owner-1');
+    const canonicalRow = { ...makeTimelineRow('canonical-1'), kind: 'document', path: 'Docs/Canonical.md' };
+    const supabase = {
+      from(table: string) {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async is() {
+            return table === 'river_documents'
+              ? { data: [canonicalRow], count: 1, error: null }
+              : { data: null, count: null, error: { message: 'legacy inventory failed' } };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 1,
+      removed: 0,
+      created: 0,
+      errors: ['legacy inventory failed'],
+    });
+    expect(fs.existsSync(canonicalCachePath)).toBe(true);
+    expect(fs.existsSync(legacyCachePath)).toBe(true);
+  });
+
+  it('preserves omitted cache files when an inventory response is truncated', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const returnedCachePath = writeCachedRiverFile(root, 'Returned AF.md', 'canonical-1');
+    const omittedCachePath = writeCachedRiverFile(root, 'Omitted AF.md', 'canonical-2');
+    const canonicalRow = { ...makeTimelineRow('canonical-1'), kind: 'document', path: 'Docs/Returned.md' };
+    const supabase = {
+      from(table: string) {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async is() {
+            return table === 'river_documents'
+              ? { data: [canonicalRow], count: 2, error: null }
+              : { data: [], count: 0, error: null };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 1,
+      removed: 0,
+      created: 0,
+      errors: ['Canonical River inventory was incomplete'],
+    });
+    expect(fs.existsSync(returnedCachePath)).toBe(true);
+    expect(fs.existsSync(omittedCachePath)).toBe(true);
+  });
+
+  it('preserves cache files when a successful inventory response has no row array', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cachePath = writeCachedRiverFile(root, 'Canonical AF.md', 'canonical-1');
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        async is() {
+          return { data: null, count: 0, error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 0,
+      removed: 0,
+      created: 0,
+      errors: ['Canonical River inventory was incomplete'],
+    });
+    expect(fs.existsSync(cachePath)).toBe(true);
+  });
+
+  it('preserves legacy cache files when their team scope cannot be resolved', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const firstCachePath = writeCachedRiverFile(root, 'First AF.md', 'legacy-1', 'owner-1');
+    const secondCachePath = writeCachedRiverFile(root, 'Second SS.md', 'legacy-2', 'owner-2');
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        async is() {
+          return { data: [], count: 0, error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'lookup_failed',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 0,
+      removed: 0,
+      created: 0,
+      errors: ['Legacy River inventory scope was unavailable'],
+    });
+    expect(fs.existsSync(firstCachePath)).toBe(true);
+    expect(fs.existsSync(secondCachePath)).toBe(true);
   });
 
   it('removes stale River cache files after a team document realtime change', async () => {
@@ -674,7 +899,7 @@ describe('SharedSyncService cache behavior', () => {
         select() { return this; },
         eq() { return this; },
         async is() {
-          return { data: [], error: null };
+          return { data: [], count: 0, error: null };
         },
       }),
     };
@@ -1069,6 +1294,7 @@ describe('SharedSyncService cache behavior', () => {
               author_callsign: 'afar',
               revision: queryCount,
             }],
+            count: 1,
             error: null,
           };
         },
@@ -1273,6 +1499,7 @@ describe('SharedSyncService cache behavior', () => {
                 author_callsign: null,
                 revision: 1,
               }],
+              count: 1,
               error: null,
             };
           },
