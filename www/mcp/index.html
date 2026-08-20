@@ -55,7 +55,9 @@
     pre { color: var(--text); font: 0.72rem/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
     .copy { position: absolute; top: 0.65rem; right: 0.65rem; padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 3px; color: var(--muted); background: transparent; font: 0.68rem var(--mono); }
     .copy:hover { color: var(--text); border-color: var(--muted); }
-    .prompt { margin-top: 0.5rem; padding-left: 0.8rem; border-left: 2px solid var(--border); color: var(--muted); font: italic 0.78rem/1.55 var(--mono); }
+    .prompt-box pre { font-size: 0.78rem; line-height: 1.6; }
+    .examples { margin: 0.5rem 0 0 1.1rem; color: var(--muted); font-size: 0.82rem; }
+    .examples li + li { margin-top: 0.45rem; }
 
     .note { margin-top: 1.25rem; color: var(--muted); font-size: 0.76rem; }
 
@@ -98,17 +100,35 @@
 
       <div id="setup">
         <p class="step">Connect Codex</p>
-        <h2>Run this command</h2>
-        <p class="panel-copy">It sets your access key in the current shell and connects Codex to the hosted MCP.</p>
+        <h2>Run this in Terminal</h2>
+        <p class="panel-copy">It connects the remote MCP, then starts Codex in the same Terminal window.</p>
         <div class="code-box">
           <pre id="setup-command"></pre>
           <button class="copy" id="copy-setup" type="button">copy</button>
         </div>
-        <p class="step">Then ask</p>
-        <p class="prompt">“What has been saved about structuring context for coding agents in large codebases? Cite the original posts.”</p>
+        <p class="step">Ask Codex</p>
+        <h2>Paste this prompt</h2>
+        <div class="code-box prompt-box">
+          <pre id="codex-prompt">Use only the remote `fieldtheory-commons` MCP to answer the question below.
+
+Do not inspect local files, use the shell or web, open the Field Theory Mac app, use Computer Use, or start subagents.
+
+Run one compact search. Call `get` for at most 1–2 results, and only if the search results do not contain enough detail.
+
+Do not mention the size of the bookmark collection unless I ask. Answer clearly and cite the original X URLs.
+
+Question: What techniques help coding agents manage context in large codebases?</pre>
+          <button class="copy" id="copy-prompt" type="button">copy</button>
+        </div>
+        <p class="step">More questions to try</p>
+        <ul class="examples">
+          <li>What have people learned about evaluating coding-agent reliability?</li>
+          <li>When do parallel coding agents help, and when do they add coordination overhead?</li>
+          <li>What patterns help an AI agent recover after losing context?</li>
+        </ul>
       </div>
     </section>
-    <p class="note">Remote and read-only. It cannot access anyone's computer or local files.</p>
+    <p class="note">Remote and read-only. The remote MCP cannot access your computer or local files. The full bookmark collection stays in the cloud; Codex receives only the records returned by MCP search and get calls.</p>
   </main>
 
   <script>
@@ -117,6 +137,7 @@
     const setup = document.querySelector('#setup');
     const status = document.querySelector('#status');
     const setupCommand = document.querySelector('#setup-command');
+    const codexPrompt = document.querySelector('#codex-prompt');
     let config;
     let email = '';
 
@@ -194,7 +215,8 @@
           body: '{}',
         });
         setupCommand.textContent = 'export FIELD_THEORY_COMMONS_TOKEN="' + access.token + '"\n' +
-          'codex mcp add fieldtheory-commons \\\n  --url ' + config.mcpUrl + ' \\\n  --bearer-token-env-var FIELD_THEORY_COMMONS_TOKEN';
+          'codex mcp add fieldtheory-commons \\\n  --url ' + config.mcpUrl + ' \\\n  --bearer-token-env-var FIELD_THEORY_COMMONS_TOKEN\n\n' +
+          'codex';
         document.querySelector('#request-step').style.display = 'none';
         setup.style.display = 'block';
       } catch (error) {
@@ -203,10 +225,33 @@
       }
     });
 
-    document.querySelector('#copy-setup').addEventListener('click', async (event) => {
-      await navigator.clipboard.writeText(setupCommand.textContent);
-      event.currentTarget.textContent = 'copied';
-      window.setTimeout(() => { event.currentTarget.textContent = 'copy'; }, 1200);
+    function showCopyFailure(button) {
+      button.textContent = 'select text';
+      button.title = 'Copy failed. Select the text manually.';
+      button.setAttribute('aria-label', button.title);
+    }
+
+    function copyText(button, value) {
+      if (!navigator.clipboard?.writeText) {
+        showCopyFailure(button);
+        return;
+      }
+      navigator.clipboard.writeText(value).then(() => {
+        button.textContent = 'copied';
+        button.removeAttribute('title');
+        button.removeAttribute('aria-label');
+        window.setTimeout(() => { button.textContent = 'copy'; }, 1200);
+      }).catch(() => {
+        showCopyFailure(button);
+      });
+    }
+
+    document.querySelector('#copy-setup').addEventListener('click', (event) => {
+      copyText(event.currentTarget, setupCommand.textContent);
+    });
+
+    document.querySelector('#copy-prompt').addEventListener('click', (event) => {
+      copyText(event.currentTarget, codexPrompt.textContent);
     });
 
     loadConfig();
