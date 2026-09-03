@@ -21,7 +21,16 @@ import {
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import type { LocalLlmManager, LocalLlmProgressEvent } from './localLlmManager';
 import type { MaxwellRunManager } from './maxwellRunManager';
-import type { MeetingCaptureResult, MeetingCaptureSession, TranscriberManager } from './transcriberManager';
+import type {
+  MeetingCaptureResult,
+  MeetingCaptureSession,
+  MeetingCaptureStartOptions,
+  TranscriberManager,
+} from './transcriberManager';
+import type { AmbientManager } from './ambientManager';
+import type { DiarizationManager } from './diarizationManager';
+import { alignMeetingSpeakers } from './meetingSpeakerAlignment';
+import type { MeetingCaptureTranscriptEntry } from './meetingCapturePipeline';
 
 export type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
 
@@ -54,6 +63,9 @@ export type MeetingSession = {
   transcriptPath: string | null;
   rawTranscriptPath: string | null;
   speakerDiarizationSupported: boolean;
+  ambientThreadId?: string;
+  ambientError?: string;
+  diarizationError?: string;
   summaryRunId?: string;
   summaryError?: string;
 };
@@ -83,13 +95,21 @@ type MeetingLibrarian = {
   emit(eventName: 'wiki:changed' | 'library:changed', rootPath?: string): boolean;
 };
 
-type MeetingTranscriber = Pick<TranscriberManager, 'startMeetingCapture' | 'stopMeetingCapture' | 'cancelMeetingCapture'>;
+type MeetingTranscriber = {
+  startMeetingCapture(options?: MeetingCaptureStartOptions): Promise<MeetingCaptureSession>;
+  stopMeetingCapture(): Promise<MeetingCaptureResult>;
+  cancelMeetingCapture(): Promise<void>;
+};
 type MeetingLocalLlm = Pick<LocalLlmManager, 'runReplacementCommand' | 'getSelectedModel' | 'getHarness'>;
+type MeetingAmbient = Pick<AmbientManager, 'start' | 'enqueueTranscript' | 'flush' | 'cancel' | 'stop' | 'getState'>;
+type MeetingDiarizer = Pick<DiarizationManager, 'diarize'>;
 
 export type MeetingManagerOptions = {
   librarian: MeetingLibrarian;
   transcriber: MeetingTranscriber;
   localLlm: MeetingLocalLlm;
+  ambient?: MeetingAmbient;
+  diarizer?: MeetingDiarizer;
   getMeetingSummaryPrompt: () => string;
   getMaxwellRunManager?: () => MaxwellRunManager;
   readMemorySnapshot?: () => string | null;
@@ -257,6 +277,10 @@ function withSpeakerIdentitySummaryGuard(prompt: string): string {
 
 export class MeetingManager extends EventEmitter {
   private activeSession: MeetingSession | null = null;
+  private ambientFlushTimer: NodeJS.Timeout | null = null;
+  private ambientTranscriptWrites = new Set<Promise<void>>();
+
+  private static readonly AMBIENT_FLUSH_INTERVAL_MS = 45_000;
 
   constructor(private readonly options: MeetingManagerOptions) {
     super();
@@ -311,6 +335,7 @@ export class MeetingManager extends EventEmitter {
     }
     const writeCheck = this.ensureWritable();
     if (!writeCheck.success) return writeCheck;
+    this.ambientTranscriptWrites.clear();
 
     const target = context && fs.existsSync(context.filePath) ? context : null;
     const resolved = target
@@ -320,10 +345,38 @@ export class MeetingManager extends EventEmitter {
       return { success: false, error: resolved.error };
     }
 
+    const sidecarDir = path.join(this.options.librarian.getWikiRoot(), '.meetings', resolved.meetingId);
+    fs.mkdirSync(sidecarDir, { recursive: true });
+    let ambientThreadId: string | undefined;
+    try {
+      if (this.options.ambient) {
+        const ambientState = await this.options.ambient.start({
+          meetingId: resolved.meetingId,
+          title: titleFromContext(resolved.target),
+          workingDirectory: sidecarDir,
+        });
+        ambientThreadId = ambientState.threadId ?? undefined;
+        await this.updateLatestTarget(resolved.target, (content) => setMeetingFrontmatter(content, {
+          ambientThreadId: ambientThreadId ?? '',
+          ambientStatePath: getMeetingSidecarPaths(resolved.meetingId).ambientStatePath,
+          diarizationStatus: 'pending',
+        }));
+      }
+    } catch (error) {
+      this.options.ambient?.stop();
+      await this.markTargetError(resolved.target);
+      return { success: false, error: error instanceof Error ? error.message : 'Could not start Ambient task' };
+    }
+
     let capture: MeetingCaptureSession;
     try {
-      capture = await this.options.transcriber.startMeetingCapture();
+      capture = await this.options.transcriber.startMeetingCapture({
+        meetingId: resolved.meetingId,
+        sidecarDir,
+        onTranscript: (entry) => this.queueAmbientTranscript(entry),
+      });
     } catch (error) {
+      this.options.ambient?.stop();
       await this.markTargetError(resolved.target);
       return { success: false, error: error instanceof Error ? error.message : 'Could not start meeting capture' };
     }
@@ -339,12 +392,16 @@ export class MeetingManager extends EventEmitter {
         startedAt: capture.startedAt,
         status: 'recording',
         speakerDiarizationSupported: capture.speakerDiarizationSupported,
+        ambientThreadId,
       });
       this.activeSession = session;
+      this.startAmbientFlushTimer();
       this.emitStatus(session);
       return { success: true, session: { ...session }, openTarget: openTargetFor(resolved.target, started.content) };
     } catch (error) {
+      this.stopAmbientFlushTimer();
       await this.options.transcriber.cancelMeetingCapture().catch(() => {});
+      this.options.ambient?.stop();
       return { success: false, error: error instanceof Error ? error.message : 'Could not bind recording to meeting note' };
     }
   }
@@ -356,22 +413,48 @@ export class MeetingManager extends EventEmitter {
     if (!writeCheck.success) return writeCheck;
 
     const target = this.targetFromSession(active);
+    this.stopAmbientFlushTimer();
     this.setActiveStatus('transcribing');
 
     let capture: MeetingCaptureResult;
     try {
       capture = await this.options.transcriber.stopMeetingCapture();
     } catch (error) {
+      this.options.ambient?.stop();
       this.setActiveStatus('error');
       return { success: false, error: error instanceof Error ? error.message : 'Could not stop meeting capture', session: this.getActiveSession() ?? undefined };
     }
 
     let sidecars: MeetingSidecarWriteResult;
     try {
-      const speakerIdentity = assignSpeakerIdentities(
-        transcriptEntriesFromText(capture.transcriptText),
-        capture.speakerDiarizationSupported,
-      );
+      const timestampedEntries: MeetingTranscriptEntry[] = capture.transcriptEntries?.length
+        ? capture.transcriptEntries.map(entry => ({
+            text: entry.text,
+            startMs: entry.startMs,
+            endMs: entry.endMs,
+          }))
+        : transcriptEntriesFromText(capture.transcriptText);
+      let diarizationError: string | undefined;
+      let speakerIdentity: MeetingSpeakerIdentity;
+      if (this.options.diarizer && capture.audioPath && timestampedEntries.some(entry => entry.startMs != null)) {
+        await this.updateLatestTarget(target, (content) => setMeetingFrontmatter(content, { diarizationStatus: 'running' }));
+        try {
+          const diarization = await this.options.diarizer.diarize(capture.audioPath);
+          speakerIdentity = alignMeetingSpeakers(timestampedEntries, diarization.segments);
+          capture = { ...capture, speakerDiarizationSupported: true };
+          await this.updateLatestTarget(target, (content) => setMeetingFrontmatter(content, { diarizationStatus: 'done' }));
+        } catch (error) {
+          diarizationError = error instanceof Error ? error.message : 'Diarization failed';
+          speakerIdentity = assignSpeakerIdentities(timestampedEntries, false);
+          await this.updateLatestTarget(target, (content) => setMeetingFrontmatter(content, { diarizationStatus: 'error' }));
+        }
+      } else {
+        speakerIdentity = assignSpeakerIdentities(timestampedEntries, capture.speakerDiarizationSupported);
+        await this.updateLatestTarget(target, (content) => setMeetingFrontmatter(content, {
+          diarizationStatus: capture.speakerDiarizationSupported ? 'done' : 'unavailable',
+        }));
+      }
+
       sidecars = this.writeSidecars(active.meetingId, target, capture, speakerIdentity);
       const rawLink = `Raw transcript: ${renderMeetingRawTranscriptWikiLink(sidecars.transcriptPath)}`;
       const transcriptInput = speakerIdentity.entries.length > 0 ? [rawLink, ...speakerIdentity.entries] : [rawLink, '(No transcript text returned.)'];
@@ -394,14 +477,42 @@ export class MeetingManager extends EventEmitter {
         transcriptPath: sidecars.transcriptPath,
         rawTranscriptPath: sidecars.rawTranscriptPath,
         speakerDiarizationSupported: capture.speakerDiarizationSupported,
+        ambientThreadId: active.ambientThreadId,
+        diarizationError,
       };
       this.emitStatus(this.activeSession);
+      let ambientError: string | undefined;
+      if (this.options.ambient) {
+        await this.waitForAmbientTranscriptWrites();
+        const finalTranscript = speakerIdentity.entries
+          .map(entry => this.renderAmbientTranscriptEntry(entry))
+          .filter(Boolean)
+          .join('\n');
+        try {
+          if (finalTranscript) {
+            const lastSequence = capture.transcriptEntries?.at(-1)?.sequence ?? speakerIdentity.entries.length;
+            await this.options.ambient.enqueueTranscript({
+              sequence: lastSequence + 1,
+              startMs: 0,
+              endMs: Math.max(0, ...speakerIdentity.entries.map(entry => entry.endMs ?? 0)),
+              text: `Final stable transcript with reconciled speaker labels:\n${finalTranscript}`,
+            });
+          }
+          await this.options.ambient.flush(true);
+        } catch (error) {
+          ambientError = error instanceof Error ? error.message : 'Could not deliver final Ambient update';
+        } finally {
+          this.options.ambient.stop();
+        }
+      }
       const summary = await this.summarizeTarget(target);
       const doneSession = {
         ...this.activeSession,
         status: summary.success ? 'done' as const : 'error' as const,
         summaryRunId: summary.summaryRunId,
         summaryError: summary.summaryError ?? summary.error,
+        ambientError,
+        diarizationError,
       };
       this.activeSession = null;
       this.emitStatus(doneSession);
@@ -414,6 +525,7 @@ export class MeetingManager extends EventEmitter {
         openTarget: openTargetFor(target, updated.content),
       };
     } catch (error) {
+      this.options.ambient?.stop();
       const message = error instanceof Error ? error.message : 'Could not finalize meeting note';
       const errored = { ...active, endedAt: capture.stoppedAt, status: 'error' as const, summaryError: message };
       this.activeSession = null;
@@ -433,8 +545,10 @@ export class MeetingManager extends EventEmitter {
   async cancelActiveMeeting(): Promise<MeetingActionResult> {
     const active = this.activeSession;
     if (!active) return { success: false, error: 'No meeting is recording' };
+    this.stopAmbientFlushTimer();
     try {
       await this.options.transcriber.cancelMeetingCapture();
+      await this.options.ambient?.cancel();
       const target = this.targetFromSession(active);
       await this.updateLatestTarget(target, (content) => setMeetingStatus(content, 'cancelled', {
         endedAt: this.now().toISOString(),
@@ -581,6 +695,9 @@ export class MeetingManager extends EventEmitter {
       transcriptPath: parsed.meeting.transcriptPath || sidecars.transcriptPath,
       rawTranscriptPath: parsed.meeting.rawTranscriptPath || sidecars.rawTranscriptPath,
       audioPath: parsed.meeting.audioPath || sidecars.audioPath,
+      ambientStatePath: parsed.meeting.ambientStatePath || sidecars.ambientStatePath,
+      ambientThreadId: parsed.meeting.ambientThreadId || '',
+      diarizationStatus: parsed.meeting.diarizationStatus || 'pending',
     });
     const saveResult = this.saveTarget(target, nextContent, current.version);
     if (!saveResult.ok) return { success: false, error: `Could not prepare meeting note: ${saveResult.reason}` };
@@ -598,13 +715,15 @@ export class MeetingManager extends EventEmitter {
     fs.mkdirSync(sidecarDir, { recursive: true });
 
     const { entries, speakers } = speakerIdentity;
+    const speakerSource = speakers[0]?.source
+      ?? (capture.speakerDiarizationSupported ? 'turn-marker' : 'transcript-label');
     const transcriptMarkdown = [
       '# Raw Transcript',
       '',
       `Meeting: [[${target.type === 'wiki' ? target.relPath : target.filePath}|${titleFromContext(target)}]]`,
       `Stopped: ${capture.stoppedAt}`,
       `Engine: ${capture.transcriptionEngine}`,
-      `Speaker diarization: ${capture.speakerDiarizationSupported ? 'supported' : 'not available'}`,
+      `Speaker diarization: ${capture.speakerDiarizationSupported ? speakerSource : 'not available'}`,
       `Speaker map: ${sidecars.speakersPath}`,
       '',
       '## Transcript',
@@ -642,7 +761,7 @@ export class MeetingManager extends EventEmitter {
       version: 1,
       meetingId,
       generatedAt: capture.stoppedAt,
-      source: capture.speakerDiarizationSupported ? 'turn-marker' : 'transcript-label',
+      source: speakerSource,
       speakers,
     }, null, 2), 'utf-8');
 
@@ -728,6 +847,9 @@ export class MeetingManager extends EventEmitter {
       transcriptPath: updates.transcriptPath ?? getMeetingSidecarPaths(meetingId).transcriptPath,
       rawTranscriptPath: updates.rawTranscriptPath ?? getMeetingSidecarPaths(meetingId).rawTranscriptPath,
       speakerDiarizationSupported: updates.speakerDiarizationSupported ?? false,
+      ambientThreadId: updates.ambientThreadId,
+      ambientError: updates.ambientError,
+      diarizationError: updates.diarizationError,
       summaryRunId: updates.summaryRunId,
       summaryError: updates.summaryError,
     };
@@ -737,6 +859,59 @@ export class MeetingManager extends EventEmitter {
     if (!this.activeSession) return;
     this.activeSession = { ...this.activeSession, status };
     this.emitStatus(this.activeSession);
+  }
+
+  private queueAmbientTranscript(entry: MeetingCaptureTranscriptEntry): void {
+    const ambient = this.options.ambient;
+    if (!ambient) return;
+    let pending: Promise<void>;
+    pending = ambient.enqueueTranscript({
+      sequence: entry.sequence,
+      startMs: entry.startMs,
+      endMs: entry.endMs,
+      text: entry.text,
+    }).catch((error) => {
+      this.recordAmbientError(error);
+    }).finally(() => {
+      this.ambientTranscriptWrites.delete(pending);
+    });
+    this.ambientTranscriptWrites.add(pending);
+  }
+
+  private startAmbientFlushTimer(): void {
+    this.stopAmbientFlushTimer();
+    if (!this.options.ambient) return;
+    this.ambientFlushTimer = setInterval(() => {
+      void this.options.ambient?.flush().catch((error) => this.recordAmbientError(error));
+    }, MeetingManager.AMBIENT_FLUSH_INTERVAL_MS);
+    this.ambientFlushTimer.unref?.();
+  }
+
+  private stopAmbientFlushTimer(): void {
+    if (!this.ambientFlushTimer) return;
+    clearInterval(this.ambientFlushTimer);
+    this.ambientFlushTimer = null;
+  }
+
+  private async waitForAmbientTranscriptWrites(): Promise<void> {
+    while (this.ambientTranscriptWrites.size > 0) {
+      await Promise.all([...this.ambientTranscriptWrites]);
+    }
+  }
+
+  private recordAmbientError(error: unknown): void {
+    if (!this.activeSession) return;
+    const ambientError = error instanceof Error ? error.message : String(error);
+    this.activeSession = { ...this.activeSession, ambientError };
+    this.emitStatus(this.activeSession);
+  }
+
+  private renderAmbientTranscriptEntry(entry: MeetingTranscriptEntry): string {
+    const timestamp = entry.startMs == null
+      ? ''
+      : `[${Math.floor(entry.startMs / 60_000)}:${String(Math.floor((entry.startMs % 60_000) / 1000)).padStart(2, '0')}] `;
+    const speaker = entry.speaker?.trim() ? `${entry.speaker.trim()}: ` : '';
+    return `${timestamp}${speaker}${entry.text.trim()}`.trim();
   }
 
   private async markTargetError(target: MeetingFileContext): Promise<void> {

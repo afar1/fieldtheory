@@ -131,6 +131,8 @@ import {
 } from './textImproveService';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingSession } from './meetingManager';
+import { AmbientManager } from './ambientManager';
+import { DiarizationManager } from './diarizationManager';
 import { registerMeetingsIpc } from './meetingsIpc';
 import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
@@ -2657,6 +2659,8 @@ let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
 let maxwellRunManager: MaxwellRunManager | null = null;
 let meetingManager: MeetingManager | null = null;
+let ambientManager: AmbientManager | null = null;
+let diarizationManager: DiarizationManager | null = null;
 let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
@@ -5097,10 +5101,15 @@ function getMeetingManager(): MeetingManager {
     throw new Error('Field Theory meetings are not ready');
   }
 
+  ambientManager ??= new AmbientManager();
+  diarizationManager ??= new DiarizationManager();
+
   meetingManager = new MeetingManager({
     librarian: librarianManager,
     transcriber: transcriberManager,
     localLlm: getLocalLlmManager(),
+    ambient: ambientManager,
+    diarizer: diarizationManager,
     getMeetingSummaryPrompt: () => preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT,
     getMaxwellRunManager,
     readMemorySnapshot: () => readMaxwellMemorySnapshot(true),
@@ -16841,6 +16850,8 @@ if (!gotTheLock) {
     commandSyncService?.destroy();
     todoStore?.destroy();
     localLlmManager?.stop();
+    ambientManager?.stop();
+    diarizationManager?.stop();
 
     // Sync metrics before quitting (fire-and-forget, don't block quit)
     if (metricsManager) {

@@ -619,7 +619,7 @@ export interface FocusWindowByTitleCommand {
  */
 export interface SetHarvestModeCommand {
   type: 'setHarvestMode';
-  mode: 'command' | 'dictation' | 'off';
+  mode: 'command' | 'dictation' | 'meeting' | 'off';
   silenceMs?: number;
 }
 

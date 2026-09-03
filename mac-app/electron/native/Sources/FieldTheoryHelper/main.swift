@@ -1490,6 +1490,7 @@ final class RecordingHelper {
     private static let SILENCE_DICTATION_MS: Int = 200
     private static let MAX_ACTIVE_CHUNK_COMMAND_MS: Double = 300
     private static let MAX_ACTIVE_CHUNK_DICTATION_MS: Double = 15000
+    private static let MAX_ACTIVE_CHUNK_MEETING_MS: Double = 30000
     private static let SPEECH_START_HOLD_MS: Double = 100
     private static let MIN_VOICED_MS: Double = 170
     private static let MIN_VOICED_RATIO: Double = 0.14
@@ -1568,9 +1569,14 @@ final class RecordingHelper {
             // Force periodic harvest while user is continuously speaking so the
             // transcript updates incrementally instead of waiting for long pauses.
             if hasSpeechSinceLastHarvest {
-                let maxChunkMs = harvestMode == "dictation"
-                    ? RecordingHelper.MAX_ACTIVE_CHUNK_DICTATION_MS
-                    : RecordingHelper.MAX_ACTIVE_CHUNK_COMMAND_MS
+                let maxChunkMs: Double
+                if harvestMode == "meeting" {
+                    maxChunkMs = RecordingHelper.MAX_ACTIVE_CHUNK_MEETING_MS
+                } else if harvestMode == "dictation" {
+                    maxChunkMs = RecordingHelper.MAX_ACTIVE_CHUNK_DICTATION_MS
+                } else {
+                    maxChunkMs = RecordingHelper.MAX_ACTIVE_CHUNK_COMMAND_MS
+                }
 
                 if observedMsSinceLastHarvest >= maxChunkMs {
                     emitHarvestChunk(trigger: "max-active")
@@ -1584,7 +1590,7 @@ final class RecordingHelper {
                 if deltaMs > 0 {
                     observedMsSinceLastHarvest += deltaMs
                 }
-                let silenceMs = silenceMsOverride ?? (harvestMode == "dictation"
+                let silenceMs = silenceMsOverride ?? ((harvestMode == "dictation" || harvestMode == "meeting")
                     ? RecordingHelper.SILENCE_DICTATION_MS
                     : RecordingHelper.SILENCE_COMMAND_MS)
                 if silenceMs <= 0 {
@@ -1623,7 +1629,7 @@ final class RecordingHelper {
         let shouldDrop = voicedMsSinceLastHarvest < RecordingHelper.MIN_VOICED_MS
             || voicedRatio < RecordingHelper.MIN_VOICED_RATIO
 
-        if shouldDrop {
+        if shouldDrop && harvestMode != "meeting" {
             _ = snapshotRecording()
             sendLog(
                 level: "info",

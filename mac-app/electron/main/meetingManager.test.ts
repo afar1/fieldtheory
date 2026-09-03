@@ -188,6 +188,104 @@ describe('MeetingManager', () => {
     }));
   });
 
+  it('streams durable transcript deltas to one Ambient task and reconciles diarization on stop', async () => {
+    const ambient = {
+      start: vi.fn(async () => ({ threadId: 'ambient-thread-1' })),
+      enqueueTranscript: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      stop: vi.fn(),
+      getState: vi.fn(() => null),
+    };
+    const diarizer = {
+      diarize: vi.fn(async () => ({
+        speakerCount: 2,
+        segments: [
+          { speakerId: 'SPEAKER_26', startMs: 0, endMs: 900 },
+          { speakerId: 'SPEAKER_4', startMs: 1_000, endMs: 1_900 },
+        ],
+      })),
+    };
+    const { manager, root, audioPath, transcriber } = makeManager({
+      ambient: ambient as never,
+      diarizer: diarizer as never,
+    });
+    transcriber.stopMeetingCapture.mockResolvedValueOnce({
+      startedAt: '2026-05-14T20:00:00.000Z',
+      stoppedAt: '2026-05-14T20:03:00.000Z',
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
+      transcriptText: 'We should inspect the API. I can pull the current schema.',
+      transcriptEntries: [
+        { sequence: 1, startMs: 0, endMs: 900, text: 'We should inspect the API.' },
+        { sequence: 2, startMs: 1_000, endMs: 1_900, text: 'I can pull the current schema.' },
+      ],
+      audioPath,
+    });
+    const created = await manager.createMeetingNote('API Review');
+    const context = contextFromResult(created);
+
+    const started = await manager.startHere(context);
+
+    expect(started.success).toBe(true);
+    expect(ambient.start).toHaveBeenCalledWith({
+      meetingId: 'meeting-1',
+      title: 'API Review',
+      workingDirectory: path.join(root, '.meetings', 'meeting-1'),
+    });
+    expect(ambient.start.mock.invocationCallOrder[0]).toBeLessThan(
+      transcriber.startMeetingCapture.mock.invocationCallOrder[0],
+    );
+    const captureOptions = (transcriber.startMeetingCapture.mock.calls[0] as unknown as [
+      { onTranscript?: (entry: { sequence: number; startMs: number; endMs: number; text: string }) => void },
+    ])[0];
+    captureOptions.onTranscript?.({
+      sequence: 1,
+      startMs: 0,
+      endMs: 900,
+      text: 'We should inspect the API.',
+    });
+    expect(ambient.enqueueTranscript).toHaveBeenCalledWith({
+      sequence: 1,
+      startMs: 0,
+      endMs: 900,
+      text: 'We should inspect the API.',
+    });
+
+    const stopped = await manager.stopActiveMeeting();
+
+    expect(stopped.success).toBe(true);
+    expect(diarizer.diarize).toHaveBeenCalledWith(audioPath);
+    expect(ambient.enqueueTranscript).toHaveBeenLastCalledWith({
+      sequence: 3,
+      startMs: 0,
+      endMs: 1_900,
+      text: [
+        'Final stable transcript with reconciled speaker labels:',
+        '[0:00] Speaker 1: We should inspect the API.',
+        '[0:01] Speaker 2: I can pull the current schema.',
+      ].join('\n'),
+    });
+    expect(ambient.flush).toHaveBeenLastCalledWith(true);
+    expect(ambient.stop).toHaveBeenCalledOnce();
+
+    const note = fs.readFileSync(context.filePath, 'utf-8');
+    expect(note).toContain('ambient_thread_id: ambient-thread-1');
+    expect(note).toContain('diarization_status: done');
+    expect(note).toContain('**Speaker 1:** We should inspect the API.');
+    expect(note).toContain('**Speaker 2:** I can pull the current schema.');
+    expect(note).not.toContain('Speaker 26');
+    const speakers = JSON.parse(fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'), 'utf-8'));
+    expect(speakers).toMatchObject({
+      source: 'fluid-audio-community-1',
+      speakers: [
+        { id: 'spk_1', label: 'Speaker 1', source: 'fluid-audio-community-1' },
+        { id: 'spk_2', label: 'Speaker 2', source: 'fluid-audio-community-1' },
+      ],
+    });
+  });
+
   it('keeps meeting speaker labels beyond Speaker 2 in the note and raw sidecar', async () => {
     const { manager, root, audioPath, transcriber, localLlm } = makeManager();
     transcriber.stopMeetingCapture.mockResolvedValueOnce({

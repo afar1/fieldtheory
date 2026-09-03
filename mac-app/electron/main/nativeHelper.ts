@@ -826,7 +826,7 @@ export class NativeHelper extends EventEmitter {
    * Set the harvest mode for Swift silence detection.
    * Fire-and-forget — no response expected.
    */
-  setHarvestMode(mode: 'command' | 'dictation' | 'off', silenceMs?: number): void {
+  setHarvestMode(mode: 'command' | 'dictation' | 'meeting' | 'off', silenceMs?: number): void {
     if (!this.child || !this.child.stdin.writable) {
       return;
     }

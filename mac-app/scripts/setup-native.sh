@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NATIVE_DIR="$(cd "$SCRIPT_DIR/../electron/native" && pwd)"
+DIARIZATION_DIR="$(cd "$SCRIPT_DIR/../electron/diarization" && pwd)"
 BUILD_DIR="$NATIVE_DIR/build"
 
 echo "🔨 Building FieldTheory native tools..."
@@ -47,6 +48,11 @@ codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryHelper"
 
 echo "✅ Built FieldTheoryHelper at $BUILD_DIR/FieldTheoryHelper"
 
+echo "   Compiling Ambient diarization sidecar..."
+swift build -c release --package-path "$DIARIZATION_DIR"
+codesign --force --deep --sign - "$DIARIZATION_DIR/.build/release/FieldTheoryDiarizer"
+echo "✅ Built FieldTheoryDiarizer at $DIARIZATION_DIR/.build/release/FieldTheoryDiarizer"
+
 # Verify the binaries.
 for binary in FieldTheoryHelper; do
     if [[ -x "$BUILD_DIR/$binary" ]]; then
@@ -56,3 +62,10 @@ for binary in FieldTheoryHelper; do
         exit 1
     fi
 done
+
+if [[ -x "$DIARIZATION_DIR/.build/release/FieldTheoryDiarizer" ]]; then
+    echo "   FieldTheoryDiarizer is executable ✓"
+else
+    echo "❌ FieldTheoryDiarizer is not executable"
+    exit 1
+fi

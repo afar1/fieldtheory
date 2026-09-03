@@ -215,6 +215,8 @@ describe('meetingMarkdown', () => {
       rawTranscriptPath: '.meetings/meeting_123/transcript.jsonl',
       speakersPath: '.meetings/meeting_123/speakers.json',
       audioPath: '.meetings/meeting_123/audio.wav',
+      captureManifestPath: '.meetings/meeting_123/capture.json',
+      ambientStatePath: '.meetings/meeting_123/ambient.json',
     });
     expect(renderMeetingRawTranscriptWikiLink('meeting_123')).toBe('[[.meetings/meeting_123/transcript|Raw transcript]]');
     expect(renderMeetingRawTranscriptWikiLink('.meetings/meeting_123/transcript.md', 'Open raw transcript')).toBe(

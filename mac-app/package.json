@@ -207,6 +207,18 @@
         {
           "from": "scripts/setup-parakeet.sh",
           "to": "scripts/setup-parakeet.sh"
+        },
+        {
+          "from": "electron/diarization/.build/release/FieldTheoryDiarizer",
+          "to": "FieldTheoryDiarizer"
+        },
+        {
+          "from": "electron/diarization/THIRD_PARTY_NOTICES.md",
+          "to": "licenses/FieldTheoryDiarizer-THIRD_PARTY_NOTICES.md"
+        },
+        {
+          "from": "electron/diarization/.build/checkouts/FluidAudio/LICENSE",
+          "to": "licenses/FluidAudio-LICENSE.txt"
         }
       ]
     },

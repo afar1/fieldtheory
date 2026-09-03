@@ -60,7 +60,7 @@ fi
 source "$VENV_DIR/bin/activate"
 
 pip install --upgrade pip --quiet
-pip install "onnx-asr[cpu,hub]" --quiet
+pip install "onnx-asr[cpu,hub]==0.10.2" --quiet
 
 echo "Parakeet setup complete."
 echo "  python: $(which python)"

@@ -46,6 +46,25 @@ vi.mock('./transcriberTrace', () => ({
 import { clipboard, globalShortcut } from 'electron';
 import { formatWhisperSpeakerTurnTranscript, TranscriberManager } from './transcriberManager';
 
+function writePcmWav(filePath: string, durationMs = 100): void {
+  const sampleRate = 16_000;
+  const dataSize = Math.round(sampleRate * (durationMs / 1_000)) * 2;
+  const wav = Buffer.alloc(44 + dataSize);
+  wav.write('RIFF', 0, 'ascii');
+  wav.writeUInt32LE(36 + dataSize, 4);
+  wav.write('WAVEfmt ', 8, 'ascii');
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36, 'ascii');
+  wav.writeUInt32LE(dataSize, 40);
+  writeFileSync(filePath, wav);
+}
+
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
 // since both engines use the shared StdioJsonServer class.
 
@@ -1279,6 +1298,78 @@ describe('TranscriberManager standard real-time chunking', () => {
       transcriptText: 'Speaker 1: Hello.\nSpeaker 2: Hi.',
       speakerDiarizationSupported: false,
     });
+  });
+
+  it('journals rotating meeting chunks and returns timestamped Parakeet entries', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-ambient-capture-'));
+    const sidecarDir = path.join(tempDir, '.meetings', 'meeting-1');
+    const firstChunk = path.join(tempDir, 'first.wav');
+    const finalChunk = path.join(tempDir, 'final.wav');
+    writePcmWav(firstChunk, 100);
+    writePcmWav(finalChunk, 150);
+    const nativeHelper = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    Object.assign(nativeHelper, {
+      startRecording: vi.fn(async () => undefined),
+      stopRecording: vi.fn(async () => finalChunk),
+      cancelRecording: vi.fn(async () => undefined),
+      setHarvestMode: vi.fn(),
+    });
+    const onTranscript = vi.fn();
+    const transcribeWithEngineFallback = vi.fn()
+      .mockResolvedValueOnce('First durable chunk.')
+      .mockResolvedValueOnce('Final durable chunk.');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'idle',
+      hotMicDelegate: null,
+      nativeHelper,
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'onboardingComplete') return true;
+          if (key === 'transcriptionEngine') return 'parakeet';
+          return undefined;
+        }),
+      },
+      overlay: {
+        showRecording: vi.fn(),
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      soundManager: { play: vi.fn() },
+      currentStack: [],
+      screenshotMetadata: [],
+      detectedCommands: [],
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkReadyListener: null,
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'off',
+      meetingCapturePipeline: null,
+      meetingChunkReadyListener: null,
+      transcribeWithEngineFallback,
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    try {
+      await manager.startMeetingCapture({ meetingId: 'meeting-1', sidecarDir, onTranscript });
+      nativeHelper.emit('recordingChunkReady', firstChunk);
+      const result = await manager.stopMeetingCapture();
+
+      expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('meeting');
+      expect(result.transcriptEntries).toEqual([
+        { sequence: 1, startMs: 0, endMs: 100, text: 'First durable chunk.' },
+        { sequence: 2, startMs: 100, endMs: 250, text: 'Final durable chunk.' },
+      ]);
+      expect(result.transcriptText).toBe('First durable chunk. Final durable chunk.');
+      expect(result.audioPath).toBe(path.join(sidecarDir, 'audio.wav'));
+      expect(existsSync(path.join(sidecarDir, 'capture.json'))).toBe(true);
+      expect(existsSync(result.audioPath)).toBe(true);
+      expect(onTranscript).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('uses the normal dictation hotkey to stop active meeting capture', async () => {

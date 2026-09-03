@@ -3171,6 +3171,10 @@ type MarkdownRenderNode = {
   };
 };
 
+type AmbientMeetingSession = {
+  status: 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+};
+
 function getMarkdownSourceOffsetDebug(content: string | null, offset: number | null): Record<string, unknown> | null {
   if (typeof content !== 'string' || typeof offset !== 'number' || !Number.isFinite(offset)) return null;
   const clampedOffset = Math.max(0, Math.min(content.length, offset));
@@ -3471,6 +3475,42 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [readerStatusFeedbackLeft, setReaderStatusFeedbackLeft] = useState<number | null>(null);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
+  const [ambientSession, setAmbientSession] = useState<AmbientMeetingSession | null>(null);
+  const [ambientActionPending, setAmbientActionPending] = useState(false);
+  const ambientRecording = ambientSession?.status === 'starting' || ambientSession?.status === 'recording';
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.commandsAPI?.getActiveMeeting?.().then((session) => {
+      if (!cancelled) setAmbientSession(session);
+    });
+    const unsubscribe = window.commandsAPI?.onMeetingStatus?.((session) => {
+      if (!cancelled) setAmbientSession(session);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  const handleAmbientToggle = useCallback(async () => {
+    if (ambientActionPending) return;
+    setAmbientActionPending(true);
+    try {
+      const result = ambientRecording
+        ? await window.commandsAPI?.stopMeeting?.()
+        : await window.commandsAPI?.startMeetingHere?.();
+      if (result?.success && result.session) {
+        setAmbientSession(result.session);
+      } else if (!result?.success) {
+        flashCopyFeedback(result?.error ?? 'Ambient action failed.');
+      }
+    } catch (error) {
+      flashCopyFeedback(error instanceof Error ? error.message : 'Ambient action failed.');
+    } finally {
+      setAmbientActionPending(false);
+    }
+  }, [ambientActionPending, ambientRecording]);
 
   useEffect(() => {
     let cancelled = false;
@@ -11722,6 +11762,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 </div>
               )}
               {focusToolbarControlsVisible && (
+                <>
                 <ContentToolbar
                   filePath={activeReading?.path || undefined}
                   isFullScreen={isFullScreen || focusImmersive}
@@ -11800,6 +11841,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onMaxwellRemoveItem={removeMaxwellItem}
                   onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
                 />
+                <button
+                  type="button"
+                  onClick={() => void handleAmbientToggle()}
+                  disabled={ambientActionPending}
+                  title={ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
+                  aria-label={ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
+                  style={{
+                    height: '24px',
+                    padding: '0 8px',
+                    marginLeft: '4px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    color: ambientRecording ? '#dc2626' : theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    fontSize: '11px',
+                    cursor: ambientActionPending ? 'wait' : 'pointer',
+                    opacity: ambientActionPending ? 0.6 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
+                </button>
+                </>
               )}
               {focusStandaloneImmersiveVisible && (
                 <div style={{ marginLeft: 'auto', opacity: focusStandaloneImmersiveOpacity, pointerEvents: 'auto' }}>

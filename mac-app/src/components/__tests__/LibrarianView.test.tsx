@@ -3597,7 +3597,7 @@ describe('LibrarianView render', () => {
     expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-  it('hides the meeting recording button from the active file toolbar', async () => {
+  it('starts and stops Ambient from the active file toolbar', async () => {
     const relPath = 'scratchpad/meeting-toolbar';
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
     const page: WikiPage = {
@@ -3612,14 +3612,39 @@ describe('LibrarianView render', () => {
 
     mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.commandsAPI!.startMeetingHere!).mockResolvedValueOnce({
+      success: true,
+      session: {
+        meetingId: 'ambient-test',
+        title: page.title,
+        type: 'wiki',
+        filePath: absPath,
+        relPath,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        status: 'recording',
+        audioPath: null,
+        transcriptPath: null,
+        rawTranscriptPath: null,
+        speakerDiarizationSupported: false,
+      },
+    });
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Field Theory' })).toBeTruthy();
     });
-    expect(screen.queryByRole('button', { name: 'Start meeting recording' })).toBeNull();
-    expect(window.commandsAPI!.startMeetingHere).not.toHaveBeenCalled();
+    const ambientButton = await screen.findByRole('button', { name: 'Start Ambient' });
+    fireEvent.click(ambientButton);
+    await waitFor(() => {
+      expect(window.commandsAPI!.startMeetingHere).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByRole('button', { name: 'Stop Ambient' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop Ambient' }));
+    await waitFor(() => {
+      expect(window.commandsAPI!.stopMeeting).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('places Field Theory commands before the view mode toggle', async () => {

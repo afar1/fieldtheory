@@ -56,6 +56,10 @@ import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
 import * as plist from 'plist';
 import { createLogger } from './logger';
 import { stripFigureReferences, insertFigureReferencesInline } from './figureUtils';
+import {
+  MeetingCapturePipeline,
+  type MeetingCaptureTranscriptEntry,
+} from './meetingCapturePipeline';
 
 const log = createLogger('Transcriber');
 const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
@@ -148,6 +152,13 @@ export interface MeetingCaptureResult extends MeetingCaptureSession {
   stoppedAt: string;
   transcriptText: string;
   audioPath: string | null;
+  transcriptEntries?: MeetingCaptureTranscriptEntry[];
+}
+
+export interface MeetingCaptureStartOptions {
+  meetingId: string;
+  sidecarDir: string;
+  onTranscript?: (entry: MeetingCaptureTranscriptEntry) => void;
 }
 
 type FieldTheoryMarkdownInsertionTarget = {
@@ -260,6 +271,8 @@ export class TranscriberManager extends EventEmitter {
   private fieldTheoryTerminalInsertionTarget: FieldTheoryTerminalInsertionTarget | null = null;
   private activeRecordingSource: RecordingInputSource | null = null;
   private activeMeetingCapture: MeetingCaptureSession | null = null;
+  private meetingCapturePipeline: MeetingCapturePipeline | null = null;
+  private meetingChunkReadyListener: ((filePath: string) => void) | null = null;
   private meetingCaptureHotkeyHandler: MeetingCaptureHotkeyHandler | null = null;
   private beforeRecordingToggleHandler: BeforeRecordingToggleHandler | null = null;
   private meetingCaptureHotkeyStopInFlight: boolean = false;
@@ -3187,7 +3200,7 @@ export class TranscriberManager extends EventEmitter {
     return this.transcribeWithEngineFallback(wavPath, engine);
   }
 
-  async startMeetingCapture(): Promise<MeetingCaptureSession> {
+  async startMeetingCapture(options?: MeetingCaptureStartOptions): Promise<MeetingCaptureSession> {
     if (this.activeMeetingCapture) {
       throw new Error('Meeting capture is already active.');
     }
@@ -3204,6 +3217,9 @@ export class TranscriberManager extends EventEmitter {
     const source = this.getRecordingSource();
     if (source === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
       throw new Error('System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.');
+    }
+    if (options && source !== 'microphone') {
+      throw new Error('Ambient currently requires microphone capture so it can preserve and transcribe durable audio chunks.');
     }
 
     const configuredEngine = this.getConfiguredTranscriptionEngine();
@@ -3229,12 +3245,35 @@ export class TranscriberManager extends EventEmitter {
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.nativeHelper.setHarvestMode('off');
+      if (options) {
+        this.meetingCapturePipeline = new MeetingCapturePipeline({
+          meetingId: options.meetingId,
+          sidecarDir: options.sidecarDir,
+          transcribe: async (filePath) => this.transcribeWithEngineFallback(filePath, transcriptionEngine),
+        });
+        this.meetingCapturePipeline.on('transcript', (entry: MeetingCaptureTranscriptEntry) => {
+          this.emit('meetingTranscript', entry);
+          options.onTranscript?.(entry);
+        });
+        this.meetingChunkReadyListener = (filePath: string) => {
+          try {
+            this.meetingCapturePipeline?.acceptChunk(filePath);
+          } catch (error) {
+            log.error('Could not preserve Ambient audio chunk:', error);
+            this.emit('error', error as Error);
+          }
+        };
+        this.nativeHelper.on('recordingChunkReady', this.meetingChunkReadyListener);
+      }
       this.setStatus('recording');
       this.overlay.showRecording();
       this.soundManager.play('recordingStart');
       await this.nativeHelper.startRecording(source);
+      if (options) this.nativeHelper.setHarvestMode('meeting');
       return this.activeMeetingCapture;
     } catch (error) {
+      this.detachMeetingChunkListener();
+      this.meetingCapturePipeline = null;
       this.activeMeetingCapture = null;
       this.activeRecordingSource = null;
       this.clearStack();
@@ -3258,25 +3297,34 @@ export class TranscriberManager extends EventEmitter {
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
       this.detachStandardChunkListener();
+      this.detachMeetingChunkListener();
       this.nativeHelper.setHarvestMode('off');
       audioPath = await this.nativeHelper.stopRecording();
       this.activeRecordingSource = null;
-      const transcript = await this.transcribeMeetingCapture(audioPath, capture);
+      const pipeline = this.meetingCapturePipeline;
+      const pipelineResult = pipeline ? await pipeline.finalize(audioPath) : null;
+      const transcript = pipelineResult
+        ? { text: pipelineResult.transcriptText, speakerDiarizationSupported: false }
+        : await this.transcribeMeetingCapture(audioPath, capture);
       const result: MeetingCaptureResult = {
         ...capture,
         speakerDiarizationSupported: transcript.speakerDiarizationSupported,
         stoppedAt: new Date().toISOString(),
         transcriptText: transcript.text.trim(),
-        audioPath,
+        audioPath: pipelineResult?.audioPath ?? audioPath,
+        transcriptEntries: pipelineResult?.entries,
       };
       this.activeMeetingCapture = null;
+      this.meetingCapturePipeline = null;
       this.clearStandardLiveTranscript();
       this.clearStack();
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
       return result;
     } catch (error) {
+      this.detachMeetingChunkListener();
       this.activeMeetingCapture = null;
+      this.meetingCapturePipeline = null;
       this.activeRecordingSource = null;
       this.clearStandardLiveTranscript();
       this.clearStack();
@@ -3301,15 +3349,23 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
+      this.detachMeetingChunkListener();
       await this.nativeHelper.cancelRecording();
     } finally {
       this.activeMeetingCapture = null;
+      this.meetingCapturePipeline = null;
       this.activeRecordingSource = null;
       this.clearStandardLiveTranscript();
       this.clearStack();
       this.setStatus('idle');
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
     }
+  }
+
+  private detachMeetingChunkListener(): void {
+    if (!this.meetingChunkReadyListener) return;
+    this.nativeHelper.removeListener('recordingChunkReady', this.meetingChunkReadyListener);
+    this.meetingChunkReadyListener = null;
   }
 
   /**

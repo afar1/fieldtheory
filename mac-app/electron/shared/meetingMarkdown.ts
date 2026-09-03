@@ -11,6 +11,8 @@ export type MeetingSidecarPaths = {
   rawTranscriptPath: string;
   speakersPath: string;
   audioPath: string;
+  captureManifestPath: string;
+  ambientStatePath: string;
 };
 
 export type MeetingFrontmatter = {
@@ -27,6 +29,9 @@ export type MeetingFrontmatter = {
   transcriptPath?: string;
   rawTranscriptPath?: string;
   audioPath?: string;
+  ambientThreadId?: string;
+  ambientStatePath?: string;
+  diarizationStatus?: string;
 };
 
 export type ParsedMeetingFrontmatter = ParsedMarkdownFrontmatter & {
@@ -80,6 +85,9 @@ const MEETING_FRONTMATTER_FIELDS: Record<keyof MeetingFrontmatter, string> = {
   transcriptPath: 'transcript_path',
   rawTranscriptPath: 'raw_transcript_path',
   audioPath: 'audio_path',
+  ambientThreadId: 'ambient_thread_id',
+  ambientStatePath: 'ambient_state_path',
+  diarizationStatus: 'diarization_status',
 };
 
 const MEETING_FRONTMATTER_KEYS = new Set(Object.values(MEETING_FRONTMATTER_FIELDS));
@@ -190,6 +198,8 @@ export function getMeetingSidecarPaths(meetingId: string): MeetingSidecarPaths {
     rawTranscriptPath: `${basePath}/transcript.jsonl`,
     speakersPath: `${basePath}/speakers.json`,
     audioPath: `${basePath}/audio.wav`,
+    captureManifestPath: `${basePath}/capture.json`,
+    ambientStatePath: `${basePath}/ambient.json`,
   };
 }
 
@@ -216,6 +226,9 @@ export function createMeetingMarkdown(options: CreateMeetingMarkdownOptions): st
     `transcript_path: ${sidecars.transcriptPath}`,
     `raw_transcript_path: ${sidecars.rawTranscriptPath}`,
     `audio_path: ${sidecars.audioPath}`,
+    `ambient_state_path: ${sidecars.ambientStatePath}`,
+    'ambient_thread_id:',
+    'diarization_status: pending',
   ];
 
   return [
@@ -253,6 +266,9 @@ export function parseMeetingFrontmatter(content: string): ParsedMeetingFrontmatt
       transcriptPath: meta.transcript_path,
       rawTranscriptPath: meta.raw_transcript_path,
       audioPath: meta.audio_path,
+      ambientThreadId: meta.ambient_thread_id,
+      ambientStatePath: meta.ambient_state_path,
+      diarizationStatus: meta.diarization_status,
     },
   };
 }
