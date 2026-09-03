@@ -286,6 +286,37 @@ describe('MeetingManager', () => {
     });
   });
 
+  it('flushes live Ambient transcript updates every 30 seconds', async () => {
+    vi.useFakeTimers();
+    const ambient = {
+      start: vi.fn(async () => ({ threadId: 'ambient-thread-1' })),
+      enqueueTranscript: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      stop: vi.fn(),
+      getState: vi.fn(() => null),
+    };
+    const { manager, transcriber } = makeManager({ ambient: ambient as never });
+
+    try {
+      const created = await manager.createMeetingNote('Live Cadence');
+      await manager.startHere(contextFromResult(created));
+      const captureOptions = (transcriber.startMeetingCapture.mock.calls[0] as unknown as [
+        { onTranscript?: (entry: { sequence: number; startMs: number; endMs: number; text: string }) => void },
+      ])[0];
+      captureOptions.onTranscript?.({ sequence: 1, startMs: 0, endMs: 10_000, text: 'Live update.' });
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(ambient.flush).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ambient.flush).toHaveBeenCalledOnce();
+      expect(ambient.flush).toHaveBeenCalledWith();
+      await manager.cancelActiveMeeting();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps meeting speaker labels beyond Speaker 2 in the note and raw sidecar', async () => {
     const { manager, root, audioPath, transcriber, localLlm } = makeManager();
     transcriber.stopMeetingCapture.mockResolvedValueOnce({

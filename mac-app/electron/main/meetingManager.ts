@@ -280,7 +280,7 @@ export class MeetingManager extends EventEmitter {
   private ambientFlushTimer: NodeJS.Timeout | null = null;
   private ambientTranscriptWrites = new Set<Promise<void>>();
 
-  private static readonly AMBIENT_FLUSH_INTERVAL_MS = 45_000;
+  private static readonly AMBIENT_FLUSH_INTERVAL_MS = 30_000;
 
   constructor(private readonly options: MeetingManagerOptions) {
     super();
