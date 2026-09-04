@@ -944,6 +944,94 @@ describe('recursive wiki tree scan', () => {
     expect(manager.scanMarkdownTree).not.toHaveBeenCalled();
   });
 
+  it('preserves projected root order, canonical deduplication, unsafe-root filtering, and lazy watcher startup', () => {
+    const root = makeTempDir();
+    const wikiRoot = path.join(root, 'wiki');
+    const externalRoot = path.join(root, 'external');
+    const alias = path.join(root, 'alias');
+    const missing = path.join(root, 'missing');
+    fs.mkdirSync(wikiRoot);
+    fs.mkdirSync(externalRoot);
+    fs.symlinkSync(externalRoot, alias);
+    fs.writeFileSync(path.join(externalRoot, 'note.md'), '[[Wiki]]');
+    const makeManager = () => {
+      const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+      Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+      Object.assign(manager, {
+        settings: { libraryRoots: [externalRoot, alias, wikiRoot, missing, os.homedir()] },
+        saveSettings: vi.fn(),
+        startWikiWatcher: vi.fn(() => Object.assign(manager, { wikiWatcher: {} })),
+      });
+      return manager;
+    };
+    const original = makeManager();
+    const expected = original.getLibraryRoots().map((item) => item.path);
+    expect(expected).toEqual([wikiRoot, externalRoot, missing]);
+    const direct = makeManager();
+    const scan = vi.spyOn(direct as any, 'scanMarkdownTree');
+    const save = vi.spyOn(direct as any, 'saveSettings');
+    expect(direct.getLibraryRootPaths({ ensureWatching: true })).toEqual(expected);
+    expect(direct.getLibraryRootPaths({ ensureWatching: true })).toEqual(expected);
+    expect(direct.startWikiWatcher).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(scan).not.toHaveBeenCalled();
+    const noWatcher = makeManager();
+    noWatcher.getLibraryRootPaths();
+    expect(noWatcher.startWikiWatcher).not.toHaveBeenCalled();
+  });
+
+  it('still receives external file edits when root-only access starts the wiki watcher', async () => {
+    const root = makeTempDir();
+    const filePath = path.join(root, 'Note.md');
+    fs.writeFileSync(filePath, 'Before');
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    Object.assign(manager, { settings: { libraryRoots: [] } });
+    expect(manager.getLibraryRootPaths({ ensureWatching: true })).toEqual([root]);
+    const watcher = (manager as unknown as { wikiWatcher: import('chokidar').FSWatcher }).wikiWatcher;
+    try {
+      await new Promise<void>((resolve) => watcher.once('ready', resolve));
+      const changed = new Promise<unknown>((resolve) => manager.once('wiki:changed', resolve));
+      fs.writeFileSync(filePath, 'After [[Target]]');
+      await expect(changed).resolves.toEqual(expect.objectContaining({
+        type: 'file-changed', absPath: filePath, relPath: 'Note', source: 'watcher',
+      }));
+    } finally {
+      await watcher.close();
+    }
+  });
+
+  it.runIf(process.env.FT_LIBRARY_ROOT_BENCHMARK === '1')('measures root-only access without file scans on an isolated Library', () => {
+    const root = makeTempDir();
+    for (let folder = 0; folder < 50; folder++) {
+      const directory = path.join(root, `folder-${folder}`);
+      fs.mkdirSync(directory);
+      for (let file = 0; file < 168; file++) fs.writeFileSync(path.join(directory, `${file}.md`), `# Note ${file}\n[[Target]]`);
+    }
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    Object.assign(manager, { settings: { libraryRoots: [] }, wikiWatcher: {}, wikiFileMetadataCache: new Map() });
+    const scan = vi.spyOn(manager as any, 'scanMarkdownTree');
+    const samples: { projection: number[]; direct: number[] } = { projection: [], direct: [] };
+    for (let iteration = 0; iteration < 6; iteration++) {
+      Object.assign(manager, { libraryRootsCache: null });
+      let start = performance.now();
+      const expected = manager.getLibraryRoots().map((item) => item.path);
+      const projection = performance.now() - start;
+      scan.mockClear();
+      start = performance.now();
+      const actual = manager.getLibraryRootPaths({ ensureWatching: true });
+      const direct = performance.now() - start;
+      expect(actual).toEqual(expected);
+      expect(scan).not.toHaveBeenCalled();
+      if (iteration > 0) {
+        samples.projection.push(projection);
+        samples.direct.push(direct);
+      }
+    }
+    console.log('LIBRARY_ROOT_BENCHMARK', JSON.stringify({ files: 8400, samplesMs: samples }));
+  }, 30000);
+
   it('uses normal wiki aliases, artifact filtering, and read boundaries for link repairs', async () => {
     const root = makeTempDir();
     const wikiRoot = path.join(root, 'wiki');

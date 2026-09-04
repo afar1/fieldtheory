@@ -3401,7 +3401,9 @@ export class LibrarianManager extends EventEmitter {
     return roots;
   }
 
-  getLibraryRootPaths(): string[] {
+  getLibraryRootPaths(options: { ensureWatching?: boolean } = {}): string[] {
+    // Root-only callers can preserve getLibraryRoots' lazy watcher startup.
+    if (options.ensureWatching && !this.wikiWatcher) this.startWikiWatcher();
     const roots: string[] = [];
     const seen = new Set<string>();
     const addRoot = (rootPath: string): void => {

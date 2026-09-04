@@ -2977,7 +2977,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   if (!librarianManager || browserHelperServer) return;
 
   const manager = librarianManager;
-  const createFallbackDocumentService = () => new BrowserHelperDocumentService(manager.getLibraryRoots().map((root) => root.path));
+  const createFallbackDocumentService = () => new BrowserHelperDocumentService(manager.getLibraryRootPaths({ ensureWatching: true }));
   const nativeWikiPage = (page: ReturnType<LibrarianManager['getWikiPage']>) => page
     ? {
       ...page,
@@ -3867,28 +3867,28 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
           blockWrite();
           return null;
         }
-        return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+        return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: manager.getLibraryRootPaths({ ensureWatching: true }) });
       },
       copyImageDataUrlForDocument: (documentPath, dataUrl, alt) => {
         if (!canWriteFieldTheoryContent()) {
           blockWrite();
           return null;
         }
-        return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+        return copyImageDataUrlForMarkdownDocument(documentPath, dataUrl, alt || 'Image', { libraryRoots: manager.getLibraryRootPaths({ ensureWatching: true }) });
       },
       makeImagesPortable: (documentPath, content) => {
         if (!canWriteFieldTheoryContent()) {
           blockWrite();
           return { content, copied: 0, rewritten: 0, missing: 0 };
         }
-        return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+        return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: manager.getLibraryRootPaths({ ensureWatching: true }) });
       },
       deleteUnusedCopiedImages: (documentPath, removedMarkdown, remainingContent) => {
         if (!canWriteFieldTheoryContent()) {
           blockWrite();
           return { deleted: 0, skipped: 0, missing: 0 };
         }
-        return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRoots().map((root) => root.path) });
+        return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: manager.getLibraryRootPaths({ ensureWatching: true }) });
       },
       getFieldTheorySyncStatus: () => getFieldTheorySyncStatus(),
       startAgentKickoff: (args) => {
@@ -7758,7 +7758,7 @@ function setupLibrarianIPCHandlers(): void {
   ));
 
   const currentLibraryRootPaths = (): string[] => (
-    librarianManager?.getLibraryRoots().map((root) => root.path) ?? []
+    librarianManager?.getLibraryRootPaths({ ensureWatching: true }) ?? []
   );
 
   // Get all readings (metadata only, for sidebar)
