@@ -279,6 +279,8 @@ export class MeetingManager extends EventEmitter {
   private activeSession: MeetingSession | null = null;
   private ambientFlushTimer: NodeJS.Timeout | null = null;
   private ambientTranscriptWrites = new Set<Promise<void>>();
+  private startInFlight: Promise<MeetingActionResult> | null = null;
+  private stopInFlight: Promise<MeetingActionResult> | null = null;
 
   private static readonly AMBIENT_FLUSH_INTERVAL_MS = 30_000;
 
@@ -329,7 +331,17 @@ export class MeetingManager extends EventEmitter {
     return { success: true, session, openTarget };
   }
 
-  async startHere(context?: MeetingFileContext | null): Promise<MeetingActionResult> {
+  startHere(context?: MeetingFileContext | null): Promise<MeetingActionResult> {
+    if (this.startInFlight) return this.startInFlight;
+    const starting = this.startHereInternal(context);
+    const tracked = starting.finally(() => {
+      if (this.startInFlight === tracked) this.startInFlight = null;
+    });
+    this.startInFlight = tracked;
+    return tracked;
+  }
+
+  private async startHereInternal(context?: MeetingFileContext | null): Promise<MeetingActionResult> {
     if (this.activeSession) {
       return { success: false, error: 'A meeting is already recording', session: this.getActiveSession() ?? undefined };
     }
@@ -406,7 +418,18 @@ export class MeetingManager extends EventEmitter {
     }
   }
 
-  async stopActiveMeeting(): Promise<MeetingActionResult> {
+  stopActiveMeeting(): Promise<MeetingActionResult> {
+    if (this.stopInFlight) return this.stopInFlight;
+    const stopping = this.stopActiveMeetingInternal();
+    const tracked = stopping.finally(() => {
+      if (this.stopInFlight === tracked) this.stopInFlight = null;
+    });
+    this.stopInFlight = tracked;
+    return tracked;
+  }
+
+  private async stopActiveMeetingInternal(): Promise<MeetingActionResult> {
+    if (this.startInFlight && !this.activeSession) await this.startInFlight;
     const active = this.activeSession;
     if (!active) return { success: false, error: 'No meeting is recording' };
     const writeCheck = this.ensureWritable();
@@ -495,7 +518,7 @@ export class MeetingManager extends EventEmitter {
               sequence: lastSequence + 1,
               startMs: 0,
               endMs: Math.max(0, ...speakerIdentity.entries.map(entry => entry.endMs ?? 0)),
-              text: `Final stable transcript with reconciled speaker labels:\n${finalTranscript}`,
+              text: `Final speaker reconciliation:\n${finalTranscript}`,
             });
           }
           await this.options.ambient.flush(true);

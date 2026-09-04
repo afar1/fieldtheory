@@ -399,6 +399,48 @@ describe('ContentToolbar', () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps Ambient in the overflow menu until the user pins it', () => {
+    const onMeetingClick = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        meetingTitle="Start Ambient"
+        onMeetingClick={onMeetingClick}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Start Ambient' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Customize toolbar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Ambient' }));
+    expect(onMeetingClick).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Add Start Ambient' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Start Ambient' }));
+    const pinnedAmbientButton = screen.getAllByRole('button', { name: 'Start Ambient' })[0];
+    expect(pinnedAmbientButton).toBeTruthy();
+    fireEvent.click(pinnedAmbientButton);
+    expect(onMeetingClick).toHaveBeenCalledTimes(2);
+  });
+
+  it('forces the Ambient stop action into the toolbar while recording', () => {
+    const onMeetingClick = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        meetingTitle="Stop Ambient"
+        meetingRecording
+        forceVisibleActions={['meeting']}
+        onMeetingClick={onMeetingClick}
+      />
+    );
+
+    const stopButton = screen.getByRole('button', { name: 'Stop Ambient' });
+    expect(stopButton).toBeTruthy();
+    fireEvent.click(stopButton);
+    expect(onMeetingClick).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the customize dropdown surface fully opaque', () => {
     render(
       <ContentToolbar

@@ -8,6 +8,10 @@ import {
 } from './codexAppServerClient';
 import { writeTextFileAtomically } from './documentSaveGuard';
 
+const AMBIENT_CONTEXT_DIRECTORY = '.ambient-context';
+const MAX_BATCH_EVENTS = 100;
+const MAX_BATCH_TRANSCRIPT_CHARACTERS = 24_000;
+
 export interface AmbientStartArgs {
   meetingId: string;
   title: string;
@@ -24,6 +28,7 @@ export interface AmbientTranscriptDelta {
 export interface AmbientOutboxEntry extends AmbientTranscriptDelta {
   attempts: number;
   lastAttemptAt?: string;
+  nextCharacterOffset?: number;
 }
 
 export interface AmbientState {
@@ -45,6 +50,14 @@ export interface AmbientPendingDelivery {
   lastSequence: number;
   clientUserMessageId: string;
   final: boolean;
+  firstCharacterOffset?: number;
+  lastCharacterOffset?: number;
+}
+
+interface AmbientBatchEntry extends AmbientTranscriptDelta {
+  characterStart: number;
+  characterEnd: number;
+  totalCharacters: number;
 }
 
 export interface AmbientClient {
@@ -161,13 +174,25 @@ export class AmbientManager extends EventEmitter {
 
   /** Close the transport. Durable pending work remains recoverable. */
   stop(): void {
-    this.active?.client.close?.();
-    this.clearActiveMeeting();
+    const active = this.active;
+    if (!active) return;
+    const close = () => {
+      if (this.active !== active) return;
+      active.client.close?.();
+      this.clearActiveMeeting();
+    };
+    if (this.flushPromise) {
+      void this.flushPromise.catch(() => {}).then(close);
+      return;
+    }
+    close();
   }
 
   /** Cancel without deleting transcript data or the Codex task. */
   async cancel(): Promise<void> {
     const active = this.requireActive();
+    await this.flushPromise?.catch(() => {});
+    if (this.active !== active) return;
     await this.mutate((state) => {
       state.status = 'cancelled';
       state.lastError = null;
@@ -248,35 +273,31 @@ export class AmbientManager extends EventEmitter {
 
   private async deliverBatch(
     active: ActiveMeeting,
-    batch: AmbientOutboxEntry[],
+    batch: AmbientBatchEntry[],
   ): Promise<void> {
     const first = batch[0];
     const last = batch[batch.length - 1];
     const pendingDelivery = this.requireState().pendingDelivery;
     if (!pendingDelivery) throw new Error('Ambient delivery batch is not initialized');
-    await this.mutate((state) => {
-      const sequences = new Set(batch.map((entry) => entry.sequence));
-      for (const entry of state.outbox) {
-        if (!sequences.has(entry.sequence)) continue;
-        entry.attempts += 1;
-        entry.lastAttemptAt = this.now().toISOString();
-      }
-    });
-
     const threadId = this.requireState().threadId;
     if (!threadId) throw new Error('Ambient task has no Codex thread id');
     try {
+      const contextFilePath = this.ensureContextFile(active, batch, pendingDelivery);
+      await this.mutate((state) => {
+        const sequences = new Set(batch.map((entry) => entry.sequence));
+        for (const entry of state.outbox) {
+          if (!sequences.has(entry.sequence)) continue;
+          entry.attempts += 1;
+          entry.lastAttemptAt = this.now().toISOString();
+        }
+      });
       await active.client.deliverTranscript({
         threadId,
         meetingId: active.meetingId,
-        meetingTitle: active.title,
         firstSequence: first.sequence,
         lastSequence: last.sequence,
-        transcript: formatTranscriptBatch(batch),
+        contextFilePath,
         clientUserMessageId: pendingDelivery.clientUserMessageId,
-        startMs: first.startMs,
-        endMs: last.endMs,
-        final: pendingDelivery.final,
       });
     } catch (error) {
       await this.recordError(error);
@@ -289,10 +310,23 @@ export class AmbientManager extends EventEmitter {
       throw error;
     }
 
-    const deliveredSequences = new Set(batch.map((entry) => entry.sequence));
     await this.mutate((state) => {
-      state.outbox = state.outbox.filter((entry) => !deliveredSequences.has(entry.sequence));
-      state.lastDeliveredSequence = last.sequence;
+      const lastEntry = state.outbox.find((entry) => entry.sequence === pendingDelivery.lastSequence);
+      const lastCharacterOffset = pendingDelivery.lastCharacterOffset ?? lastEntry?.text.length ?? 0;
+      const fullyDeliveredSequences: number[] = [];
+      state.outbox = state.outbox.filter((entry) => {
+        if (entry.sequence < pendingDelivery.firstSequence || entry.sequence > pendingDelivery.lastSequence) {
+          return true;
+        }
+        if (entry.sequence === pendingDelivery.lastSequence && lastCharacterOffset < entry.text.length) {
+          entry.nextCharacterOffset = lastCharacterOffset;
+          return true;
+        }
+        fullyDeliveredSequences.push(entry.sequence);
+        return false;
+      });
+      const lastFullyDeliveredSequence = fullyDeliveredSequences.at(-1);
+      if (lastFullyDeliveredSequence !== undefined) state.lastDeliveredSequence = lastFullyDeliveredSequence;
       state.pendingDelivery = null;
       state.lastError = null;
     });
@@ -303,24 +337,84 @@ export class AmbientManager extends EventEmitter {
     });
   }
 
-  private async selectBatch(final: boolean): Promise<AmbientOutboxEntry[]> {
+  private async selectBatch(final: boolean): Promise<AmbientBatchEntry[]> {
     await this.mutate((state) => {
       if (state.pendingDelivery || state.outbox.length === 0) return;
-      const first = state.outbox[0];
-      const last = state.outbox[state.outbox.length - 1];
+      const batch = selectBoundedBatch(state.outbox);
+      const first = batch[0];
+      const last = batch[batch.length - 1];
+      const needsCharacterDiscriminator = first.characterStart > 0 || last.characterEnd < last.totalCharacters;
+      const lastOutboxEntry = state.outbox.at(-1);
+      const isLastBatch = last.sequence === lastOutboxEntry?.sequence
+        && last.characterEnd === last.totalCharacters;
       state.pendingDelivery = {
         firstSequence: first.sequence,
         lastSequence: last.sequence,
-        clientUserMessageId: ambientClientUserMessageId(state.meetingId, first.sequence, last.sequence),
-        final,
+        clientUserMessageId: ambientClientUserMessageId(
+          state.meetingId,
+          first.sequence,
+          last.sequence,
+          needsCharacterDiscriminator
+            ? `${first.sequence}:${first.characterStart}-${last.sequence}:${last.characterEnd}`
+            : '',
+        ),
+        final: final && isLastBatch,
+        firstCharacterOffset: first.characterStart,
+        lastCharacterOffset: last.characterEnd,
       };
     });
     const state = this.requireState();
     if (!state.pendingDelivery) return [];
-    return structuredClone(state.outbox.filter((entry) => (
-      entry.sequence >= state.pendingDelivery!.firstSequence
-      && entry.sequence <= state.pendingDelivery!.lastSequence
-    )));
+    return structuredClone(materializePendingBatch(state.outbox, state.pendingDelivery));
+  }
+
+  private ensureContextFile(
+    active: ActiveMeeting,
+    batch: AmbientBatchEntry[],
+    pendingDelivery: AmbientPendingDelivery,
+  ): string {
+    const directoryPath = path.join(active.workingDirectory, AMBIENT_CONTEXT_DIRECTORY);
+    fs.mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directoryPath, 0o700); } catch { /* best effort */ }
+    const relativePath = path.join(
+      AMBIENT_CONTEXT_DIRECTORY,
+      `${pendingDelivery.clientUserMessageId}.json`,
+    );
+    const filePath = path.join(active.workingDirectory, relativePath);
+    const content = `${JSON.stringify({
+      version: 1,
+      kind: 'field-theory-ambient-context',
+      trust: 'untrusted',
+      meeting: {
+        id: active.meetingId,
+        title: active.title,
+      },
+      batch: {
+        id: pendingDelivery.clientUserMessageId,
+        firstSequence: pendingDelivery.firstSequence,
+        lastSequence: pendingDelivery.lastSequence,
+        final: pendingDelivery.final,
+      },
+      events: batch.map(({
+        sequence,
+        startMs,
+        endMs,
+        text,
+        characterStart,
+        characterEnd,
+        totalCharacters,
+      }) => ({ sequence, startMs, endMs, characterStart, characterEnd, totalCharacters, text })),
+    }, null, 2)}\n`;
+
+    if (fs.existsSync(filePath)) {
+      if (fs.readFileSync(filePath, 'utf-8') !== content) {
+        throw new Error(`Ambient context file conflicts with durable batch ${pendingDelivery.clientUserMessageId}`);
+      }
+    } else {
+      writeTextFileAtomically(filePath, content);
+    }
+    try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
+    return relativePath;
   }
 
   private async ensureState(): Promise<void> {
@@ -436,10 +530,72 @@ function sameMeeting(
     && left.workingDirectory === right.workingDirectory;
 }
 
-function formatTranscriptBatch(entries: AmbientOutboxEntry[]): string {
-  return entries.map((entry) => (
-    `[delta ${entry.sequence}; ${entry.startMs}-${entry.endMs} ms]\n${entry.text}`
-  )).join('\n\n');
+function selectBoundedBatch(entries: AmbientOutboxEntry[]): AmbientBatchEntry[] {
+  const batch: AmbientBatchEntry[] = [];
+  let transcriptCharacters = 0;
+  for (const entry of entries) {
+    if (batch.length >= MAX_BATCH_EVENTS) break;
+    const characterStart = entry.nextCharacterOffset ?? 0;
+    const availableCharacters = MAX_BATCH_TRANSCRIPT_CHARACTERS - transcriptCharacters;
+    const characterEnd = boundedCharacterEnd(entry.text, characterStart, availableCharacters);
+    if (characterEnd <= characterStart) break;
+    batch.push({
+      sequence: entry.sequence,
+      startMs: entry.startMs,
+      endMs: entry.endMs,
+      text: entry.text.slice(characterStart, characterEnd),
+      characterStart,
+      characterEnd,
+      totalCharacters: entry.text.length,
+    });
+    transcriptCharacters += characterEnd - characterStart;
+    if (characterEnd < entry.text.length) break;
+  }
+  return batch;
+}
+
+function boundedCharacterEnd(text: string, start: number, availableCharacters: number): number {
+  let end = Math.min(text.length, start + availableCharacters);
+  if (end < text.length
+    && end > start
+    && isHighSurrogate(text.charCodeAt(end - 1))
+    && isLowSurrogate(text.charCodeAt(end))) {
+    end -= 1;
+  }
+  return end;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xD800 && value <= 0xDBFF;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xDC00 && value <= 0xDFFF;
+}
+
+function materializePendingBatch(
+  entries: AmbientOutboxEntry[],
+  pending: AmbientPendingDelivery,
+): AmbientBatchEntry[] {
+  return entries
+    .filter((entry) => entry.sequence >= pending.firstSequence && entry.sequence <= pending.lastSequence)
+    .map((entry) => {
+      const characterStart = entry.sequence === pending.firstSequence
+        ? pending.firstCharacterOffset ?? entry.nextCharacterOffset ?? 0
+        : entry.nextCharacterOffset ?? 0;
+      const characterEnd = entry.sequence === pending.lastSequence
+        ? pending.lastCharacterOffset ?? entry.text.length
+        : entry.text.length;
+      return {
+        sequence: entry.sequence,
+        startMs: entry.startMs,
+        endMs: entry.endMs,
+        text: entry.text.slice(characterStart, characterEnd),
+        characterStart,
+        characterEnd,
+        totalCharacters: entry.text.length,
+      };
+    });
 }
 
 function parseState(raw: string): AmbientState {
@@ -469,7 +625,11 @@ function parseState(raw: string): AmbientState {
       || !Number.isFinite(item.startMs)
       || !Number.isFinite(item.endMs)
       || typeof item.text !== 'string'
-      || !Number.isSafeInteger(item.attempts)) {
+      || !Number.isSafeInteger(item.attempts)
+      || !(item.nextCharacterOffset === undefined
+        || (Number.isSafeInteger(item.nextCharacterOffset)
+          && item.nextCharacterOffset >= 0
+          && item.nextCharacterOffset < item.text.length))) {
       throw new Error('Ambient state outbox is invalid');
     }
   }
@@ -485,7 +645,12 @@ function isPendingDelivery(value: unknown): value is AmbientPendingDelivery {
     && Number.isSafeInteger(pending.lastSequence)
     && pending.lastSequence >= pending.firstSequence
     && typeof pending.clientUserMessageId === 'string'
-    && typeof pending.final === 'boolean';
+    && /^field-theory-ambient-[a-f0-9]{32}$/.test(pending.clientUserMessageId)
+    && typeof pending.final === 'boolean'
+    && (pending.firstCharacterOffset === undefined
+      || (Number.isSafeInteger(pending.firstCharacterOffset) && pending.firstCharacterOffset >= 0))
+    && (pending.lastCharacterOffset === undefined
+      || (Number.isSafeInteger(pending.lastCharacterOffset) && pending.lastCharacterOffset >= 0));
 }
 
 function errorMessage(error: unknown): string {

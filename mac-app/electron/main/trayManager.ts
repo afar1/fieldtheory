@@ -52,6 +52,8 @@ export class TrayManager {
   private showOnboardingCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
+  private startAmbientCallback: (() => void | Promise<void>) | null = null;
+  private stopAmbientCallback: (() => void | Promise<void>) | null = null;
   private takeScreenshotCallback: (() => void) | null = null;
   private takeFullScreenCallback: (() => void) | null = null;
   private takeActiveWindowCallback: (() => void) | null = null;
@@ -64,6 +66,8 @@ export class TrayManager {
   private screenshotHotkey: string = 'Command+4';
   private taggedDocsUnreadCount: number = 0;
   private recordingActive: boolean = false;
+  private ambientActive: boolean = false;
+  private ambientFinishing: boolean = false;
   private recordingWaveformLevels: number[] = new Array(TRAY_WAVEFORM_BAR_COUNT).fill(0);
   private recordingWaveformWriteIndex: number = 0;
   private trayIconDataUrlByPath: Map<string, string> = new Map();
@@ -154,14 +158,31 @@ export class TrayManager {
     this.refreshMenu();
   }
 
+  setAmbientCallbacks(callbacks: {
+    start: () => void | Promise<void>;
+    stop: () => void | Promise<void>;
+  }): void {
+    this.startAmbientCallback = callbacks.start;
+    this.stopAmbientCallback = callbacks.stop;
+    this.refreshMenu();
+  }
+
+  setAmbientActive(active: boolean, finishing = false): void {
+    const nextActive = Boolean(active);
+    const nextFinishing = Boolean(finishing);
+    if (this.ambientActive === nextActive && this.ambientFinishing === nextFinishing) return;
+    this.ambientActive = nextActive;
+    this.ambientFinishing = nextFinishing;
+    this.refreshMenu();
+  }
+
   setRecordingActive(active: boolean): void {
     const nextActive = Boolean(active);
     if (this.recordingActive === nextActive) return;
     this.recordingActive = nextActive;
     this.resetRecordingWaveform();
     if (this.tray) {
-      this.updateTrayImage(this.audioManager.getState());
-      this.updateTrayTitle(this.audioManager.getState());
+      this.updateTray(this.audioManager.getState());
     }
   }
 
@@ -499,7 +520,7 @@ export class TrayManager {
     });
 
     items.push({
-      label: 'Record Transcription',
+      label: this.recordingActive ? 'Stop Transcription' : 'Record Transcription',
       accelerator: this.transcriptionHotkey,
       click: () => {
         if (this.startRecordingCallback) {
@@ -507,6 +528,18 @@ export class TrayManager {
         }
       },
     });
+
+    if (this.startAmbientCallback || this.stopAmbientCallback) {
+      items.push({
+        label: this.ambientFinishing
+          ? 'Finishing Ambient Transcription…'
+          : this.ambientActive ? 'Stop Ambient Transcription' : 'Start Ambient',
+        enabled: !this.ambientFinishing,
+        click: () => {
+          void (this.ambientActive ? this.stopAmbientCallback?.() : this.startAmbientCallback?.());
+        },
+      });
+    }
 
     if (this.getAutoImproveCallback && this.setAutoImproveCallback) {
       items.push({

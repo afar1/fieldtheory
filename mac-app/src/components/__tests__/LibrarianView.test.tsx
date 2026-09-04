@@ -3635,16 +3635,51 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Field Theory' })).toBeTruthy();
     });
-    const ambientButton = await screen.findByRole('button', { name: 'Start Ambient' });
-    fireEvent.click(ambientButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Customize toolbar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Ambient' }));
     await waitFor(() => {
       expect(window.commandsAPI!.startMeetingHere).toHaveBeenCalledTimes(1);
     });
-    expect(screen.getByRole('button', { name: 'Stop Ambient' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop Ambient' }));
+    expect(screen.getAllByRole('button', { name: 'Stop Ambient' }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Stop Ambient' })[0]);
     await waitFor(() => {
       expect(window.commandsAPI!.stopMeeting).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('does not let an older meeting snapshot overwrite a live Ambient status', async () => {
+    const relPath = 'scratchpad/meeting-status-race';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'meeting-status-race',
+      title: 'meeting-status-race',
+      lastUpdated: 1,
+      content: 'Meeting status race',
+      documentVersion: { mtimeMs: 1, size: 19, sha256: 'meeting-status-race-version' },
+    };
+    let resolveSnapshot: ((session: null) => void) | undefined;
+    let publishStatus: ((session: any) => void) | undefined;
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.commandsAPI!.getActiveMeeting!).mockImplementationOnce(() => (
+      new Promise((resolve) => { resolveSnapshot = resolve; })
+    ));
+    vi.mocked(window.commandsAPI!.onMeetingStatus!).mockImplementationOnce((callback) => {
+      publishStatus = callback;
+      return () => {};
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+    await screen.findByLabelText('File title');
+    act(() => publishStatus?.({ status: 'recording' }));
+    expect(screen.getByRole('button', { name: 'Stop Ambient' })).toBeTruthy();
+
+    await act(async () => {
+      resolveSnapshot?.(null);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: 'Stop Ambient' })).toBeTruthy();
   });
 
   it('places Field Theory commands before the view mode toggle', async () => {

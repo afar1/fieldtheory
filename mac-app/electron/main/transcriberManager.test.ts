@@ -44,6 +44,7 @@ vi.mock('./transcriberTrace', () => ({
 }));
 
 import { clipboard, globalShortcut } from 'electron';
+import { MeetingCapturePipeline } from './meetingCapturePipeline';
 import { formatWhisperSpeakerTurnTranscript, TranscriberManager } from './transcriberManager';
 
 function writePcmWav(filePath: string, durationMs = 100): void {
@@ -83,6 +84,49 @@ describe('formatWhisperSpeakerTurnTranscript', () => {
       'Third voice joining.',
       'Yes, sounds good.',
     ].join('\n\n'));
+  });
+});
+
+describe('TranscriberManager Parakeet meeting timestamps', () => {
+  it('requests structured segments only for meeting chunks', async () => {
+    const sendParakeetCommand = vi.fn()
+      .mockResolvedValueOnce({ ok: true, text: 'Normal dictation.' })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: 'First. Second.',
+        segments: [
+          { startSeconds: 0.1, endSeconds: 0.4, text: 'First.' },
+          { startSeconds: 0.5, endSeconds: 0.9, text: 'Second.' },
+        ],
+      });
+    const manager: any = {
+      screenshotMetadata: [],
+      startParakeetServer: vi.fn(async () => {}),
+      sendParakeetCommand,
+      stopParakeetServer: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await expect(manager.transcribeWithParakeet('/tmp/dictation.wav', 'parakeet'))
+      .resolves.toBe('Normal dictation.');
+    await expect(manager.transcribeMeetingChunk('/tmp/meeting.wav', 'parakeet')).resolves.toEqual({
+      text: 'First. Second.',
+      segments: [
+        { startMs: 100, endMs: 400, text: 'First.' },
+        { startMs: 500, endMs: 900, text: 'Second.' },
+      ],
+    });
+
+    expect(sendParakeetCommand).toHaveBeenNthCalledWith(1, 'parakeet', {
+      cmd: 'transcribe',
+      audio: '/tmp/dictation.wav',
+      timestamps: false,
+    });
+    expect(sendParakeetCommand).toHaveBeenNthCalledWith(2, 'parakeet', {
+      cmd: 'transcribe',
+      audio: '/tmp/meeting.wav',
+      structuredSegments: true,
+    });
   });
 });
 
@@ -1315,9 +1359,18 @@ describe('TranscriberManager standard real-time chunking', () => {
       setHarvestMode: vi.fn(),
     });
     const onTranscript = vi.fn();
-    const transcribeWithEngineFallback = vi.fn()
-      .mockResolvedValueOnce('First durable chunk.')
-      .mockResolvedValueOnce('Final durable chunk.');
+    const transcribeMeetingChunk = vi.fn()
+      .mockResolvedValueOnce({
+        text: 'First durable chunk.',
+        segments: [
+          { startMs: 0, endMs: 40, text: 'First durable' },
+          { startMs: 50, endMs: 90, text: 'chunk.' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: 'Final durable chunk.',
+        segments: [{ startMs: 10, endMs: 130, text: 'Final durable chunk.' }],
+      });
     const manager: any = new EventEmitter();
     Object.assign(manager, {
       status: 'idle',
@@ -1348,26 +1401,30 @@ describe('TranscriberManager standard real-time chunking', () => {
       currentStandardHarvestMode: 'off',
       meetingCapturePipeline: null,
       meetingChunkReadyListener: null,
-      transcribeWithEngineFallback,
+      transcribeMeetingChunk,
     });
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    const resume = vi.spyOn(MeetingCapturePipeline.prototype, 'resume');
 
     try {
       await manager.startMeetingCapture({ meetingId: 'meeting-1', sidecarDir, onTranscript });
+      expect(resume).toHaveBeenCalledOnce();
       nativeHelper.emit('recordingChunkReady', firstChunk);
       const result = await manager.stopMeetingCapture();
 
       expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('meeting');
       expect(result.transcriptEntries).toEqual([
-        { sequence: 1, startMs: 0, endMs: 100, text: 'First durable chunk.' },
-        { sequence: 2, startMs: 100, endMs: 250, text: 'Final durable chunk.' },
+        { sequence: 1, startMs: 0, endMs: 40, text: 'First durable' },
+        { sequence: 2, startMs: 50, endMs: 90, text: 'chunk.' },
+        { sequence: 3, startMs: 110, endMs: 230, text: 'Final durable chunk.' },
       ]);
       expect(result.transcriptText).toBe('First durable chunk. Final durable chunk.');
       expect(result.audioPath).toBe(path.join(sidecarDir, 'audio.wav'));
       expect(existsSync(path.join(sidecarDir, 'capture.json'))).toBe(true);
       expect(existsSync(result.audioPath)).toBe(true);
-      expect(onTranscript).toHaveBeenCalledTimes(2);
+      expect(onTranscript).toHaveBeenCalledTimes(3);
     } finally {
+      resume.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

@@ -12,8 +12,20 @@ export type MeetingAudioChunk = {
   durationMs: number;
   status: MeetingAudioChunkStatus;
   transcript?: string;
+  transcriptSegments?: MeetingChunkTranscriptSegment[];
   attempts: number;
   error?: string;
+};
+
+export type MeetingChunkTranscriptSegment = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
+export type MeetingChunkTranscription = {
+  text: string;
+  segments?: MeetingChunkTranscriptSegment[];
 };
 
 export type MeetingCaptureManifest = {
@@ -41,10 +53,51 @@ export type MeetingCapturePipelineResult = {
 export type MeetingCapturePipelineOptions = {
   meetingId: string;
   sidecarDir: string;
-  transcribe: (filePath: string) => Promise<string>;
+  transcribe: (filePath: string) => Promise<string | MeetingChunkTranscription>;
   now?: () => Date;
   retryDelayMs?: number;
 };
+
+function transcriptSegmentsForChunk(chunk: MeetingAudioChunk): MeetingChunkTranscriptSegment[] {
+  if (chunk.transcriptSegments?.length) return chunk.transcriptSegments;
+  const text = chunk.transcript?.trim();
+  return text ? [{ startMs: chunk.startMs, endMs: chunk.endMs, text }] : [];
+}
+
+function transcriptEntriesForChunks(chunks: MeetingAudioChunk[]): MeetingCaptureTranscriptEntry[] {
+  let sequence = 0;
+  return chunks.flatMap(chunk => transcriptSegmentsForChunk(chunk).map(segment => ({
+    sequence: ++sequence,
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    text: segment.text,
+  })));
+}
+
+function normalizeTranscription(
+  transcription: string | MeetingChunkTranscription,
+  chunk: MeetingAudioChunk,
+): { text: string; segments: MeetingChunkTranscriptSegment[] } {
+  const text = (typeof transcription === 'string' ? transcription : transcription.text).trim();
+  const rawSegments = typeof transcription === 'string' ? [] : transcription.segments ?? [];
+  const segments = rawSegments.flatMap((segment) => {
+    const segmentText = segment.text.trim();
+    const relativeStartMs = Math.max(0, Math.min(chunk.durationMs, segment.startMs));
+    const relativeEndMs = Math.max(relativeStartMs, Math.min(chunk.durationMs, segment.endMs));
+    if (!segmentText || relativeEndMs <= relativeStartMs) return [];
+    return [{
+      startMs: chunk.startMs + relativeStartMs,
+      endMs: chunk.startMs + relativeEndMs,
+      text: segmentText,
+    }];
+  });
+  return {
+    text,
+    segments: segments.length > 0
+      ? segments
+      : (text ? [{ startMs: chunk.startMs, endMs: chunk.endMs, text }] : []),
+  };
+}
 
 type WavDataRange = {
   header: Buffer;
@@ -218,14 +271,7 @@ export class MeetingCapturePipeline extends EventEmitter {
     const ordered = [...this.manifest.chunks].sort((left, right) => left.sequence - right.sequence);
     const audioPath = path.join(this.options.sidecarDir, 'audio.wav');
     concatenateWavFiles(ordered.map(chunk => path.join(this.audioDir, chunk.fileName)), audioPath);
-    const entries = ordered
-      .filter((chunk): chunk is MeetingAudioChunk & { transcript: string } => Boolean(chunk.transcript?.trim()))
-      .map(chunk => ({
-        sequence: chunk.sequence,
-        startMs: chunk.startMs,
-        endMs: chunk.endMs,
-        text: chunk.transcript.trim(),
-      }));
+    const entries = transcriptEntriesForChunks(ordered);
     return {
       audioPath,
       transcriptText: entries.map(entry => entry.text).join(' ').trim(),
@@ -248,18 +294,24 @@ export class MeetingCapturePipeline extends EventEmitter {
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         chunk.attempts += 1;
         try {
-          const transcript = (await this.options.transcribe(filePath)).trim();
-          chunk.transcript = transcript;
+          const transcription = normalizeTranscription(await this.options.transcribe(filePath), chunk);
+          chunk.transcript = transcription.text;
+          chunk.transcriptSegments = transcription.segments;
           chunk.status = 'transcribed';
           chunk.error = undefined;
           this.persist();
-          if (transcript) {
-            this.emit('transcript', {
-              sequence: chunk.sequence,
-              startMs: chunk.startMs,
-              endMs: chunk.endMs,
-              text: transcript,
-            } satisfies MeetingCaptureTranscriptEntry);
+          if (transcription.segments.length > 0) {
+            const priorEntries = transcriptEntriesForChunks(
+              this.manifest.chunks.filter(candidate => candidate.sequence < chunk.sequence),
+            ).length;
+            transcription.segments.forEach((segment, index) => {
+              this.emit('transcript', {
+                sequence: priorEntries + index + 1,
+                startMs: segment.startMs,
+                endMs: segment.endMs,
+                text: segment.text,
+              } satisfies MeetingCaptureTranscriptEntry);
+            });
           }
           return;
         } catch (error) {

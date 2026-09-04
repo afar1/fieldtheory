@@ -216,4 +216,36 @@ describe('TrayManager update menu', () => {
     await item?.click?.({ checked: false });
     expect(setAutoImprove).toHaveBeenCalledWith(false);
   });
+
+  it('updates the transcription label when recording changes', () => {
+    const { manager, tray } = createTrayManager();
+
+    manager.setRecordingActive(true);
+
+    const items = tray.contextMenu as Array<{ label?: string }>;
+    expect(items.some((item) => item.label === 'Stop Transcription')).toBe(true);
+    expect(items.some((item) => item.label === 'Record Transcription')).toBe(false);
+  });
+
+  it('shows and dispatches the Ambient menu action with live state', async () => {
+    const { manager, tray } = createTrayManager();
+    const start = vi.fn();
+    const stop = vi.fn();
+    manager.setAmbientCallbacks({ start, stop });
+
+    let items = tray.contextMenu as Array<{ label?: string; click?: () => void }>;
+    items.find((item) => item.label === 'Start Ambient')?.click?.();
+    expect(start).toHaveBeenCalledTimes(1);
+
+    manager.setAmbientActive(true);
+    items = tray.contextMenu as Array<{ label?: string; click?: () => void }>;
+    items.find((item) => item.label === 'Stop Ambient Transcription')?.click?.();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(items.some((item) => item.label === 'Start Ambient')).toBe(false);
+
+    manager.setAmbientActive(false, true);
+    items = tray.contextMenu as Array<{ label?: string; enabled?: boolean; click?: () => void }>;
+    expect(items.find((item) => item.label === 'Finishing Ambient Transcription…'))
+      .toMatchObject({ enabled: false });
+  });
 });

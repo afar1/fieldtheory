@@ -34,6 +34,22 @@ describe('alignMeetingSpeakers', () => {
     expect(result.entries[1]).toEqual({ text: 'No timing' });
   });
 
+  it('leaves a transcript segment unlabeled when speaker overlap is ambiguous', () => {
+    const result = alignMeetingSpeakers([
+      { text: 'Overlapping exchange', startMs: 1_000, endMs: 2_000 },
+    ], [
+      { speakerId: 'A', startMs: 1_000, endMs: 1_600 },
+      { speakerId: 'B', startMs: 1_400, endMs: 2_000 },
+    ]);
+
+    expect(result.entries[0]).toEqual({
+      text: 'Overlapping exchange',
+      startMs: 1_000,
+      endMs: 2_000,
+    });
+    expect(result.speakers.map(speaker => speaker.id)).toEqual(['spk_1', 'spk_2']);
+  });
+
   it('drops tiny end-of-file clusters that create phantom speakers', () => {
     const result = alignMeetingSpeakers([
       { text: 'Closing thought', startMs: 30_000, endMs: 33_100 },

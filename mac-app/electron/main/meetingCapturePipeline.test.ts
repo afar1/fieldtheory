@@ -72,6 +72,48 @@ describe('MeetingCapturePipeline', () => {
     expect(fs.existsSync(path.join(root, 'sidecar', 'audio', '000001.wav'))).toBe(true);
   });
 
+  it('emits stable transcript entries for each timestamped ASR segment', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-meeting-segments-'));
+    const first = path.join(root, 'temporary-1.wav');
+    const second = path.join(root, 'temporary-2.wav');
+    writeFloatWav(first, 1_000);
+    writeFloatWav(second, 1_000);
+    const transcribe = vi.fn()
+      .mockResolvedValueOnce({
+        text: 'First speaker. Second speaker.',
+        segments: [
+          { startMs: 100, endMs: 400, text: 'First speaker.' },
+          { startMs: 450, endMs: 900, text: 'Second speaker.' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: 'Third segment.',
+        segments: [{ startMs: 50, endMs: 800, text: 'Third segment.' }],
+      });
+    const pipeline = new MeetingCapturePipeline({
+      meetingId: 'meeting-segments',
+      sidecarDir: path.join(root, 'sidecar'),
+      transcribe,
+    });
+    const emitted: unknown[] = [];
+    pipeline.on('transcript', entry => emitted.push(entry));
+
+    pipeline.acceptChunk(first);
+    const result = await pipeline.finalize(second);
+
+    expect(result.entries).toEqual([
+      { sequence: 1, startMs: 100, endMs: 400, text: 'First speaker.' },
+      { sequence: 2, startMs: 450, endMs: 900, text: 'Second speaker.' },
+      { sequence: 3, startMs: 1_050, endMs: 1_800, text: 'Third segment.' },
+    ]);
+    expect(emitted).toEqual(result.entries);
+    expect(result.transcriptText).toBe('First speaker. Second speaker. Third segment.');
+    expect(pipeline.getManifest().chunks[0].transcriptSegments).toEqual([
+      { startMs: 100, endMs: 400, text: 'First speaker.' },
+      { startMs: 450, endMs: 900, text: 'Second speaker.' },
+    ]);
+  });
+
   it('streams concatenation without changing the WAV format', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-meeting-wav-'));
     const first = path.join(root, '1.wav');

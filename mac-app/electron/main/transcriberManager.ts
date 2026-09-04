@@ -58,6 +58,8 @@ import { createLogger } from './logger';
 import { stripFigureReferences, insertFigureReferencesInline } from './figureUtils';
 import {
   MeetingCapturePipeline,
+  type MeetingChunkTranscription,
+  type MeetingChunkTranscriptSegment,
   type MeetingCaptureTranscriptEntry,
 } from './meetingCapturePipeline';
 
@@ -71,6 +73,37 @@ const WHISPER_TIMESTAMP_PATTERN = /\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}
 const WHISPER_METADATA_PATTERN = /\[(?:id:\s*\d+|start:|end:)[^\]]*\]/gi;
 const WHISPER_SPEAKER_TURN_PATTERN = /\[SPEAKER_TURN\]/gi;
 const AUTO_IMPROVE_PROVIDERS = new Set<AutoImproveProvider>(['local', 'codex', 'claude']);
+
+type ParakeetTranscriptionResponse = {
+  ok: boolean;
+  text?: string;
+  error?: string;
+  segments?: unknown;
+};
+
+function parseMeetingParakeetSegments(value: unknown): MeetingChunkTranscriptSegment[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error('Parakeet returned invalid meeting transcript segments');
+  return value.flatMap((segment, index) => {
+    if (!segment || typeof segment !== 'object') {
+      throw new Error(`Parakeet returned invalid meeting transcript segment ${index}`);
+    }
+    const candidate = segment as Record<string, unknown>;
+    const startSeconds = candidate.startSeconds;
+    const endSeconds = candidate.endSeconds;
+    const text = typeof candidate.text === 'string' ? candidate.text.trim() : '';
+    if (typeof startSeconds !== 'number' || !Number.isFinite(startSeconds)
+      || typeof endSeconds !== 'number' || !Number.isFinite(endSeconds)
+      || startSeconds < 0 || endSeconds <= startSeconds) {
+      throw new Error(`Parakeet returned invalid meeting transcript segment ${index}`);
+    }
+    return text ? [{
+      startMs: Math.round(startSeconds * 1000),
+      endMs: Math.round(endSeconds * 1000),
+      text,
+    }] : [];
+  });
+}
 
 export type TranscriptImproveRunner = (input: {
   text: string;
@@ -2922,28 +2955,23 @@ export class TranscriberManager extends EventEmitter {
     return this.getOrCreateParakeetServer(engine).send(cmd);
   }
 
-  /**
-   * Transcribe audio using NVIDIA Parakeet TDT 0.6B v2.
-   * Starts the server on first use, auto-restarts on crash (one retry).
-   */
-  private async transcribeWithParakeet(wavPath: string, engine: ParakeetEngine): Promise<string> {
-    const needTimestamps = this.screenshotMetadata.length > 0;
+  private async requestParakeetTranscription(
+    wavPath: string,
+    engine: ParakeetEngine,
+    options: Record<string, unknown>,
+  ): Promise<ParakeetTranscriptionResponse> {
     const engineLabel = PARAKEET_ENGINE_LABELS[engine];
-
-    const doTranscribe = async (): Promise<string> => {
+    const doTranscribe = async (): Promise<ParakeetTranscriptionResponse> => {
       await this.startParakeetServer(engine);
-
       const response = await this.sendParakeetCommand(engine, {
         cmd: 'transcribe',
         audio: wavPath,
-        timestamps: needTimestamps,
-      });
-
+        ...options,
+      }) as ParakeetTranscriptionResponse;
       if (!response.ok) {
         throw new Error(`${engineLabel} transcription failed: ${response.error}`);
       }
-
-      return (response.text || '').trim();
+      return response;
     };
 
     try {
@@ -2957,6 +2985,28 @@ export class TranscriberManager extends EventEmitter {
       this.stopParakeetServer();
       return await doTranscribe();
     }
+  }
+
+  /**
+   * Transcribe audio using NVIDIA Parakeet TDT 0.6B v2.
+   * Starts the server on first use, auto-restarts on crash (one retry).
+   */
+  private async transcribeWithParakeet(wavPath: string, engine: ParakeetEngine): Promise<string> {
+    const needTimestamps = this.screenshotMetadata.length > 0;
+    const response = await this.requestParakeetTranscription(wavPath, engine, { timestamps: needTimestamps });
+    return (response.text || '').trim();
+  }
+
+  private async transcribeMeetingChunk(
+    wavPath: string,
+    engine: ParakeetEngine,
+  ): Promise<MeetingChunkTranscription> {
+    const response = await this.requestParakeetTranscription(wavPath, engine, { structuredSegments: true });
+    const segments = parseMeetingParakeetSegments(response.segments);
+    return {
+      text: (response.text || segments.map(segment => segment.text).join(' ')).trim(),
+      segments,
+    };
   }
 
   /**
@@ -3249,12 +3299,13 @@ export class TranscriberManager extends EventEmitter {
         this.meetingCapturePipeline = new MeetingCapturePipeline({
           meetingId: options.meetingId,
           sidecarDir: options.sidecarDir,
-          transcribe: async (filePath) => this.transcribeWithEngineFallback(filePath, transcriptionEngine),
+          transcribe: async (filePath) => this.transcribeMeetingChunk(filePath, transcriptionEngine),
         });
         this.meetingCapturePipeline.on('transcript', (entry: MeetingCaptureTranscriptEntry) => {
           this.emit('meetingTranscript', entry);
           options.onTranscript?.(entry);
         });
+        this.meetingCapturePipeline.resume();
         this.meetingChunkReadyListener = (filePath: string) => {
           try {
             this.meetingCapturePipeline?.acceptChunk(filePath);

@@ -5121,6 +5121,10 @@ function getMeetingManager(): MeetingManager {
     onBlockedWrite: () => blockWrite(),
   });
   meetingManager.on('status', (status: MeetingSession) => {
+    trayManager?.setAmbientActive(
+      ['starting', 'recording'].includes(status.status),
+      ['transcribing', 'summarizing'].includes(status.status),
+    );
     if (status.status === 'idle') {
       if (status.type === 'wiki' && status.relPath) {
         recordRecentEntry({ kind: 'wiki', path: status.relPath, title: status.title, lastOpenedAt: Date.now() });
@@ -14712,6 +14716,38 @@ async function initTranscriberSystem(): Promise<void> {
     commandLauncherWindow?.hide(true);
   });
   await transcriberManager.init();
+  trayManager?.setAmbientCallbacks({
+    start: async () => {
+      const result = await getMeetingManager().startHere(
+        activeLibraryFileContext ? { ...activeLibraryFileContext } : null,
+      );
+      if (!result.success) {
+        const message = result.error ?? 'Could not start Ambient';
+        log.warn('Could not start Ambient from the menu bar: %s', message);
+        emitLocalCommandStatus({
+          status: 'error',
+          message,
+          commandName: 'start-ambient',
+          mode: 'document',
+          error: message,
+        });
+      }
+    },
+    stop: async () => {
+      const result = await getMeetingManager().stopActiveMeeting();
+      if (!result.success) {
+        const message = result.error ?? result.summaryError ?? 'Could not stop Ambient';
+        log.warn('Could not stop Ambient from the menu bar: %s', message);
+        emitLocalCommandStatus({
+          status: 'error',
+          message,
+          commandName: 'stop-ambient',
+          mode: 'document',
+          error: message,
+        });
+      }
+    },
+  });
   startupMark('transcriber-manager-init-complete');
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();

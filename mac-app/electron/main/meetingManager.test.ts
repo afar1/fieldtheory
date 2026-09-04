@@ -252,17 +252,24 @@ describe('MeetingManager', () => {
       endMs: 900,
       text: 'We should inspect the API.',
     });
+    captureOptions.onTranscript?.({
+      sequence: 2,
+      startMs: 1_000,
+      endMs: 1_900,
+      text: 'I can pull the current schema.',
+    });
 
     const stopped = await manager.stopActiveMeeting();
 
     expect(stopped.success).toBe(true);
     expect(diarizer.diarize).toHaveBeenCalledWith(audioPath);
+    expect(ambient.enqueueTranscript).toHaveBeenCalledTimes(3);
     expect(ambient.enqueueTranscript).toHaveBeenLastCalledWith({
       sequence: 3,
       startMs: 0,
       endMs: 1_900,
       text: [
-        'Final stable transcript with reconciled speaker labels:',
+        'Final speaker reconciliation:',
         '[0:00] Speaker 1: We should inspect the API.',
         '[0:01] Speaker 2: I can pull the current schema.',
       ].join('\n'),
@@ -284,6 +291,24 @@ describe('MeetingManager', () => {
         { id: 'spk_2', label: 'Speaker 2', source: 'fluid-audio-community-1' },
       ],
     });
+  });
+
+  it('shares one start and one stop operation across overlapping callers', async () => {
+    const { manager, transcriber } = makeManager();
+    const created = await manager.createMeetingNote('Concurrent controls');
+    const context = contextFromResult(created);
+
+    const firstStart = manager.startHere(context);
+    const secondStart = manager.startHere(context);
+    expect(secondStart).toBe(firstStart);
+    await firstStart;
+    expect(transcriber.startMeetingCapture).toHaveBeenCalledOnce();
+
+    const firstStop = manager.stopActiveMeeting();
+    const secondStop = manager.stopActiveMeeting();
+    expect(secondStop).toBe(firstStop);
+    await firstStop;
+    expect(transcriber.stopMeetingCapture).toHaveBeenCalledOnce();
   });
 
   it('flushes live Ambient transcript updates every 30 seconds', async () => {

@@ -13,6 +13,8 @@ export type SpeakerAlignmentResult = {
 };
 
 const MIN_SPEAKER_TOTAL_MS = 250;
+const MIN_PRIMARY_OVERLAP_SHARE = 0.75;
+const MIN_PRIMARY_MARGIN_SHARE = 0.5;
 
 function overlapMs(
   left: { startMs: number; endMs: number },
@@ -54,12 +56,20 @@ export function alignMeetingSpeakers(
       );
       if (overlap > 0) overlapBySpeaker.set(segment.speakerId, (overlapBySpeaker.get(segment.speakerId) ?? 0) + overlap);
     }
-    const primary = [...overlapBySpeaker.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
+    const ranked = [...overlapBySpeaker.entries()].sort((left, right) => right[1] - left[1]);
+    const primary = ranked[0];
     if (!primary) return { ...entry };
+    const totalOverlap = ranked.reduce((total, candidate) => total + candidate[1], 0);
+    const runnerUpOverlap = ranked[1]?.[1] ?? 0;
+    const primaryShare = primary[1] / totalOverlap;
+    const primaryMarginShare = (primary[1] - runnerUpOverlap) / totalOverlap;
+    if (primaryShare < MIN_PRIMARY_OVERLAP_SHARE || primaryMarginShare < MIN_PRIMARY_MARGIN_SHARE) {
+      return { ...entry };
+    }
     return {
       ...entry,
-      speakerId: stableIdByRawId.get(primary) ?? null,
-      speaker: labelByRawId.get(primary) ?? null,
+      speakerId: stableIdByRawId.get(primary[0]) ?? null,
+      speaker: labelByRawId.get(primary[0]) ?? null,
     };
   });
 

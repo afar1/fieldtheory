@@ -192,15 +192,31 @@ def log_silence_skip(reason, stats):
     )
 
 
-def transcribe(model, audio_path, timestamps=False):
-    """Run transcription and return the result string."""
+def transcribe(model, audio_path, timestamps=False, structured_segments=False):
+    """Run transcription and return text or a structured meeting result."""
     waveform, sr = read_wav_float32(audio_path)
     skip, reason, stats = should_skip_for_silence(waveform, sr)
     if skip:
         log_silence_skip(reason, stats)
-        return ""
+        return {"text": "", "segments": []} if structured_segments else ""
 
     result = model.recognize(waveform, sample_rate=sr)
+
+    if hasattr(result, "text"):
+        plain_text = result.text.strip()
+    else:
+        plain_text = str(result).strip()
+
+    if structured_segments:
+        segments = []
+        if hasattr(result, "segments") and result.segments:
+            for seg in result.segments:
+                segments.append({
+                    "startSeconds": float(seg.get("start", 0) or 0),
+                    "endSeconds": float(seg.get("end", 0) or 0),
+                    "text": str(seg.get("text", "")).strip(),
+                })
+        return {"text": plain_text, "segments": segments}
 
     if timestamps and hasattr(result, "segments") and result.segments:
         lines = []
@@ -212,9 +228,7 @@ def transcribe(model, audio_path, timestamps=False):
         return "\n".join(lines)
 
     # onnx-asr returns a result object with a .text attribute or plain string.
-    if hasattr(result, "text"):
-        return result.text.strip()
-    return str(result).strip()
+    return plain_text
 
 
 def fmt_timestamp(t):
@@ -260,9 +274,13 @@ def run_server(model):
                 send({"ok": False, "error": "Missing 'audio' field"})
                 continue
             timestamps = cmd.get("timestamps", False)
+            structured_segments = cmd.get("structuredSegments", False)
             try:
-                text = transcribe(model, audio_path, timestamps)
-                send({"ok": True, "text": text})
+                result = transcribe(model, audio_path, timestamps, structured_segments)
+                if structured_segments:
+                    send({"ok": True, **result})
+                else:
+                    send({"ok": True, "text": result})
             except Exception as e:
                 send({"ok": False, "error": str(e)})
 

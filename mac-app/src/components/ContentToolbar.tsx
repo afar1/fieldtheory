@@ -22,13 +22,13 @@ const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
 
 type ToolbarActionId = 'textstyle' | 'contentmode' | 'htmllayout' | 'copypath' | 'copy' | 'share' | 'fieldtheory' | 'agent' | 'terminal' | 'meeting' | 'newwindow' | 'folder' | 'rename' | 'edit' | 'immersive';
 
-const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'immersive', 'copy', 'folder', 'rename', 'edit'];
-const DEFAULT_PINNED_TOOLBAR_ACTIONS: ToolbarActionId[] = PINNED_TOOLBAR_ACTION_ORDER;
+const PINNED_TOOLBAR_ACTION_ORDER: ToolbarActionId[] = ['textstyle', 'copypath', 'fieldtheory', 'agent', 'share', 'newwindow', 'contentmode', 'htmllayout', 'terminal', 'meeting', 'immersive', 'copy', 'folder', 'rename', 'edit'];
+const DEFAULT_PINNED_TOOLBAR_ACTIONS: ToolbarActionId[] = PINNED_TOOLBAR_ACTION_ORDER.filter((id) => id !== 'meeting');
 const TOOLBAR_ACTION_GROUPS: Array<{ id: string; label: string; actions: ToolbarActionId[] }> = [
   { id: 'format', label: 'Format', actions: ['textstyle', 'contentmode', 'htmllayout'] },
   { id: 'copy', label: 'Copy', actions: ['copypath', 'copy', 'share'] },
   { id: 'field', label: 'Field Theory', actions: ['fieldtheory', 'agent'] },
-  { id: 'tools', label: 'Tools', actions: ['terminal'] },
+  { id: 'tools', label: 'Tools', actions: ['terminal', 'meeting'] },
   { id: 'view', label: 'View', actions: ['newwindow', 'immersive'] },
   { id: 'file', label: 'File', actions: ['folder', 'rename', 'edit'] },
 ];
@@ -1167,6 +1167,19 @@ export default function ContentToolbar({
                       <span>Toolbar</span>
                       <span style={{ fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '9px', letterSpacing: '0.04em', textTransform: 'none', opacity: 0.68 }}>+ / -</span>
                     </div>
+                    {onMeetingClick && (
+                      <button
+                        type="button"
+                        onClick={() => runToolbarAction('meeting')}
+                        disabled={meetingDisabled}
+                        aria-label={meetingTitle}
+                        title={meetingTitle}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 9px', border: 'none', borderRadius: '7px', backgroundColor: 'transparent', color: meetingRecording ? '#dc2626' : toolbarIconStrong, cursor: meetingDisabled ? 'default' : 'pointer', opacity: meetingDisabled ? 0.45 : 1, textAlign: 'left', fontSize: '13px', fontFamily: 'inherit' }}
+                      >
+                        <span style={{ width: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{renderToolbarIcon('meeting')}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meetingTitle}</span>
+                      </button>
+                    )}
                     {TOOLBAR_ACTION_GROUPS.map((group, groupIndex) => {
                       const actions = group.actions.filter(canUseToolbarAction);
                       if (!actions.length) return null;

@@ -3175,6 +3175,14 @@ type AmbientMeetingSession = {
   status: 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
 };
 
+function isAmbientRecording(session: AmbientMeetingSession | null): boolean {
+  return session?.status === 'starting' || session?.status === 'recording';
+}
+
+function isAmbientFinishing(session: AmbientMeetingSession | null): boolean {
+  return session?.status === 'transcribing' || session?.status === 'summarizing';
+}
+
 function getMarkdownSourceOffsetDebug(content: string | null, offset: number | null): Record<string, unknown> | null {
   if (typeof content !== 'string' || typeof offset !== 'number' || !Number.isFinite(offset)) return null;
   const clampedOffset = Math.max(0, Math.min(content.length, offset));
@@ -3477,15 +3485,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
   const [ambientSession, setAmbientSession] = useState<AmbientMeetingSession | null>(null);
   const [ambientActionPending, setAmbientActionPending] = useState(false);
-  const ambientRecording = ambientSession?.status === 'starting' || ambientSession?.status === 'recording';
+  const ambientRecording = isAmbientRecording(ambientSession);
+  const ambientFinishing = isAmbientFinishing(ambientSession);
+  const ambientActive = ambientRecording || ambientFinishing;
 
   useEffect(() => {
     let cancelled = false;
-    void window.commandsAPI?.getActiveMeeting?.().then((session) => {
-      if (!cancelled) setAmbientSession(session);
-    });
+    let receivedStatus = false;
     const unsubscribe = window.commandsAPI?.onMeetingStatus?.((session) => {
-      if (!cancelled) setAmbientSession(session);
+      if (!cancelled) {
+        receivedStatus = true;
+        setAmbientSession(session);
+      }
+    });
+    void window.commandsAPI?.getActiveMeeting?.().then((session) => {
+      if (!cancelled && !receivedStatus) setAmbientSession(session);
     });
     return () => {
       cancelled = true;
@@ -11840,29 +11854,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onMaxwellRunItem={runMaxwellItem}
                   onMaxwellRemoveItem={removeMaxwellItem}
                   onOpenAgent={LIBRARIAN_AGENT_KICKOFF_ENABLED && activeReading?.path && (selectedItemType === 'wiki' || selectedItemType === 'external') ? () => setAgentKickoffOpen(true) : undefined}
+                  meetingTitle={ambientFinishing ? 'Finishing Ambient' : ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
+                  meetingRecording={ambientActive}
+                  meetingDisabled={ambientActionPending || ambientFinishing}
+                  forceVisibleActions={ambientActive ? ['meeting'] : undefined}
+                  onMeetingClick={handleAmbientToggle}
                 />
-                <button
-                  type="button"
-                  onClick={() => void handleAmbientToggle()}
-                  disabled={ambientActionPending}
-                  title={ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
-                  aria-label={ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
-                  style={{
-                    height: '24px',
-                    padding: '0 8px',
-                    marginLeft: '4px',
-                    border: 'none',
-                    borderRadius: '4px',
-                    color: ambientRecording ? '#dc2626' : theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    fontSize: '11px',
-                    cursor: ambientActionPending ? 'wait' : 'pointer',
-                    opacity: ambientActionPending ? 0.6 : 1,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
-                </button>
                 </>
               )}
               {focusStandaloneImmersiveVisible && (
