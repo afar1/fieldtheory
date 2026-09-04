@@ -42,7 +42,11 @@ describe('AmbientManager', () => {
 
   it('creates one task under concurrent starts and durably saves its id', async () => {
     const client = makeClient();
-    const manager = new AmbientManager({ clientFactory: () => client });
+    const openTask = vi.fn(async (threadId: string) => {
+      expect(JSON.parse(fs.readFileSync(path.join(workingDirectory, 'ambient.json'), 'utf-8')).threadId)
+        .toBe(threadId);
+    });
+    const manager = new AmbientManager({ clientFactory: () => client, openTask });
 
     const [first, second] = await Promise.all([manager.start(startArgs()), manager.start(startArgs())]);
 
@@ -50,6 +54,8 @@ describe('AmbientManager', () => {
     expect(client.createAmbientTask).toHaveBeenCalledWith('Design Review', expect.any(Function));
     expect(first.threadId).toBe('thread-1');
     expect(second.threadId).toBe('thread-1');
+    expect(openTask).toHaveBeenCalledTimes(1);
+    expect(openTask).toHaveBeenCalledWith('thread-1');
     expect(JSON.parse(fs.readFileSync(path.join(workingDirectory, 'ambient.json'), 'utf-8')).threadId)
       .toBe('thread-1');
     expect(fs.statSync(path.join(workingDirectory, 'ambient.json')).mode & 0o777).toBe(0o600);
@@ -109,13 +115,16 @@ describe('AmbientManager', () => {
     firstManager.stop();
 
     const recoveredClient = makeClient();
-    const recovered = new AmbientManager({ clientFactory: () => recoveredClient });
+    const openTask = vi.fn(async () => {});
+    const recovered = new AmbientManager({ clientFactory: () => recoveredClient, openTask });
     const state = await recovered.start(startArgs());
     await recovered.flush();
 
     expect(state.threadId).toBe('thread-1');
     expect(recoveredClient.prepareAmbientTask).toHaveBeenCalledWith('thread-1', 'Design Review');
     expect(recoveredClient.createAmbientTask).not.toHaveBeenCalled();
+    expect(openTask).toHaveBeenCalledTimes(1);
+    expect(openTask).toHaveBeenCalledWith('thread-1');
     expect(recoveredClient.deliverTranscript).toHaveBeenCalledWith(expect.objectContaining({
       firstSequence: 1,
       lastSequence: 2,
@@ -143,6 +152,23 @@ describe('AmbientManager', () => {
 
     expect(ids).toHaveLength(2);
     expect(ids[1]).toBe(ids[0]);
+  });
+
+  it('persists an opening failure and does not mark the task active', async () => {
+    const client = makeClient();
+    const manager = new AmbientManager({
+      clientFactory: () => client,
+      openTask: vi.fn(async () => { throw new Error('Codex task could not be opened'); }),
+    });
+
+    await expect(manager.start(startArgs())).rejects.toThrow('Codex task could not be opened');
+    expect(manager.getState()).toMatchObject({
+      status: 'starting',
+      threadId: 'thread-1',
+      lastError: { message: 'Codex task could not be opened' },
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(workingDirectory, 'ambient.json'), 'utf-8')).threadId)
+      .toBe('thread-1');
   });
 
   it('keeps a failed batch boundary stable when a new delta arrives before retry', async () => {

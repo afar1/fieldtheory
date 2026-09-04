@@ -5103,7 +5103,9 @@ function getMeetingManager(): MeetingManager {
     throw new Error('Field Theory meetings are not ready');
   }
 
-  ambientManager ??= new AmbientManager();
+  ambientManager ??= new AmbientManager({
+    openTask: (threadId) => shell.openExternal(`codex://threads/${encodeURIComponent(threadId)}`),
+  });
   diarizationManager ??= new DiarizationManager();
 
   meetingManager = new MeetingManager({

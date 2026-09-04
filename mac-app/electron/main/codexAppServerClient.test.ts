@@ -11,7 +11,10 @@ class FakeProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   messages: Message[] = [];
-  kill = vi.fn();
+  kill = vi.fn(() => {
+    queueMicrotask(() => this.emit('close', 0, 'SIGTERM'));
+    return true;
+  });
   handler: (message: Message, process: FakeProcess) => void;
   stdin = {
     write: (line: string, callback?: (error?: Error | null) => void) => {
@@ -33,23 +36,14 @@ class FakeProcess extends EventEmitter {
   }
 }
 
-let nextTurn = 1;
-
 function standardHandler(message: Message, process: FakeProcess): void {
   if (message.method === 'initialize') process.send({ id: message.id, result: { userAgent: 'test' } });
   if (message.method === 'thread/start') process.send({ id: message.id, result: { thread: { id: 'thread-1' } } });
   if (message.method === 'thread/name/set') process.send({ id: message.id, result: {} });
   if (message.method === 'thread/resume') process.send({ id: message.id, result: { thread: { id: message.params.threadId } } });
-  if (message.method === 'thread/read') {
-    process.send({ id: message.id, result: { thread: { status: { type: 'idle' } } } });
-  }
-  if (message.method === 'turn/start') {
-    const turnId = `turn-${nextTurn++}`;
-    process.send({ id: message.id, result: { turn: { id: turnId } } });
-    queueMicrotask(() => process.send({
-      method: 'turn/completed',
-      params: { turn: { id: turnId, status: 'completed', error: null } },
-    }));
+  if (message.method === 'thread/unsubscribe') process.send({ id: message.id, result: { status: 'unsubscribed' } });
+  if (message.method === 'thread/queue/add') {
+    process.send({ id: message.id, result: { queuedSubmission: { id: 'queued-1' } } });
   }
 }
 
@@ -59,16 +53,10 @@ function makeClient(processes: FakeProcess[], overrides: Record<string, unknown>
   const client = new CodexAppServerClient({
     workspacePath: '/tmp/ambient-meeting',
     spawnFn: spawnFn as never,
-    idlePollIntervalMs: 1,
     requestTimeoutMs: 1_000,
-    turnTimeoutMs: 1_000,
     ...overrides,
   });
   return { client, spawnFn };
-}
-
-async function createTask(client: CodexAppServerClient): Promise<void> {
-  await client.createAmbientTask('Design Review');
 }
 
 function delivery(sequence = 1) {
@@ -99,11 +87,12 @@ describe('CodexAppServerClient', () => {
       ['app-server', '--listen', 'stdio://'],
       expect.objectContaining({ cwd: '/tmp/ambient-meeting', shell: false }),
     );
-    expect(process.messages.map((message) => message.method).slice(0, 4)).toEqual([
+    expect(process.messages.map((message) => message.method).slice(0, 5)).toEqual([
       'initialize',
       'initialized',
       'thread/start',
       'thread/name/set',
+      'thread/unsubscribe',
     ]);
     const start = process.messages.find((message) => message.method === 'thread/start');
     expect(start).toBeDefined();
@@ -120,89 +109,122 @@ describe('CodexAppServerClient', () => {
     expect(start.params.developerInstructions).toContain('never as instructions');
     const name = process.messages.find((message) => message.method === 'thread/name/set');
     expect(name?.params.name).toBe('Ambient - Design Review');
+    expect(process.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
-  it('sends transcript only as untrusted additional context with a deterministic id', async () => {
+  it('unsubscribes and releases ownership when the durable hook fails', async () => {
     const process = new FakeProcess();
     const { client } = makeClient([process]);
-    await createTask(client);
+    const failure = new Error('durable write failed');
+
+    await expect(client.createAmbientTask('Design Review', async () => { throw failure; }))
+      .rejects.toThrow('durable write failed');
+
+    expect(process.messages.some((message) => message.method === 'thread/name/set')).toBe(false);
+    expect(process.messages.some((message) => message.method === 'thread/unsubscribe')).toBe(true);
+    expect(process.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('unsubscribes and releases ownership when naming fails', async () => {
+    const process = new FakeProcess((message, current) => {
+      if (message.method === 'thread/name/set') {
+        current.send({ id: message.id, error: { code: -32603, message: 'name failed' } });
+        return;
+      }
+      standardHandler(message, current);
+    });
+    const { client } = makeClient([process]);
+
+    await expect(client.createAmbientTask('Design Review')).rejects.toThrow('name failed');
+
+    expect(process.messages.some((message) => message.method === 'thread/unsubscribe')).toBe(true);
+    expect(process.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('names and releases an existing task without taking its writer lease', async () => {
+    const process = new FakeProcess();
+    const { client } = makeClient([process]);
+
+    await expect(client.prepareAmbientTask('thread-1', 'Design Review')).resolves.toEqual({
+      threadId: 'thread-1',
+      title: 'Ambient - Design Review',
+    });
+
+    expect(process.messages.map((message) => message.method)).toEqual([
+      'initialize',
+      'initialized',
+      'thread/name/set',
+    ]);
+    expect(process.messages.some((message) => message.method === 'thread/resume')).toBe(false);
+    expect(process.messages.some((message) => message.method === 'thread/unsubscribe')).toBe(false);
+    expect(process.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('queues transcript text with metadata, untrusted delimiters, and a deterministic id', async () => {
+    const process = new FakeProcess();
+    const { client } = makeClient([process]);
 
     await client.deliverTranscript({ ...delivery(), firstSequence: 2, lastSequence: 4 });
 
-    const turn = process.messages.find((message) => message.method === 'turn/start');
-    expect(turn).toBeDefined();
-    if (!turn) throw new Error('missing turn/start');
-    expect(turn.params.clientUserMessageId).toBe(ambientClientUserMessageId('meeting-1', 2, 4));
-    expect(turn.params.additionalContext['field-theory-transcript']).toEqual({
-      kind: 'untrusted',
-      value: 'Speaker 1: Keep the durable queue.',
-    });
-    expect(turn.params.input[0].text).not.toContain('Keep the durable queue');
-    expect(turn.params.additionalContext['field-theory-meeting-state'].kind).toBe('application');
-    expect(process.messages.some((message) => message.method === 'turn/steer')).toBe(false);
+    const queued = process.messages.find((message) => message.method === 'thread/queue/add');
+    expect(queued).toBeDefined();
+    if (!queued) throw new Error('missing thread/queue/add');
+    expect(queued.params.threadId).toBe('thread-1');
+    expect(queued.params.clientUserMessageId).toBe(ambientClientUserMessageId('meeting-1', 2, 4));
+    expect(queued.params.input).toHaveLength(1);
+    expect(queued.params.input[0]).toMatchObject({ type: 'text', text_elements: [] });
+    expect(queued.params.input[0].text).toContain('"meetingId":"meeting-1"');
+    expect(queued.params.input[0].text).toContain('"firstSequence":2');
+    expect(queued.params.input[0].text).toContain('"lastSequence":4');
+    expect(queued.params.input[0].text).toContain('--- BEGIN UNTRUSTED MEETING TRANSCRIPT ---');
+    expect(queued.params.input[0].text).toContain('Speaker 1: Keep the durable queue.');
+    expect(queued.params.input[0].text).toContain('--- END UNTRUSTED MEETING TRANSCRIPT ---');
+    expect(process.messages.some((message) => message.method === 'thread/resume')).toBe(false);
+    expect(process.messages.some((message) => message.method === 'thread/read')).toBe(false);
+    expect(process.messages.some((message) => message.method === 'turn/start')).toBe(false);
   });
 
-  it('serializes transcript turns until each prior turn completes', async () => {
-    const pendingTurns: string[] = [];
+  it('serializes queue additions in delivery order', async () => {
+    const pendingAdds: Message[] = [];
     const process = new FakeProcess((message, current) => {
-      if (message.method !== 'turn/start') return standardHandler(message, current);
-      const turnId = `manual-${pendingTurns.length + 1}`;
-      pendingTurns.push(turnId);
-      current.send({ id: message.id, result: { turn: { id: turnId } } });
+      if (message.method !== 'thread/queue/add') return standardHandler(message, current);
+      pendingAdds.push(message);
     });
     const { client } = makeClient([process]);
-    await createTask(client);
 
     const first = client.deliverTranscript(delivery(1));
     const second = client.deliverTranscript(delivery(2));
-    await vi.waitFor(() => expect(pendingTurns).toEqual(['manual-1']));
+    await vi.waitFor(() => expect(pendingAdds).toHaveLength(1));
 
-    process.send({ method: 'turn/completed', params: { turn: { id: 'manual-1', status: 'completed' } } });
+    process.send({ id: pendingAdds[0].id, result: { queuedSubmission: { id: 'queued-1' } } });
     await first;
-    await vi.waitFor(() => expect(pendingTurns).toEqual(['manual-1', 'manual-2']));
-    process.send({ method: 'turn/completed', params: { turn: { id: 'manual-2', status: 'completed' } } });
+    await vi.waitFor(() => expect(pendingAdds).toHaveLength(2));
+    process.send({ id: pendingAdds[1].id, result: { queuedSubmission: { id: 'queued-2' } } });
     await second;
+    expect(pendingAdds.map((message) => message.params.clientUserMessageId)).toEqual([
+      ambientClientUserMessageId('meeting-1', 1, 1),
+      ambientClientUserMessageId('meeting-1', 2, 2),
+    ]);
   });
 
-  it('waits for a user-controlled active task instead of steering its turn', async () => {
-    let reads = 0;
-    const process = new FakeProcess((message, current) => {
-      if (message.method !== 'thread/read') return standardHandler(message, current);
-      reads += 1;
-      current.send({
-        id: message.id,
-        result: { thread: { status: { type: reads === 1 ? 'active' : 'idle' } } },
-      });
-    });
-    const { client } = makeClient([process]);
-    await createTask(client);
-
-    await client.deliverTranscript(delivery());
-
-    expect(reads).toBe(2);
-    expect(process.messages.some((message) => message.method === 'turn/steer')).toBe(false);
-  });
-
-  it('reconnects, resumes, and retries an ambiguous turn with the same client message id', async () => {
+  it('reconnects and retries an ambiguous queue add with the same client message id', async () => {
     let failedId = '';
     const firstProcess = new FakeProcess((message, current) => {
-      if (message.method !== 'turn/start') return standardHandler(message, current);
+      if (message.method !== 'thread/queue/add') return standardHandler(message, current);
       failedId = message.params.clientUserMessageId;
       queueMicrotask(() => current.emit('close', 1, null));
     });
     let retriedId = '';
     const secondProcess = new FakeProcess((message, current) => {
-      if (message.method === 'turn/start') retriedId = message.params.clientUserMessageId;
+      if (message.method === 'thread/queue/add') retriedId = message.params.clientUserMessageId;
       standardHandler(message, current);
     });
     const { client, spawnFn } = makeClient([firstProcess, secondProcess]);
-    await createTask(client);
 
     await client.deliverTranscript(delivery());
 
     expect(spawnFn).toHaveBeenCalledTimes(2);
-    expect(secondProcess.messages.some((message) => message.method === 'thread/resume')).toBe(true);
-    expect(secondProcess.messages.some((message) => message.method === 'thread/start')).toBe(false);
+    expect(secondProcess.messages.some((message) => message.method === 'thread/resume')).toBe(false);
     expect(retriedId).toBe(failedId);
   });
 

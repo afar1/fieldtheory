@@ -59,6 +59,7 @@ export interface AmbientClient {
 
 export interface AmbientManagerOptions {
   clientFactory?: (workingDirectory: string) => AmbientClient;
+  openTask?: (threadId: string) => Promise<void>;
   now?: () => Date;
   autoFlush?: boolean;
   stateFileName?: string;
@@ -75,6 +76,7 @@ interface ActiveMeeting {
 /** Durable bridge between stable meeting transcript deltas and one Codex task. */
 export class AmbientManager extends EventEmitter {
   private readonly clientFactory: (workingDirectory: string) => AmbientClient;
+  private readonly openTask: (threadId: string) => Promise<void>;
   private readonly now: () => Date;
   private readonly autoFlush: boolean;
   private readonly stateFileName: string;
@@ -90,6 +92,7 @@ export class AmbientManager extends EventEmitter {
     super();
     this.clientFactory = options.clientFactory
       ?? ((workingDirectory) => new CodexAppServerClient({ workspacePath: workingDirectory }));
+    this.openTask = options.openTask ?? (async () => {});
     this.now = options.now ?? (() => new Date());
     this.autoFlush = options.autoFlush ?? false;
     this.stateFileName = options.stateFileName ?? 'ambient.json';
@@ -195,6 +198,9 @@ export class AmbientManager extends EventEmitter {
           });
         });
       }
+      const threadId = this.requireState().threadId;
+      if (!threadId) throw new Error('Ambient task has no Codex thread id');
+      await this.openTask(threadId);
       this.taskReady = true;
       await this.mutate((state) => {
         if (state.status === 'starting') state.status = 'active';
