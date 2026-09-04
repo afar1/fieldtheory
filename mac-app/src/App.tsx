@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import AudioSettingsPanel from './components/AudioSettingsPanel';
 import TranscriptionSettings from './components/TranscriptionSettings';
+import AmbientSettings from './components/AmbientSettings';
 import CommandsSettings from './components/CommandsSettings';
 import { buildHotkeyString, isModifierOnly } from './utils/hotkeys';
 
@@ -397,6 +398,11 @@ export default function App() {
           <div style={styles.settingsSection}>
             <h3 style={styles.sectionTitle}>Transcription</h3>
             <TranscriptionSettings />
+          </div>
+
+          <div style={styles.settingsSection}>
+            <h3 style={styles.sectionTitle}>Ambient</h3>
+            <AmbientSettings />
           </div>
 
           <div style={styles.settingsSection}>

@@ -113,6 +113,7 @@ export type MeetingManagerOptions = {
   getMeetingSummaryPrompt: () => string;
   getMaxwellRunManager?: () => MaxwellRunManager;
   readMemorySnapshot?: () => string | null;
+  getLocalSpeakerName?: () => string | null;
   canWrite?: () => boolean;
   onBlockedWrite?: () => void;
   now?: () => Date;
@@ -257,6 +258,30 @@ function assignSpeakerIdentities(
   });
 
   return { entries: identifiedEntries, speakers };
+}
+
+function identifySoleLocalSpeaker(
+  identity: MeetingSpeakerIdentity,
+  capture: Pick<MeetingCaptureResult, 'source' | 'speakerDiarizationSupported'>,
+  rawLocalSpeakerName: string | null | undefined,
+): MeetingSpeakerIdentity {
+  const localSpeakerName = rawLocalSpeakerName?.replace(/\s+/g, ' ').trim();
+  const speaker = identity.speakers[0];
+  if (capture.source !== 'microphone'
+    || !capture.speakerDiarizationSupported
+    || identity.speakers.length !== 1
+    || !speaker
+    || !/^Speaker\s+\d+$/i.test(speaker.label)
+    || !localSpeakerName
+    || localSpeakerName.length > 80) {
+    return identity;
+  }
+  return {
+    speakers: [{ ...speaker, label: localSpeakerName }],
+    entries: identity.entries.map((entry) => (
+      entry.speakerId === speaker.id ? { ...entry, speaker: localSpeakerName } : entry
+    )),
+  };
 }
 
 function jsonLine(value: Record<string, unknown>): string {
@@ -477,6 +502,11 @@ export class MeetingManager extends EventEmitter {
           diarizationStatus: capture.speakerDiarizationSupported ? 'done' : 'unavailable',
         }));
       }
+      speakerIdentity = identifySoleLocalSpeaker(
+        speakerIdentity,
+        capture,
+        this.options.getLocalSpeakerName?.(),
+      );
 
       sidecars = this.writeSidecars(active.meetingId, target, capture, speakerIdentity);
       const rawLink = `Raw transcript: ${renderMeetingRawTranscriptWikiLink(sidecars.transcriptPath)}`;

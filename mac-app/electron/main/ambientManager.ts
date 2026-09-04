@@ -7,8 +7,14 @@ import {
   type AmbientTranscriptDelivery,
 } from './codexAppServerClient';
 import { writeTextFileAtomically } from './documentSaveGuard';
+import {
+  DEFAULT_AMBIENT_SETTINGS,
+  normalizeAmbientSettings,
+  type AmbientSettings,
+} from '../shared/ambientSettings';
 
 const AMBIENT_CONTEXT_DIRECTORY = '.ambient-context';
+const AMBIENT_INSTRUCTIONS_FILE = 'ambient-instructions.txt';
 const MAX_BATCH_EVENTS = 100;
 const MAX_BATCH_TRANSCRIPT_CHARACTERS = 24_000;
 
@@ -64,8 +70,10 @@ export interface AmbientClient {
   createAmbientTask(
     meetingTitle: string,
     onThreadStarted?: (threadId: string) => void | Promise<void>,
+    settings?: AmbientSettings,
   ): Promise<{ threadId: string; title: string }>;
   prepareAmbientTask(threadId: string, meetingTitle: string): Promise<{ threadId: string; title: string }>;
+  deliverAmbientSettings(threadId: string, settingsFilePath: string): Promise<void>;
   deliverTranscript(delivery: AmbientTranscriptDelivery): Promise<void>;
   close?(): void;
 }
@@ -76,6 +84,7 @@ export interface AmbientManagerOptions {
   now?: () => Date;
   autoFlush?: boolean;
   stateFileName?: string;
+  getSettings?: () => AmbientSettings;
 }
 
 interface ActiveMeeting {
@@ -93,6 +102,7 @@ export class AmbientManager extends EventEmitter {
   private readonly now: () => Date;
   private readonly autoFlush: boolean;
   private readonly stateFileName: string;
+  private readonly getSettings: () => AmbientSettings;
 
   private active: ActiveMeeting | null = null;
   private state: AmbientState | null = null;
@@ -109,6 +119,7 @@ export class AmbientManager extends EventEmitter {
     this.now = options.now ?? (() => new Date());
     this.autoFlush = options.autoFlush ?? false;
     this.stateFileName = options.stateFileName ?? 'ambient.json';
+    this.getSettings = options.getSettings ?? (() => DEFAULT_AMBIENT_SETTINGS);
   }
 
   start(args: AmbientStartArgs): Promise<AmbientState> {
@@ -205,14 +216,27 @@ export class AmbientManager extends EventEmitter {
     return this.state ? structuredClone(this.state) : null;
   }
 
+  async applySettings(rawSettings: AmbientSettings): Promise<boolean> {
+    const active = this.active;
+    const state = this.state;
+    if (!active || !state?.threadId) return false;
+    const settings = normalizeAmbientSettings(rawSettings);
+    const settingsFilePath = this.writeSettingsFile(active, settings);
+    await active.client.deliverAmbientSettings(state.threadId, settingsFilePath);
+    return true;
+  }
+
   private async startInternal(): Promise<AmbientState> {
     await this.ensureState();
     const active = this.requireActive();
     const current = this.requireState();
     if (current.status === 'cancelled') throw new Error('Ambient meeting was cancelled');
+    const settings = normalizeAmbientSettings(this.getSettings());
+    const settingsFilePath = this.writeSettingsFile(active, settings);
     try {
       if (current.threadId) {
         await active.client.prepareAmbientTask(current.threadId, active.title);
+        await active.client.deliverAmbientSettings(current.threadId, settingsFilePath);
       } else {
         await active.client.createAmbientTask(active.title, async (threadId) => {
           await this.mutate((state) => {
@@ -221,7 +245,7 @@ export class AmbientManager extends EventEmitter {
             }
             state.threadId = threadId;
           });
-        });
+        }, settings);
       }
       const threadId = this.requireState().threadId;
       if (!threadId) throw new Error('Ambient task has no Codex thread id');
@@ -413,6 +437,17 @@ export class AmbientManager extends EventEmitter {
     } else {
       writeTextFileAtomically(filePath, content);
     }
+    try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
+    return relativePath;
+  }
+
+  private writeSettingsFile(active: ActiveMeeting, settings: AmbientSettings): string {
+    const directoryPath = path.join(active.workingDirectory, AMBIENT_CONTEXT_DIRECTORY);
+    fs.mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directoryPath, 0o700); } catch { /* best effort */ }
+    const relativePath = path.join(AMBIENT_CONTEXT_DIRECTORY, AMBIENT_INSTRUCTIONS_FILE);
+    const filePath = path.join(active.workingDirectory, relativePath);
+    writeTextFileAtomically(filePath, settings.instructions);
     try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
     return relativePath;
   }

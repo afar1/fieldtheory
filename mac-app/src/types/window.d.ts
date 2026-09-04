@@ -1505,6 +1505,20 @@ interface MeetingActionResult {
   summaryError?: string;
 }
 
+type AmbientAccessMode = 'codex-defaults';
+
+interface AmbientSettingsValue {
+  instructions: string;
+  accessMode: AmbientAccessMode;
+}
+
+interface AmbientSettingsSaveResult {
+  success: boolean;
+  settings: AmbientSettingsValue;
+  appliedToActiveTask: boolean;
+  error?: string;
+}
+
 interface LauncherFileInfo {
   name: string;
   displayName: string;
@@ -1619,6 +1633,9 @@ interface CommandsAPI {
   cancelMeeting?: () => Promise<MeetingActionResult>;
   summarizeCurrentMeeting?: () => Promise<MeetingActionResult>;
   getActiveMeeting?: () => Promise<MeetingSession | null>;
+  getAmbientSettings?: () => Promise<AmbientSettingsValue>;
+  saveAmbientSettings?: (settings: AmbientSettingsValue) => Promise<AmbientSettingsSaveResult>;
+  resetAmbientSettings?: () => Promise<AmbientSettingsSaveResult>;
   onMeetingStatus?: (callback: (session: MeetingSession) => void) => () => void;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;

@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MeetingsIPCChannels, registerMeetingsIpc } from './meetingsIpc';
+import {
+  MeetingsIPCChannels,
+  registerMeetingsIpc,
+  type AmbientSettingsSaveResult,
+} from './meetingsIpc';
 import type { MeetingFileContext } from './meetingManager';
+import type { AmbientSettings } from '../shared/ambientSettings';
 
 describe('meetingsIpc', () => {
   let handlers: Map<string, (event: any, ...args: any[]) => unknown>;
@@ -14,6 +19,9 @@ describe('meetingsIpc', () => {
     getActiveSession: ReturnType<typeof vi.fn>;
     summarizeCurrentMeeting: ReturnType<typeof vi.fn>;
   };
+  let getAmbientSettings: ReturnType<typeof vi.fn>;
+  let saveAmbientSettings: ReturnType<typeof vi.fn>;
+  let resetAmbientSettings: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     handlers = new Map();
@@ -37,6 +45,17 @@ describe('meetingsIpc', () => {
       getActiveSession: vi.fn(() => ({ status: 'recording' })),
       summarizeCurrentMeeting: vi.fn(async (context?: MeetingFileContext | null) => ({ success: true, context })),
     };
+    getAmbientSettings = vi.fn(() => ({ instructions: 'Default staffer', accessMode: 'codex-defaults' as const }));
+    saveAmbientSettings = vi.fn(async (settings: AmbientSettings) => ({
+      success: true,
+      settings,
+      appliedToActiveTask: true,
+    }));
+    resetAmbientSettings = vi.fn(async () => ({
+      success: true,
+      settings: { instructions: 'Default staffer', accessMode: 'codex-defaults' as const },
+      appliedToActiveTask: false,
+    }));
   });
 
   function register() {
@@ -44,6 +63,9 @@ describe('meetingsIpc', () => {
       ipcMain: ipcMain as any,
       getMeetingManager: () => manager as any,
       getActiveFileContext: () => activeContext,
+      getAmbientSettings: getAmbientSettings as () => AmbientSettings,
+      saveAmbientSettings: saveAmbientSettings as (settings: AmbientSettings) => Promise<AmbientSettingsSaveResult>,
+      resetAmbientSettings: resetAmbientSettings as () => Promise<AmbientSettingsSaveResult>,
     });
   }
 
@@ -63,6 +85,9 @@ describe('meetingsIpc', () => {
       'meetings:cancel',
       'meetings:getActive',
       'meetings:summarizeCurrent',
+      'meetings:getAmbientSettings',
+      'meetings:saveAmbientSettings',
+      'meetings:resetAmbientSettings',
     ]);
   });
 
@@ -110,5 +135,30 @@ describe('meetingsIpc', () => {
     register();
 
     expect(handler(MeetingsIPCChannels.GET_ACTIVE)({ sender: {} })).toBeNull();
+  });
+
+  it('gets, saves, and resets the exact visible Ambient settings', async () => {
+    register();
+    const revised = { instructions: 'Research first.\nDo not edit files.', accessMode: 'codex-defaults' as const };
+
+    expect(handler(MeetingsIPCChannels.GET_AMBIENT_SETTINGS)({ sender: {} })).toEqual({
+      instructions: 'Default staffer',
+      accessMode: 'codex-defaults',
+    });
+    await expect(handler(MeetingsIPCChannels.SAVE_AMBIENT_SETTINGS)({ sender: {} }, revised))
+      .resolves.toMatchObject({ success: true, settings: revised, appliedToActiveTask: true });
+    expect(saveAmbientSettings).toHaveBeenCalledWith(revised);
+    await handler(MeetingsIPCChannels.RESET_AMBIENT_SETTINGS)({ sender: {} });
+    expect(resetAmbientSettings).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an unknown Ambient access mode before saving', async () => {
+    register();
+
+    await expect(handler(MeetingsIPCChannels.SAVE_AMBIENT_SETTINGS)({ sender: {} }, {
+      instructions: 'Prompt',
+      accessMode: 'hidden-superuser',
+    })).resolves.toMatchObject({ success: false, error: 'Ambient access mode is invalid.' });
+    expect(saveAmbientSettings).not.toHaveBeenCalled();
   });
 });

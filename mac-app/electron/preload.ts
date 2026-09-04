@@ -3508,6 +3508,18 @@ type MeetingActionResult = {
   summaryError?: string;
 };
 
+type AmbientAccessMode = 'codex-defaults';
+type AmbientSettings = {
+  instructions: string;
+  accessMode: AmbientAccessMode;
+};
+type AmbientSettingsSaveResult = {
+  success: boolean;
+  settings: AmbientSettings;
+  appliedToActiveTask: boolean;
+  error?: string;
+};
+
 type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
   | { kind: 'markdown'; title: string; filePath: string; content: string };
@@ -3863,6 +3875,18 @@ const commandsAPI = {
 
   getActiveMeeting: async (): Promise<MeetingSession | null> => {
     return ipcRenderer.invoke('meetings:getActive');
+  },
+
+  getAmbientSettings: async (): Promise<AmbientSettings> => {
+    return ipcRenderer.invoke('meetings:getAmbientSettings');
+  },
+
+  saveAmbientSettings: async (settings: AmbientSettings): Promise<AmbientSettingsSaveResult> => {
+    return ipcRenderer.invoke('meetings:saveAmbientSettings', settings);
+  },
+
+  resetAmbientSettings: async (): Promise<AmbientSettingsSaveResult> => {
+    return ipcRenderer.invoke('meetings:resetAmbientSettings');
   },
 
   onMeetingStatus: (callback: (session: MeetingSession) => void): (() => void) => {

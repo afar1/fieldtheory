@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.32': [
+    'Ambient instructions are now editable in settings, persist into Desktop-run Codex tasks, and can update during a meeting',
+    'Ambient now investigates unresolved questions and returns findings with evidence instead of rolling meeting notes',
+    'Solo microphone meetings can identify the speaker from the signed-in Field Theory profile while ambiguous rooms remain anonymous',
+    'Ambient access stays controlled by the permission profile configured in Codex',
+  ],
   '0.3.31': [
     'Ambient now acts as a quiet meeting staffer that researches useful answers and stays silent when it has nothing material to add',
     'Meeting transcripts stay in private local context files instead of appearing in the Ambient Codex task',
@@ -483,6 +489,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.32': 'Sep 4 2026',
   '0.3.31': 'Sep 3 2026',
   '0.3.30': 'Sep 3 2026',
   '0.3.29': 'Sep 3 2026',

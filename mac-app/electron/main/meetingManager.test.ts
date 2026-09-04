@@ -209,6 +209,7 @@ describe('MeetingManager', () => {
     const { manager, root, audioPath, transcriber } = makeManager({
       ambient: ambient as never,
       diarizer: diarizer as never,
+      getLocalSpeakerName: () => 'Andrew Field',
     });
     transcriber.stopMeetingCapture.mockResolvedValueOnce({
       startedAt: '2026-05-14T20:00:00.000Z',
@@ -291,6 +292,55 @@ describe('MeetingManager', () => {
         { id: 'spk_2', label: 'Speaker 2', source: 'fluid-audio-community-1' },
       ],
     });
+  });
+
+  it('labels one diarized microphone speaker with the signed-in Field Theory identity', async () => {
+    const ambient = {
+      start: vi.fn(async () => ({ threadId: 'ambient-thread-1' })),
+      enqueueTranscript: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      stop: vi.fn(),
+      getState: vi.fn(() => null),
+    };
+    const diarizer = {
+      diarize: vi.fn(async () => ({
+        speakerCount: 1,
+        segments: [{ speakerId: 'SPEAKER_26', startMs: 0, endMs: 1_900 }],
+      })),
+    };
+    const { manager, root, audioPath, transcriber } = makeManager({
+      ambient: ambient as never,
+      diarizer: diarizer as never,
+      getLocalSpeakerName: () => 'Andrew Field',
+    });
+    transcriber.stopMeetingCapture.mockResolvedValueOnce({
+      startedAt: '2026-05-14T20:00:00.000Z',
+      stoppedAt: '2026-05-14T20:03:00.000Z',
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
+      transcriptText: 'I am not sure whether the repo supports that.',
+      transcriptEntries: [
+        { sequence: 1, startMs: 0, endMs: 1_900, text: 'I am not sure whether the repo supports that.' },
+      ],
+      audioPath,
+    });
+    const created = await manager.createMeetingNote('Solo Review');
+    const context = contextFromResult(created);
+
+    await manager.startHere(context);
+    await manager.stopActiveMeeting();
+
+    const note = fs.readFileSync(context.filePath, 'utf-8');
+    expect(note).toContain('**Andrew Field:** I am not sure whether the repo supports that.');
+    expect(ambient.enqueueTranscript).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[0:00] Andrew Field: I am not sure whether the repo supports that.'),
+    }));
+    const speakers = JSON.parse(fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'), 'utf-8'));
+    expect(speakers.speakers).toEqual([
+      expect.objectContaining({ id: 'spk_1', label: 'Andrew Field', source: 'fluid-audio-community-1' }),
+    ]);
   });
 
   it('shares one start and one stop operation across overlapping callers', async () => {

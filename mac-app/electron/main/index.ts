@@ -40,6 +40,11 @@ import { BrowserHelperServer, type BrowserHelperNativeEvent } from './browserHel
 import { BrowserPanelLauncherServer } from './browserPanelLauncherServer';
 import { clearBrowserHelperState, writeBrowserHelperState } from './browserHelperState';
 import { BROWSER_LIBRARY_RENDERER_STORAGE_KEYS } from '../shared/browserLibraryRendererStorage';
+import {
+  DEFAULT_AMBIENT_SETTINGS,
+  normalizeAmbientSettings,
+  type AmbientSettings,
+} from '../shared/ambientSettings';
 import { normalizeFieldTheoryMarkdownTarget } from '../shared/fieldTheoryMarkdownTarget';
 import { BrowserLibraryRendererStorageStore } from './browserLibraryRendererStorageStore';
 import { isActiveLibraryFileContextAllowed } from './activeLibraryFileContextPolicy';
@@ -5105,6 +5110,7 @@ function getMeetingManager(): MeetingManager {
 
   ambientManager ??= new AmbientManager({
     openTask: (threadId) => shell.openExternal(`codex://threads/${encodeURIComponent(threadId)}`),
+    getSettings: getAmbientSettings,
   });
   diarizationManager ??= new DiarizationManager();
 
@@ -5117,6 +5123,10 @@ function getMeetingManager(): MeetingManager {
     getMeetingSummaryPrompt: () => preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT,
     getMaxwellRunManager,
     readMemorySnapshot: () => readMaxwellMemorySnapshot(true),
+    getLocalSpeakerName: () => {
+      const state = authManager?.getSessionState();
+      return state?.displayName?.trim() || state?.callsign?.trim() || null;
+    },
     canWrite: canWriteFieldTheoryContent,
     onBlockedWrite: () => blockWrite(),
   });
@@ -5151,6 +5161,41 @@ function getMeetingManager(): MeetingManager {
     });
   });
   return meetingManager;
+}
+
+function getAmbientSettings(): AmbientSettings {
+  if (!preferencesManager) return { ...DEFAULT_AMBIENT_SETTINGS };
+  return normalizeAmbientSettings({
+    instructions: preferencesManager.getPreference('ambientInstructions'),
+    accessMode: preferencesManager.getPreference('ambientAccessMode'),
+  });
+}
+
+async function saveAmbientSettings(settings: AmbientSettings) {
+  const normalized = normalizeAmbientSettings(settings);
+  if (!preferencesManager) {
+    return {
+      success: false,
+      settings: normalized,
+      appliedToActiveTask: false,
+      error: 'Preferences manager not initialized.',
+    };
+  }
+  await preferencesManager.save({
+    ambientInstructions: normalized.instructions,
+    ambientAccessMode: normalized.accessMode,
+  });
+  try {
+    const appliedToActiveTask = await ambientManager?.applySettings(normalized) ?? false;
+    return { success: true, settings: normalized, appliedToActiveTask };
+  } catch (error) {
+    return {
+      success: false,
+      settings: normalized,
+      appliedToActiveTask: false,
+      error: `Saved for the next meeting, but the active task was not updated: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 const MAXWELL_MEMORY_MAX_CHARS = 12_000;
@@ -13494,6 +13539,9 @@ function setupMeetingsIPCHandlers(): void {
   registerMeetingsIpc({
     getMeetingManager,
     getActiveFileContext: () => activeLibraryFileContext ? { ...activeLibraryFileContext } : null,
+    getAmbientSettings,
+    saveAmbientSettings,
+    resetAmbientSettings: () => saveAmbientSettings({ ...DEFAULT_AMBIENT_SETTINGS }),
   });
 }
 

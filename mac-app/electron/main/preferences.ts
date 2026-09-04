@@ -6,6 +6,10 @@ import { createLogger } from './logger';
 import { ModelSize } from './modelManager';
 import type { AutoImproveContextFile, AutoImproveEffort, AutoImproveProvider } from './types/transcribe';
 import {
+  DEFAULT_AMBIENT_SETTINGS,
+  type AmbientAccessMode,
+} from '../shared/ambientSettings';
+import {
   createDefaultGazeWindowFocusConfig,
   type GazeDebugOverlayBounds,
   type GazePersonalOffsets,
@@ -289,6 +293,10 @@ interface Preferences {
   // Maxwell meeting summaries - user-customizable prompt/style contract.
   meetingSummaryPrompt?: string;
 
+  // Ambient staffer behavior and the explicit Codex-owned access marker.
+  ambientInstructions?: string;
+  ambientAccessMode?: AmbientAccessMode;
+
   // Launcher root search categories. Apps and file search are the first active slices.
   launcherRootSearchEnabledKinds?: LauncherRootSearchEnabledKinds;
 
@@ -464,6 +472,10 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Meeting summary prompt defaults to preserving the note as the source of truth.
   meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT,
+
+  // Ambient sends this exact text to Codex. There is no hidden prompt suffix.
+  ambientInstructions: DEFAULT_AMBIENT_SETTINGS.instructions,
+  ambientAccessMode: DEFAULT_AMBIENT_SETTINGS.accessMode,
 
   // Launcher root search starts with apps and Spotlight-backed file search.
   launcherRootSearchEnabledKinds: DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,

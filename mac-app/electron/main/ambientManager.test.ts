@@ -16,6 +16,7 @@ function makeClient(overrides: Partial<AmbientClient> = {}): AmbientClient {
       return { threadId: 'thread-1', title: `Ambient - ${title}` };
     }),
     prepareAmbientTask: vi.fn(async (threadId, title) => ({ threadId, title: `Ambient - ${title}` })),
+    deliverAmbientSettings: vi.fn(async () => {}),
     deliverTranscript: vi.fn(async () => {}),
     close: vi.fn(),
     ...overrides,
@@ -52,7 +53,11 @@ describe('AmbientManager', () => {
     const [first, second] = await Promise.all([manager.start(startArgs()), manager.start(startArgs())]);
 
     expect(client.createAmbientTask).toHaveBeenCalledTimes(1);
-    expect(client.createAmbientTask).toHaveBeenCalledWith('Design Review', expect.any(Function));
+    expect(client.createAmbientTask).toHaveBeenCalledWith(
+      'Design Review',
+      expect.any(Function),
+      expect.objectContaining({ accessMode: 'codex-defaults' }),
+    );
     expect(first.threadId).toBe('thread-1');
     expect(second.threadId).toBe('thread-1');
     expect(openTask).toHaveBeenCalledTimes(1);
@@ -72,6 +77,26 @@ describe('AmbientManager', () => {
     expect(client.deliverTranscript).not.toHaveBeenCalled();
     const state = JSON.parse(fs.readFileSync(path.join(workingDirectory, 'ambient.json'), 'utf-8')) as AmbientState;
     expect(state.outbox).toMatchObject([{ sequence: 1, text: 'Speaker 1: Delta 1', attempts: 0 }]);
+  });
+
+  it('applies changed settings to the active Codex task without restarting the meeting', async () => {
+    const client = makeClient();
+    const manager = new AmbientManager({ clientFactory: () => client });
+    await manager.start(startArgs());
+
+    await expect(manager.applySettings({
+      instructions: 'Investigate technical uncertainty before responding.',
+      accessMode: 'codex-defaults',
+    })).resolves.toBe(true);
+
+    expect(client.deliverAmbientSettings).toHaveBeenCalledWith(
+      'thread-1',
+      '.ambient-context/ambient-instructions.txt',
+    );
+    const instructionsPath = path.join(workingDirectory, '.ambient-context', 'ambient-instructions.txt');
+    expect(fs.readFileSync(instructionsPath, 'utf-8'))
+      .toBe('Investigate technical uncertainty before responding.');
+    expect(fs.statSync(instructionsPath).mode & 0o777).toBe(0o600);
   });
 
   it('coalesces all pending entries into one delivery and acknowledges the range after success', async () => {
@@ -133,7 +158,14 @@ describe('AmbientManager', () => {
     await recovered.flush();
 
     expect(state.threadId).toBe('thread-1');
-    expect(recoveredClient.prepareAmbientTask).toHaveBeenCalledWith('thread-1', 'Design Review');
+    expect(recoveredClient.prepareAmbientTask).toHaveBeenCalledWith(
+      'thread-1',
+      'Design Review',
+    );
+    expect(recoveredClient.deliverAmbientSettings).toHaveBeenCalledWith(
+      'thread-1',
+      '.ambient-context/ambient-instructions.txt',
+    );
     expect(recoveredClient.createAmbientTask).not.toHaveBeenCalled();
     expect(openTask).toHaveBeenCalledTimes(1);
     expect(openTask).toHaveBeenCalledWith('thread-1');
