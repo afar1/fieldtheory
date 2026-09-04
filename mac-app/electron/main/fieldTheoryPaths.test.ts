@@ -8,6 +8,9 @@ import {
   canonicalLibraryDir,
   commandsDir,
   ideasDir,
+  kindleArtifactDir,
+  kindleDeliveryDir,
+  kindleDeliveryStatePath,
   legacyLibraryDir,
   libraryDir,
   sharedFilesCacheDir,
@@ -27,6 +30,9 @@ describe('Field Theory path contract', () => {
     expect(sharedFilesCacheDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'River (shared)'));
     expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'Commands'));
     expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
+    expect(kindleDeliveryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle'));
+    expect(kindleArtifactDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle', 'artifacts'));
+    expect(kindleDeliveryStatePath(options)).toBe(path.join(homeDir, '.fieldtheory', 'kindle', 'state.json'));
   });
 
   it('honors explicit env overrides', () => {

@@ -112,6 +112,7 @@ export type HelperOutgoingMessageType =
   | 'audioLevel'
   | 'permissionsStatus'
   | 'focusedTextInputStatus'
+  | 'secureInputStatus'
   | 'appBecameFrontmost'
   | 'frontmostAppChanged'
   | 'activeSpaceChanged'
@@ -139,6 +140,8 @@ export type HelperIncomingMessageType =
   | 'snapshotRecording'
   | 'cancelRecording'
   | 'checkPermissions'
+  | 'checkFocusedTextInput'
+  | 'getSecureInputStatus'
   | 'getFrontmostWindowBounds'
   | 'preloadSounds'
   | 'playSound'
@@ -255,6 +258,11 @@ export interface PermissionsStatusMessage extends HelperMessage {
 export interface FocusedTextInputStatusMessage extends HelperMessage {
   type: 'focusedTextInputStatus';
   hasTextInput: boolean;
+}
+
+export interface SecureInputStatusMessage extends HelperMessage {
+  type: 'secureInputStatus';
+  active: boolean;
 }
 
 /**
@@ -489,6 +497,7 @@ export type HelperOutgoingMessage =
   | AudioLevelMessage
   | PermissionsStatusMessage
   | FocusedTextInputStatusMessage
+  | SecureInputStatusMessage
   | AppBecameFrontmostMessage
   | FrontmostAppChangedMessage
   | ActiveSpaceChangedMessage
@@ -554,6 +563,10 @@ export interface CheckFocusedTextInputCommand {
 
 export interface GetFrontmostWindowBoundsCommand {
   type: 'getFrontmostWindowBounds';
+}
+
+export interface GetSecureInputStatusCommand {
+  type: 'getSecureInputStatus';
 }
 
 export interface PreloadSoundsCommand {
@@ -675,6 +688,7 @@ export type HelperIncomingCommand =
   | CancelRecordingCommand
   | CheckPermissionsCommand
   | CheckFocusedTextInputCommand
+  | GetSecureInputStatusCommand
   | GetFrontmostWindowBoundsCommand
   | PreloadSoundsCommand
   | PlaySoundCommand

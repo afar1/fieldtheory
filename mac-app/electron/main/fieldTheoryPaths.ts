@@ -60,6 +60,18 @@ export function ideasDir(options?: FieldTheoryPathOptions): string {
   return pathEnv(options).FT_IDEAS_DIR ?? path.join(fieldTheoryDir(options), 'ideas');
 }
 
+export function kindleDeliveryDir(options?: FieldTheoryPathOptions): string {
+  return path.join(fieldTheoryDir(options), 'kindle');
+}
+
+export function kindleArtifactDir(options?: FieldTheoryPathOptions): string {
+  return path.join(kindleDeliveryDir(options), 'artifacts');
+}
+
+export function kindleDeliveryStatePath(options?: FieldTheoryPathOptions): string {
+  return path.join(kindleDeliveryDir(options), 'state.json');
+}
+
 export function bookmarkDataDir(options?: FieldTheoryPathOptions): string {
   const dataOverride = pathEnv(options).FT_DATA_DIR;
   if (dataOverride) return dataOverride;

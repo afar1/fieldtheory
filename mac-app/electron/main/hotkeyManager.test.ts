@@ -142,3 +142,45 @@ describe('HotkeyManager clearing', () => {
     expect(globalShortcut.register).not.toHaveBeenCalled();
   });
 });
+
+describe('HotkeyManager recovery', () => {
+  it('rebuilds active registrations without duplicating callbacks', () => {
+    const manager = new HotkeyManager();
+    const transcriptionCallback = vi.fn();
+    const hotMicCallback = vi.fn();
+    manager.register('transcription', '\\', transcriptionCallback);
+    manager.register('hotMic', '`', hotMicCallback);
+    globalShortcut.register.mockClear();
+    globalShortcut.unregister.mockClear();
+
+    const result = manager.restartAll();
+
+    expect(result).toEqual({
+      success: true,
+      restarted: ['transcription', 'hotMic'],
+      failed: [],
+    });
+    expect(globalShortcut.unregister.mock.calls).toEqual([["\\"], ['`']]);
+    expect(globalShortcut.register.mock.calls).toEqual([
+      ['\\', transcriptionCallback],
+      ['`', hotMicCallback],
+    ]);
+    expect(manager.getRegisteredKey('transcription')).toBe('\\');
+    expect(manager.getRegisteredKey('hotMic')).toBe('`');
+  });
+
+  it('retains a stale registration so a later recovery can retry it', () => {
+    const manager = new HotkeyManager();
+    manager.register('transcription', '\\', vi.fn());
+    globalShortcut.register.mockReturnValueOnce(false);
+
+    const result = manager.restartAll();
+
+    expect(result.success).toBe(false);
+    expect(result.failed).toEqual([{
+      id: 'transcription',
+      error: 'Hotkey may be in use by another application',
+    }]);
+    expect(manager.isRegistered('transcription')).toBe(true);
+  });
+});

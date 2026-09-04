@@ -11,6 +11,7 @@ import type { HotMicEngineStatus } from './types/hotMic';
 import type { HotMicRuntimeStatus } from './hotMicManager';
 import type { ParakeetStatus } from './types/transcribe';
 import type { StandardRecordingDiagnostics, TranscriberManager } from './transcriberManager';
+import type { SecureInputHotkeyStatus } from './secureInputHotkeyRecovery';
 import { createLogger } from './logger';
 
 const log = createLogger('Diagnostics');
@@ -100,6 +101,7 @@ export interface DiagnosticsReport {
     commandsDirectory: string | null;
     commandsDirectoryExists: boolean | null;
   };
+  hotkeys: SecureInputHotkeyStatus;
   interface: {
     transcriptionHotkey: string | null;
     clipboardHistoryHotkey: string | null;
@@ -128,6 +130,7 @@ export class DiagnosticsCollector {
   private audioManager: AudioManager | null = null;
   private transcriberManager: DiagnosticsTranscriber | null = null;
   private hotMicRuntimeStatusGetter: (() => HotMicRuntimeStatus) | null = null;
+  private hotkeyRecoveryStatusGetter: (() => SecureInputHotkeyStatus) | null = null;
 
   constructor(preferencesManager: PreferencesManager) {
     this.preferencesManager = preferencesManager;
@@ -149,6 +152,10 @@ export class DiagnosticsCollector {
     this.hotMicRuntimeStatusGetter = getter;
   }
 
+  setHotkeyRecoveryStatusGetter(getter: () => SecureInputHotkeyStatus): void {
+    this.hotkeyRecoveryStatusGetter = getter;
+  }
+
   async collect(): Promise<DiagnosticsReport> {
     const transcription = await this.collectTranscriptionInfo();
     const commands = await this.collectCommandsInfo();
@@ -162,6 +169,12 @@ export class DiagnosticsCollector {
       hotMic: this.collectHotMicInfo(),
       windowManagement: this.collectWindowManagementInfo(),
       commands,
+      hotkeys: this.hotkeyRecoveryStatusGetter?.() ?? {
+        active: null,
+        lastCheckedAt: null,
+        lastRecoveredAt: null,
+        lastRecoveryReason: null,
+      },
       interface: this.collectInterfaceInfo(),
       support: {
         consoleLogTip: 'For detailed error logs, open Console.app and filter by "Field Theory"',
@@ -308,6 +321,9 @@ export class DiagnosticsCollector {
     lines.push('');
 
     lines.push('### Interface & Shortcuts');
+    lines.push(`- Secure Input: ${report.hotkeys.active === null ? 'unknown' : report.hotkeys.active ? 'active' : 'inactive'}`);
+    lines.push(`- Last Hotkey Recovery: ${formatOptionalText(report.hotkeys.lastRecoveredAt)}`);
+    lines.push(`- Last Recovery Reason: ${formatOptionalText(report.hotkeys.lastRecoveryReason)}`);
     lines.push(`- Transcription Hotkey: ${formatOptionalText(report.interface.transcriptionHotkey)}`);
     lines.push(`- Clipboard History Hotkey: ${formatOptionalText(report.interface.clipboardHistoryHotkey)}`);
     lines.push(`- Screenshot Hotkey: ${formatOptionalText(report.interface.screenshotHotkey)}`);
@@ -556,6 +572,10 @@ export class DiagnosticsCollector {
   private collectIssues(report: DiagnosticsReport): string[] {
     const issues: string[] = [];
     const engineStatus = report.transcription.engineStatus;
+
+    if (report.hotkeys.active) {
+      issues.push('Secure Input is active; modifierless hotkeys can be temporarily unavailable');
+    }
 
     if (engineStatus && engineStatus.readiness !== 'ready' && engineStatus.readiness !== 'cold') {
       issues.push(`Transcription engine ${report.transcription.selectedEngine} is ${engineStatus.readiness}: ${formatOptionalText(engineStatus.detail)}`);

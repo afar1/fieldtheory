@@ -36,6 +36,7 @@ enum MessageType: String, Codable {
     case cancelRecording
     case checkPermissions
     case checkFocusedTextInput
+    case getSecureInputStatus
     case getFrontmostWindowBounds
     // Sound playback
     case preloadSounds
@@ -213,6 +214,16 @@ struct FocusedTextInputStatusMessage: Codable {
     enum CodingKeys: String, CodingKey {
         case type
         case hasTextInput
+    }
+}
+
+struct SecureInputStatusMessage: Codable {
+    let type = "secureInputStatus"
+    let active: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case active
     }
 }
 
@@ -2240,6 +2251,9 @@ final class MessageHandler {
             let hasTextInput = KeyboardMonitor.shared.checkFocusedTextInput()
             let response = FocusedTextInputStatusMessage(hasTextInput: hasTextInput)
             sendJSON(response)
+
+        case .getSecureInputStatus:
+            sendJSON(SecureInputStatusMessage(active: IsSecureEventInputEnabled()))
 
         case .getFrontmostWindowBounds:
             let bounds = getFrontmostWindowBounds()

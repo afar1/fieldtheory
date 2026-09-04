@@ -1824,6 +1824,13 @@ interface HotkeyAPI {
   testHotkey: (key: string, timeoutMs?: number) => Promise<HotkeyTestResult>;
   /** Get list of running apps known to capture hotkeys */
   getRunningConflictApps: () => Promise<string[]>;
+  getRecoveryStatus: () => Promise<{
+    active: boolean | null;
+    lastCheckedAt: string | null;
+    lastRecoveredAt: string | null;
+    lastRecoveryReason: string | null;
+  }>;
+  restartListener: () => Promise<{ success: boolean; secureInputActive: boolean | null }>;
 }
 
 /**

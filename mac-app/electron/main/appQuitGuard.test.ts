@@ -3,9 +3,21 @@ import {
   collectQuitBlockingActivities,
   formatQuitBlockingActivityDetail,
   getActiveCodexTerminalModelRunCount,
+  relaunchThroughQuit,
 } from './appQuitGuard';
 
 describe('appQuitGuard', () => {
+  it('relaunches through the normal quit lifecycle', () => {
+    const calls: string[] = [];
+
+    relaunchThroughQuit({
+      relaunch: () => calls.push('relaunch'),
+      quit: () => calls.push('quit'),
+    });
+
+    expect(calls).toEqual(['relaunch', 'quit']);
+  });
+
   it('returns no blocking activities when local work is idle', () => {
     expect(collectQuitBlockingActivities({
       transcriptionStatus: 'idle',

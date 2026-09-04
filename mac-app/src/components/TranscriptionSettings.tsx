@@ -82,6 +82,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
   const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
   const [isCapturingHotMicHotkey, setIsCapturingHotMicHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [hotkeyRecoveryMessage, setHotkeyRecoveryMessage] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('small');
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
   const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio'>('microphone');
@@ -560,6 +561,22 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
     }
   }, []);
 
+  const handleRestartHotkeyListener = useCallback(async () => {
+    setHotkeyRecoveryMessage(null);
+    try {
+      const result = await window.hotkeyAPI?.restartListener?.();
+      if (result?.success) {
+        setHotkeyRecoveryMessage('Hotkey listener restarted.');
+      } else if (result?.secureInputActive) {
+        setHotkeyRecoveryMessage('Secure Input is active. Field Theory will recover automatically when it ends.');
+      } else {
+        setHotkeyRecoveryMessage('Hotkey listener is not ready yet.');
+      }
+    } catch (error) {
+      setHotkeyRecoveryMessage(error instanceof Error ? error.message : 'Could not restart the hotkey listener.');
+    }
+  }, []);
+
   const copyErrorText = useCallback(async (text: string, source: 'general') => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -830,6 +847,25 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
             {hotkeyError}
           </div>
         )}
+
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Hotkey listener</span>
+            <span style={styles.modelHint}>Restarts shortcut capture without restarting Field Theory.</span>
+            {hotkeyRecoveryMessage && (
+              <span style={styles.modelHint}>{hotkeyRecoveryMessage}</span>
+            )}
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              type="button"
+              onClick={() => void handleRestartHotkeyListener()}
+              style={styles.btnGhost}
+            >
+              Restart listener
+            </button>
+          </div>
+        </div>
 
         <div style={styles.row}>
           <div style={styles.rowText}>

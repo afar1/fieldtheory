@@ -140,6 +140,12 @@ export interface HotkeyResult {
   conflictWith?: HotkeyId;
 }
 
+export interface HotkeyRestartResult {
+  success: boolean;
+  restarted: HotkeyId[];
+  failed: Array<{ id: HotkeyId; error: string }>;
+}
+
 /**
  * Known apps that commonly capture keyboard shortcuts.
  * Used for conflict detection hints.
@@ -523,6 +529,46 @@ export class HotkeyManager {
    */
   isRegistered(id: HotkeyId): boolean {
     return this.registeredHotkeys.has(id);
+  }
+
+  /**
+   * Rebuild every active OS registration while preserving callbacks and keys.
+   * macOS can leave Electron's registration state stale after Secure Input,
+   * sleep, or a locked user session.
+   */
+  restartAll(): HotkeyRestartResult {
+    const registrations = [...this.registeredHotkeys.values()];
+    const restarted: HotkeyId[] = [];
+    const failed: Array<{ id: HotkeyId; error: string }> = [];
+
+    for (const registration of registrations) {
+      try {
+        globalShortcut.unregister(registration.key);
+        const registered = globalShortcut.register(registration.key, registration.callback);
+        if (!registered) {
+          failed.push({
+            id: registration.id,
+            error: 'Hotkey may be in use by another application',
+          });
+          continue;
+        }
+
+        restarted.push(registration.id);
+      } catch (error) {
+        failed.push({
+          id: registration.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    if (failed.length > 0) {
+      log.warn('Hotkey restart completed with failures:', failed);
+    } else {
+      log.info(`Restarted ${restarted.length} hotkey registrations`);
+    }
+
+    return { success: failed.length === 0, restarted, failed };
   }
 
   /**

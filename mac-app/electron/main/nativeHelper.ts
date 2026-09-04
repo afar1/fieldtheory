@@ -113,6 +113,36 @@ export class NativeHelper extends EventEmitter {
     });
   }
 
+  async getSecureInputStatus(timeoutMs = 1000): Promise<boolean | null> {
+    if (!this.child || !this.child.stdin.writable) {
+      return null;
+    }
+
+    await this.waitForReady({ readyDelayMs: 0, settledDelayMs: 0 });
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, timeoutMs);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'secureInputStatus') {
+          cleanup();
+          resolve(msg.active);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'getSecureInputStatus' });
+    });
+  }
+
   /**
    * Start the native helper process.
    * On macOS, this spawns the FieldTheoryHelper binary.
@@ -1101,6 +1131,7 @@ export class NativeHelper extends EventEmitter {
 
       case 'permissionsStatus':
       case 'focusedTextInputStatus':
+      case 'secureInputStatus':
         this.emit('message', msg);
         break;
 

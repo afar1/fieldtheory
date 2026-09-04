@@ -192,6 +192,12 @@ describe('DiagnosticsCollector audio diagnostics', () => {
         commandsDirectory: '/tmp/commands',
         commandsDirectoryExists: false,
       },
+      hotkeys: {
+        active: true,
+        lastCheckedAt: '2026-03-16T00:00:00.000Z',
+        lastRecoveredAt: null,
+        lastRecoveryReason: null,
+      },
       interface: {
         transcriptionHotkey: '',
         clipboardHistoryHotkey: 'Alt+Space',
@@ -226,5 +232,6 @@ describe('DiagnosticsCollector audio diagnostics', () => {
     expect(markdown).toContain('### Window Management');
     expect(markdown).toContain('### Portable Commands');
     expect(markdown).toContain('Transcription Hotkey: unset');
+    expect(markdown).toContain('Secure Input: active');
   });
 });

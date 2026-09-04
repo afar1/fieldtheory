@@ -21,6 +21,16 @@ export interface QuitBlockingActivitySnapshot {
   codexTerminalSessions?: Pick<CodexTerminalSessionSummary, 'exitedAt' | 'modelRunActive'>[];
 }
 
+export interface RelaunchableApp {
+  relaunch: () => void;
+  quit: () => void;
+}
+
+export function relaunchThroughQuit(app: RelaunchableApp): void {
+  app.relaunch();
+  app.quit();
+}
+
 export function getActiveCodexTerminalModelRunCount(
   sessions: Pick<CodexTerminalSessionSummary, 'exitedAt' | 'modelRunActive'>[] = [],
 ): number {

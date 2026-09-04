@@ -910,6 +910,15 @@ export interface HotkeyAPI {
   getAllHotkeys: () => Promise<Record<HotkeyId, string | null>>;
   testHotkey: (key: string, timeoutMs?: number) => Promise<HotkeyTestResult>;
   getRunningConflictApps: () => Promise<string[]>;
+  getRecoveryStatus: () => Promise<SecureInputHotkeyStatus>;
+  restartListener: () => Promise<{ success: boolean; secureInputActive: boolean | null }>;
+}
+
+export interface SecureInputHotkeyStatus {
+  active: boolean | null;
+  lastCheckedAt: string | null;
+  lastRecoveredAt: string | null;
+  lastRecoveryReason: string | null;
 }
 
 export interface TranscribeAPI {
@@ -1361,6 +1370,14 @@ const hotkeyAPI: HotkeyAPI = {
 
   getRunningConflictApps: async (): Promise<string[]> => {
     return ipcRenderer.invoke('hotkey:getRunningConflictApps');
+  },
+
+  getRecoveryStatus: async (): Promise<SecureInputHotkeyStatus> => {
+    return ipcRenderer.invoke('hotkey:getRecoveryStatus');
+  },
+
+  restartListener: async (): Promise<{ success: boolean; secureInputActive: boolean | null }> => {
+    return ipcRenderer.invoke('hotkey:restartListener');
   },
 };
 

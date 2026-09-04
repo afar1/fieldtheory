@@ -118,6 +118,7 @@ import { registerQuotaIpc } from './quotaIpc';
 import { AccountStatusManager } from './accountStatusManager';
 import { registerAccountIpc } from './accountIpc';
 import { DiagnosticsCollector } from './diagnosticsCollector';
+import { SecureInputHotkeyRecovery } from './secureInputHotkeyRecovery';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
@@ -143,7 +144,7 @@ import { SharedTeamEntitlementService, type SharedTeamEntitlementState } from '.
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
-import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
+import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail, relaunchThroughQuit } from './appQuitGuard';
 import {
   CommandsIPCChannels,
   type LauncherFileIconResult,
@@ -2627,6 +2628,7 @@ app.setName(isExperimentalBuild ? 'Field Theory Experimental' : 'Field Theory');
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
+let secureInputHotkeyRecovery: SecureInputHotkeyRecovery | null = null;
 let audioManager: AudioManager | null = null;
 let trayManager: TrayManager | null = null;
 let transcriberManager: TranscriberManager | null = null;
@@ -10806,14 +10808,8 @@ function setupClipboardIPCHandlers(): void {
 
   // Relaunch the app
   ipcMain.on('electron:relaunch', () => {
-    // Close all windows first
-    BrowserWindow.getAllWindows().forEach(window => {
-      if (!window.isDestroyed()) {
-        window.destroy();
-      }
-    });
-    app.relaunch();
-    app.exit(0);
+    appQuitConfirmedWithLocalWork = true;
+    relaunchThroughQuit(app);
   });
   
   // Show "no target" error at cursor position (replaces old toast window).
@@ -11414,6 +11410,22 @@ function setupClipboardIPCHandlers(): void {
     return result;
   });
 
+  ipcMain.handle('hotkey:getRecoveryStatus', () => {
+    return secureInputHotkeyRecovery?.getStatus() ?? {
+      active: null,
+      lastCheckedAt: null,
+      lastRecoveredAt: null,
+      lastRecoveryReason: null,
+    };
+  });
+
+  ipcMain.handle('hotkey:restartListener', async () => {
+    if (!secureInputHotkeyRecovery) {
+      return { success: false, secureInputActive: null };
+    }
+    return secureInputHotkeyRecovery.restartWhenAvailable('manual');
+  });
+
   // Diagnostic handler to check hotkey registration state
   ipcMain.handle('hotkey:diagnose', async () => {
     const hotkeyManager = getHotkeyManager();
@@ -11429,6 +11441,7 @@ function setupClipboardIPCHandlers(): void {
     // Get all registered hotkeys from our manager
     const registered = hotkeyManager.getAll();
     results.registeredHotkeys = Object.fromEntries(registered);
+    results.secureInput = secureInputHotkeyRecovery?.getStatus() ?? null;
 
     // Check clipboard manager state
     if (clipboardManager) {
@@ -14001,6 +14014,18 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   log.info('[audio-startup] === BOOT TIMELINE (ready handler): +%dms since module load', Date.now() - BOOT_MARK);
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  secureInputHotkeyRecovery = new SecureInputHotkeyRecovery({
+    getSecureInputStatus: () => nativeHelper?.getSecureInputStatus() ?? Promise.resolve(null),
+    restartHotkeys: (reason) => {
+      const result = getHotkeyManager().restartAll();
+      log.info('[HotkeyRecovery] %s: restarted=%d failed=%d', reason, result.restarted.length, result.failed.length);
+      return result.success;
+    },
+  });
+  setInterval(() => {
+    void secureInputHotkeyRecovery?.check();
+  }, 2000);
+  void secureInputHotkeyRecovery.check();
   log.info('[audio-startup] after nativeHelper.start(): +%dms', Date.now() - BOOT_MARK);
   nativeHelper.warmupAudio();
   log.info('[audio-startup] after nativeHelper.warmupAudio() call (async): +%dms', Date.now() - BOOT_MARK);
@@ -14893,6 +14918,12 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setTranscriberManager(transcriberManager);
   }
   diagnosticsCollector.setHotMicRuntimeStatusGetter(getHotMicRuntimeStatusSnapshot);
+  diagnosticsCollector.setHotkeyRecoveryStatusGetter(() => secureInputHotkeyRecovery?.getStatus() ?? {
+    active: null,
+    lastCheckedAt: null,
+    lastRecoveredAt: null,
+    lastRecoveryReason: null,
+  });
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
   }
@@ -15290,6 +15321,9 @@ async function initTranscriberSystem(): Promise<void> {
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');
+    setTimeout(() => {
+      void secureInputHotkeyRecovery?.restartWhenAvailable('power-monitor:resume');
+    }, 500);
 
     // Pre-warm the configured transcription runtime if Hot Mic is active.
     if (hotMicManager?.isActive) {
@@ -15326,6 +15360,9 @@ async function initTranscriberSystem(): Promise<void> {
 
   powerMonitor.on('unlock-screen', () => {
     scheduleWakeOverlayRefresh('power-monitor:unlock-screen');
+    setTimeout(() => {
+      void secureInputHotkeyRecovery?.restartWhenAvailable('power-monitor:unlock-screen');
+    }, 250);
   });
 
   // The userChanged handler handles preference reloading when session is restored.
