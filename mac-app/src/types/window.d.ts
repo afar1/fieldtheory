@@ -2381,6 +2381,7 @@ declare global {
   }
 
   interface LibraryAPI {
+    getLinkRelationChanges?: (request: import('../../electron/shared/libraryLinkRelations').LinkRelationRequest) => Promise<import('../../electron/shared/libraryLinkRelations').LinkRelationSnapshot>;
     getRoots: () => Promise<LibraryRoot[]>;
     previewMigration: () => Promise<LibraryMigrationPlan>;
     executeMigration: () => Promise<LibraryMigrationExecutionResult>;

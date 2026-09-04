@@ -1,3 +1,4 @@
+import type { LinkRelationSource } from './libraryLinkRelationReader';
 /**
  * Portable Commands Manager
  *
@@ -1591,6 +1592,24 @@ End of User Commands
   // =========================================================================
   // CRUD Operations
   // =========================================================================
+
+  getLinkRelationSource(filePath: string): LinkRelationSource | null {
+    const safePath = this.resolveWatchedCommandFile(filePath);
+    if (!safePath) return null;
+    return {
+      path: safePath,
+      metadataVersion: '',
+      load: async () => {
+        const command = await this.getCommandByPath(safePath);
+        return command ? {
+          target: { kind: 'command', path: command.filePath },
+          title: command.displayName || command.name,
+          content: command.content,
+          documentVersion: command.documentVersion,
+        } : null;
+      },
+    };
+  }
 
   /**
    * Get a command by file path with full content.

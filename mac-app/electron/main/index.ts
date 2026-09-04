@@ -1,3 +1,4 @@
+import { LibraryLinkRelationReader } from './libraryLinkRelationReader';
 import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
 import path from 'path';
@@ -3167,6 +3168,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     staticDir: path.join(app.getAppPath(), 'dist'),
     nativeBridge: {
+      getLinkRelationChanges: (request) => libraryLinkRelationReader.read(request, 'browser'),
       getAuthSession: () => authManager?.getSessionState() ?? null,
       getAuthCallsign: () => getCurrentUserCallsign(),
       getMetrics: () => metricsManager?.getMetrics() ?? null,
@@ -7737,10 +7739,24 @@ function syncTaggedDocsRootsFromLibrary(): void {
   taggedDocsManager.setRoots(librarianManager?.getLibraryRootPaths() ?? []);
 }
 
+const libraryLinkRelationReader = new LibraryLinkRelationReader({
+  scope: () => JSON.stringify([
+    userDataManager?.getCurrentCallsign() ?? null,
+    librarianManager?.getLibraryRootPaths() ?? [],
+  ]),
+  resolve: (target) => target.kind === 'command'
+    ? commandsManager?.getLinkRelationSource(target.path) ?? null
+    : librarianManager?.getLinkRelationSource(target) ?? null,
+});
+
 /**
  * Set up IPC handlers for Librarian (reading collection) functionality.
  */
 function setupLibrarianIPCHandlers(): void {
+  ipcMain.handle('library:getLinkRelationChanges', (event, request: unknown) => (
+    libraryLinkRelationReader.read(request, `renderer:${event.sender.id}`)
+  ));
+
   const currentLibraryRootPaths = (): string[] => (
     librarianManager?.getLibraryRoots().map((root) => root.path) ?? []
   );

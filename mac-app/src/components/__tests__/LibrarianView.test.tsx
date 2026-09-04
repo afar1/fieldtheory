@@ -5440,7 +5440,7 @@ describe('LibrarianView render', () => {
     }, { timeout: RENDERED_EDITOR_SAVE_TIMEOUT_MS });
   });
 
-  it('shows linked documents at the bottom of rendered wiki content', async () => {
+  it.each(['full', 'versioned', 'incomplete'] as const)('shows linked documents at the bottom of rendered wiki content using %s hydration', async (mode) => {
     const relPath = 'scratchpad/rendered-linked-source';
     const targetRelPath = 'scratchpad/target-page';
     const content = 'See [[Target Page]].';
@@ -5459,7 +5459,7 @@ describe('LibrarianView render', () => {
       name: 'target-page',
       title: 'Target Page',
       lastUpdated: 2,
-      content: 'Target body',
+      content: 'Target body with [[Rendered Linked Source]]',
       documentVersion: { mtimeMs: 2, size: 'Target body'.length, sha256: 'target-page-version' },
     };
 
@@ -5492,6 +5492,20 @@ describe('LibrarianView render', () => {
       if (pageRelPath === targetRelPath) return targetPage;
       return null;
     });
+    if (mode !== 'full') {
+      window.libraryAPI!.getLinkRelationChanges = vi.fn<NonNullable<LibraryAPI['getLinkRelationChanges']>>(async (request) => mode === 'incomplete' ? { complete: false } : ({
+        complete: true,
+        scope: 'wiki-test',
+        changes: request.sources.map(({ target }) => {
+          const page = target.kind === 'wiki' && target.relPath === targetRelPath ? targetPage : activePage;
+          return {
+            key: JSON.stringify([target.kind, target.kind === 'wiki' ? target.relPath : target.path]),
+            version: 'test-version',
+            document: { target, title: page.title, content: page.content },
+          };
+        }),
+      }));
+    }
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
@@ -5501,9 +5515,14 @@ describe('LibrarianView render', () => {
     });
     const linkedSection = await screen.findByLabelText('Linked');
     expect(within(linkedSection).getByRole('button', { name: /Target Page/ })).toBeTruthy();
+    expect(await within(linkedSection).findByTitle('Linked both ways')).toBeTruthy();
     const bottomScrollSpace = container.querySelector('[data-ft-rendered-bottom-scroll-space="library"]');
     if (!bottomScrollSpace) throw new Error('Rendered bottom scroll space missing');
     expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    if (mode === 'versioned') {
+      expect(window.libraryAPI!.getLinkRelationChanges).toHaveBeenCalled();
+      expect(vi.mocked(window.wikiAPI!.getPage).mock.calls.some(([pageRelPath]) => pageRelPath === targetRelPath)).toBe(false);
+    }
   });
 
   it('refreshes command link discovery when the Browser helper event stream reconnects', async () => {

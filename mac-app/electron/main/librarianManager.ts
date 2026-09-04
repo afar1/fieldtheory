@@ -1,3 +1,5 @@
+import type { LinkRelationSource } from './libraryLinkRelationReader';
+import type { LinkRelationTarget } from '../shared/libraryLinkRelations';
 import { app, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -2607,18 +2609,20 @@ export class LibrarianManager extends EventEmitter {
     }
 
     try {
-      let content = fs.readFileSync(normalizedPath, 'utf-8');
-      // Strip STORY/LESSON metadata lines (used for indexing, not display)
-      content = content
-        .split('\n')
-        .filter(line => !line.startsWith('STORY:') && !line.startsWith('LESSON:'))
-        .join('\n')
-        .trimEnd();
+      const content = this.readingDisplayContent(fs.readFileSync(normalizedPath, 'utf-8'));
       return { ...meta, content, documentVersion: readDocumentVersion(normalizedPath) };
     } catch (error) {
       log.error(`Error reading file ${normalizedPath}:`, error);
       return null;
     }
+  }
+
+  private readingDisplayContent(content: string): string {
+    // Strip STORY/LESSON metadata lines (used for indexing, not display).
+    return content.split('\n')
+      .filter(line => !line.startsWith('STORY:') && !line.startsWith('LESSON:'))
+      .join('\n')
+      .trimEnd();
   }
 
   /**
@@ -3511,6 +3515,44 @@ export class LibrarianManager extends EventEmitter {
       log.error(`Error reading wiki page ${relPath}:`, error);
       return null;
     }
+  }
+
+  getLinkRelationSource(target: Exclude<LinkRelationTarget, { kind: 'command' }>): LinkRelationSource | null {
+    if (target.kind === 'wiki') {
+      const relPath = this.resolveWikiPageReadRelPath(target.relPath);
+      const filePath = this.resolveExistingWikiPagePath(relPath);
+      if (!filePath) return null;
+      return {
+        path: filePath,
+        metadataVersion: '',
+        load: () => {
+          const page = this.getWikiPage(relPath);
+          return page ? {
+            target: { kind: 'wiki', relPath: page.relPath },
+            title: page.title,
+            content: page.content,
+            documentVersion: page.documentVersion,
+          } : null;
+        },
+      };
+    }
+    const filePath = this.normalizePath(target.path);
+    const meta = this.cache.get(filePath);
+    if (!meta) return null;
+    return {
+      path: filePath,
+      metadataVersion: meta.title,
+      displayContent: (raw) => this.readingDisplayContent(raw),
+      load: () => {
+        const reading = this.getReading(filePath);
+        return reading ? {
+          target: { kind: 'artifact', path: reading.path },
+          title: reading.title,
+          content: reading.content,
+          documentVersion: reading.documentVersion,
+        } : null;
+      },
+    };
   }
 
   getWikiBacklinkRelationDocuments(relPath: string): WikiBacklinkRelationDocument[] {

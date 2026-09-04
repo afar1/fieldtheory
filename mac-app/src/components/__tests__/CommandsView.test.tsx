@@ -533,7 +533,7 @@ describe('CommandsView command naming', () => {
     });
   });
 
-  it('shows the shared linked-documents footer for command files', async () => {
+  it.each(['full', 'versioned', 'incomplete'] as const)('shows the shared linked-documents footer for command files using %s hydration', async (mode) => {
     const existingCommand = {
       name: 'existing',
       displayName: 'existing',
@@ -555,6 +555,21 @@ describe('CommandsView command naming', () => {
         ? '# review\n\nSee [[existing]].\n'
         : '# existing\n\nRendered selection text\n',
     }));
+    if (mode !== 'full') {
+      window.libraryAPI!.getLinkRelationChanges = vi.fn<NonNullable<LibraryAPI['getLinkRelationChanges']>>(async (request) => mode === 'incomplete' ? { complete: false } : ({
+        complete: true,
+        scope: 'commands-test',
+        changes: request.sources.map(({ target }) => ({
+          key: JSON.stringify([target.kind, target.kind === 'wiki' ? target.relPath : target.path]),
+          version: 'test-version',
+          document: {
+            target,
+            title: target.kind === 'command' && target.path === reviewCommand.filePath ? 'review' : 'existing',
+            content: target.kind === 'command' && target.path === reviewCommand.filePath ? 'See [[existing]].' : 'Rendered selection text',
+          },
+        })),
+      }));
+    }
 
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
@@ -567,6 +582,10 @@ describe('CommandsView command naming', () => {
     expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(await screen.findByTitle('Links back to this document')).toBeTruthy();
     expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
+    if (mode === 'versioned') {
+      expect(window.libraryAPI!.getLinkRelationChanges).toHaveBeenCalled();
+      expect(vi.mocked(window.commandsAPI!.getCommandByPath).mock.calls.some(([filePath]) => filePath === reviewCommand.filePath)).toBe(false);
+    }
   });
 
   it('does not rebuild every linked command document when selection changes', async () => {

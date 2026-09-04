@@ -3,6 +3,8 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
+import { LibraryLinkRelationCache, linkRelationTargetsFromPages } from '../services/libraryLinkRelationCache';
+import { MarkdownLinkRelationIndex } from '../utils/markdownLinkRelationIndex';
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, lazy, Suspense } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
@@ -168,7 +170,6 @@ import {
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
-  getMarkdownLinkedDocuments,
   getMarkdownLinkRelationMetadataDocuments,
   getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
@@ -4221,6 +4222,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
   const wikiIndexPagesRef = useRef<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const [linkRelationCache] = useState(() => new LibraryLinkRelationCache());
+  const [linkRelationIndex] = useState(() => new MarkdownLinkRelationIndex());
   const [markdownLinkRelationRepairVersion, setMarkdownLinkRelationRepairVersion] = useState(0);
   const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
   const markdownLinkRelationDocumentsRequestRef = useRef(0);
@@ -5921,12 +5924,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return { links: [], timing: emptyTiming('inactive') };
     }
     const linkedContent = linkedDocumentsContent ?? '';
-    const links = getMarkdownLinkedDocuments(
-      activeMarkdownLinkTarget,
-      linkedContent,
-      visibleMarkdownLinkRelationDocuments,
-      wikiIndex,
-    );
+    linkRelationIndex.update(visibleMarkdownLinkRelationDocuments, wikiIndex);
+    const links = linkRelationIndex.getLinks(activeMarkdownLinkTarget, linkedContent, wikiIndex);
     return {
       links,
       timing: {
@@ -6094,6 +6093,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     let cancelled = false;
     const load = async () => {
+      const isCurrent = () => !cancelled && markdownLinkRelationDocumentsRequestRef.current === requestId;
+      const cached = await linkRelationCache.load(
+        linkRelationTargetsFromPages(wikiIndexPages, readings, commandIndexPages),
+        wikiIndex,
+        window.libraryAPI?.getLinkRelationChanges,
+        isCurrent,
+      );
+      if (!isCurrent()) return;
+      if (cached) {
+        setMarkdownLinkRelationDocuments(cached);
+        return;
+      }
       const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         wikiIndexPages.map(async (page) => {
           const fullPage = await window.wikiAPI?.getPage(page.relPath);
@@ -6107,6 +6118,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             : null;
         }),
       );
+      if (!isCurrent()) return;
       const artifactDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         readings.map(async (reading) => {
           const fullReading = await window.librarianAPI?.getReading(reading.path);
@@ -6120,6 +6132,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             : null;
         }),
       );
+      if (!isCurrent()) return;
       const commandPagesByPath = new Map<string, WikiIndexInput>();
       for (const command of commandIndexPages) {
         const commandPath = command.commandPath;

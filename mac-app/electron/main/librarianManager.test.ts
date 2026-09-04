@@ -944,6 +944,34 @@ describe('recursive wiki tree scan', () => {
     expect(manager.scanMarkdownTree).not.toHaveBeenCalled();
   });
 
+  it('uses normal wiki aliases, artifact filtering, and read boundaries for link repairs', async () => {
+    const root = makeTempDir();
+    const wikiRoot = path.join(root, 'wiki');
+    fs.mkdirSync(wikiRoot);
+    const wikiPath = path.join(wikiRoot, 'New.markdown');
+    const artifactPath = path.join(root, 'artifact.md');
+    fs.writeFileSync(wikiPath, '---\ntitle: Wiki title\n---\nSee [[Target]]');
+    fs.writeFileSync(artifactPath, 'STORY: [[Hidden]]\nLESSON: [[Hidden too]]\n# Essay\nVisible [[Target]]\n');
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    Object.assign(manager, {
+      wikiRenameAliases: new Map([['Old', { relPath: 'New' }]]),
+      cache: new Map([[artifactPath, { path: artifactPath, title: 'Essay' }]]),
+    });
+    const wiki = manager.getWikiPage('Old')!;
+    expect(await manager.getLinkRelationSource({ kind: 'wiki', relPath: 'Old' })!.load()).toEqual({
+      target: { kind: 'wiki', relPath: 'New' }, title: wiki.title, content: wiki.content, documentVersion: wiki.documentVersion,
+    });
+    const artifact = manager.getReading(artifactPath)!;
+    const source = manager.getLinkRelationSource({ kind: 'artifact', path: artifactPath })!;
+    expect(await source.load()).toEqual({
+      target: { kind: 'artifact', path: artifactPath }, title: artifact.title, content: '# Essay\nVisible [[Target]]', documentVersion: artifact.documentVersion,
+    });
+    expect(source.metadataVersion).toBe('Essay');
+    expect(manager.getLinkRelationSource({ kind: 'wiki', relPath: '../artifact' })).toBeNull();
+    expect(manager.getLinkRelationSource({ kind: 'artifact', path: wikiPath })).toBeNull();
+  });
+
   it('emits a file change delta immediately after saving a wiki page', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });

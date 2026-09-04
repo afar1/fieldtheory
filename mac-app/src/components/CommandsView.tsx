@@ -4,6 +4,8 @@
 // Supports multi-directory watching, full CRUD, and internally gated Shared commands discovery.
 // =============================================================================
 
+import { LibraryLinkRelationCache, linkRelationTargetsFromPages } from '../services/libraryLinkRelationCache';
+import { MarkdownLinkRelationIndex } from '../utils/markdownLinkRelationIndex';
 import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
@@ -33,7 +35,6 @@ import {
   buildWikiIndex,
   classifyLinkHref,
   getMarkdownEditorLinkHits,
-  getMarkdownLinkedDocuments,
   getMarkdownLinkRelationMetadataDocuments,
   isUnresolvedWikiHref,
   mergeMarkdownLinkRelationDocuments,
@@ -291,6 +292,8 @@ export default function CommandsView({
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
+  const [linkRelationCache] = useState(() => new LibraryLinkRelationCache());
+  const [linkRelationIndex] = useState(() => new MarkdownLinkRelationIndex());
   const markdownLinkBacklinkDocumentsRequestRef = useRef(0);
   const markdownLinkRelationDocumentsRequestRef = useRef(0);
 
@@ -670,12 +673,8 @@ export default function CommandsView({
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!selectedCommand) return [];
-    return getMarkdownLinkedDocuments(
-      activeLinkTarget,
-      selectedCommand.content,
-      visibleMarkdownLinkRelationDocuments,
-      wikiIndex,
-    );
+    linkRelationIndex.update(visibleMarkdownLinkRelationDocuments, wikiIndex);
+    return linkRelationIndex.getLinks(activeLinkTarget, selectedCommand.content, wikiIndex);
   }, [activeLinkTarget, selectedCommand, visibleMarkdownLinkRelationDocuments, wikiIndex]);
 
   const flashCopyFeedback = useCallback((label: string) => {
@@ -1192,6 +1191,18 @@ export default function CommandsView({
 
     let cancelled = false;
     const load = async () => {
+      const isCurrent = () => !cancelled && markdownLinkRelationDocumentsRequestRef.current === requestId;
+      const cached = await linkRelationCache.load(
+        linkRelationTargetsFromPages(wikiIndexPages, readings, commandIndexPages),
+        wikiIndex,
+        window.libraryAPI?.getLinkRelationChanges,
+        isCurrent,
+      );
+      if (!isCurrent()) return;
+      if (cached) {
+        setMarkdownLinkRelationDocuments(cached);
+        return;
+      }
       const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         wikiIndexPages.map(async (page) => {
           const fullPage = await window.wikiAPI?.getPage?.(page.relPath);
@@ -1205,6 +1216,7 @@ export default function CommandsView({
             : null;
         }),
       );
+      if (!isCurrent()) return;
       const artifactDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         readings.map(async (reading) => {
           const fullReading = await window.librarianAPI?.getReading?.(reading.path);
@@ -1218,6 +1230,7 @@ export default function CommandsView({
             : null;
         }),
       );
+      if (!isCurrent()) return;
       const commandPagesByPath = new Map<string, WikiIndexInput>();
       for (const command of commandIndexPages) {
         const commandPath = command.commandPath;

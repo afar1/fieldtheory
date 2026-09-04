@@ -173,6 +173,23 @@ describe('CommandsManager default internal commands', () => {
     ]);
   });
 
+  it('uses the normal command reader and its watched-path boundary for link repairs', async () => {
+    await manager.reinitializeForUser();
+    const filePath = join(manager.getDefaultDirectory(), 'review.md');
+    const command = (await manager.getCommandByPath(filePath))!;
+    const source = manager.getLinkRelationSource(filePath)!;
+    expect(await source.load()).toEqual({
+      target: { kind: 'command', path: command.filePath },
+      title: command.displayName,
+      content: command.content,
+      documentVersion: command.documentVersion,
+    });
+    const outside = join(tempRoot, 'outside.md');
+    writeFileSync(outside, '[[Review]]');
+    expect(manager.getLinkRelationSource(outside)).toBeNull();
+    expect(manager.getLinkRelationSource(join(manager.getDefaultDirectory(), 'missing.md'))).toBeNull();
+  });
+
   it('does not overwrite an existing default commands directory that already has markdown commands', async () => {
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });

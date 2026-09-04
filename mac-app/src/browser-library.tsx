@@ -1,3 +1,4 @@
+import type { LinkRelationRequest, LinkRelationSnapshot } from '../electron/shared/libraryLinkRelations';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { useTheme } from './contexts/ThemeContext';
@@ -738,6 +739,9 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   } as any;
 
   window.libraryAPI = {
+    getLinkRelationChanges: async (query: LinkRelationRequest) => (
+      await request<{ result: LinkRelationSnapshot }>('/native/library/link-relations', { method: 'POST', json: query })
+    ).result,
     getRoots: async () => (await request<{ roots: unknown[] }>('/native/library/roots')).roots,
     addRoot: async (dirPath: string) => (
       await request<{ root: unknown }>('/native/library/root', {

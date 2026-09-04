@@ -420,7 +420,14 @@ export function getMarkdownEditorLinkHits(
   markdown: string,
   index: WikiIndex,
 ): MarkdownEditorLinkHit[] {
-  return getRawMarkdownLinkHits(markdown)
+  return resolveMarkdownEditorLinkHits(getRawMarkdownLinkHits(markdown), index);
+}
+
+export function resolveMarkdownEditorLinkHits(
+  hits: ReturnType<typeof getRawMarkdownLinkHits>,
+  index: WikiIndex,
+): MarkdownEditorLinkHit[] {
+  return hits
     .map((hit): MarkdownEditorLinkHit => ({
       action: hit.kind === 'wikilink'
         ? wikiLinkActionFromTarget(hit.rawTarget, index)

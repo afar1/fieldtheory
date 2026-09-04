@@ -1,3 +1,4 @@
+import type { LinkRelationRequest, LinkRelationSnapshot } from './shared/libraryLinkRelations';
 import { contextBridge, ipcRenderer } from 'electron';
 
 // Define IPC channels locally to avoid import issues
@@ -4990,6 +4991,8 @@ interface PossibleIdeaBatch extends PossibleIdeaBatchSummary {
 }
 
 const libraryAPI = {
+  getLinkRelationChanges: (request: LinkRelationRequest): Promise<LinkRelationSnapshot> =>
+    ipcRenderer.invoke('library:getLinkRelationChanges', request),
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
   previewMigration: (): Promise<LibraryMigrationPlan> => ipcRenderer.invoke('library:previewMigration'),
   executeMigration: (): Promise<LibraryMigrationExecutionResult> => ipcRenderer.invoke('library:executeMigration'),

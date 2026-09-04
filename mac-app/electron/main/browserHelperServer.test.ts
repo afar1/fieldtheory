@@ -99,6 +99,40 @@ describe('BrowserHelperServer', () => {
     expect(response.status).toBe(401);
   });
 
+  it('protects batched link repairs with the same token and origin checks as document reads', async () => {
+    const root = makeTempDir();
+    const snapshot = { complete: true as const, scope: root, changes: [] };
+    const getLinkRelationChanges = vi.fn(async () => snapshot);
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]),
+      token: 'test-token',
+      nativeBridge: { getLinkRelationChanges },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const url = `http://${address.host}:${address.port}/native/library/link-relations`;
+    const body = { clientId: 'browser-test', sources: [] };
+    expect((await request(url, { method: 'POST', body })).status).toBe(401);
+    expect((await request(`${url}?token=test-token`, {
+      method: 'POST', body, headers: { Origin: 'https://example.com' },
+    })).status).toBe(403);
+    expect(getLinkRelationChanges).not.toHaveBeenCalled();
+    const response = await request(url, {
+      method: 'POST', body, headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.result).toEqual(snapshot);
+    expect(getLinkRelationChanges).toHaveBeenCalledWith(body);
+  });
+
+  it('marks link repairs incomplete when the native bridge is unavailable', async () => {
+    const { address } = await startServer();
+    const response = await request(`http://${address.host}:${address.port}/native/library/link-relations?token=test-token`, {
+      method: 'POST', body: { clientId: 'browser-test', sources: [] },
+    });
+    expect(response.body.result).toEqual({ complete: false });
+  });
+
   it('rejects unexpected origins', async () => {
     const { address } = await startServer();
 

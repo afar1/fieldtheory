@@ -1,3 +1,4 @@
+import type { LinkRelationSnapshot } from '../shared/libraryLinkRelations';
 import http from 'http';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -124,6 +125,7 @@ export type BrowserHelperRendererStorageSnapshot = {
 };
 
 export type BrowserHelperNativeBridge = {
+  getLinkRelationChanges?: (request: unknown) => Promise<LinkRelationSnapshot>;
   getAuthSession?: () => unknown | Promise<unknown>;
   getAuthCallsign?: () => string | null | Promise<string | null>;
   getMetrics?: () => unknown | Promise<unknown>;
@@ -675,6 +677,13 @@ export class BrowserHelperServer {
 
       if (req.method === 'GET' && parsed.pathname === '/tree') {
         writeJson(res, 200, { ok: true, roots: this.service.getRoots() }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/library/link-relations') {
+        const body = await readJsonBody(req);
+        const result = await this.nativeBridge.getLinkRelationChanges?.(body) ?? { complete: false };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 
