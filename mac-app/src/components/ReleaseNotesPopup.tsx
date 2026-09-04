@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.30': [
+    'Ambient meeting tasks now open directly in Codex and stay available while the meeting continues',
+    'You can steer an Ambient task in Codex while new transcript updates arrive every 30 seconds',
+    'Ambient meeting tasks now recover without showing the task as open in another app',
+  ],
   '0.3.29': [
     'Ambient creates one dedicated Codex task and adds new meeting observations every 30 seconds',
     'Long meetings preserve audio and transcript progress in durable local chunks',
@@ -472,6 +477,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.30': 'Sep 3 2026',
   '0.3.29': 'Sep 3 2026',
   '0.3.28': 'Sep 1 2026',
   '0.3.20': 'Jun 20 2026',
