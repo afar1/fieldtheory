@@ -221,6 +221,7 @@ import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { BookmarkSyncController, type BookmarkSyncResult } from './bookmarkSyncController';
 import { BookmarkSyncRunner } from './bookmarkSyncRunner';
+import { BookmarkSyncStateStore } from './bookmarkSyncStateStore';
 import {
   getLocalImageCacheHeaders,
   getLocalImageContentType,
@@ -440,6 +441,7 @@ function ensureBookmarkSyncController(): BookmarkSyncController {
     return cli ? { executable: cli, env: fieldTheoryCliEnv() } : null;
   }, execFileAsync);
   bookmarkSyncController = new BookmarkSyncController({
+    stateStore: new BookmarkSyncStateStore(path.join(require('./fieldTheoryPaths').bookmarkDataDir(), 'app-sync-state.json')),
     quick: (signal) => runner.quick(signal),
     maintenance: (signal, work) => runner.maintenance(signal, work),
     isOnline: () => net.isOnline(),

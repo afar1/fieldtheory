@@ -1,3 +1,5 @@
+import { restoreBookmarkSyncState, type PersistedBookmarkSyncState } from './bookmarkSyncStateStore';
+
 /** App-owned freshness checks. Timers do no work until a bounded CLI job is due. */
 export type BookmarkSyncState = {
   phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported';
@@ -28,6 +30,7 @@ type Options = {
   onChanged: () => void;
   onState: (state: BookmarkSyncState) => void;
   now?: () => number;
+  stateStore?: { load: () => unknown; save: (state: PersistedBookmarkSyncState) => void };
 };
 
 export class BookmarkSyncController {
@@ -47,7 +50,20 @@ export class BookmarkSyncController {
   private needsIndex = false;
   private readonly now: () => number;
 
-  constructor(private readonly options: Options) { this.now = options.now ?? Date.now; }
+  constructor(private readonly options: Options) {
+    this.now = options.now ?? Date.now;
+    const restored = restoreBookmarkSyncState(options.stateStore?.load(), this.now());
+    if (restored) {
+      this.lastAttempt = restored.lastAttemptAt ?? -Infinity;
+      this.blockedUntil = restored.blockedUntil;
+      this.failures = restored.failures;
+      this.needsIndex = restored.needsIndex;
+      this.maintenanceDue = restored.maintenanceDue;
+      this.lastMaintenance = restored.lastMaintenanceAt ?? -Infinity;
+      if (this.maintenanceDue !== null) this.maintenanceDue = Math.max(this.maintenanceDue, this.lastMaintenance + MAINTENANCE_INTERVAL);
+      this.state = { ...this.state, lastCheckedAt: restored.lastCheckedAt, phase: restored.retryPhase ?? 'idle' };
+    }
+  }
   getState(): BookmarkSyncState { return { ...this.state }; }
 
   start(): void {
@@ -103,6 +119,7 @@ export class BookmarkSyncController {
     const signal = this.abort.signal;
     this.publish({ phase: 'syncing', nextCheckAt: null, error: null });
     this.runningKind = 'quick';
+    this.persist();
     this.running = Promise.resolve().then(async () => {
       try {
         const outcome = await this.options.quick(signal);
@@ -153,6 +170,7 @@ export class BookmarkSyncController {
     return idle < 5 * MINUTE ? MINUTE : idle < 30 * MINUTE ? 5 * MINUTE : 15 * MINUTE;
   }
   private planNext(): void {
+    this.persist();
     if (!this.started || this.suspended) return;
     const next = Math.max(this.now(), this.lastAttempt + this.interval(), this.blockedUntil);
     this.plan(this.maintenanceDue !== null && this.blockedUntil <= this.now() ? Math.min(next, this.maintenanceDue) : next);
@@ -180,6 +198,7 @@ export class BookmarkSyncController {
     const index = this.needsIndex;
     // Share the process lane; due foreground freshness can preempt optional media.
     this.runningKind = 'maintenance';
+    this.persist();
     this.running = Promise.resolve().then(async () => {
       try {
         const result = await this.options.maintenance!(signal, { index });
@@ -199,6 +218,20 @@ export class BookmarkSyncController {
         this.planNext();
       }
       return this.result('too-recent');
+    });
+  }
+  private persist(): void {
+    this.options.stateStore?.save({
+      version: 1,
+      lastCheckedAt: this.state.lastCheckedAt,
+      lastAttemptAt: Number.isFinite(this.lastAttempt) ? this.lastAttempt : null,
+      blockedUntil: this.blockedUntil,
+      failures: this.failures,
+      retryPhase: this.state.phase === 'backoff' || this.state.phase === 'unsupported' ? this.state.phase : null,
+      pendingMaintenance: this.maintenanceDue !== null || this.runningKind === 'maintenance',
+      needsIndex: this.needsIndex,
+      maintenanceDue: this.maintenanceDue,
+      lastMaintenanceAt: Number.isFinite(this.lastMaintenance) ? this.lastMaintenance : null,
     });
   }
   private clearTimer(): void { if (this.timer) clearTimeout(this.timer); this.timer = null; }

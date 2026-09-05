@@ -112,4 +112,34 @@ describe('BookmarkSyncController', () => {
     controller.stop();
   });
 
+  it('restores pending maintenance and a truthful check timestamp after restart', async () => {
+    let saved: unknown;
+    const stateStore = { load: () => saved, save: (value: unknown) => { saved = value; } };
+    const first = new BookmarkSyncController({ quick: async () => ({ status: 'synced', added: 1 }), maintenance: async () => ({}), isOnline: () => true, onChanged: vi.fn(), onState: vi.fn(), stateStore });
+    first.start(); await first.request();
+    const checked = first.getState().lastCheckedAt; first.stop();
+    const maintenance = vi.fn(async () => ({}));
+    const second = new BookmarkSyncController({ quick: async () => ({ status: 'synced' }), maintenance, isOnline: () => true, onChanged: vi.fn(), onState: vi.fn(), stateStore });
+    expect(second.getState().lastCheckedAt).toBe(checked);
+    second.start(); await vi.advanceTimersByTimeAsync(MINUTE + 1);
+    expect(maintenance).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), { index: true });
+    expect(saved).toMatchObject({ pendingMaintenance: false, needsIndex: false });
+    second.stop();
+  });
+
+  it('retains rate-limit backoff across restart without repeatedly writing timer state', async () => {
+    let saved: unknown;
+    const save = vi.fn((value: unknown) => { saved = value; });
+    const stateStore = { load: () => saved, save };
+    const first = new BookmarkSyncController({ quick: async () => ({ status: 'rate_limited', retryAfterSec: 1800 }), isOnline: () => true, onChanged: vi.fn(), onState: vi.fn(), stateStore });
+    first.start(); await first.request(); first.stop(); save.mockClear();
+    const quick = vi.fn(async (): Promise<QuickBookmarkSync> => ({ status: 'synced' }));
+    const second = new BookmarkSyncController({ quick, isOnline: () => true, onChanged: vi.fn(), onState: vi.fn(), stateStore });
+    expect(second.getState().phase).toBe('backoff'); second.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await second.request(); await second.request();
+    expect(quick).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30 * MINUTE);
+    expect(quick).toHaveBeenCalledTimes(1); second.stop();
+  });
 });
