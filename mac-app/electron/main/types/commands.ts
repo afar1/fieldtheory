@@ -108,6 +108,7 @@ export interface LauncherFileIconResult {
 export type LauncherRootSearchEnabledKinds = Record<string, boolean>;
 
 export interface LauncherSettings {
+  sections?: string[];
   rootSearchEnabledKinds: LauncherRootSearchEnabledKinds;
 }
 

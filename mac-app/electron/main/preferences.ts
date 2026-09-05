@@ -298,6 +298,7 @@ interface Preferences {
   ambientAccessMode?: AmbientAccessMode;
 
   // Launcher root search categories. Apps and file search are the first active slices.
+  launcherSections?: string[];
   launcherRootSearchEnabledKinds?: LauncherRootSearchEnabledKinds;
 
   // Dark mode preference - synced across all windows.

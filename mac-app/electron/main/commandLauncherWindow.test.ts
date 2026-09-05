@@ -22,7 +22,6 @@ const mockWindow = vi.hoisted(() => ({
 
 const mockIpcMainHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => void>());
 const LAUNCHER_WIDTH = 520;
-const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_RESULTS_HEIGHT = 430;
 
 const mockApp = vi.hoisted(() => ({
@@ -115,7 +114,7 @@ describe('CommandLauncherWindow.show()', () => {
       x: Math.round(100 + (900 - LAUNCHER_WIDTH) / 2),
       y: Math.round(200 + (700 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
-      height: LAUNCHER_COLLAPSED_HEIGHT,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 
@@ -138,7 +137,7 @@ describe('CommandLauncherWindow.show()', () => {
       x: Math.round(1400 + (1100 - LAUNCHER_WIDTH) / 2),
       y: Math.round(120 + (900 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
-      height: LAUNCHER_COLLAPSED_HEIGHT,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 
@@ -161,7 +160,7 @@ describe('CommandLauncherWindow.show()', () => {
       x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
       y: Math.round(100 + (800 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
-      height: LAUNCHER_COLLAPSED_HEIGHT,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 
@@ -184,7 +183,7 @@ describe('CommandLauncherWindow.show()', () => {
       x: Math.round(1400 + (1100 - LAUNCHER_WIDTH) / 2),
       y: Math.round(120 + (900 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
-      height: LAUNCHER_COLLAPSED_HEIGHT,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 
@@ -700,10 +699,10 @@ describe('CommandLauncherWindow resize IPC', () => {
     mockIpcMainHandlers.clear();
     mockWindow.isVisible.mockReturnValue(true);
     mockWindow.isDestroyed.mockReturnValue(false);
-    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: LAUNCHER_WIDTH, height: LAUNCHER_COLLAPSED_HEIGHT });
+    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: LAUNCHER_WIDTH, height: LAUNCHER_RESULTS_HEIGHT });
   });
 
-  it('keeps renderer resize requests inside the normal launcher height', () => {
+  it('keeps the full panel height when the renderer requests a smaller loading state', () => {
     const launcher = new CommandLauncherWindow();
     (launcher as any).window = mockWindow;
 
@@ -713,7 +712,7 @@ describe('CommandLauncherWindow resize IPC', () => {
       x: 10,
       y: 20,
       width: LAUNCHER_WIDTH,
-      height: 390,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 

@@ -117,7 +117,6 @@ export class CommandLauncherWindow {
 
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 520;
-  private readonly WINDOW_HEIGHT_COLLAPSED = 52;
   private readonly WINDOW_HEIGHT_RESULTS = 430;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
@@ -148,7 +147,7 @@ export class CommandLauncherWindow {
 
       if (this.window && !this.window.isDestroyed()) {
         const bounds = this.window.getBounds();
-        const nextHeight = Math.min(height, this.WINDOW_HEIGHT_RESULTS);
+        const nextHeight = this.WINDOW_HEIGHT_RESULTS;
         if (nextHeight !== height) {
           appendCommandLauncherTrace('renderer-resize-clamped', {
             launcherSessionId: this.launcherSessionId,
@@ -389,7 +388,7 @@ export class CommandLauncherWindow {
         x,
         y,
         width: this.WINDOW_WIDTH,
-        height: this.WINDOW_HEIGHT_COLLAPSED,
+        height: this.WINDOW_HEIGHT_RESULTS,
       });
       appendCommandLauncherTrace('show-set-bounds', {
         launcherSessionId: this.launcherSessionId,
@@ -397,7 +396,7 @@ export class CommandLauncherWindow {
         x,
         y,
         width: this.WINDOW_WIDTH,
-        height: this.WINDOW_HEIGHT_COLLAPSED,
+        height: this.WINDOW_HEIGHT_RESULTS,
       });
 
       // Reset before focus so early typed characters are not cleared after show.
@@ -620,7 +619,7 @@ export class CommandLauncherWindow {
     this.window = new BrowserWindow({
       title: 'Field Theory Command Launcher',
       width: this.WINDOW_WIDTH,
-      height: this.WINDOW_HEIGHT_COLLAPSED,
+      height: this.WINDOW_HEIGHT_RESULTS,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',

@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.39': [
+    'Choose and reorder launcher sections in Settings → Launcher, including River',
+    'The launcher opens at full size with a simpler Search field',
+    'Overlapping native paste requests now receive their own delivery results',
+  ],
   '0.3.38': [
     'Ambient instructions are now editable from Settings → Ambient',
     'Includes the portable-paste fix, wider tables, improved launcher browsing, and background bookmark syncing',
@@ -518,6 +523,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.39': 'September 5, 2026',
   '0.3.38': 'September 5, 2026',
   '0.3.37': 'September 5, 2026',
   '0.3.36': 'September 5, 2026',

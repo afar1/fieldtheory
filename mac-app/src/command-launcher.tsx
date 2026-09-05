@@ -1,3 +1,4 @@
+import { normalizeLauncherSections, nextLauncherSection, type LauncherSection } from '../electron/shared/launcherSections';
 /**
  * Command Launcher UI
  *
@@ -165,6 +166,7 @@ interface LauncherFileIconResult {
 }
 
 interface LauncherSettings {
+  sections?: string[];
   rootSearchEnabledKinds: Record<string, boolean>;
 }
 
@@ -176,7 +178,7 @@ interface HandoffInfo {
 }
 
 type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks' | 'actions';
-type LauncherDefaultPanelSource = 'recents' | 'clipboard' | 'bookmarks';
+type LauncherDefaultPanelSource = LauncherSection;
 
 type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
@@ -392,7 +394,7 @@ const LAUNCHER_DEFAULT_PANEL_EXPANDED_STORAGE_KEY = 'fieldTheory.launcher.defaul
 function readLauncherDefaultPanelSource(): LauncherDefaultPanelSource {
   try {
     const stored = localStorage.getItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY);
-    return stored === 'clipboard' || stored === 'bookmarks' ? stored : 'recents';
+    return stored === 'clipboard' || stored === 'bookmarks' || stored === 'river' ? stored : 'recents';
   } catch {
     return 'recents';
   }
@@ -963,6 +965,7 @@ export function CommandLauncher() {
   const [moveSource, setMoveSource] = useState<LauncherLibraryMoveSource | null>(null);
   const [riverShareSource, setRiverShareSource] = useState<LauncherLibraryMoveSource | null>(null);
   const [clipboardSearchActive, setClipboardSearchActive] = useState(false);
+  const [launcherSections, setLauncherSections] = useState<LauncherSection[]>(() => normalizeLauncherSections(undefined));
   const [launcherDefaultPanelSource, setLauncherDefaultPanelSource] = useState<LauncherDefaultPanelSource>(() => readLauncherDefaultPanelSource());
   const [launcherDefaultPanelExpanded, setLauncherDefaultPanelExpanded] = useState<boolean>(() => readLauncherDefaultPanelExpanded());
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
@@ -1068,8 +1071,8 @@ export function CommandLauncher() {
   const launcherClosingForInvocationRef = useRef(false);
   const launcherInvocationInFlightRef = useRef(false);
 
-  const resizeLauncher = useCallback((height: number) => {
-    const nextHeight = Math.max(LAUNCHER_COLLAPSED_HEIGHT, Math.round(height));
+  const resizeLauncher = useCallback((_height: number) => {
+    const nextHeight = LAUNCHER_COLLAPSED_HEIGHT + LAUNCHER_MAX_LIST_HEIGHT;
     if (resizeHeightRef.current === nextHeight) return;
     resizeHeightRef.current = nextHeight;
     if (resizeFrameRef.current !== null) {
@@ -1223,6 +1226,9 @@ export function CommandLauncher() {
     const startedAt = performance.now();
     try {
       const settings = await commandsAPI.getLauncherSettings();
+      const sections = normalizeLauncherSections(settings?.sections);
+      setLauncherSections(sections);
+      setLauncherDefaultPanelSource(current => sections.includes(current) ? current : sections[0]);
       const normalized = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds as LauncherRootSearchEnabledKinds);
       setLauncherRootSearchEnabledKinds(prev => (
         areLauncherRootSearchEnabledKindsEqual(prev, normalized) ? prev : normalized
@@ -2246,6 +2252,7 @@ export function CommandLauncher() {
     && launcherDefaultPanelExpanded
     && launcherDefaultPanelSource === 'bookmarks';
   const clipboardLauncherModeActive = clipboardSearchQuery !== null || defaultClipboardPanelActive;
+  const riverPanelItems = useMemo(() => [...libraryMarkdownSearchItems, ...commandItems, ...artifactReadings].filter(isLauncherRiverItem), [libraryMarkdownSearchItems, commandItems, artifactReadings]);
   const defaultPanelItems = useMemo((): LauncherItem[] => {
     return getLauncherDefaultPanelItems({
       expanded: launcherDefaultPanelExpanded,
@@ -2254,8 +2261,9 @@ export function CommandLauncher() {
       recentItems: recentFileItems,
       clipboardItems: clipboardLauncherItems,
       bookmarkItems: bookmarkPostItems,
+      riverItems: riverPanelItems,
     });
-  }, [bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
+  }, [riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
 
   const getDefaultPanelItemsForSource = useCallback((source: LauncherDefaultPanelSource, expanded: boolean): LauncherItem[] => (
     getLauncherDefaultPanelItems({
@@ -2265,14 +2273,11 @@ export function CommandLauncher() {
       recentItems: recentFileItems,
       clipboardItems: clipboardLauncherItems,
       bookmarkItems: bookmarkPostItems,
+      riverItems: riverPanelItems,
     })
-  ), [bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+  ), [riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
 
-  const nextDefaultPanelSource = launcherDefaultPanelSource === 'recents'
-    ? 'clipboard'
-    : launcherDefaultPanelSource === 'clipboard'
-      ? 'bookmarks'
-      : 'recents';
+  const nextDefaultPanelSource = nextLauncherSection(launcherDefaultPanelSource, launcherSections);
   const defaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(launcherDefaultPanelSource);
   const nextDefaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(nextDefaultPanelSource);
 
@@ -4310,7 +4315,7 @@ export function CommandLauncher() {
           className="command-launcher-input"
           type="text"
           name="field-theory-command-launcher-query"
-          placeholder="Search markdown, commands, bookmarks, or ' files"
+          placeholder="Search"
           aria-label={namespaceLabel ? `${namespaceLabel} search` : 'Command search'}
           autoComplete="off"
           autoCorrect="off"

@@ -1,3 +1,4 @@
+import { normalizeLauncherSections } from '../shared/launcherSections';
 import { LibraryLinkRelationReader } from './libraryLinkRelationReader';
 import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
@@ -2067,6 +2068,9 @@ async function typeTextFromCommandLauncher(
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
+      requestId: result.requestId ?? null,
+      standardRecordingStatus: transcriberManager?.getStatus() ?? 'unavailable',
+      liveTypingEnabled: transcriberManager?.getLiveTyping() ?? false,
       success: result.success,
       error: result.error ?? null,
       accessibilityTrusted: result.accessibilityTrusted ?? null,
@@ -12205,6 +12209,7 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_SETTINGS, async (): Promise<LauncherSettings> => {
     return {
+      sections: normalizeLauncherSections(preferencesManager?.getPreference('launcherSections')),
       rootSearchEnabledKinds: normalizeLauncherRootSearchEnabledKinds(
         preferencesManager?.getPreference('launcherRootSearchEnabledKinds'),
       ),
@@ -12213,10 +12218,11 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle(CommandsIPCChannels.SET_LAUNCHER_SETTINGS, async (_event, settings: LauncherSettings): Promise<LauncherSettings> => {
     const rootSearchEnabledKinds = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds);
+    const sections = normalizeLauncherSections(settings?.sections ?? preferencesManager?.getPreference('launcherSections'));
     if (preferencesManager) {
-      await preferencesManager.save({ launcherRootSearchEnabledKinds: rootSearchEnabledKinds });
+      await preferencesManager.save({ launcherRootSearchEnabledKinds: rootSearchEnabledKinds, launcherSections: sections });
     }
-    return { rootSearchEnabledKinds };
+    return { rootSearchEnabledKinds, sections };
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_COMMAND_CONTENT, async (_event, commandName: string) => {

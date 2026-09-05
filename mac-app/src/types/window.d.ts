@@ -1542,6 +1542,7 @@ interface LauncherFileIconResult {
 }
 
 interface LauncherSettings {
+  sections?: string[];
   rootSearchEnabledKinds: Record<string, boolean>;
 }
 

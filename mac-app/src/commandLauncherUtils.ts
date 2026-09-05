@@ -114,7 +114,8 @@ export function formatLauncherBookmarkEmbedMarkdown(input: {
   return `![${alt}](bookmark://${encodeURIComponent(input.bookmarkId)})`;
 }
 
-export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks'): string {
+export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks' | 'river'): string {
+  if (source === 'river') return 'River';
   if (source === 'clipboard') return 'Clipboard';
   if (source === 'bookmarks') return 'Bookmarks';
   return 'Recents';
@@ -961,14 +962,16 @@ export function isLauncherRiverItem(item: { source?: string; sourceLabel?: strin
 export function getLauncherDefaultPanelItems<T>(input: {
   expanded: boolean;
   isRootIdle: boolean;
-  source: 'recents' | 'clipboard' | 'bookmarks';
+  source: 'recents' | 'clipboard' | 'bookmarks' | 'river';
   recentItems: T[];
   clipboardItems: T[];
   bookmarkItems?: T[];
+  riverItems?: T[];
   maxItems?: number;
 }): T[] {
   if (!input.expanded || !input.isRootIdle) return [];
   const maxItems = input.maxItems ?? Infinity;
+  if (input.source === 'river') return (input.riverItems ?? []).slice(0, maxItems);
   if (input.source === 'clipboard') return input.clipboardItems.slice(0, maxItems);
   if (input.source === 'bookmarks') return (input.bookmarkItems ?? []).slice(0, maxItems);
   return input.recentItems.slice(0, maxItems);

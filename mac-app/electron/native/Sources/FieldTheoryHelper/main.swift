@@ -62,6 +62,7 @@ enum MessageType: String, Codable {
 
 /// Message received from Electron.
 struct IncomingMessage: Codable {
+    let requestId: String?
     let type: MessageType
     let deviceId: String?
     let recordingSource: String?
@@ -260,6 +261,7 @@ struct SoundsPreloadedMessage: Codable {
 
 /// Result of typing text into an app.
 struct TypeIntoAppResultMessage: Codable {
+    let requestId: String?
     let type = "typeIntoAppResult"
     let success: Bool
     let error: String?
@@ -270,6 +272,7 @@ struct TypeIntoAppResultMessage: Codable {
     let eventTarget: String?
 
     init(
+        requestId: String? = nil,
         success: Bool,
         error: String?,
         accessibilityTrusted: Bool? = nil,
@@ -278,6 +281,7 @@ struct TypeIntoAppResultMessage: Codable {
         pasteboardWritten: Bool? = nil,
         eventTarget: String? = nil
     ) {
+        self.requestId = requestId
         self.success = success
         self.error = error
         self.accessibilityTrusted = accessibilityTrusted
@@ -288,6 +292,7 @@ struct TypeIntoAppResultMessage: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case requestId
         case type
         case success
         case error
@@ -2297,7 +2302,8 @@ final class MessageHandler {
                 text: text,
                 submitMode: submitMode,
                 targetWindowBounds: message.targetWindowBounds,
-                pasteEventTarget: message.pasteEventTarget ?? "pid"
+                pasteEventTarget: message.pasteEventTarget ?? "pid",
+                requestId: message.requestId
             )
 
         case .insertTextSegment:
@@ -2405,7 +2411,8 @@ final class MessageHandler {
         text: String,
         submitMode: String,
         targetWindowBounds: WindowBoundsInput?,
-        pasteEventTarget: String
+        pasteEventTarget: String,
+        requestId: String?
     ) {
         let accessibilityTrusted = AXIsProcessTrusted()
 
@@ -2418,6 +2425,7 @@ final class MessageHandler {
             eventTarget: String? = nil
         ) {
             let result = TypeIntoAppResultMessage(
+                requestId: requestId,
                 success: success,
                 error: error,
                 accessibilityTrusted: accessibilityTrusted,

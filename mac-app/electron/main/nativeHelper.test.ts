@@ -172,6 +172,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(sentCommands()).toEqual([{
       type: 'typeIntoApp',
+      requestId: expect.any(String),
       bundleId: 'com.mitchellh.ghostty',
       text: '[pr.md]\n/commands/pr.md ',
       pressEnter: false,
@@ -179,6 +180,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     helper.handleMessage({
       type: 'typeIntoAppResult',
+      requestId: sentCommands().find(command => command.type === 'typeIntoApp')?.requestId,
       success: true,
       accessibilityTrusted: true,
       targetFrontmost: true,
@@ -188,6 +190,7 @@ describe('NativeHelper recording command sequencing', () => {
     });
 
     await expect(typePromise).resolves.toEqual({
+      requestId: expect.any(String),
       success: true,
       error: undefined,
       accessibilityTrusted: true,
@@ -206,6 +209,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(sentCommands()).toEqual([{
       type: 'typeIntoApp',
+      requestId: expect.any(String),
       bundleId: 'com.mitchellh.ghostty',
       text: 'alpha beta',
       pressEnter: true,
@@ -214,6 +218,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     helper.handleMessage({
       type: 'typeIntoAppResult',
+      requestId: sentCommands().find(command => command.type === 'typeIntoApp')?.requestId,
       success: true,
     });
 
@@ -229,6 +234,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(sentCommands()).toEqual([{
       type: 'typeIntoApp',
+      requestId: expect.any(String),
       bundleId: 'com.openai.codex',
       text: '[release.md]\\n',
       pressEnter: false,
@@ -237,10 +243,34 @@ describe('NativeHelper recording command sequencing', () => {
 
     helper.handleMessage({
       type: 'typeIntoAppResult',
+      requestId: sentCommands().find(command => command.type === 'typeIntoApp')?.requestId,
       success: true,
     });
 
     await expect(typePromise).resolves.toMatchObject({ success: true });
+  });
+
+  it('correlates overlapping paste replies and ignores unrelated replies', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const first = helper.typeIntoApp('com.openai.codex', 'first', false);
+    const second = helper.typeIntoApp('com.openai.codex', 'second', false);
+    let firstDone = false;
+    let secondDone = false;
+    void first.then(() => { firstDone = true; });
+    void second.then(() => { secondDone = true; });
+    await flushMicrotasks();
+    const [a, b] = sentCommands();
+    expect(a.requestId).not.toBe(b.requestId);
+    helper.handleMessage({ type: 'typeIntoAppResult', requestId: 'expired-request', success: true });
+    await flushMicrotasks();
+    expect(firstDone || secondDone).toBe(false);
+    helper.handleMessage({ type: 'typeIntoAppResult', requestId: b.requestId, success: false, error: 'second failed' });
+    await flushMicrotasks();
+    expect(firstDone).toBe(false);
+    expect(secondDone).toBe(true);
+    helper.handleMessage({ type: 'typeIntoAppResult', requestId: a.requestId, success: true });
+    await expect(first).resolves.toMatchObject({ success: true });
+    await expect(second).resolves.toMatchObject({ success: false, error: 'second failed' });
   });
 
   it('requests a process-targeted paste for long Codex composer input without changing the payload', async () => {
@@ -260,6 +290,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(sentCommands()).toEqual([{
       type: 'typeIntoApp',
+      requestId: expect.any(String),
       bundleId: 'com.openai.codex',
       text: longCommandInput,
       pressEnter: false,
@@ -269,6 +300,7 @@ describe('NativeHelper recording command sequencing', () => {
 
     helper.handleMessage({
       type: 'typeIntoAppResult',
+      requestId: sentCommands().find(command => command.type === 'typeIntoApp')?.requestId,
       success: true,
       focusedTextInput: true,
       eventTarget: 'pid',

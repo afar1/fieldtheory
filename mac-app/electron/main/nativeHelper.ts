@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 import { spawn, exec, ChildProcessWithoutNullStreams } from 'child_process';
 import path from 'path';
@@ -678,6 +679,7 @@ export class NativeHelper extends EventEmitter {
     targetWindowBounds?: { x: number; y: number; width: number; height: number } | null,
     pasteEventTarget?: 'pid',
   ): Promise<{
+    requestId?: string;
     success: boolean;
     error?: string;
     accessibilityTrusted?: boolean;
@@ -692,6 +694,7 @@ export class NativeHelper extends EventEmitter {
 
     await this.waitForReady();
 
+    const requestId = randomUUID();
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         cleanup();
@@ -699,9 +702,10 @@ export class NativeHelper extends EventEmitter {
       }, 5000);
 
       const onMessage = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'typeIntoAppResult') {
+        if (msg.type === 'typeIntoAppResult' && msg.requestId === requestId) {
           cleanup();
           resolve({
+            requestId: msg.requestId,
             success: msg.success,
             error: msg.error,
             accessibilityTrusted: msg.accessibilityTrusted,
@@ -719,7 +723,7 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.on('message', onMessage);
-      const command: HelperIncomingCommand = { type: 'typeIntoApp', bundleId, text, pressEnter };
+      const command: HelperIncomingCommand = { type: 'typeIntoApp', requestId, bundleId, text, pressEnter };
       if (submitMode) {
         command.submitMode = submitMode;
       }

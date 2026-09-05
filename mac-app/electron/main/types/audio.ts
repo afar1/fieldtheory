@@ -327,6 +327,7 @@ export interface SoundsPreloadedMessage extends HelperMessage {
  */
 export interface TypeIntoAppResultMessage extends HelperMessage {
   type: 'typeIntoAppResult';
+  requestId?: string;
   success: boolean;
   error?: string;
   accessibilityTrusted?: boolean;
@@ -588,6 +589,7 @@ export interface StopSoundsCommand {
  */
 export interface TypeIntoAppCommand {
   type: 'typeIntoApp';
+  requestId?: string;
   bundleId: string;
   text: string;
   pressEnter: boolean;

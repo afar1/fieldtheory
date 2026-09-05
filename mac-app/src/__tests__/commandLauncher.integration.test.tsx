@@ -55,6 +55,25 @@ async function mount(source: string) {
 }
 
 describe('launcher source navigation', () => {
+  it('cycles configured sections including River and keeps the full panel size', async () => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'river'] });
+    const originalRoots = window.libraryAPI!.getRoots;
+    window.libraryAPI!.getRoots = vi.fn(async () => [
+      { path: '/library', label: 'Library', builtin: true, tree: files },
+      { path: '/river', label: 'River (shared)', builtin: false, tree: files.map(file => ({ ...file, absPath: `/river/${file.name}.md`, title: `Shared ${file.title}` })) },
+    ]) as typeof originalRoots;
+    try {
+      const { container, input } = await mount('recents');
+      expect(input.getAttribute('placeholder')).toBe('Search');
+      fireEvent.keyDown(input, { key: 'Tab' });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Shared Markdown note'));
+      expect(screen.getByRole('button', { name: 'Switch to Recents' })).toBeTruthy();
+      fireEvent.keyDown(input, { key: 'Tab' });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Switch to River' })).toBeTruthy());
+      expect(commands.launcherResize.mock.calls.every(([height]) => height === 430)).toBe(true);
+    } finally { window.libraryAPI!.getRoots = originalRoots; commands.getLauncherSettings.mockResolvedValue({}); }
+  });
+
   it.each(['recents', 'clipboard', 'bookmarks'])('arrows through multiple pages of %s and invokes the chosen row', async source => {
     const { container, input } = await mount(source);
     for (let i = 0; i < 23; i++) fireEvent.keyDown(input, { key: 'ArrowDown' });
