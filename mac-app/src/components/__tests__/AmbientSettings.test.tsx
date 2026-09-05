@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AmbientSettings from '../AmbientSettings';
+import SettingsPanel from '../SettingsPanel';
+
+vi.mock('../../supabaseClient', () => ({ supabase: null }));
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -22,6 +25,12 @@ describe('AmbientSettings', () => {
   };
 
   beforeEach(() => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
     (window as any).commandsAPI = {
       getAmbientSettings: vi.fn(async () => initial),
       saveAmbientSettings: vi.fn(async (settings: AmbientSettingsValue) => ({
@@ -40,6 +49,21 @@ describe('AmbientSettings', () => {
   afterEach(() => {
     delete (window as any).commandsAPI;
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the instruction editor from the current Settings navigation and saves edits', async () => {
+    render(<SettingsPanel initialSection="account" />);
+    fireEvent.click(screen.getByRole('button', { name: /Ambient/ }));
+    const prompt = await screen.findByLabelText('Staffer instructions sent to Codex');
+    await waitFor(() => expect((prompt as HTMLTextAreaElement).value).toBe(initial.instructions));
+    expect(screen.getByRole('button', { name: /Ambient/ })).toBeTruthy();
+    fireEvent.change(prompt, { target: { value: 'Investigate the question raised in the meeting.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and apply' }));
+    await waitFor(() => expect(window.commandsAPI?.saveAmbientSettings).toHaveBeenCalledWith({
+      instructions: 'Investigate the question raised in the meeting.',
+      accessMode: 'codex-defaults',
+    }));
   });
 
   it('shows the exact prompt and applies edits to an active Ambient task', async () => {

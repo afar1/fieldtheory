@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.38': [
+    'Ambient instructions are now editable from Settings → Ambient',
+    'Includes the portable-paste fix, wider tables, improved launcher browsing, and background bookmark syncing',
+  ],
   '0.3.37': [
     'Restored Command-key release after portable paste to address interrupted follow-up typing',
   ],
@@ -514,6 +518,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.38': 'September 5, 2026',
   '0.3.37': 'September 5, 2026',
   '0.3.36': 'September 5, 2026',
   '0.3.35': 'September 5, 2026',

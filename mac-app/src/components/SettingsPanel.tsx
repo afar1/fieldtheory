@@ -6,6 +6,7 @@
 
 import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
+import AmbientSettings from './AmbientSettings';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
 import HotMicSettings from './HotMicSettings';
@@ -41,6 +42,7 @@ import {
 // Settings sections in alphabetical order
 type SettingsSection =
   | 'account'
+  | 'ambient'
   | 'appearance'
   | 'auto-improve'
   | 'audio'
@@ -83,6 +85,7 @@ type HotkeyCapture =
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
   'account': 'Account',
+  'ambient': 'Ambient',
   'appearance': 'Appearance & System',
   'auto-improve': 'Auto Improve',
   'audio': 'Audio & Transcription',
@@ -101,6 +104,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
 
 const SECTION_GLYPHS: Record<SettingsSection, string> = {
   'account': '◉',
+  'ambient': '◌',
   'appearance': '◐',
   'auto-improve': '✦',
   'audio': '∿',
@@ -119,6 +123,7 @@ const SECTION_GLYPHS: Record<SettingsSection, string> = {
 
 const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
   'account': 'Profile, sign-in, local sync, and support.',
+  'ambient': 'Edit the instructions sent to your Codex meeting staffer.',
   'appearance': 'Theme, app behavior, permissions, and retention.',
   'auto-improve': 'Clean up transcripts before paste using your selected provider.',
   'audio': 'Microphone, transcription, and word corrections.',
@@ -139,6 +144,7 @@ const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
 const SECTIONS_ORDER: SettingsSection[] = [
   'account',
   'terminal-commands', // Allowlist
+  'ambient',
   'appearance',
   'auto-improve',
   'audio',
@@ -2154,6 +2160,13 @@ export default function SettingsPanel({
             </p>
           )}
         </div>
+      </div>
+      )}
+
+      {/* Ambient Section */}
+      {selectedSection === 'ambient' && (
+      <div style={styles.sectionStack}>
+        <AmbientSettings />
       </div>
       )}
 
