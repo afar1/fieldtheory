@@ -1,60 +1,73 @@
-// Module-scope cache for bookmarks snapshots.
-// The JSONL is ~14MB; each IPC call serializes all ~7k records via structured
-// clone, which is visibly slow on remount. Caching here makes repeat visits
-// instant, and lets us prefetch on Library mount so the first click is fast too.
-
+// Keep the last usable snapshot while native changes settle. IPC transfers the
+// entire library, so bursts share one read and changes during it get one followup.
 let cached: BookmarksSnapshot | null = null;
 let inflight: Promise<BookmarksSnapshot> | null = null;
+let pending = false;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let generation = 0;
+let unsubscribe: (() => void) | null = null;
 const listeners = new Set<(s: BookmarksSnapshot) => void>();
-let changeSubscribed = false;
+const emptySnapshot = (): BookmarksSnapshot => ({ bookmarks: [], folders: [], xLastSyncedAt: null });
+
+function scheduleRefresh(): void {
+  pending = true;
+  if (inflight || timer) return;
+  timer = setTimeout(() => {
+    timer = null;
+    void readSnapshot().catch((error) => console.warn('[Bookmarks] Refresh failed', error));
+  }, 100);
+}
 
 function subscribeToChanges(): void {
-  if (changeSubscribed) return;
-  if (!window.bookmarksAPI) return;
-  window.bookmarksAPI.onChanged(() => {
-    cached = null;
-    inflight = null;
-    void getBookmarks().then((s) => {
-      for (const cb of listeners) cb(s);
-    });
-  });
-  changeSubscribed = true;
+  if (unsubscribe || !window.bookmarksAPI) return;
+  unsubscribe = window.bookmarksAPI.onChanged(scheduleRefresh);
 }
 
-/** Returns the cached snapshot synchronously, or null if not yet loaded. */
-export function peekBookmarks(): BookmarksSnapshot | null {
-  return cached;
-}
-
-/** Loads (or returns cached) snapshot. Coalesces concurrent callers. */
-export function getBookmarks(): Promise<BookmarksSnapshot> {
-  subscribeToChanges();
-  if (cached) return Promise.resolve(cached);
+function readSnapshot(): Promise<BookmarksSnapshot> {
   if (inflight) return inflight;
+  if (timer) clearTimeout(timer);
+  timer = null;
   const api = window.bookmarksAPI;
-  if (!api) return Promise.resolve({ bookmarks: [], folders: [], xLastSyncedAt: null });
-  inflight = api.getAll().then((snap) => {
-    cached = snap ?? { bookmarks: [], folders: [], xLastSyncedAt: null };
-    inflight = null;
-    return cached;
+  if (!api) return Promise.resolve(cached ?? emptySnapshot());
+  const startedGeneration = generation;
+  const read = async () => {
+    do {
+      pending = false;
+      const snapshot = await api.getAll() ?? emptySnapshot();
+      if (startedGeneration !== generation) return snapshot;
+      cached = snapshot;
+      for (const cb of listeners) cb(snapshot);
+    } while (pending);
+    return cached!;
+  };
+  inflight = read().finally(() => {
+    if (startedGeneration === generation) {
+      inflight = null;
+      if (pending) scheduleRefresh();
+    }
   });
   return inflight;
 }
 
-/** Forces a fresh IPC snapshot read after a sync has completed. */
+export function peekBookmarks(): BookmarksSnapshot | null { return cached; }
+
+/** Opening a pane can render stale data immediately while a refresh is running. */
+export function getBookmarks(): Promise<BookmarksSnapshot> {
+  subscribeToChanges();
+  return cached ? Promise.resolve(cached) : readSnapshot();
+}
+
+/** Explicit refreshes share a running request instead of starting a second one. */
 export function refreshBookmarks(): Promise<BookmarksSnapshot> {
-  cached = null;
-  inflight = null;
-  return getBookmarks();
+  subscribeToChanges();
+  pending = true;
+  return readSnapshot();
 }
 
-/** Fire-and-forget prefetch; safe to call repeatedly. */
 export function prefetchBookmarks(): void {
-  if (cached || inflight) return;
-  void getBookmarks();
+  void getBookmarks().catch((error) => console.warn('[Bookmarks] Prefetch failed', error));
 }
 
-/** Subscribe to change events (from file watcher via IPC). */
 export function onBookmarksChanged(cb: (s: BookmarksSnapshot) => void): () => void {
   subscribeToChanges();
   listeners.add(cb);
@@ -62,8 +75,13 @@ export function onBookmarksChanged(cb: (s: BookmarksSnapshot) => void): () => vo
 }
 
 export function resetBookmarksCacheForTests(): void {
+  generation++;
+  unsubscribe?.();
+  unsubscribe = null;
+  if (timer) clearTimeout(timer);
+  timer = null;
+  pending = false;
   cached = null;
   inflight = null;
   listeners.clear();
-  changeSubscribed = false;
 }

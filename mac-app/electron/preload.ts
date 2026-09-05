@@ -5308,6 +5308,7 @@ interface Bookmark {
   authorAvatar: string;
   localAvatarFilename?: string;
   postedAt: string;
+  bookmarkedAt?: string;
   images: BookmarkImage[];
   mediaCount: number;
   likeCount: number;
@@ -5337,9 +5338,22 @@ interface BookmarkAuthorSummary {
   lastPostedAt: string;
 }
 
+interface BookmarkSyncState {
+  phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported';
+  lastCheckedAt: string | null;
+  nextCheckAt: string | null;
+  error: string | null;
+}
+
 const bookmarksAPI = {
   getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
-  syncIfStale: (): Promise<{ status: string; error?: string }> => ipcRenderer.invoke('bookmarks:syncIfStale'),
+  syncIfStale: (): Promise<{ status: string; lastCheckedAt?: string | null; error?: string }> => ipcRenderer.invoke('bookmarks:syncIfStale'),
+  getSyncState: (): Promise<BookmarkSyncState> => ipcRenderer.invoke('bookmarks:getSyncState'),
+  onSyncStateChanged: (callback: (state: BookmarkSyncState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: BookmarkSyncState) => callback(state);
+    ipcRenderer.on('bookmarks:syncStateChanged', handler);
+    return () => ipcRenderer.removeListener('bookmarks:syncStateChanged', handler);
+  },
   getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
   getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
     ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
@@ -5365,6 +5379,7 @@ const bookmarksAPI = {
   },
 };
 contextBridge.exposeInMainWorld('bookmarksAPI', bookmarksAPI);
+window.addEventListener('online', () => ipcRenderer.send('bookmarks:networkOnline'));
 
 interface AgentHookTargets { claude?: boolean; codex?: boolean }
 interface AgentHookStatus { claude: boolean; codex: boolean }

@@ -385,6 +385,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       'quota:changed',
       'team:changed',
       'bookmarks:changed',
+      'bookmarks:syncStateChanged',
       'updater:checkingForUpdate',
       'updater:updateAvailable',
       'updater:updateNotAvailable',
@@ -1448,6 +1449,11 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     syncIfStale: async () => (
       await request<{ result: unknown }>('/native/bookmarks/sync-if-stale', { method: 'POST' })
     ).result,
+    getSyncState: async () => (
+      await request<{ state: BookmarkSyncState }>('/native/bookmarks/sync-state')
+    ).state,
+    onSyncStateChanged: (callback: (state: BookmarkSyncState) => void) =>
+      events.on('bookmarks:syncStateChanged', (detail) => callback(detail.state)),
     getAuthors: async () => (
       await request<{ authors: unknown[] }>('/native/bookmarks/authors')
     ).authors,
@@ -2520,7 +2526,10 @@ function BrowserLibraryFooter(props: {
     };
   }, [isWindowVisible]);
   React.useEffect(() => {
-    const updateOnline = () => setIsOnline(navigator.onLine);
+    const updateOnline = () => {
+      setIsOnline(navigator.onLine);
+      if (navigator.onLine) void window.bookmarksAPI?.syncIfStale().catch(() => {});
+    };
     const updateVisibility = () => setIsWindowVisible(document.visibilityState === 'visible');
     window.addEventListener('online', updateOnline);
     window.addEventListener('offline', updateOnline);

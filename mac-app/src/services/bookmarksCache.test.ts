@@ -41,7 +41,10 @@ describe('bookmarksCache', () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { resetBookmarksCacheForTests } = await import('./bookmarksCache');
+    resetBookmarksCacheForTests();
+    vi.useRealTimers();
     delete window.bookmarksAPI;
     vi.restoreAllMocks();
   });
@@ -119,4 +122,65 @@ describe('bookmarksCache', () => {
     await expect(getBookmarks()).resolves.toBe(updatedSnapshot);
     expect(getAll).toHaveBeenCalledTimes(2);
   });
+
+  it('retains cached data and bounds bursts to one read plus a followup', async () => {
+    vi.useFakeTimers();
+    let changed = () => {};
+    let resolveRead = (_snapshot: BookmarksSnapshot) => {};
+    const getAll = vi.fn().mockResolvedValueOnce(initialSnapshot)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }))
+      .mockResolvedValue(updatedSnapshot);
+    window.bookmarksAPI = { getAll, onChanged: (callback: () => void) => { changed = callback; return () => {}; } } as unknown as BookmarksAPI;
+    const { getBookmarks, peekBookmarks, onBookmarksChanged } = await import('./bookmarksCache');
+    await getBookmarks();
+    const listener = vi.fn();
+    const unsubscribe = onBookmarksChanged(listener);
+    for (let i = 0; i < 100; i++) changed();
+    expect(peekBookmarks()).toBe(initialSnapshot);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getAll).toHaveBeenCalledTimes(2);
+    await expect(getBookmarks()).resolves.toBe(initialSnapshot);
+    for (let i = 0; i < 100; i++) changed();
+    expect(getAll).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    resolveRead(initialSnapshot);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getAll).toHaveBeenCalledTimes(3);
+    expect(peekBookmarks()).toBe(updatedSnapshot);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('keeps the previous snapshot after a failed read and recovers on the next event', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let changed = () => {};
+    const getAll = vi.fn().mockResolvedValueOnce(initialSnapshot)
+      .mockRejectedValueOnce(new Error('IPC unavailable')).mockResolvedValue(updatedSnapshot);
+    window.bookmarksAPI = { getAll, onChanged: (callback: () => void) => { changed = callback; return () => {}; } } as unknown as BookmarksAPI;
+    const { getBookmarks, peekBookmarks } = await import('./bookmarksCache');
+    await getBookmarks();
+    changed();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(peekBookmarks()).toBe(initialSnapshot);
+    changed();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(peekBookmarks()).toBe(updatedSnapshot);
+  });
+
+  it('does not let an old generation overwrite a reset cache', async () => {
+    let resolveRead = (_snapshot: BookmarksSnapshot) => {};
+    const unsubscribe = vi.fn();
+    const getAll = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }))
+      .mockResolvedValue(updatedSnapshot);
+    window.bookmarksAPI = { getAll, onChanged: () => unsubscribe } as unknown as BookmarksAPI;
+    const { getBookmarks, peekBookmarks, resetBookmarksCacheForTests } = await import('./bookmarksCache');
+    const oldRead = getBookmarks();
+    resetBookmarksCacheForTests();
+    await getBookmarks();
+    resolveRead(initialSnapshot);
+    await oldRead;
+    expect(peekBookmarks()).toBe(updatedSnapshot);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
 });

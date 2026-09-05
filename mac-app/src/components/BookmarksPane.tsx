@@ -1,12 +1,12 @@
-import { memo, useEffect, useState, useMemo, useRef } from 'react';
+import { memo, useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
 import ImmersiveToggle from './ImmersiveToggle';
-import { getBookmarks, peekBookmarks, onBookmarksChanged, refreshBookmarks } from '../services/bookmarksCache';
+import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
-type BookmarkSyncStatus = 'idle' | 'syncing' | 'up-to-date' | 'offline' | 'failed';
+type BookmarkSyncStatus = 'idle' | 'syncing' | 'checked' | 'offline' | 'failed';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
 const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
@@ -90,6 +90,7 @@ function BookmarksPane({
   const [pendingSnapshot, setPendingSnapshot] = useState<BookmarksSnapshot | null>(null);
   const [syncStatus, setSyncStatus] = useState<BookmarkSyncStatus>('idle');
   const [syncRetryCount, setSyncRetryCount] = useState(0);
+  const [revealRevision, setRevealRevision] = useState(0);
   const [folder, setFolder] = useState<string>('All');
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -101,7 +102,17 @@ function BookmarksPane({
   const installCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayedSnapshotRef = useRef<BookmarksSnapshot | null>(snapshot);
   const pendingSnapshotRef = useRef<BookmarksSnapshot | null>(null);
-  const syncInFlightRef = useRef(false);
+  const browsingRef = useRef(false);
+  const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
+  const onBrowsingChange = useCallback((browsing: boolean) => {
+    browsingRef.current = browsing;
+    if (!browsing && pendingSnapshotRef.current) {
+      displayedSnapshotRef.current = pendingSnapshotRef.current;
+      setSnapshot(pendingSnapshotRef.current);
+      pendingSnapshotRef.current = null;
+      setPendingSnapshot(null);
+    }
+  }, []);
   const loading = snapshot === null;
   const pendingNewCount = useMemo(() => countNewBookmarks(snapshot, pendingSnapshot), [snapshot, pendingSnapshot]);
 
@@ -184,61 +195,65 @@ function BookmarksPane({
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    const unsub = onBookmarksChanged((s) => {
+    browsingRef.current = false;
+    const applySnapshot = (next: BookmarksSnapshot) => {
       if (cancelled) return;
-      const displayedSnapshot = displayedSnapshotRef.current;
-      if ((syncInFlightRef.current || pendingSnapshotRef.current) && countNewBookmarks(displayedSnapshot, s) > 0) {
-        holdPendingSnapshot(s);
+      if (browsingRef.current && countNewBookmarks(displayedSnapshotRef.current, next) > 0) {
+        holdPendingSnapshot(next);
         return;
       }
       holdPendingSnapshot(null);
-      displayedSnapshotRef.current = s;
-      setSnapshot(s);
+      displayedSnapshotRef.current = next;
+      setSnapshot(next);
+    };
+    const unsub = onBookmarksChanged(applySnapshot);
+    void getBookmarks().then(applySnapshot).catch(() => {
+      if (!cancelled) setSyncStatus('failed');
     });
-    getBookmarks().then((data) => {
-      if (!cancelled) {
-        displayedSnapshotRef.current = data;
-        setSnapshot(data);
-      }
+    let statusEvents = 0;
+    const applySyncState = (state: BookmarkSyncState) => {
+      if (cancelled) return;
+      setLastCheckedAt(state.lastCheckedAt);
+      setSyncStatus(state.phase === 'syncing' ? 'syncing'
+        : state.phase === 'offline' ? 'offline'
+        : state.phase === 'backoff' || state.phase === 'unsupported' ? 'failed'
+        : state.lastCheckedAt ? 'checked' : 'idle');
+    };
+    const unsubStatus = window.bookmarksAPI?.onSyncStateChanged?.((state) => {
+      statusEvents++;
+      applySyncState(state);
     });
+    // Subscribe first; don't let an older state read overwrite a newer event.
+    void window.bookmarksAPI?.getSyncState?.().then((state) => {
+      if (statusEvents === 0) applySyncState(state);
+    }).catch(() => {});
     const syncBookmarks = async () => {
       const syncIfStale = window.bookmarksAPI?.syncIfStale;
       if (!syncIfStale) return;
-      syncInFlightRef.current = true;
       setSyncStatus('syncing');
       try {
         const result = await syncIfStale();
         if (cancelled) return;
-        if (result.status === 'failed') {
-          setSyncStatus(isOfflineSyncError(result.error) ? 'offline' : 'failed');
-        } else if (result.status === 'missing-cli' || result.status === 'unavailable') {
-          setSyncStatus('failed');
-        } else if (result.status === 'already-running') {
-          setSyncStatus('syncing');
-        } else {
-          if (result.status === 'synced') {
-            const refreshed = await refreshBookmarks();
-            if (cancelled) return;
-            const displayedSnapshot = displayedSnapshotRef.current;
-            if (countNewBookmarks(displayedSnapshot, refreshed) > 0) {
-              holdPendingSnapshot(refreshed);
-              setSyncStatus('idle');
-              return;
-            }
-          }
-          setSyncStatus('up-to-date');
+        statusEvents++;
+        // Native data notifications update the cache; a successful no-change
+        // check must not pay for another full-library IPC transfer.
+        if (result.status === 'failed') setSyncStatus(isOfflineSyncError(result.error) ? 'offline' : 'failed');
+        else if (result.status === 'offline') setSyncStatus('offline');
+        else if (['missing-cli', 'unavailable', 'unsupported'].includes(result.status)) setSyncStatus('failed');
+        else if (result.status === 'already-running') setSyncStatus('syncing');
+        else {
+          setLastCheckedAt(result.lastCheckedAt ?? null);
+          setSyncStatus(result.lastCheckedAt ? 'checked' : 'idle');
         }
       } catch {
         if (!cancelled) setSyncStatus(typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'failed');
-      } finally {
-        syncInFlightRef.current = false;
       }
     };
     void syncBookmarks();
     return () => {
       cancelled = true;
-      syncInFlightRef.current = false;
       unsub();
+      unsubStatus?.();
     };
   }, [active, syncRetryCount]);
 
@@ -274,7 +289,8 @@ function BookmarksPane({
     displayedSnapshotRef.current = pendingSnapshot;
     setSnapshot(pendingSnapshot);
     holdPendingSnapshot(null);
-    setSyncStatus('up-to-date');
+    browsingRef.current = false;
+    setRevealRevision((revision) => revision + 1);
   };
 
   const retryBookmarkSync = () => {
@@ -283,8 +299,8 @@ function BookmarksPane({
   };
 
   const syncStatusView = pendingNewCount > 0 ? null : (() => {
-    if (syncStatus === 'syncing') return { label: 'Syncing bookmarks...', color: theme.textSecondary, retry: false };
-    if (syncStatus === 'up-to-date') return { label: 'Up to date', color: theme.textSecondary, retry: false };
+    if (syncStatus === 'syncing') return { label: 'Checking for new bookmarks…', color: theme.textSecondary, retry: false };
+    if (syncStatus === 'checked' && lastCheckedAt) return { label: `Last checked ${new Date(lastCheckedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, color: theme.textSecondary, retry: false };
     if (syncStatus === 'offline') return { label: 'Network offline', color: theme.textSecondary, retry: true };
     if (syncStatus === 'failed') return { label: 'Sync failed', color: theme.textSecondary, retry: true };
     return null;
@@ -627,7 +643,10 @@ function BookmarksPane({
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+      <div
+        onPointerDownCapture={() => { browsingRef.current = true; }}
+        onScrollCapture={(event) => { if (mode === 'list') onBrowsingChange((event.target as HTMLElement).scrollTop > 8); }}
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.textSecondary, fontSize: '12px' }}>
             Loading bookmarks…
@@ -699,7 +718,7 @@ function BookmarksPane({
             )}
             {canvasEverShown && (
               <div style={{ position: 'absolute', inset: 0, display: mode === 'canvas' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
-                <BookmarksCanvas bookmarks={filtered} onActionFeedback={onActionFeedback} />
+                <BookmarksCanvas bookmarks={filtered} active={active && mode === 'canvas'} viewKey={JSON.stringify([folder, debouncedQuery, showText, revealRevision])} onBrowsingChange={onBrowsingChange} onActionFeedback={onActionFeedback} />
               </div>
             )}
           </>

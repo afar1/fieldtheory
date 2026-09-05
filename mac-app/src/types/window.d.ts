@@ -2660,6 +2660,7 @@ declare global {
     authorAvatar: string;
     localAvatarFilename?: string;
     postedAt: string;
+    bookmarkedAt?: string;
     images: BookmarkImage[];
     mediaCount: number;
     likeCount: number;
@@ -2695,10 +2696,18 @@ declare global {
     firstPostedAt: string;
     lastPostedAt: string;
   }
+  interface BookmarkSyncState {
+    phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported';
+    lastCheckedAt: string | null;
+    nextCheckAt: string | null;
+    error: string | null;
+  }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
     getDataSource?: () => Promise<unknown>;
-    syncIfStale: () => Promise<{ status: string; error?: string }>;
+    syncIfStale: () => Promise<{ status: string; lastCheckedAt?: string | null; error?: string }>;
+    getSyncState?: () => Promise<BookmarkSyncState>;
+    onSyncStateChanged?: (callback: (state: BookmarkSyncState) => void) => () => void;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
     getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;

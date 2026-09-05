@@ -57,16 +57,22 @@ function animateValue(
   easing: (t: number) => number = easeInOutQuart
 ): () => void {
   let cancelled = false;
+  let animationFrame: number;
   const start = performance.now();
   const tick = (now: number) => {
     if (cancelled) return;
     const elapsed = Math.min((now - start) / duration, 1);
     onUpdate(from + (to - from) * easing(elapsed));
-    if (elapsed < 1) requestAnimationFrame(tick);
+    if (elapsed < 1) animationFrame = requestAnimationFrame(tick);
     else onDone?.();
   };
-  requestAnimationFrame(tick);
-  return () => { cancelled = true; };
+  animationFrame = requestAnimationFrame(tick);
+  return () => {
+    cancelled = true;
+    cancelAnimationFrame(animationFrame);
+    onUpdate(to);
+    onDone?.();
+  };
 }
 
 function applyImageGrid(gridEl: HTMLDivElement, sources: string[], alt: string): void {
@@ -210,11 +216,16 @@ type LightboxState = {
 // Imperative controller held in a ref so React prop changes can update the
 // running canvas without tearing down the DOM pool + event listeners.
 type Controller = {
-  setBookmarks: (bookmarks: Bookmark[]) => void;
+  setBookmarks: (bookmarks: Bookmark[], reset: boolean) => void;
+  setActive: (active: boolean) => void;
   destroy: () => void;
 };
 
-export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookmarks: Bookmark[]; onActionFeedback?: (message: string) => void }) {
+export default function BookmarksCanvas({ bookmarks, active = true, viewKey = '', onBrowsingChange, onActionFeedback }: {
+  bookmarks: Bookmark[]; active?: boolean; viewKey?: string;
+  onBrowsingChange?: (browsing: boolean) => void;
+  onActionFeedback?: (message: string) => void;
+}) {
   const { theme } = useTheme();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -229,6 +240,10 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
   const openBtnRef = useRef<HTMLButtonElement | null>(null);
   const agentCopyBtnRef = useRef<HTMLButtonElement | null>(null);
   const controllerRef = useRef<Controller | null>(null);
+  const activeRef = useRef(active);
+  const browsingCallbackRef = useRef(onBrowsingChange);
+  const viewKeyRef = useRef(viewKey);
+  browsingCallbackRef.current = onBrowsingChange;
 
   // Mount-only setup. Creates the pool, binds listeners, starts the animation loop.
   useEffect(() => {
@@ -264,6 +279,8 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       lightboxAnimating: false,
     };
 
+    let destroyed = false;
+    let finishLightboxAnimation: (() => void) | null = null;
     let current: Bookmark[] = [];
     let layoutItems: LayoutItem[] = [];
     let colWidth = 0;
@@ -346,7 +363,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       for (let col = 0; col < cols; col++) {
         for (let row = 0; row < columns[col].length; row++) {
           const item = columns[col][row];
-          item.key = `${col}-${row}`;
+          item.key = item.bookmark.id;
           layoutItems.push(item);
         }
       }
@@ -526,6 +543,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     };
 
     const renderVisible = () => {
+      if (!activeRef.current || document.hidden) return;
       const vw = viewport.clientWidth;
       const vh = viewport.clientHeight;
       const buf = CONFIG.BUFFER;
@@ -555,8 +573,20 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         const visKey = item.key;
         visibleThisFrame.add(visKey);
 
-        const existing = activeMap.get(visKey);
+        let existing = activeMap.get(visKey);
+        if (existing && existing.poolEl !== lightboxEl && (
+          existing.layoutItem.w !== item.w || existing.layoutItem.h !== item.h ||
+          (existing.layoutItem.bookmark !== item.bookmark &&
+            JSON.stringify(existing.layoutItem.bookmark) !== JSON.stringify(item.bookmark))
+        )) {
+          releaseEl(existing.poolEl);
+          elToBookmark.delete(existing.poolEl);
+          activeMap.delete(visKey);
+          existing = undefined;
+        }
         if (existing) {
+          if (existing.poolEl !== lightboxEl) existing.layoutItem = item;
+          elToBookmark.set(existing.poolEl, item.bookmark);
           if (existing.poolEl !== lightboxEl) {
             existing.poolEl.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
           }
@@ -622,6 +652,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     const openLightbox = (el: HTMLDivElement, bookmark: Bookmark) => {
       if (state.lightbox || state.lightboxAnimating) return;
       state.lightboxAnimating = true;
+      browsingCallbackRef.current?.(true);
 
       const rect = el.getBoundingClientRect();
       const vw = window.innerWidth;
@@ -726,7 +757,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       const dy = endY - startY;
       const distance = Math.sqrt(dx * dx + dy * dy);
       const duration = 450 + Math.min(distance / 4, 250);
-      animateValue(0, 1, duration, (t) => {
+      finishLightboxAnimation = animateValue(0, 1, duration, (t) => {
         const w = startW + (targetW - startW) * t;
         const h = startH + (targetH - startH) * t;
         const x = startX + (endX - startX) * t;
@@ -735,6 +766,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         clone.style.height = `${h}px`;
         clone.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }, () => {
+        finishLightboxAnimation = null;
         state.lightboxAnimating = false;
         const cloneGrid = clone.querySelector('.bm-image-grid') as HTMLDivElement;
         const cloneVideoEl = clone.querySelector('.bm-lightbox-video') as HTMLVideoElement;
@@ -772,7 +804,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       const endH = rect.height;
       const { endX: fromX, endY: fromY, endW: fromW, endH: fromH } = lb;
 
-      animateValue(0, 1, 350, (t) => {
+      finishLightboxAnimation = animateValue(0, 1, 350, (t) => {
         const w = fromW + (endW - fromW) * t;
         const h = fromH + (endH - fromH) * t;
         const x = fromX + (endX - fromX) * t;
@@ -781,6 +813,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         lb.clone.style.height = `${h}px`;
         lb.clone.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }, () => {
+        finishLightboxAnimation = null;
         const video = lb.clone.querySelector('.bm-lightbox-video') as HTMLVideoElement | null;
         if (video) resetLightboxVideo(video);
         lb.clone.remove();
@@ -793,12 +826,13 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
           elToBookmark.delete(lb.sourceEl);
         }
         renderVisible();
+        wake();
       });
     };
 
     // --- Input handlers ---
     const onMouseDown = (e: MouseEvent) => {
-      if (state.lightbox) return;
+      if (!activeRef.current || state.lightbox) return;
       state.isDragging = true;
       state.hasDragged = false;
       state.dragStartPosition = { x: e.clientX, y: e.clientY };
@@ -819,6 +853,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
       state.targetOffset.y -= dy;
       clampOffset(state.targetOffset);
       state.previousMousePosition = { x: e.clientX, y: e.clientY };
+      wake();
     };
 
     const onMouseUp = (e: MouseEvent) => {
@@ -849,21 +884,23 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
         state.targetOffset.y -= dy;
         clampOffset(state.targetOffset);
         state.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        wake();
       }
     };
 
     const onTouchEnd = () => { state.touchStart = null; };
 
     const onWheel = (e: WheelEvent) => {
-      if (state.lightbox) return;
+      if (!activeRef.current || state.lightbox) return;
       e.preventDefault();
       state.targetOffset.x += e.deltaX;
       state.targetOffset.y += e.deltaY;
       clampOffset(state.targetOffset);
+      wake();
     };
 
     const onResize = () => {
-      if (viewport.clientWidth === 0) return;
+      if (!activeRef.current || viewport.clientWidth === 0) return;
       buildLayout();
       clearActive();
       renderVisible();
@@ -986,6 +1023,7 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     };
 
     const onKey = (e: KeyboardEvent) => {
+      if (!activeRef.current || document.hidden) return;
       if (!state.lightbox) return;
       if (e.key === 'Escape') {
         closeLightbox();
@@ -1056,15 +1094,38 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
 
     let rafId: number | null = null;
     const loop = () => {
-      rafId = requestAnimationFrame(loop);
+      rafId = null;
+      if (destroyed || !activeRef.current || document.hidden) return;
       const dx = state.targetOffset.x - state.cameraOffset.x;
       const dy = state.targetOffset.y - state.cameraOffset.y;
-      if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+      const moving = Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01;
+      if (moving) {
         state.cameraOffset.x += dx * CONFIG.easingFactor;
         state.cameraOffset.y += dy * CONFIG.easingFactor;
+      } else {
+        state.cameraOffset = { ...state.targetOffset };
+      }
+      renderVisible();
+      browsingCallbackRef.current?.(!!state.lightbox || state.targetOffset.y > 8 || state.targetOffset.x > 8);
+      if (moving) rafId = requestAnimationFrame(loop);
+    };
+    const wake = () => {
+      if (destroyed) return;
+      browsingCallbackRef.current?.(!!state.lightbox || state.targetOffset.y > 8 || state.targetOffset.x > 8);
+      if (activeRef.current && !document.hidden && rafId === null) rafId = requestAnimationFrame(loop);
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        finishLightboxAnimation?.();
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        rafId = null;
+      } else if (activeRef.current) {
+        buildLayout();
         renderVisible();
+        wake();
       }
     };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     // Initial setup
     createPool();
@@ -1110,22 +1171,62 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
     });
     resizeObserver.observe(viewport);
 
-    loop();
-
     // Expose controller so subsequent prop changes don't tear this all down
     controllerRef.current = {
-      setBookmarks: (list) => {
+      setBookmarks: (list, reset) => {
+        // Anchor a visible card as arrivals/media change the masonry layout.
+        // At the top, keep the newest cards in view instead.
+        let anchor: LayoutItem | null = null;
+        if (!reset && state.cameraOffset.y > 8) {
+          for (const item of layoutItems) {
+            if (item.y + item.h <= state.cameraOffset.y) continue;
+            if (!anchor || Math.abs(item.y - state.cameraOffset.y) < Math.abs(anchor.y - state.cameraOffset.y)) anchor = item;
+          }
+        }
+        const oldAnchor = anchor ? { x: anchor.x, y: anchor.y } : null;
         current = list;
-        state.cameraOffset.x = 0;
-        state.cameraOffset.y = 0;
-        state.targetOffset.x = 0;
-        state.targetOffset.y = 0;
+        if (reset) {
+          state.cameraOffset = { x: 0, y: 0 };
+          state.targetOffset = { x: 0, y: 0 };
+        }
+        if (!activeRef.current || document.hidden) return;
         buildLayout();
-        clearActive();
+        const nextAnchor = anchor && layoutItems.find((item) => item.bookmark.id === anchor.bookmark.id);
+        if (nextAnchor && oldAnchor) {
+          const dx = nextAnchor.x - oldAnchor.x;
+          const dy = nextAnchor.y - oldAnchor.y;
+          state.cameraOffset.x += dx;
+          state.targetOffset.x += dx;
+          state.cameraOffset.y += dy;
+          state.targetOffset.y += dy;
+        }
         renderVisible();
       },
+      setActive: (next) => {
+        activeRef.current = next;
+        if (!next) {
+          finishLightboxAnimation?.();
+          if (state.lightbox) {
+            state.lightbox.clone.style.display = 'none';
+            state.lightbox.clone.querySelector<HTMLVideoElement>('video')?.pause();
+          }
+          if (rafId !== null) cancelAnimationFrame(rafId);
+          rafId = null;
+          state.isDragging = false;
+          state.touchStart = null;
+        } else {
+          if (state.lightbox) state.lightbox.clone.style.display = '';
+          buildLayout();
+          renderVisible();
+          wake();
+        }
+      },
       destroy: () => {
+        destroyed = true;
+        activeRef.current = false;
+        finishLightboxAnimation?.();
         if (rafId !== null) cancelAnimationFrame(rafId);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
         viewport.removeEventListener('mousedown', onMouseDown);
         viewport.removeEventListener('mousemove', onMouseMove);
         viewport.removeEventListener('mouseup', onMouseUp);
@@ -1165,8 +1266,12 @@ export default function BookmarksCanvas({ bookmarks, onActionFeedback }: { bookm
 
   // Prop-driven updates: push new bookmarks to the running controller.
   useEffect(() => {
-    controllerRef.current?.setBookmarks(bookmarks);
-  }, [bookmarks]);
+    const reset = viewKeyRef.current !== viewKey;
+    viewKeyRef.current = viewKey;
+    controllerRef.current?.setBookmarks(bookmarks, reset);
+  }, [bookmarks, viewKey]);
+
+  useEffect(() => { controllerRef.current?.setActive(active); }, [active]);
 
   const overlayBg = theme.isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)';
   const closeBtnBg = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
