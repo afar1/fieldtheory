@@ -3489,7 +3489,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             caretColor: caretColor ?? color,
             padding: '0',
             cursor: 'text',
-            ...(isRenderedPresentation ? { minHeight: '160px' } : {}),
+            ...(isRenderedPresentation ? { minHeight: '160px', minWidth: 0, flexBasis: '0%' } : {}),
           },
           '.cm-content::after': {
             content: '""',

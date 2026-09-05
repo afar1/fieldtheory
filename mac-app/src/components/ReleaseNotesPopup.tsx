@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.34': [
+    'Tables use more of the document pane while surrounding text stays in its reading column',
+    'Wide tables scroll independently, with edge fades showing when more columns are available',
+    'Table widths adapt to window and pane changes; keyboard scrolling reaches either end',
+  ],
   '0.3.33': [
     'Documents now render editable tables with wider layouts and horizontal scrolling',
     'Command search reveals more results with scrolling, Arrow Down, and Show more',
@@ -496,6 +501,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.34': 'September 5, 2026',
   '0.3.33': 'September 5, 2026',
   '0.3.32': 'Sep 4 2026',
   '0.3.31': 'Sep 3 2026',

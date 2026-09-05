@@ -814,6 +814,10 @@ describe('LibrarianView render', () => {
     expect(topFade.style.maskImage).toContain('22%');
     expect(topFade.style.opacity).toBe('0.72');
     expect(scrollEl.style.scrollbarGutter).toBe('stable');
+    // The pane can hold table breakouts; prose remains bounded by the inner column.
+    expect(scrollEl.style.width).toBe('100%');
+    expect(scrollEl.style.overflowX).toBe('hidden');
+    expect((scrollEl.firstElementChild as HTMLElement).style.maxWidth).not.toBe('none');
   });
 
   it('resamples rendered top fade after scroll geometry settles', async () => {

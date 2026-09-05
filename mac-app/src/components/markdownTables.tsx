@@ -53,16 +53,88 @@ export const markdownTableRanges = StateField.define<MarkdownTable[]>({
   update: (tables, transaction) => transaction.docChanged ? parseMarkdownTables(transaction.newDoc.toString()) : tables,
 });
 
+type HorizontalBounds = { left: number; right: number };
+
+/** Keep the table viewport inside every clipping ancestor, including split panes. */
+export function tableViewportLayout(content: HorizontalBounds, viewport: HorizontalBounds) {
+  const available = Math.max(0, viewport.right - viewport.left);
+  const width = Math.min((content.right - content.left) * 1.6, available);
+  const centered = (content.left + content.right - width) / 2;
+  const left = Math.max(viewport.left, Math.min(centered, viewport.right - width));
+  return { width, marginLeft: left - content.left };
+}
+
+/** Event-driven measurements only: no polling and no document-wide scroll handling. */
+export function observeTableViewport(wrapper: HTMLElement, scroller: HTMLElement, content: HTMLElement) {
+  const table = scroller.querySelector('table')!;
+  const ancestors: HTMLElement[] = [];
+  for (let parent = content.parentElement; parent; parent = parent.parentElement) ancestors.push(parent);
+  let frame = 0;
+  let disposed = false;
+  const updateFades = () => {
+    wrapper.classList.toggle('can-scroll-left', scroller.scrollLeft > 1);
+    wrapper.classList.toggle('can-scroll-right', scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1);
+  };
+  const measure = () => {
+    frame = 0;
+    if (disposed || !wrapper.isConnected) return;
+    const contentRect = content.getBoundingClientRect();
+    if (!contentRect.width) return;
+    let left = 0;
+    let right = document.documentElement.clientWidth;
+    for (const ancestor of ancestors) {
+      if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(ancestor).overflowX)) continue;
+      const rect = ancestor.getBoundingClientRect();
+      left = Math.max(left, rect.left + ancestor.clientLeft);
+      right = Math.min(right, rect.left + ancestor.clientLeft + ancestor.clientWidth);
+    }
+    // Leave room for the document gutter and avoid touching the pane edges.
+    const inset = Math.min(24, Math.max(0, (right - left) / 10));
+    const layout = tableViewportLayout(contentRect, { left: left + inset, right: right - inset });
+    wrapper.style.width = `${layout.width}px`;
+    wrapper.style.marginLeft = `${layout.marginLeft}px`;
+    updateFades();
+  };
+  const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(measure); };
+  const observer = new ResizeObserver(schedule);
+  for (const element of [content, table, ...ancestors]) observer.observe(element);
+  scroller.addEventListener('scroll', updateFades, { passive: true });
+  window.addEventListener('resize', schedule);
+  schedule();
+  return () => {
+    disposed = true;
+    cancelAnimationFrame(frame);
+    observer.disconnect();
+    scroller.removeEventListener('scroll', updateFades);
+    window.removeEventListener('resize', schedule);
+  };
+}
+
+const tableCleanups = new WeakMap<HTMLElement, () => void>();
+
 class MarkdownTableWidget extends WidgetType {
   constructor(readonly table: MarkdownTable, readonly readOnly: boolean) { super(); }
   eq(other: MarkdownTableWidget) { return this.table === other.table && this.readOnly === other.readOnly; }
   toDOM(view: EditorView) {
     const wrapper = document.createElement('div');
-    wrapper.className = 'cm-markdown-table-scroll';
-    wrapper.tabIndex = 0;
-    wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', 'Table, horizontally scrollable');
-    const table = wrapper.appendChild(document.createElement('table'));
+    wrapper.className = 'cm-markdown-table-viewport';
+    const scroller = wrapper.appendChild(document.createElement('div'));
+    scroller.className = 'cm-markdown-table-scroll';
+    scroller.tabIndex = 0;
+    scroller.setAttribute('role', 'region');
+    scroller.setAttribute('aria-label', 'Table, scroll horizontally to see all columns');
+    scroller.addEventListener('keydown', (event) => {
+      if (event.target !== scroller || event.altKey || event.metaKey || event.ctrlKey) return;
+      const end = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      const positions: Record<string, number> = {
+        ArrowLeft: scroller.scrollLeft - 64, ArrowRight: scroller.scrollLeft + 64, Home: 0, End: end,
+      };
+      if (!(event.key in positions)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      scroller.scrollLeft = Math.max(0, Math.min(end, positions[event.key]));
+    });
+    const table = scroller.appendChild(document.createElement('table'));
     const head = table.appendChild(document.createElement('thead'));
     const body = table.appendChild(document.createElement('tbody'));
     this.table.rows.forEach((row, rowIndex) => {
@@ -73,7 +145,9 @@ class MarkdownTableWidget extends WidgetType {
         if (rowIndex === 0) td.setAttribute('scope', 'col');
         td.style.textAlign = this.table.align[columnIndex] || 'left';
         if (!cell) return;
-        td.innerHTML = renderToStaticMarkup(<ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{cell.text}</ReactMarkdown>);
+        const cellContent = td.appendChild(document.createElement('div'));
+        cellContent.className = 'cm-markdown-table-cell';
+        cellContent.innerHTML = renderToStaticMarkup(<ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{cell.text}</ReactMarkdown>);
         if (this.readOnly) return;
         td.tabIndex = 0;
         td.title = 'Double-click or press Enter to edit';
@@ -118,8 +192,10 @@ class MarkdownTableWidget extends WidgetType {
         });
       });
     });
+    tableCleanups.set(wrapper, observeTableViewport(wrapper, scroller, view.contentDOM));
     return wrapper;
   }
+  destroy(dom: HTMLElement) { tableCleanups.get(dom)?.(); tableCleanups.delete(dom); }
   ignoreEvent() { return true; }
 }
 
@@ -131,20 +207,39 @@ const tableDecorations = EditorView.decorations.compute([markdownTableRanges, Ed
 export const markdownTablesExtension = [markdownTableRanges, tableDecorations,
   EditorView.atomicRanges.of((view) => Decoration.set(view.state.field(markdownTableRanges).map((table) =>
     Decoration.replace({}).range(table.from, table.to)))), EditorView.baseTheme({
-  '.cm-markdown-table-scroll': {
-    width: 'min(120%, calc(100vw - 48px))', marginLeft: 'max(-10%, calc((100% - 100vw + 48px) / 2))', marginTop: '1em', marginBottom: '1.2em',
-    overflowX: 'auto', boxSizing: 'border-box', fontSize: '0.94em',
+  '.cm-markdown-table-viewport': {
+    position: 'relative', width: '100%', minWidth: '0', maxWidth: 'none',
+    marginTop: '1em', marginBottom: '1.2em', boxSizing: 'border-box', fontSize: '0.94em',
   },
-  '.cm-markdown-table-scroll table': { display: 'table', width: '100%', margin: '0', overflow: 'visible', fontSize: 'inherit', borderCollapse: 'collapse', lineHeight: '1.6' },
+  '.cm-markdown-table-scroll': {
+    width: '100%', minWidth: '0', overflowX: 'auto', overscrollBehaviorX: 'contain',
+    // Flex/grid intrinsic sizing must never propagate the table width to prose.
+    contain: 'inline-size', paddingBottom: '6px',
+  },
+  '.cm-markdown-table-scroll:focus-visible': { outline: '2px solid currentColor', outlineOffset: '3px' },
+  '.cm-markdown-table-viewport.can-scroll-left .cm-markdown-table-scroll': {
+    maskImage: 'linear-gradient(to right, transparent, black 24px)',
+  },
+  '.cm-markdown-table-viewport.can-scroll-right .cm-markdown-table-scroll': {
+    maskImage: 'linear-gradient(to left, transparent, black 24px)',
+  },
+  '.cm-markdown-table-viewport.can-scroll-left.can-scroll-right .cm-markdown-table-scroll': {
+    maskImage: 'linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent)',
+  },
+  '.cm-markdown-table-scroll table': {
+    display: 'table', width: 'max-content', minWidth: '100%', maxWidth: 'none', margin: '0',
+    overflow: 'visible', fontSize: 'inherit', borderCollapse: 'collapse', lineHeight: '1.6',
+  },
   '.cm-markdown-table-scroll th, .cm-markdown-table-scroll td': {
-    minWidth: '10em', padding: '0.65em 0.8em', verticalAlign: 'top',
+    whiteSpace: 'normal', overflowWrap: 'anywhere',
+    padding: '0.65em 0.8em', verticalAlign: 'top',
     border: '0', borderBottom: '1px solid color-mix(in srgb, currentColor 14%, transparent)',
   },
+  '.cm-markdown-table-cell': { width: 'max-content', minWidth: '8em', maxWidth: '28em', whiteSpace: 'normal', overflowWrap: 'anywhere' },
   '.cm-markdown-table-scroll th': { fontWeight: '600', background: 'transparent' },
-  '.cm-markdown-table-scroll p': { margin: '0' },
+  '.cm-markdown-table-scroll p': { margin: '0', whiteSpace: 'normal' },
   '.cm-markdown-table-scroll textarea': {
     width: '100%', minHeight: '4em', boxSizing: 'border-box', font: 'inherit', color: 'inherit',
     background: 'transparent', border: '1px solid currentColor', padding: '0.2em',
   },
-  '@media (max-width: 700px)': { '.cm-markdown-table-scroll': { width: '100%', marginLeft: '0' } },
 })];

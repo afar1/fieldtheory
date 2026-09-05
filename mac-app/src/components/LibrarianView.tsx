@@ -5073,6 +5073,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeReadingPath, riverSharePickerOpen, sharedFileStatus?.shared]);
   const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
+  const renderedMarkdownUsesFullPane = contentMode !== 'markdown' && activeIsMarkdownDocument;
   const activeIsHtmlDocument = activeDocumentKind === 'html';
   const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
   const kindleToolbarVisible = activeIsMarkdownDocument && contentMode === 'rendered';
@@ -12176,16 +12177,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
           style={{
             flex: activeHtmlUsesFullCanvas ? '1 1 auto' : '0 1 auto',
-            width: activeHtmlUsesFullCanvas
+            width: activeHtmlUsesFullCanvas || renderedMarkdownUsesFullPane
               ? '100%'
               : lineNumbersMode === 'hidden'
                 ? `min(100%, calc(${documentMaxWidth} + 64px))`
                 : `min(100%, calc(${documentMaxWidth} + 64px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH}))`,
             minHeight: 0,
-            marginLeft: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
+            marginLeft: !activeHtmlUsesFullCanvas && !renderedMarkdownUsesFullPane && lineNumbersMode !== 'hidden'
               ? MARKDOWN_CODE_EDITOR_LINE_NUMBER_EDITOR_OFFSET
               : undefined,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
+            overflowX: 'hidden',
+            minWidth: 0,
             padding: !activeHtmlUsesFullCanvas && lineNumbersMode !== 'hidden'
               ? `${contentTopPadding}px 32px 0 calc(32px + ${MARKDOWN_CODE_EDITOR_LINE_NUMBER_RESERVED_WIDTH})`
               : `${contentTopPadding}px 32px 0 32px`,
@@ -12199,6 +12202,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           <div
             style={{
               maxWidth: activeHtmlUsesFullCanvas ? 'none' : documentMaxWidth,
+              minWidth: 0,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
