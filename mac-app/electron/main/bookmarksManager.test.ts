@@ -150,6 +150,32 @@ describe('BookmarksManager.getSnapshot', () => {
     fs.rmSync(tmpLibraryDir, { recursive: true, force: true });
   });
 
+  it('orders by when a bookmark was saved, with publication time only as a fallback', () => {
+    fs.writeFileSync(path.join(tmpDir, 'bookmarks.jsonl'), [
+      { id: 'old-post-new-save', postedAt: '2020-01-01', bookmarkedAt: '2026-09-05' },
+      { id: 'new-post', postedAt: '2026-09-04' },
+      { id: 'bad-save-date', postedAt: '2026-09-03', bookmarkedAt: 'invalid' },
+    ].map(row => JSON.stringify(row)).join('\n'));
+    expect(new BookmarksManager().getSnapshot().bookmarks.map(row => row.id)).toEqual([
+      'old-post-new-save', 'new-post', 'bad-save-date',
+    ]);
+  });
+
+  it('reuses parsed bookmarks on media refresh and clears removed media attachments', () => {
+    const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
+    const manifest = path.join(tmpDir, 'media-manifest.json');
+    fs.writeFileSync(jsonl, JSON.stringify({ id: 'a', mediaObjects: [{ type: 'photo', url: 'https://pbs/a.jpg' }] }));
+    fs.writeFileSync(manifest, JSON.stringify({ entries: [{ tweetId: 'a', sourceUrl: 'https://pbs/a.jpg', status: 'downloaded', localPath: '/media/a.jpg' }] }));
+    const manager = new BookmarksManager();
+    expect(manager.getSnapshot().bookmarks[0].images[0].localFilename).toBe('a.jpg');
+    fs.writeFileSync(manifest, JSON.stringify({ entries: [] }));
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(manager.reloadAndEmitChanged().bookmarks[0].images[0].localFilename).toBeUndefined();
+      expect(read.mock.calls.some(([file]) => String(file) === jsonl)).toBe(false);
+    } finally { read.mockRestore(); }
+  });
+
   it('returns an empty snapshot when no jsonl exists', () => {
     const mgr = new BookmarksManager();
     expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [], xLastSyncedAt: null });
@@ -566,6 +592,22 @@ describe('BookmarksManager.getSnapshot', () => {
     );
     const second = new BookmarksManager();
     expect(second.getSnapshot().bookmarks[0].folders).toEqual(['Reading']);
+  });
+
+  it('batches a burst of media writes into one snapshot invalidation', async () => {
+    const media = path.join(tmpDir, 'media');
+    fs.mkdirSync(media);
+    const manager = new BookmarksManager();
+    const changed = vi.fn();
+    manager.on('bookmarks:changed', changed);
+    manager.startWatcher();
+    try {
+      await wait(100);
+      for (let index = 0; index < 8; index++) fs.writeFileSync(path.join(media, `asset-${index}.jpg`), 'image');
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1), { timeout: 2000 });
+      await wait(300);
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally { await manager.stopWatcher(); }
   });
 
   it('emits bookmark changes when media inputs update after the snapshot loads', async () => {

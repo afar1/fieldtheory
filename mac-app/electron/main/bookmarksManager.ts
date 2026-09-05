@@ -65,6 +65,7 @@ export interface Bookmark {
   domain?: string;
   excerpt?: string;
   savedAt?: string;
+  bookmarkedAt?: string;
   markdownPath?: string;
 }
 
@@ -108,6 +109,7 @@ export interface RawBookmark {
   authorName?: string;
   authorProfileImageUrl?: string;
   postedAt?: string;
+  bookmarkedAt?: string | null;
   media?: unknown[];
   mediaObjects?: RawMediaObject[];
   engagement?: {
@@ -194,7 +196,7 @@ function snapshotCachePath(): string {
   return path.join(bookmarksDir(), 'snapshot-cache.json');
 }
 
-const SNAPSHOT_CACHE_VERSION = 1;
+const SNAPSHOT_CACHE_VERSION = 2;
 
 /**
  * (mtimeMs + size) for a single input file, or null when absent.
@@ -434,6 +436,7 @@ export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
     authorName: raw.authorName ?? '',
     authorAvatar: raw.authorProfileImageUrl ?? '',
     postedAt: raw.postedAt ?? '',
+    bookmarkedAt: raw.bookmarkedAt && Number.isFinite(Date.parse(raw.bookmarkedAt)) ? raw.bookmarkedAt : undefined,
     images,
     mediaCount: Array.isArray(raw.media) ? raw.media.length : 0,
     likeCount: raw.engagement?.likeCount ?? 0,
@@ -583,6 +586,37 @@ export class BookmarksManager extends EventEmitter {
   private watcher: chokidar.FSWatcher | null = null;
   private watcherPending = false;
   private cached: BookmarksSnapshot | null = null;
+  private changeTimer: ReturnType<typeof setTimeout> | null = null;
+  private parsedInput: { gate: FileGate; rows: Map<string, Bookmark> } | null = null;
+
+  private readBookmarkRows(gate: FileGate): Bookmark[] {
+    if (this.parsedInput && JSON.stringify(this.parsedInput.gate) === JSON.stringify(gate)) {
+      return [...this.parsedInput.rows.values()];
+    }
+    const rows = new Map<string, Bookmark>();
+    const text = gate ? fs.readFileSync(jsonlPath(), 'utf-8') : '';
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const bookmark = this.parsedInput?.rows.get(trimmed) ?? parseRawBookmark(JSON.parse(trimmed) as RawBookmark);
+        if (bookmark) rows.set(trimmed, bookmark);
+      } catch {
+        // Ignore malformed records, as with the initial snapshot load.
+      }
+    }
+    this.parsedInput = { gate, rows };
+    return [...rows.values()];
+  }
+
+  private queueChanged(): void {
+    if (this.changeTimer) return;
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      this.cached = null;
+      this.emit('bookmarks:changed');
+    }, 200);
+  }
 
   getSnapshot(): BookmarksSnapshot {
     if (this.cached) return this.cached;
@@ -590,6 +624,8 @@ export class BookmarksManager extends EventEmitter {
   }
 
   reloadAndEmitChanged(): BookmarksSnapshot {
+    if (this.changeTimer) clearTimeout(this.changeTimer);
+    this.changeTimer = null;
     this.cached = null;
     const snapshot = this.reload(true);
     this.emit('bookmarks:changed');
@@ -640,37 +676,26 @@ export class BookmarksManager extends EventEmitter {
     const mediaIndex = indexMediaByTweetSource();
 
     const bookmarks: Bookmark[] = [];
-    const p = jsonlPath();
-    if (fs.existsSync(p)) {
-      const text = fs.readFileSync(p, 'utf-8');
-      for (const line of text.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const raw = JSON.parse(trimmed) as RawBookmark;
-          const bm = parseRawBookmark(raw);
-          if (bm) {
-            bm.folders = folderMap[bm.id] ?? [];
-            attachLocalImages(bm.images, bm.id, mediaIndex);
-            const bmAvatar = lookupAvatar(bm.authorHandle, mediaIndex);
-            if (bmAvatar) bm.localAvatarFilename = bmAvatar;
-            if (bm.quotedTweet) {
-              attachLocalImages(bm.quotedTweet.images, bm.quotedTweet.id, mediaIndex);
-              const qAvatar = lookupAvatar(bm.quotedTweet.authorHandle, mediaIndex);
-              if (qAvatar) bm.quotedTweet.localAvatarFilename = qAvatar;
-            }
-            bookmarks.push(bm);
-          }
-        } catch {
-          // skip malformed lines
-        }
+    for (const base of this.readBookmarkRows(gate.bookmarks)) {
+      const bm: Bookmark = {
+        ...base,
+        images: base.images.map(image => ({ ...image })),
+        quotedTweet: base.quotedTweet ? { ...base.quotedTweet, images: base.quotedTweet.images.map(image => ({ ...image })) } : undefined,
+        folders: folderMap[base.id] ?? [],
+      };
+      attachLocalImages(bm.images, bm.id, mediaIndex);
+      bm.localAvatarFilename = lookupAvatar(bm.authorHandle, mediaIndex);
+      if (bm.quotedTweet) {
+        attachLocalImages(bm.quotedTweet.images, bm.quotedTweet.id, mediaIndex);
+        bm.quotedTweet.localAvatarFilename = lookupAvatar(bm.quotedTweet.authorHandle, mediaIndex);
       }
+      bookmarks.push(bm);
     }
     bookmarks.push(...loadWebBookmarks());
 
     bookmarks.sort((a, b) => {
-      const ta = new Date(a.postedAt).getTime() || 0;
-      const tb = new Date(b.postedAt).getTime() || 0;
+      const ta = Date.parse(a.bookmarkedAt || a.savedAt || a.postedAt) || 0;
+      const tb = Date.parse(b.bookmarkedAt || b.savedAt || b.postedAt) || 0;
       return tb - ta;
     });
 
@@ -781,10 +806,7 @@ export class BookmarksManager extends EventEmitter {
       }
     );
 
-    const emit = () => {
-      this.cached = null;
-      this.emit('bookmarks:changed');
-    };
+    const emit = () => this.queueChanged();
     this.watcher.on('add', emit);
     this.watcher.on('change', emit);
     this.watcher.on('unlink', emit);
@@ -792,6 +814,8 @@ export class BookmarksManager extends EventEmitter {
   }
 
   async stopWatcher(): Promise<void> {
+    if (this.changeTimer) clearTimeout(this.changeTimer);
+    this.changeTimer = null;
     const watcher = this.watcher;
     this.watcher = null;
     await watcher?.close();
