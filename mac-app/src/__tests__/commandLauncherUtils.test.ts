@@ -116,7 +116,7 @@ describe('launcher visible result equality', () => {
 });
 
 describe('launcher default panel helpers', () => {
-  it('shows only the first five rows from the selected idle panel source', () => {
+  it('retains every row from the selected idle panel source for progressive rendering', () => {
     const recentItems = Array.from({ length: 7 }, (_, index) => ({ id: `recent-${index}` }));
     const clipboardItems = Array.from({ length: 7 }, (_, index) => ({ id: `clipboard-${index}` }));
     const bookmarkItems = Array.from({ length: 7 }, (_, index) => ({ id: `bookmark-${index}` }));
@@ -128,7 +128,7 @@ describe('launcher default panel helpers', () => {
       recentItems,
       clipboardItems,
       bookmarkItems,
-    }).map(item => item.id)).toEqual(['recent-0', 'recent-1', 'recent-2', 'recent-3', 'recent-4']);
+    }).map(item => item.id)).toEqual(recentItems.map(item => item.id));
 
     expect(getLauncherDefaultPanelItems({
       expanded: true,
@@ -137,7 +137,7 @@ describe('launcher default panel helpers', () => {
       recentItems,
       clipboardItems,
       bookmarkItems,
-    }).map(item => item.id)).toEqual(['clipboard-0', 'clipboard-1', 'clipboard-2', 'clipboard-3', 'clipboard-4']);
+    }).map(item => item.id)).toEqual(clipboardItems.map(item => item.id));
 
     expect(getLauncherDefaultPanelItems({
       expanded: true,
@@ -146,7 +146,7 @@ describe('launcher default panel helpers', () => {
       recentItems,
       clipboardItems,
       bookmarkItems,
-    }).map(item => item.id)).toEqual(['bookmark-0', 'bookmark-1', 'bookmark-2', 'bookmark-3', 'bookmark-4']);
+    }).map(item => item.id)).toEqual(bookmarkItems.map(item => item.id));
   });
 
   it('hides the default panel when collapsed or outside the root idle launcher', () => {

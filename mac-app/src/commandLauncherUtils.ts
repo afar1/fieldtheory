@@ -968,7 +968,7 @@ export function getLauncherDefaultPanelItems<T>(input: {
   maxItems?: number;
 }): T[] {
   if (!input.expanded || !input.isRootIdle) return [];
-  const maxItems = input.maxItems ?? 5;
+  const maxItems = input.maxItems ?? Infinity;
   if (input.source === 'clipboard') return input.clipboardItems.slice(0, maxItems);
   if (input.source === 'bookmarks') return (input.bookmarkItems ?? []).slice(0, maxItems);
   return input.recentItems.slice(0, maxItems);

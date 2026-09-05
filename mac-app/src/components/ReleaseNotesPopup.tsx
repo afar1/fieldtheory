@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.35': [
+    'Arrow Down and Show more browse beyond the first five recent files, clipboard items, and bookmarks',
+    'Launcher search includes clipboard, bookmarks, and Markdown files, with local sources loaded promptly',
+    'Older clipboard results load as you browse; clipboard search accepts typing without triggering stack shortcuts',
+  ],
   '0.3.34': [
     'Tables use more of the document pane while surrounding text stays in its reading column',
     'Wide tables scroll independently, with edge fades showing when more columns are available',
@@ -501,6 +506,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.35': 'September 5, 2026',
   '0.3.34': 'September 5, 2026',
   '0.3.33': 'September 5, 2026',
   '0.3.32': 'Sep 4 2026',

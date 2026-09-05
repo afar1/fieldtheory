@@ -954,7 +954,7 @@ const getStyles = (isDark: boolean) => ({
 // Main Component
 // =============================================================================
 
-function CommandLauncher() {
+export function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [namespacePrefix, setNamespacePrefix] = useState<NamespacePrefix | null>(null);
   const [directoryNamespace, setDirectoryNamespace] = useState<LauncherDirectoryNamespace | null>(null);
@@ -975,6 +975,12 @@ function CommandLauncher() {
   const [clipboardStacks, setClipboardStacks] = useState<StackInfo[]>([]);
   const [clipboardHydratedStackItemsById, setClipboardHydratedStackItemsById] = useState<Record<string, ClipboardItem[]>>({});
   const [clipboardSearchLoading, setClipboardSearchLoading] = useState(false);
+  const [clipboardHasMore, setClipboardHasMore] = useState(false);
+  const [clipboardResultQuery, setClipboardResultQuery] = useState<string | null>(null);
+  const clipboardItemsRef = useRef<ClipboardItem[]>([]);
+  const clipboardOffsetRef = useRef(0);
+  const clipboardLoadingRef = useRef(false);
+  const pendingClipboardArrowRef = useRef<{ query: string; index: number } | null>(null);
   const [clipboardSelectedItemIds, setClipboardSelectedItemIds] = useState<Set<number>>(new Set());
   const [clipboardDragId, setClipboardDragId] = useState<string | null>(null);
   const [clipboardDropId, setClipboardDropId] = useState<string | null>(null);
@@ -998,6 +1004,7 @@ function CommandLauncher() {
   const [bookmarkNamespaceBookmarks, setBookmarkNamespaceBookmarks] = useState<Bookmark[]>([]);
   const [bookmarkPostItems, setBookmarkPostItems] = useState<LauncherItem[]>([]);
   const [bookmarkPosts, setBookmarkPosts] = useState<Bookmark[]>([]);
+  const [bookmarkPostsLoading, setBookmarkPostsLoading] = useState(true);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
   const [libraryMarkdownLoading, setLibraryMarkdownLoading] = useState(true);
@@ -1011,7 +1018,7 @@ function CommandLauncher() {
   const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const resultPages = useLauncherResultPages(
-    JSON.stringify([query, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource]),
+    JSON.stringify([query, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, clipboardSearchActive, launcherDefaultPanelSource, launcherDefaultPanelExpanded]),
     filtered.length,
   );
   const visibleResults = filtered.slice(0, resultPages.visibleCount);
@@ -1121,10 +1128,13 @@ function CommandLauncher() {
 
   const applyFilteredResults = useCallback((results: LauncherItem[]) => {
     if (areLauncherVisibleItemsSameOrder(filteredRef.current, results)) return false;
+    const selectedId = filteredRef.current[selectedIndexRef.current]?.id;
+    const nextIndex = hasNavigatedRef.current && selectedId ? results.findIndex(item => item.id === selectedId) : -1;
     filteredRef.current = results;
     setFiltered(results);
+    if (nextIndex >= 0) selectIndex(nextIndex);
     return true;
-  }, []);
+  }, [selectIndex]);
 
   const resetSoftSelection = useCallback(() => {
     hasNavigatedRef.current = false;
@@ -1140,7 +1150,7 @@ function CommandLauncher() {
   useLayoutEffect(() => {
     if (filtered.length === 0 || !listRef.current) return;
     resizeLauncherForListHeight(measureLauncherListContentHeight());
-  }, [filtered, measureLauncherListContentHeight, resizeLauncherForListHeight]);
+  }, [filtered, resultPages.visibleCount, measureLauncherListContentHeight, resizeLauncherForListHeight]);
 
   const showLauncherMessage = useCallback((message: string) => {
     launcherInvocationInFlightRef.current = false;
@@ -1426,6 +1436,7 @@ function CommandLauncher() {
   const loadBookmarkPosts = useCallback(async () => {
     const startedAt = performance.now();
     const requestId = ++launcherBookmarkPostsRequestRef.current;
+    setBookmarkPostsLoading(true);
     try {
       const snapshot = await bookmarksAPI?.getAll();
       if (requestId !== launcherBookmarkPostsRequestRef.current) {
@@ -1450,6 +1461,8 @@ function CommandLauncher() {
       setBookmarkPosts([]);
       setBookmarkPostItems([]);
       traceLauncherLoad('load-bookmark-posts', startedAt, { success: false });
+    } finally {
+      if (requestId === launcherBookmarkPostsRequestRef.current) setBookmarkPostsLoading(false);
     }
   }, []);
 
@@ -1584,21 +1597,22 @@ function CommandLauncher() {
     const startedAt = performance.now();
     const results = await Promise.allSettled([
       warmLauncherFileIndex(),
-      loadLibraryMarkdown(),
       loadArtifacts(),
-      bookmarkRefresh.run(),
       loadActiveWebPage(),
     ]);
     traceLauncherLoad('load-launcher-background-data', startedAt, {
       rejectedCount: results.filter(result => result.status === 'rejected').length,
     });
-  }, [loadActiveWebPage, loadArtifacts, bookmarkRefresh, loadLibraryMarkdown, warmLauncherFileIndex]);
+  }, [loadActiveWebPage, loadArtifacts, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
     const requestId = ++launcherDataRequestRef.current;
     const startedAt = performance.now();
     setLauncherDataLoading(true);
+    // Local searchable sources are needed as soon as the launcher opens.
+    void loadLibraryMarkdown();
+    void bookmarkRefresh.run();
     const results = await Promise.allSettled([
       loadCommands(),
       loadLauncherSettings(),
@@ -1617,7 +1631,7 @@ function CommandLauncher() {
     if (includeBackground && requestId === launcherDataRequestRef.current) {
       void loadLauncherBackgroundData();
     }
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadLauncherBackgroundData, loadLauncherSettings, loadRecentEntries, refreshLauncherContext]);
+  }, [bookmarkRefresh, loadLibraryMarkdown, loadCommands, loadHandoffs, loadHotkeys, loadLauncherBackgroundData, loadLauncherSettings, loadRecentEntries, refreshLauncherContext]);
 
   const scheduleLauncherBackgroundRefresh = useCallback(() => {
     if (launcherBackgroundRefreshTimeoutRef.current !== null) {
@@ -2075,10 +2089,6 @@ function CommandLauncher() {
     ];
   }, [actionItems, commandItems, commandDirectoryItems, directoryItems, handoffItems, libraryMarkdownSearchItems, sourceItems, recentFileItems]);
 
-  const normalModeItems = useMemo(() => (
-    allItems.filter(shouldShowLauncherItemInTypedSearch)
-  ), [allItems]);
-
   useEffect(() => {
     let idleHandle: number | null = null;
     let cancelled = false;
@@ -2217,6 +2227,10 @@ function CommandLauncher() {
       clipboardSearch: clipboardSearchQuery ?? '',
     };
   }), [clipboardListRows, clipboardSearchQuery]);
+
+  const normalModeItems = useMemo(() => (
+    [...allItems, ...bookmarkPostItems, ...clipboardLauncherItems].filter(shouldShowLauncherItemInTypedSearch)
+  ), [allItems, bookmarkPostItems, clipboardLauncherItems]);
 
   const isRootIdleLauncher = !namespacePrefix
     && !directoryNamespace
@@ -2543,13 +2557,15 @@ function CommandLauncher() {
     launcherIconDataBatchRef.current = {};
   }, []);
 
-  const loadClipboardLauncherResults = useCallback(async (search: string): Promise<void> => {
+  const loadClipboardLauncherResults = useCallback(async (search: string, append = false): Promise<void> => {
+    if (append && clipboardLoadingRef.current) return;
+    clipboardLoadingRef.current = true;
     const requestId = ++clipboardSearchRequestRef.current;
     const startedAt = performance.now();
     setClipboardSearchLoading(true);
     const options: ClipboardQueryOptions = {
       limit: 50,
-      offset: 0,
+      offset: append ? clipboardOffsetRef.current : 0,
     };
     if (search.trim()) {
       options.search = search.trim();
@@ -2561,8 +2577,14 @@ function CommandLauncher() {
         clipboardAPI.getUniqueStacks?.() ?? Promise.resolve([]),
       ]);
       if (requestId !== clipboardSearchRequestRef.current) return;
-      setClipboardHydratedStackItemsById({});
-      setClipboardItems(items ?? []);
+      const page = items ?? [];
+      clipboardOffsetRef.current = (options.offset ?? 0) + page.length;
+      const merged = new Map((append ? clipboardItemsRef.current : []).map(item => [item.id, item]));
+      for (const item of page) merged.set(item.id, item);
+      clipboardItemsRef.current = [...merged.values()];
+      setClipboardHasMore(page.length === options.limit);
+      if (!append) setClipboardHydratedStackItemsById({});
+      setClipboardItems(clipboardItemsRef.current);
       setClipboardStacks(stacks ?? []);
       traceLauncherLoad('load-clipboard-results', startedAt, {
         queryLength: search.length,
@@ -2572,24 +2594,57 @@ function CommandLauncher() {
     } catch (error) {
       if (requestId !== clipboardSearchRequestRef.current) return;
       console.error('[CommandLauncher] Failed to load clipboard results:', error);
-      setClipboardItems([]);
-      setClipboardStacks([]);
-      setClipboardHydratedStackItemsById({});
+      pendingClipboardArrowRef.current = null;
+      if (!append) {
+        clipboardItemsRef.current = [];
+        setClipboardItems([]);
+        setClipboardStacks([]);
+        setClipboardHydratedStackItemsById({});
+        setClipboardHasMore(false);
+      }
       traceLauncherLoad('load-clipboard-results', startedAt, {
         queryLength: search.length,
         success: false,
       });
     } finally {
       if (requestId !== clipboardSearchRequestRef.current) return;
+      clipboardLoadingRef.current = false;
+      setClipboardResultQuery(search);
       setClipboardSearchLoading(false);
     }
   }, []);
 
-  const clipboardLoadQuery = clipboardSearchQuery ?? (defaultClipboardPanelActive ? '' : null);
+  const rootClipboardQuery = !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace
+    && !moveSource && !isHelpQuery && fileSearchQuery === null && query.trim() ? query : null;
+  const clipboardLoadQuery = clipboardSearchQuery ?? (defaultClipboardPanelActive ? '' : rootClipboardQuery);
+  const rootSourcesLoading = libraryMarkdownLoading || bookmarkPostsLoading || (rootClipboardQuery !== null && clipboardResultQuery !== rootClipboardQuery);
+  const hasMoreClipboard = clipboardLoadQuery !== null && clipboardHasMore;
+  const hasMoreResults = resultPages.hasMore || hasMoreClipboard;
+  const showMoreResults = useCallback(() => {
+    resultPages.showMore();
+    if (!resultPages.hasMore && clipboardLoadQuery !== null && clipboardHasMore) {
+      void loadClipboardLauncherResults(clipboardLoadQuery, true);
+    }
+  }, [resultPages.showMore, resultPages.hasMore, clipboardLoadQuery, clipboardHasMore, loadClipboardLauncherResults]);
+
+  useEffect(() => {
+    const pending = pendingClipboardArrowRef.current;
+    if (!pending) return;
+    if (pending.query !== clipboardLoadQuery) { pendingClipboardArrowRef.current = null; return; }
+    if (pending.index < filtered.length) {
+      pendingClipboardArrowRef.current = null;
+      resultPages.revealThrough(pending.index);
+      selectIndex(pending.index);
+    }
+  }, [filtered, clipboardLoadQuery, resultPages.revealThrough, selectIndex]);
 
   useEffect(() => {
     if (clipboardLoadQuery === null) {
       clipboardSearchRequestRef.current += 1;
+      clipboardLoadingRef.current = false;
+      clipboardItemsRef.current = [];
+      pendingClipboardArrowRef.current = null;
+      setClipboardHasMore(false);
       setClipboardItems([]);
       setClipboardStacks([]);
       setClipboardHydratedStackItemsById({});
@@ -2600,13 +2655,12 @@ function CommandLauncher() {
       return;
     }
 
-    let cancelled = false;
-    void loadClipboardLauncherResults(clipboardLoadQuery).then(() => {
-      if (cancelled) return;
-    });
-    return () => {
-      cancelled = true;
-    };
+    // A query change invalidates old responses before the debounce expires.
+    clipboardSearchRequestRef.current += 1;
+    pendingClipboardArrowRef.current = null;
+    setClipboardHasMore(false);
+    const timeout = window.setTimeout(() => { void loadClipboardLauncherResults(clipboardLoadQuery); }, clipboardLoadQuery ? 80 : 0);
+    return () => { window.clearTimeout(timeout); clipboardSearchRequestRef.current += 1; clipboardLoadingRef.current = false; };
   }, [clipboardLoadQuery, clipboardOpenReloadKey, loadClipboardLauncherResults]);
 
   useEffect(() => {
@@ -2944,7 +2998,7 @@ function CommandLauncher() {
     }
 
     const balancedMatches = getNormalModeMatches(q);
-    const waitingForLibraryMarkdown = libraryMarkdownLoading && q !== '';
+    const waitingForLibraryMarkdown = rootSourcesLoading && q !== '';
     const fallback = waitingForLibraryMarkdown ? null : localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
@@ -2978,7 +3032,7 @@ function CommandLauncher() {
         : getLauncherElapsedMs(launcherFirstInputAtRef.current),
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults]);
+  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults, rootSourcesLoading]);
 
   // Reset soft selection only when results change before keyboard navigation starts.
   useEffect(() => {
@@ -2998,6 +3052,10 @@ function CommandLauncher() {
     // Only scroll if user has navigated with arrow keys.
     if (!hasNavigatedRef.current) return;
     if (!listRef.current || filtered.length === 0) return;
+    if (selectedIndex >= resultPages.visibleCount) {
+      resultPages.revealThrough(selectedIndex);
+      return;
+    }
 
     const list = listRef.current;
     const selectedItem = list.querySelector(`[data-item-index="${selectedIndex}"]`) as HTMLElement | null;
@@ -3006,7 +3064,7 @@ function CommandLauncher() {
     // Get positions relative to the list container.
     const listTop = list.scrollTop;
     const listBottom = listTop + list.clientHeight;
-    const itemTop = selectedItem.offsetTop;
+    const itemTop = selectedItem.getBoundingClientRect().top - list.getBoundingClientRect().top + listTop - list.clientTop;
     const itemBottom = itemTop + selectedItem.offsetHeight;
 
     // Check if item is above visible area.
@@ -3018,7 +3076,7 @@ function CommandLauncher() {
       list.scrollTop = itemBottom - list.clientHeight;
     }
     // Otherwise, item is visible - don't scroll.
-  }, [selectedIndex, filtered.length]);
+  }, [selectedIndex, filtered, resultPages.visibleCount, resultPages.revealThrough]);
 
   const getFieldTheoryTarget = useCallback((item: LauncherItem): FieldTheoryMarkdownTarget | null => (
     getLauncherFieldTheoryMarkdownTarget(item)
@@ -3290,14 +3348,14 @@ function CommandLauncher() {
       setFiltered([]);
       selectIndex(0);
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
-    } else if (clipboardLauncherModeActive && plainKey && e.key === 'x') {
+    } else if (defaultClipboardPanelActive && hasExplicitSelectionRef.current && plainKey && e.key === 'x') {
       e.preventDefault();
       const selectedItem = filtered[resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length)];
       void toggleClipboardLauncherSelection(selectedItem);
-    } else if (clipboardLauncherModeActive && plainKey && e.key === 's') {
+    } else if (defaultClipboardPanelActive && hasExplicitSelectionRef.current && plainKey && e.key === 's') {
       e.preventDefault();
       void stackClipboardLauncherSelection();
-    } else if (clipboardLauncherModeActive && plainKey && e.key === 'u') {
+    } else if (defaultClipboardPanelActive && hasExplicitSelectionRef.current && plainKey && e.key === 'u') {
       e.preventDefault();
       const selectedItem = filtered[resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length)];
       void unstackClipboardLauncherItem(selectedItem);
@@ -3306,6 +3364,11 @@ function CommandLauncher() {
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
       manualPreviewRef.current = false;
+      if (selectedIndexRef.current === filtered.length - 1 && hasMoreClipboard && clipboardLoadQuery !== null) {
+        pendingClipboardArrowRef.current = { query: clipboardLoadQuery, index: filtered.length };
+        resultPages.revealThrough(filtered.length);
+        void loadClipboardLauncherResults(clipboardLoadQuery, true);
+      }
       const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down');
       resultPages.revealThrough(nextIndex);
       hasExplicitSelectionRef.current = true;
@@ -3548,7 +3611,7 @@ function CommandLauncher() {
           selectedItem: describeLauncherItem(selectedItem),
           hasExplicitSelection: hasExplicitSelectionRef.current,
         });
-        if (selectedItem?.type === 'local-instruction' && libraryMarkdownLoading && rawQuery) {
+        if (selectedItem?.type === 'local-instruction' && rootSourcesLoading && rawQuery) {
           traceLauncher('enter-key-deferred-local-fallback', {
             queryLength: rawQuery.length,
             launcherDataLoading,
@@ -3594,7 +3657,7 @@ function CommandLauncher() {
       }
       const fallback = localInstructionFallbackForQuery(rawQuery, 0, inScopedMode);
       if (fallback) {
-        if (libraryMarkdownLoading && rawQuery) {
+        if (rootSourcesLoading && rawQuery) {
           traceLauncher('enter-key-deferred-local-fallback', {
             queryLength: rawQuery.length,
             launcherDataLoading,
@@ -4159,10 +4222,10 @@ function CommandLauncher() {
     hasQuery: query.trim() !== '',
     namespaceLabel,
     resultCount: filtered.length,
-    loading: launcherDataLoading || launcherFileSearchLoading || clipboardSearchLoading,
+    loading: launcherDataLoading || launcherFileSearchLoading || clipboardSearchLoading || rootSourcesLoading,
     hasLoadedItems: clipboardSearchQuery !== null
       ? !clipboardSearchLoading
-      : fileSearchQuery !== null ? !launcherFileSearchLoading : allItems.length > 0,
+      : fileSearchQuery !== null ? !launcherFileSearchLoading : !rootSourcesLoading && allItems.length > 0,
   });
   const renderItemIcon = (item: LauncherItem) => {
     if (item.type === 'clipboard-item' || item.type === 'clipboard-stack') {
@@ -4290,8 +4353,8 @@ function CommandLauncher() {
           ref={listRef}
           onScroll={(event) => {
             const list = event.currentTarget;
-            if (resultPages.hasMore && list.scrollTop + list.clientHeight >= list.scrollHeight - 40) {
-              resultPages.showMore();
+            if (hasMoreResults && list.scrollTop + list.clientHeight >= list.scrollHeight - 40) {
+              showMoreResults();
             }
           }}
           style={styles.list}
@@ -4432,11 +4495,11 @@ function CommandLauncher() {
               );
             })
           )}
-          {resultPages.hasMore && (
+          {hasMoreResults && (
             <li style={styles.sectionHeader}>
-              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={resultPages.showMore}
+              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={showMoreResults} disabled={clipboardSearchLoading && !resultPages.hasMore}
                 style={{ color: 'inherit', font: 'inherit', background: 'none', border: 0, cursor: 'pointer' }}>
-                Show more · {resultPages.visibleCount} of {filtered.length}
+                {clipboardSearchLoading && !resultPages.hasMore ? 'Loading more…' : 'Show more'} · {resultPages.visibleCount} of {filtered.length}{hasMoreClipboard ? '+' : ''}
               </button>
             </li>
           )}
@@ -4452,8 +4515,8 @@ function CommandLauncher() {
 }
 
 // Mount the React app.
-const root = ReactDOM.createRoot(document.getElementById('root')!);
-root.render(
+const rootElement = document.getElementById('root');
+if (rootElement) ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <ThemeProvider>
       <CommandLauncher />
