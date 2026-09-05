@@ -2391,3 +2391,18 @@ describe('buildBuiltInLauncherActions', () => {
     ]);
   });
 });
+
+
+describe('uncapped launcher search', () => {
+  it('retains every matching command in the same ranked order as bounded search', () => {
+    const items = Array.from({ length: 75 }, (_, index) => ({
+      id: `command-${index}`, type: 'command', name: `review-${index}`,
+      displayName: `Review ${index}`, keywords: ['review'],
+    }));
+    const all = filterLauncherNormalModeItems(items, 'review', {}, { maxResults: Infinity });
+    const bounded = filterLauncherNormalModeItems(items, 'review');
+    expect(all).toHaveLength(75);
+    expect(all.slice(0, bounded.length)).toEqual(bounded);
+    expect(new Set(all.map(item => item.id)).size).toBe(75);
+  });
+});

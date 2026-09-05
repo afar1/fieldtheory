@@ -17,6 +17,7 @@
  */
 
 import fs from 'fs';
+import { CoalescedRefresh } from '../shared/coalescedRefresh';
 import path from 'path';
 import crypto from 'crypto';
 import { app, shell } from 'electron';
@@ -240,6 +241,14 @@ export class CommandsManager extends EventEmitter {
   private indexHooks: CommandsManagerIndexHooks;
   private commandLinkIndexFreshness: Map<string, { mtimeMs: number; size: number }> = new Map();
 
+  private changedCommandPaths = new Set<string>();
+  private needsFullRefresh = false;
+  private refreshGeneration = 0;
+  private commandRefresh = new CoalescedRefresh(
+    () => this.flushCommandChanges(),
+    (error) => log.error('Error refreshing commands:', error),
+  );
+
   // Legacy single directory support (for migration)
   private directoryPath: string | null = null;
   private watcherAbort: AbortController | null = null;
@@ -288,6 +297,8 @@ export class CommandsManager extends EventEmitter {
       return;
     }
 
+    this.cancelCommandRefresh();
+
     // Stop existing watchers
     for (const abort of this.watchers.values()) {
       abort.abort();
@@ -305,6 +316,7 @@ export class CommandsManager extends EventEmitter {
    * Clear state on logout.
    */
   onUserLoggedOut(): void {
+    this.cancelCommandRefresh();
     // Stop watchers
     for (const abort of this.watchers.values()) {
       abort.abort();
@@ -562,6 +574,7 @@ export class CommandsManager extends EventEmitter {
    * Pass null to disable commands.
    */
   async setDirectory(directoryPath: string | null): Promise<void> {
+    this.cancelCommandRefresh();
     // Stop watching old directory
     if (this.watcherAbort) {
       try {
@@ -768,7 +781,7 @@ export class CommandsManager extends EventEmitter {
    * Scan a specific directory for markdown files and add to the commands index.
    * If no path provided, scans all watched directories.
    */
-  private async scanDirectory(dirPath?: string): Promise<void> {
+  private async scanDirectory(dirPath?: string, target = this.commands): Promise<void> {
     // If specific path provided, scan that directory
     if (dirPath) {
       if (this.isLegacyCommandsDirectoryPath(dirPath)) return;
@@ -785,8 +798,9 @@ export class CommandsManager extends EventEmitter {
         }
 
         // Recursively scan for markdown files
-        await this.scanDirectoryRecursive(dirPath);
+        await this.scanDirectoryRecursive(dirPath, undefined, target);
       } catch (error) {
+        if (target !== this.commands) throw error;
         log.error(`Error scanning directory ${dirPath}:`, error);
       }
       return;
@@ -807,16 +821,17 @@ export class CommandsManager extends EventEmitter {
       }
 
       // Recursively scan for markdown files
-      await this.scanDirectoryRecursive(this.directoryPath);
+      await this.scanDirectoryRecursive(this.directoryPath, undefined, target);
     } catch (error) {
+      if (target !== this.commands) throw error;
       log.error('Error scanning directory:', error);
     }
   }
 
-  private async scanSharedCommandSources(): Promise<void> {
+  private async scanSharedCommandSources(target = this.commands): Promise<void> {
     for (const source of this.sharedCommandSources()) {
       if (!source.sourceRootPath) continue;
-      await this.scanDirectoryRecursive(source.sourceRootPath, source);
+      await this.scanDirectoryRecursive(source.sourceRootPath, source, target);
     }
   }
 
@@ -829,7 +844,7 @@ export class CommandsManager extends EventEmitter {
   /**
    * Recursively scan a directory for markdown files.
    */
-  private async scanDirectoryRecursive(dirPath: string, source?: CommandSourceContext): Promise<void> {
+  private async scanDirectoryRecursive(dirPath: string, source?: CommandSourceContext, target = this.commands): Promise<void> {
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
@@ -841,18 +856,19 @@ export class CommandsManager extends EventEmitter {
 
         if (entry.isDirectory()) {
           // Recursively scan subdirectories
-          await this.scanDirectoryRecursive(fullPath, source);
+          await this.scanDirectoryRecursive(fullPath, source, target);
         } else if (entry.isFile() && this.isMarkdownFile(entry.name)) {
           // Add markdown file as a command
           const command = this.createCommandFromFile(fullPath, source);
-          const existing = command ? this.commands.get(command.name) : null;
+          const existing = command ? target.get(command.name) : null;
           if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
-            this.commands.set(command.name, command);
-            this.indexCommandFile(command.filePath);
+            target.set(command.name, command);
+            if (target === this.commands) this.indexCommandFile(command.filePath);
           }
         }
       }
     } catch (error) {
+      if (target !== this.commands) throw error;
       log.error(`Error scanning ${dirPath}:`, error);
     }
   }
@@ -956,17 +972,8 @@ export class CommandsManager extends EventEmitter {
       const watcher = fs.watch(
         this.directoryPath,
         { recursive: true, signal: this.watcherAbort.signal },
-        async (eventType, filename) => {
-          try {
-            // File saves, file renames, and folder renames can all affect
-            // launcher labels, paths, and folder rows.
-            if (!filename) return;
-            this.commands.clear();
-            await this.scanDirectory();
-            this.emit('commandsChanged', this.getCommands());
-          } catch (error) {
-            log.error('Error handling file change:', error);
-          }
+        (_eventType, filename) => {
+          this.queueCommandChange(this.directoryPath!, filename?.toString() ?? null);
         }
       );
 
@@ -1351,37 +1358,86 @@ End of User Commands
   /**
    * Refresh the commands list by rescanning all directories.
    */
-  async refresh(): Promise<void> {
-    const previousCommandPaths = new Set(Array.from(this.commands.values()).map((command) => this.normalizePath(command.filePath)));
-    this.commands.clear();
+  refresh(): Promise<void> {
+    this.needsFullRefresh = true;
+    // A refresh requested during a scan must run again with the newest filesystem state.
+    this.commandRefresh.schedule();
+    return this.commandRefresh.run();
+  }
 
-    // Scan all watched directories
-    for (const dirPath of this.settings.watchedDirs) {
-      await this.scanDirectory(dirPath);
+  private queueCommandChange(rootPath: string, filename: string | null): void {
+    const activeRoots = [...this.watchedRootPaths(), this.directoryPath, ...this.sharedCommandSources().map(source => source.sourceRootPath)];
+    if (!activeRoots.some(root => root && this.normalizePath(root) === this.normalizePath(rootPath))) return;
+    if (!filename) this.needsFullRefresh = true;
+    else {
+      const filePath = this.normalizePath(path.join(rootPath, filename));
+      if (!isPathInside(this.normalizePath(rootPath), filePath)) return;
+      if (filename.split(/[\\/]/).some(part => part.startsWith('.'))) return;
+      if (this.isMarkdownFile(filename)) this.changedCommandPaths.add(filePath);
+      else {
+        // Folder changes affect descendants and empty folder rows; ordinary non-Markdown files do not.
+        try { if (!fs.statSync(filePath).isDirectory()) return; } catch { /* Deleted folder or file. */ }
+        this.needsFullRefresh = true;
+      }
     }
+    this.commandRefresh.schedule();
+  }
 
-    // Legacy: also scan single directory if set
-    if (this.directoryPath) {
-      await this.scanDirectory();
+  private async flushCommandChanges(): Promise<void> {
+    const generation = this.refreshGeneration;
+    const paths = [...this.changedCommandPaths];
+    this.changedCommandPaths.clear();
+    let fullRefresh = this.needsFullRefresh;
+    this.needsFullRefresh = false;
+    let next = new Map(this.commands);
+    for (const filePath of paths) {
+      if (fullRefresh) break;
+      const existing = [...next.values()].find(command => this.normalizePath(command.filePath) === filePath);
+      // Deletion can uncover another command with the same name. Rebuild to preserve precedence.
+      try {
+        if (!fs.lstatSync(filePath).isFile()) { fullRefresh = true; break; }
+      } catch { fullRefresh = true; break; }
+      const command = this.createCommandFromFile(filePath);
+      if (existing && (!command || existing.name !== command.name)) { fullRefresh = true; break; }
+      if (command) {
+        const competing = next.get(command.name);
+        if (!competing || competing === existing || this.shouldReplaceCommand(competing, command)) {
+          next.set(command.name, command);
+        }
+      }
     }
-
-    await this.scanSharedCommandSources();
-    this.watchSharedCommandSources();
-
+    if (fullRefresh) {
+      next = new Map();
+      for (const dirPath of this.settings.watchedDirs) await this.scanDirectory(dirPath, next);
+      if (this.directoryPath) await this.scanDirectory(undefined, next);
+      await this.scanSharedCommandSources(next);
+      if (generation !== this.refreshGeneration) return;
+      this.watchSharedCommandSources();
+    }
+    if (generation !== this.refreshGeneration) return;
+    const nextPaths = new Set([...next.values()].map(command => this.normalizePath(command.filePath)));
     for (const command of this.commands.values()) {
-      previousCommandPaths.delete(this.normalizePath(command.filePath));
+      if (!nextPaths.has(this.normalizePath(command.filePath))) this.removeCommandIndexPath(command.filePath);
     }
-    for (const removedPath of previousCommandPaths) {
-      this.removeCommandIndexPath(removedPath);
+    for (const command of next.values()) {
+      if (fullRefresh || paths.includes(this.normalizePath(command.filePath))) this.indexCommandFile(command.filePath);
     }
-
+    this.commands = next;
     this.emit('commandsChanged', this.getCommands());
+  }
+
+  private cancelCommandRefresh(): void {
+    this.refreshGeneration += 1;
+    this.commandRefresh.cancelPending();
+    this.changedCommandPaths.clear();
+    this.needsFullRefresh = false;
   }
 
   /**
    * Cleanup resources.
    */
   destroy(): void {
+    this.cancelCommandRefresh();
     // Stop all directory watchers
     for (const [, abort] of this.watchers) {
       try {
@@ -1420,14 +1476,8 @@ End of User Commands
       const watcher = fs.watch(
         dirPath,
         { recursive: true, signal: abort.signal },
-        async (eventType, filename) => {
-          try {
-            // Folder renames do not always report a markdown filename, but
-            // they still change launcher folder rows and command paths.
-            if (filename) await this.refresh();
-          } catch (error) {
-            log.error('Error handling file change:', error);
-          }
+        (_eventType, filename) => {
+          this.queueCommandChange(dirPath, filename?.toString() ?? null);
         }
       );
 
@@ -1516,6 +1566,7 @@ End of User Commands
       return false;
     }
 
+    this.cancelCommandRefresh();
     // Stop watching
     this.unwatchDirectory(normalizedPath);
 

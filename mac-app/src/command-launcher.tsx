@@ -11,6 +11,8 @@
  * - Escape to close
  */
 
+import { CoalescedRefresh } from '../electron/shared/coalescedRefresh';
+import { useLauncherResultPages } from './hooks/useLauncherResultPages';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import ReactDOM from 'react-dom/client';
@@ -1008,6 +1010,11 @@ function CommandLauncher() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
+  const resultPages = useLauncherResultPages(
+    JSON.stringify([query, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource]),
+    filtered.length,
+  );
+  const visibleResults = filtered.slice(0, resultPages.visibleCount);
   const [launcherIconDataByPath, setLauncherIconDataByPath] = useState<Record<string, string | null>>({});
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
@@ -1514,6 +1521,17 @@ function CommandLauncher() {
     }
   }, []);
 
+  const bookmarkRefresh = useMemo(() => new CoalescedRefresh(async () => {
+    await Promise.all([loadBookmarkAuthors(), loadBookmarkPosts()]);
+    const handle = authorNamespaceRef.current;
+    const namespace = bookmarkNamespaceRef.current;
+    await Promise.all([
+      handle ? loadAuthorBookmarks(handle) : Promise.resolve(),
+      namespace ? loadBookmarkNamespace(namespace) : Promise.resolve(),
+    ]);
+  }, (error) => console.error('[CommandLauncher] Bookmark refresh failed:', error)),
+  [loadBookmarkAuthors, loadBookmarkPosts, loadAuthorBookmarks, loadBookmarkNamespace]);
+
   // Load handoffs from global Field Theory directory.
   const loadHandoffs = useCallback(async () => {
     const startedAt = performance.now();
@@ -1568,14 +1586,13 @@ function CommandLauncher() {
       warmLauncherFileIndex(),
       loadLibraryMarkdown(),
       loadArtifacts(),
-      loadBookmarkAuthors(),
-      loadBookmarkPosts(),
+      bookmarkRefresh.run(),
       loadActiveWebPage(),
     ]);
     traceLauncherLoad('load-launcher-background-data', startedAt, {
       rejectedCount: results.filter(result => result.status === 'rejected').length,
     });
-  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
+  }, [loadActiveWebPage, loadArtifacts, bookmarkRefresh, loadLibraryMarkdown, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
@@ -1789,12 +1806,7 @@ function CommandLauncher() {
       setShowSquaresInCommandLauncher(normalizeSquaresConfig(config).showInCommandLauncher);
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
-      loadBookmarkAuthors();
-      loadBookmarkPosts();
-      const handle = authorNamespaceRef.current;
-      if (handle) loadAuthorBookmarks(handle);
-      const namespace = bookmarkNamespaceRef.current;
-      if (namespace) loadBookmarkNamespace(namespace);
+      bookmarkRefresh.schedule();
     });
     const unsubscribeCommands = commandsAPI.onCommandsChanged?.((nextCommands) => {
       setCommands(nextCommands || []);
@@ -1839,6 +1851,9 @@ function CommandLauncher() {
       unsubscribeTheme?.();
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
+      bookmarkRefresh.cancelPending();
+      launcherBookmarkAuthorsRequestRef.current += 1;
+      launcherBookmarkPostsRequestRef.current += 1;
       unsubscribeCommands?.();
       unsubscribeLibraryRoots?.();
       unsubscribeLibraryRenamed?.();
@@ -1846,7 +1861,7 @@ function CommandLauncher() {
       unsubscribeWikiRenamed?.();
       unsubscribeRecent?.();
     };
-  }, [applyLibraryChangeEvent, applyLibraryRenameEvent, applyRecentEntries, applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
+  }, [applyLibraryChangeEvent, applyLibraryRenameEvent, applyRecentEntries, applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, bookmarkRefresh, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {
@@ -2484,7 +2499,7 @@ function CommandLauncher() {
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
   const getNormalModeMatches = useCallback((rawQuery: string): LauncherItem[] => {
-    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(normalModeItems, rawQuery, usageByItemId));
+    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(normalModeItems, rawQuery, usageByItemId, { maxResults: Infinity }));
   }, [normalModeItems, usageByItemId]);
 
   const visibleLauncherIconPaths = useMemo(() => {
@@ -2834,7 +2849,6 @@ function CommandLauncher() {
             })
             .map(({ item }) => item)
         : commandItems.slice().sort(compareLauncherItemsByRecency))
-        .slice(0, 12)
         .map(item => ({
           ...item,
           id: `local-${item.id}`,
@@ -2864,7 +2878,7 @@ function CommandLauncher() {
       const results = exactCommandMatch
         ? [...commandMatches, ...customInstructionItem]
         : [...customInstructionItem, ...commandMatches];
-      showResults(results.slice(0, 14));
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
@@ -2915,7 +2929,7 @@ function CommandLauncher() {
               ? recentFileItems
               : [...libraryMarkdownSearchItems, ...commandItems, ...artifactReadings].filter(isLauncherRiverItem);
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
-      showResults(results.slice(0, 20));
+      showResults(results);
       resizeForResults(results.length, true);
       return;
     }
@@ -3293,6 +3307,7 @@ function CommandLauncher() {
       hasNavigatedRef.current = true;
       manualPreviewRef.current = false;
       const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down');
+      resultPages.revealThrough(nextIndex);
       hasExplicitSelectionRef.current = true;
       setHasExplicitSelection(true);
       selectIndex(nextIndex);
@@ -3949,7 +3964,8 @@ function CommandLauncher() {
             created: result.created ?? null,
             url: result.page?.url ?? result.bookmark?.url ?? null,
           });
-          await loadBookmarkPosts();
+          bookmarkRefresh.schedule();
+          await bookmarkRefresh.run();
 
           if (!markdownPath) {
             setQuery('Saved, but no markdown path was returned');
@@ -4272,15 +4288,21 @@ function CommandLauncher() {
       {filtered.length > 0 && (
         <ul
           ref={listRef}
+          onScroll={(event) => {
+            const list = event.currentTarget;
+            if (resultPages.hasMore && list.scrollTop + list.clientHeight >= list.scrollHeight - 40) {
+              resultPages.showMore();
+            }
+          }}
           style={styles.list}
         >
           {isHelpQuery ? (
             // Help mode: show grouped by type with section headers.
             <>
-              {filtered.some(item => item.type === 'action') && (
+              {visibleResults.some(item => item.type === 'action') && (
                 <li style={styles.sectionHeader}>Actions</li>
               )}
-              {filtered
+              {visibleResults
                 .filter(item => item.type === 'action')
                 .map((item, i) => {
                   const globalIndex = filtered.findIndex(f => f.id === item.id);
@@ -4302,10 +4324,10 @@ function CommandLauncher() {
                     </li>
                   );
                 })}
-              {filtered.some(item => item.type === 'handoff') && (
+              {visibleResults.some(item => item.type === 'handoff') && (
                 <li style={styles.sectionHeader}>Recent Handoffs</li>
               )}
-              {filtered
+              {visibleResults
                 .filter(item => item.type === 'handoff')
                 .map((item, i) => {
                   const globalIndex = filtered.findIndex(f => f.id === item.id);
@@ -4327,10 +4349,10 @@ function CommandLauncher() {
                     </li>
                   );
                 })}
-              {filtered.some(item => item.type === 'command') && (
+              {visibleResults.some(item => item.type === 'command') && (
                 <li style={styles.sectionHeader}>Commands</li>
               )}
-              {filtered
+              {visibleResults
                 .filter(item => item.type === 'command')
                 .map((item, i) => {
                   const globalIndex = filtered.findIndex(f => f.id === item.id);
@@ -4351,7 +4373,7 @@ function CommandLauncher() {
                 })}
             </>
           ) : (
-            filtered.map((item, i) => {
+            visibleResults.map((item, i) => {
               const metaText = item.type === 'handoff' ? item.timeAgo : item.hotkeyDisplay;
               const showMetaText = Boolean(metaText && !(item.type === 'directory' && metaText === 'folder'));
               const clipboardDragItemId = getClipboardLauncherDragId(item);
@@ -4409,6 +4431,14 @@ function CommandLauncher() {
                 </li>
               );
             })
+          )}
+          {resultPages.hasMore && (
+            <li style={styles.sectionHeader}>
+              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={resultPages.showMore}
+                style={{ color: 'inherit', font: 'inherit', background: 'none', border: 0, cursor: 'pointer' }}>
+                Show more · {resultPages.visibleCount} of {filtered.length}
+              </button>
+            </li>
           )}
         </ul>
       )}

@@ -73,6 +73,83 @@ describe('CommandsManager default internal commands', () => {
     vi.clearAllMocks();
   });
 
+  it('updates changed files in one batch without rescanning directories', async () => {
+    await manager.reinitializeForUser();
+    const filePath = join(manager.getDefaultDirectory(), 'incremental.md');
+    writeFileSync(filePath, '# Original');
+    await manager.refresh();
+    const scans = vi.spyOn(manager as any, 'scanDirectory');
+    const events = vi.fn();
+    manager.on('commandsChanged', events);
+    writeFileSync(filePath, '# Updated');
+    for (let i = 0; i < 20; i++) (manager as any).queueCommandChange(manager.getDefaultDirectory(), 'incremental.md');
+    await vi.waitFor(() => expect(events).toHaveBeenCalled(), { timeout: 1000 });
+    expect(scans).not.toHaveBeenCalled();
+    expect(await manager.loadCommandContent(manager.getCommand('incremental')!)).toMatchObject({ content: '# Updated' });
+  });
+
+  it('discovers a created command through its real filesystem watcher without a rescan', async () => {
+    await manager.reinitializeForUser();
+    const scans = vi.spyOn(manager as any, 'scanDirectory');
+    writeFileSync(join(manager.getDefaultDirectory(), 'watcher-created.md'), '# New command');
+    await vi.waitFor(() => expect(manager.getCommand('watcher-created')).not.toBeNull(), { timeout: 2000 });
+    expect(scans).not.toHaveBeenCalled();
+  });
+
+  it('retains the previous snapshot when a full scan fails', async () => {
+    await manager.reinitializeForUser();
+    const previous = manager.getCommands();
+    vi.spyOn(manager as any, 'scanDirectory').mockRejectedValueOnce(new Error('Directory unavailable'));
+    await manager.refresh();
+    expect(manager.getCommands()).toEqual(previous);
+  });
+
+  it('rebuilds after a file deletion and removes its stale index', async () => {
+    await manager.reinitializeForUser();
+    const filePath = join(manager.getDefaultDirectory(), 'deleted-command.md');
+    writeFileSync(filePath, '# Delete me');
+    await manager.refresh();
+    const remove = vi.fn();
+    manager.setIndexHooks({ removeCommandIndex: remove });
+    rmSync(filePath);
+    (manager as any).queueCommandChange(manager.getDefaultDirectory(), 'deleted-command.md');
+    await vi.waitFor(() => expect(manager.getCommand('deleted-command')).toBeNull(), { timeout: 1000 });
+    expect(remove).toHaveBeenCalledWith(filePath);
+  });
+
+  it('keeps the old snapshot available until a full refresh completes', async () => {
+    await manager.reinitializeForUser();
+    const previous = manager.getCommands();
+    let release!: () => void;
+    const original = (manager as any).scanDirectory.bind(manager);
+    vi.spyOn(manager as any, 'scanDirectory').mockImplementationOnce(async (...args: any[]) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return original(...args);
+    });
+    const running = manager.refresh();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(manager.getCommands()).toEqual(previous);
+    release();
+    await running;
+    expect(manager.getCommands()).toEqual(previous);
+  });
+
+  it('does not repopulate commands if logout occurs during a scan', async () => {
+    await manager.reinitializeForUser();
+    let release!: () => void;
+    const original = (manager as any).scanDirectory.bind(manager);
+    vi.spyOn(manager as any, 'scanDirectory').mockImplementationOnce(async (...args: any[]) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return original(...args);
+    });
+    const running = manager.refresh();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    manager.onUserLoggedOut();
+    release();
+    await running;
+    expect(manager.getCommands()).toEqual([]);
+  });
+
   it('creates the Field Theory default directory and seeds the built-in commands on first reinitialize', async () => {
     await manager.reinitializeForUser();
 

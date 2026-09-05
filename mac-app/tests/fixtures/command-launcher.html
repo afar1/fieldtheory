@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Field Theory command launcher test fixture</title>
+<style>body{margin:20px;background:#eee;font:14px system-ui}#root{width:600px}#fixture-status{white-space:pre-wrap}button{margin:4px}</style>
+</head><body>
+<p>Command launcher test fixture · 75 commands · no app data or external delivery</p>
+<button id="bookmark-burst">Simulate 100 bookmark changes</button>
+<pre id="fixture-status"></pre><div id="root"></div>
+<script>
+window.addEventListener('error',event=>document.getElementById('fixture-status').textContent += '\nERROR: '+event.message);
+window.addEventListener('unhandledrejection',event=>document.getElementById('fixture-status').textContent += '\nREJECTION: '+event.reason);
+const listeners = new Set();
+const metrics = { calls: 0, active: 0, maximum: 0, invoked: null };
+const status = () => document.getElementById('fixture-status').textContent = JSON.stringify(metrics);
+const empty = async () => [];
+const noop = () => {};
+const subscribe = () => noop;
+const commands = Array.from({length:75}, (_, i) => ({name:`review-${String(i).padStart(2,'0')}`,displayName:`Review ${String(i).padStart(2,'0')}`,filePath:`/fixture/review-${i}.md`,lastModified:0,source:'private'}));
+window.commandsAPI = {
+ getCommands: async () => commands, getCommandDirectories: empty, getLauncherSettings: async () => ({}),
+ getHandoffs: empty, getLauncherContext: async () => ({fieldTheoryActive:false}),
+ getActiveLibraryFileContext: async () => null, warmLauncherFileIndex: async () => ({}),
+ getActiveWebPage: async () => null, getLauncherFileIcon: async () => null, getMarkdownPreview: async () => null, searchLauncherFiles: async () => ({files:[],indexing:false}),
+ launcherResize: noop, launcherClose: noop, launcherTrace: noop, launcherPreviewHide: noop,
+ onLauncherReset: callback => {const timer=setTimeout(()=>callback({generation:1,launcherSessionId:'fixture',isDarkMode:false}),100);return()=>clearTimeout(timer)}, onLauncherFocusInput: subscribe, onCommandsChanged: subscribe,
+ invokeCommand: async (name) => {metrics.invoked=name;status();return {success:true}},
+ runLocalCommand: async (request) => {metrics.invoked=request;status();return {success:true}},
+};
+window.clipboardAPI = {getHotkeys:async()=>({}),queryItems:empty,getUniqueStacks:empty};
+window.transcribeAPI = {getHotkey:async()=>'',getAutoImprove:async()=>false};
+window.themeAPI = {initialTheme:false,getTheme:async()=>false,onThemeChanged:subscribe};
+window.squaresAPI = {getConfig:async()=>({}),getHotkeys:async()=>({}),onConfigChanged:subscribe};
+window.libraryAPI = {getRoots:empty,onRootsChanged:subscribe,onRenamed:subscribe};
+window.recentAPI = {getEntries:empty,onChanged:subscribe};
+window.bookmarksAPI = {
+ getAuthors: empty,
+ getAll: async () => {metrics.calls++;metrics.active++;metrics.maximum=Math.max(metrics.maximum,metrics.active);status();await new Promise(r=>setTimeout(r,200));metrics.active--;status();return {bookmarks:[]}},
+ onChanged: callback => {listeners.add(callback);return()=>listeners.delete(callback)},
+};
+document.getElementById('bookmark-burst').onclick=()=>{for(let i=0;i<100;i++)for(const callback of listeners)callback()};
+status();
+</script>
+<script type="module">import("/src/command-launcher.tsx").catch(error => document.getElementById("fixture-status").textContent += "\nIMPORT: " + error.stack);</script>
+</body></html>

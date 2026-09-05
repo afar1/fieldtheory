@@ -1299,9 +1299,11 @@ export function filterLauncherNormalModeItems<T extends LauncherSearchableItem &
     const baseScore = scoreLauncherSearchableItem(item, q);
     const score = baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore);
     if (score <= 0 || !(options.includeItem?.(item, score, baseScore) ?? true)) continue;
-    insertScoredLauncherMatch(bestMatches, { item, score }, maxResults);
+    if (maxResults === Infinity) bestMatches.push({ item, score });
+    else insertScoredLauncherMatch(bestMatches, { item, score }, maxResults);
   }
 
+  if (maxResults === Infinity) bestMatches.sort(compareScoredLauncherMatches);
   return bestMatches.map(({ item }) => item);
 }
 
