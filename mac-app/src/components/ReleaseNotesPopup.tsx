@@ -60,6 +60,13 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.33': [
+    'Documents now render editable tables with wider layouts and horizontal scrolling',
+    'Command search reveals more results with scrolling, Arrow Down, and Show more',
+    'Bookmarks check for new saves quietly in the background, with media processed separately',
+    'Newly saved bookmarks appear first, while canvas updates preserve your place',
+    'Includes the latest local Ambient settings, Library link performance, and Kindle delivery improvements',
+  ],
   '0.3.32': [
     'Ambient instructions are now editable in settings, persist into Desktop-run Codex tasks, and can update during a meeting',
     'Ambient now investigates unresolved questions and returns findings with evidence instead of rolling meeting notes',
@@ -489,6 +496,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.33': 'September 5, 2026',
   '0.3.32': 'Sep 4 2026',
   '0.3.31': 'Sep 3 2026',
   '0.3.30': 'Sep 3 2026',
