@@ -10,6 +10,7 @@ import AVFoundation
 import ApplicationServices
 import AppKit
 import Carbon.HIToolbox
+import NativeKeyboardEvents
 
 // MARK: - Data Models
 
@@ -2737,12 +2738,9 @@ final class MessageHandler {
     }
 
     private func postCommandVToPid(source: CGEventSource?, pid: pid_t) -> Bool {
-        let vKey: CGKeyCode = 0x09
-
-        let pasteKeyDownPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: true, flags: .maskCommand, pid: pid)
-        let pasteKeyUpPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: false, flags: .maskCommand, pid: pid)
-
-        return pasteKeyDownPosted && pasteKeyUpPosted
+        return CommandPasteShortcut.post(to: pid) { key, keyDown, flags, targetPid in
+            self.postKeyEventToPid(source: source, virtualKey: key, keyDown: keyDown, flags: flags, pid: targetPid)
+        }
     }
 
     private func postUnicodeTextToPid(source: CGEventSource?, text: String, pid: pid_t) -> Bool {

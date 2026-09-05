@@ -15,6 +15,8 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        .target(name: "NativeKeyboardEvents"),
+        .testTarget(name: "NativeKeyboardEventsTests", dependencies: ["NativeKeyboardEvents"]),
         .target(
             name: "WebRTCVad",
             path: "Sources/WebRTCVad",
@@ -26,7 +28,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "FieldTheoryHelper",
-            dependencies: ["WebRTCVad"],
+            dependencies: ["WebRTCVad", "NativeKeyboardEvents"],
             path: "Sources/FieldTheoryHelper",
             exclude: ["GazeTrackingHelper.swift"],
             linkerSettings: [
