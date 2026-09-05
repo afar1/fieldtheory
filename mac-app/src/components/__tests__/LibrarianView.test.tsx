@@ -843,12 +843,10 @@ describe('LibrarianView render', () => {
     Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, value: 1200 });
     Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, value: 600 });
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 90));
+    await waitFor(() => {
+      const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
+      expect(topFade.style.opacity).toBe('0.72');
     });
-
-    const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
-    expect(topFade.style.opacity).toBe('0.72');
   });
 
   it('keeps the source selection when a document window fails to open', async () => {
