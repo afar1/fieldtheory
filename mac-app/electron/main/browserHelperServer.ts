@@ -1,4 +1,5 @@
 import type { LinkRelationSnapshot } from '../shared/libraryLinkRelations';
+import type { BookmarkSyncState } from './bookmarkSyncController';
 import http from 'http';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -107,6 +108,7 @@ export type BrowserHelperNativeEvent =
   | { type: 'quota:changed'; data: unknown }
   | { type: 'team:changed' }
   | { type: 'bookmarks:changed' }
+  | { type: 'bookmarks:syncStateChanged'; state: BookmarkSyncState }
   | { type: 'updater:checkingForUpdate' }
   | { type: 'updater:updateAvailable'; info: unknown }
   | { type: 'updater:updateNotAvailable' }
@@ -241,6 +243,7 @@ export type BrowserHelperNativeBridge = {
   getBookmarks?: () => unknown | Promise<unknown>;
   getBookmarkDataSource?: () => unknown | Promise<unknown>;
   syncBookmarksIfStale?: () => unknown | Promise<unknown>;
+  getBookmarkSyncState?: () => BookmarkSyncState;
   getBookmarkAuthors?: () => unknown[] | Promise<unknown[]>;
   getAuthorBookmarks?: (handle: string) => unknown[] | Promise<unknown[]>;
   getTaxonomyBookmarks?: (filePaths: string[]) => unknown[] | Promise<unknown[]>;
@@ -1679,6 +1682,11 @@ export class BrowserHelperServer {
       if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/source') {
         const source = await this.nativeBridge.getBookmarkDataSource?.() ?? null;
         writeJson(res, 200, { ok: true, source }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/sync-state') {
+        writeJson(res, 200, { ok: true, state: this.nativeBridge.getBookmarkSyncState?.() ?? null }, req.headers.origin);
         return;
       }
 

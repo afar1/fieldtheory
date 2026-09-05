@@ -219,6 +219,8 @@ import {
 import { browserLibraryTargetFromProtocolUrl } from './fieldTheoryProtocolTarget';
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
+import { BookmarkSyncController, type BookmarkSyncResult } from './bookmarkSyncController';
+import { BookmarkSyncRunner } from './bookmarkSyncRunner';
 import {
   getLocalImageCacheHeaders,
   getLocalImageContentType,
@@ -382,7 +384,6 @@ const BOOT_MARK = Date.now();
 startupMark('module-loaded');
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
-const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
 const SHARED_FILES_SYNC_DEBOUNCE_MS = 1500;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
@@ -390,15 +391,10 @@ const { exec, execFile: execFileCp, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFileCp);
 
-type BookmarkBackgroundSyncResult =
-  | { status: 'synced' | 'already-running' | 'too-recent' | 'missing-cli' | 'unavailable' }
-  | { status: 'failed'; error: string };
-
-let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
 const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 3;
 const commandClipboardRestoreCoordinator = new CommandClipboardRestoreCoordinator();
 const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
-let bookmarkBackgroundSyncLastAttemptAt = 0;
+let bookmarkSyncController: BookmarkSyncController | null = null;
 
 function findFieldTheoryCli(): string | null {
   const candidates = [
@@ -429,36 +425,42 @@ function fieldTheoryCliEnv(): NodeJS.ProcessEnv {
   };
 }
 
-async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResult> {
-  if (!bookmarksManager) return { status: 'unavailable' };
-  if (bookmarkBackgroundSyncInFlight) return bookmarkBackgroundSyncInFlight;
-
-  const now = Date.now();
-  if (bookmarkBackgroundSyncLastAttemptAt > 0 && now - bookmarkBackgroundSyncLastAttemptAt < BOOKMARK_BACKGROUND_SYNC_STALE_MS) {
-    return { status: 'too-recent' };
-  }
-
-  const cli = findFieldTheoryCli();
-  if (!cli) return { status: 'missing-cli' };
-
-  bookmarkBackgroundSyncInFlight = (async () => {
-    try {
-      await execFileAsync(cli, ['sync', '--yes'], { env: fieldTheoryCliEnv(), maxBuffer: 10 * 1024 * 1024 });
-      bookmarkBackgroundSyncLastAttemptAt = Date.now();
-      bookmarksManager?.reloadAndEmitChanged();
-      return { status: 'synced' as const };
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') return { status: 'missing-cli' as const };
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      log.debug('Background bookmark sync failed:', message);
-      return { status: 'failed' as const, error: message };
-    } finally {
-      bookmarkBackgroundSyncInFlight = null;
+function ensureBookmarkSyncController(): BookmarkSyncController {
+  if (bookmarkSyncController) return bookmarkSyncController;
+  const runner = new BookmarkSyncRunner(() => {
+    if (app.isPackaged) {
+      try {
+        const bundledCli = require.resolve('fieldtheory/bin/ft.mjs');
+        return { executable: process.execPath, args: [bundledCli], env: { ...fieldTheoryCliEnv(), ELECTRON_RUN_AS_NODE: '1' } };
+      } catch {
+        // An older package can still use an explicitly capable installed CLI.
+      }
     }
-  })();
+    const cli = findFieldTheoryCli();
+    return cli ? { executable: cli, env: fieldTheoryCliEnv() } : null;
+  }, execFileAsync);
+  bookmarkSyncController = new BookmarkSyncController({
+    quick: (signal) => runner.quick(signal),
+    maintenance: (signal, work) => runner.maintenance(signal, work),
+    isOnline: () => net.isOnline(),
+    onChanged: () => {
+      ensureBookmarksWatcher();
+      bookmarksManager?.reloadAndEmitChanged();
+    },
+    onState: (state) => {
+      browserHelperServer?.emitNativeEvent({ type: 'bookmarks:syncStateChanged', state });
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) window.webContents.send('bookmarks:syncStateChanged', state);
+      });
+    },
+  });
+  return bookmarkSyncController;
+}
 
-  return bookmarkBackgroundSyncInFlight;
+async function syncBookmarksFromCliIfStale(): Promise<BookmarkSyncResult> {
+  const controller = ensureBookmarkSyncController();
+  controller.start();
+  return controller.request('activity');
 }
 
 function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ stdout: string; stderr: string }> {
@@ -3702,6 +3704,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         };
       },
       syncBookmarksIfStale: () => syncBookmarksFromCliIfStale(),
+      getBookmarkSyncState: () => ensureBookmarkSyncController().getState(),
       getBookmarkAuthors: () => {
         const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
         return buildBookmarkAuthorSummaries(ensureBookmarksManager().getSnapshot().bookmarks);
@@ -8454,6 +8457,8 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:syncIfStale', () => syncBookmarksFromCliIfStale());
+  ipcMain.handle('bookmarks:getSyncState', () => ensureBookmarkSyncController().getState());
+  ipcMain.on('bookmarks:networkOnline', () => { void bookmarkSyncController?.request('network'); });
 
   ipcMain.handle('bookmarks:getAuthors', () => {
     const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
@@ -14506,8 +14511,9 @@ async function initTranscriberSystem(): Promise<void> {
     log.warn('Failed to start Field Theory browser helper: %s', error instanceof Error ? error.message : String(error));
   });
 
-  // Initialize bookmarks manager for reading synced X bookmarks.
+  // Load cached bookmarks immediately; freshness belongs to the app, not the canvas.
   ensureBookmarksManager();
+  ensureBookmarkSyncController().start();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
@@ -15452,6 +15458,7 @@ async function initTranscriberSystem(): Promise<void> {
   };
 
   powerMonitor.on('suspend', () => {
+    bookmarkSyncController?.suspend();
     log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
     if (wakeOverlayRefreshTimeout) {
       clearTimeout(wakeOverlayRefreshTimeout);
@@ -15461,6 +15468,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   powerMonitor.on('resume', () => {
+    bookmarkSyncController?.resume();
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');
     setTimeout(() => {
@@ -15480,6 +15488,7 @@ async function initTranscriberSystem(): Promise<void> {
     setTimeout(() => {
       if (net.isOnline()) {
         authManager?.refreshIfExpiringSoon();
+        void bookmarkSyncController?.request('network');
         return;
       }
 
@@ -15490,6 +15499,7 @@ async function initTranscriberSystem(): Promise<void> {
           if (wakeNetworkTimeout) { clearTimeout(wakeNetworkTimeout); wakeNetworkTimeout = null; }
           log.info('[PowerMonitor] Network restored, refreshing token');
           authManager?.refreshIfExpiringSoon();
+          void bookmarkSyncController?.request('network');
         }
       }, 5000);
       // Give up after 2 minutes
@@ -15501,6 +15511,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   powerMonitor.on('unlock-screen', () => {
+    void bookmarkSyncController?.request('activity');
     scheduleWakeOverlayRefresh('power-monitor:unlock-screen');
     setTimeout(() => {
       void secureInputHotkeyRecovery?.restartWhenAvailable('power-monitor:unlock-screen');
@@ -16910,6 +16921,7 @@ if (!gotTheLock) {
       // We no longer create the old main/settings window - the app is a background app
       // that primarily operates through the clipboard history window and tray.
       showClipboardHistoryOnActivate();
+      void bookmarkSyncController?.request('activity');
       logUserState('activate');
       // Note: SDK handles token refresh automatically via autoRefreshToken
     });
@@ -16962,6 +16974,7 @@ if (!gotTheLock) {
     }
 
     log.info('App quitting, cleaning up...');
+    bookmarkSyncController?.stop();
 
     if (!appQuitWatcherCleanupComplete) {
       event.preventDefault();

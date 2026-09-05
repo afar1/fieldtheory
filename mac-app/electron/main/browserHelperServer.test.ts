@@ -2342,6 +2342,7 @@ describe('BrowserHelperServer', () => {
           mediaManifestPath: '/Users/ada/.fieldtheory/bookmarks/media-manifest.json',
           usingLegacyDataDir: false,
         }),
+        getBookmarkSyncState: () => ({ phase: 'idle', lastCheckedAt: '2026-09-05T12:00:00Z', nextCheckAt: null, error: null }),
         syncBookmarksIfStale: () => {
           calls.push('sync');
           return { status: 'fresh' };
@@ -2400,6 +2401,7 @@ describe('BrowserHelperServer', () => {
 
     const all = await request(`http://${address.host}:${address.port}/native/bookmarks/all?token=test-token`);
     const source = await request(`http://${address.host}:${address.port}/native/bookmarks/source?token=test-token`);
+    const syncState = await request(`http://${address.host}:${address.port}/native/bookmarks/sync-state?token=test-token`);
     const sync = await request(`http://${address.host}:${address.port}/native/bookmarks/sync-if-stale`, {
       method: 'POST',
       headers: { 'X-FieldTheory-Browser-Token': 'test-token' },
@@ -2456,6 +2458,7 @@ describe('BrowserHelperServer', () => {
       mediaManifestPath: '/Users/ada/.fieldtheory/bookmarks/media-manifest.json',
       usingLegacyDataDir: false,
     });
+    expect(syncState.body).toEqual({ ok: true, state: { phase: 'idle', lastCheckedAt: '2026-09-05T12:00:00Z', nextCheckAt: null, error: null } });
     expect(sync.body.result).toEqual({ status: 'fresh' });
     expect(authors.body.authors).toEqual([{ handle: 'ada', name: 'Ada' }]);
     expect(authorBookmarks.body.bookmarks).toEqual([{ id: 'bookmark-2', authorHandle: 'ada' }]);
