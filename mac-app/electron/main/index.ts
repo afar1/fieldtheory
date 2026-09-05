@@ -431,7 +431,8 @@ function ensureBookmarkSyncController(): BookmarkSyncController {
   const runner = new BookmarkSyncRunner(() => {
     if (app.isPackaged) {
       try {
-        const bundledCli = require.resolve('fieldtheory/bin/ft.mjs');
+        const bundledCli = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'fieldtheory', 'bin', 'ft.mjs');
+        fs.accessSync(bundledCli, fs.constants.R_OK);
         return { executable: process.execPath, args: [bundledCli], env: { ...fieldTheoryCliEnv(), ELECTRON_RUN_AS_NODE: '1' } };
       } catch {
         // An older package can still use an explicitly capable installed CLI.

@@ -269,6 +269,9 @@
     ],
     "directories": {
       "output": "release"
-    }
+    },
+    "asarUnpack": [
+      "node_modules/{fieldtheory,commander,dotenv,sql.js,sql.js-fts5,undici}/**/*"
+    ]
   }
 }
