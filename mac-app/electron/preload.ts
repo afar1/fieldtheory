@@ -5379,7 +5379,10 @@ const bookmarksAPI = {
   },
 };
 contextBridge.exposeInMainWorld('bookmarksAPI', bookmarksAPI);
-window.addEventListener('online', () => ipcRenderer.send('bookmarks:networkOnline'));
+const bookmarkNetworkEvents = globalThis as typeof globalThis & {
+  addEventListener(event: 'online', listener: () => void): void;
+};
+bookmarkNetworkEvents.addEventListener('online', () => ipcRenderer.send('bookmarks:networkOnline'));
 
 interface AgentHookTargets { claude?: boolean; codex?: boolean }
 interface AgentHookStatus { claude: boolean; codex: boolean }

@@ -66,6 +66,7 @@ export interface Bookmark {
   excerpt?: string;
   savedAt?: string;
   bookmarkedAt?: string;
+  sortIndex?: string;
   markdownPath?: string;
 }
 
@@ -110,6 +111,7 @@ export interface RawBookmark {
   authorProfileImageUrl?: string;
   postedAt?: string;
   bookmarkedAt?: string | null;
+  sortIndex?: string | null;
   media?: unknown[];
   mediaObjects?: RawMediaObject[];
   engagement?: {
@@ -437,6 +439,7 @@ export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
     authorAvatar: raw.authorProfileImageUrl ?? '',
     postedAt: raw.postedAt ?? '',
     bookmarkedAt: raw.bookmarkedAt && Number.isFinite(Date.parse(raw.bookmarkedAt)) ? raw.bookmarkedAt : undefined,
+    sortIndex: raw.sortIndex && /^\d{1,30}$/.test(raw.sortIndex) ? raw.sortIndex : undefined,
     images,
     mediaCount: Array.isArray(raw.media) ? raw.media.length : 0,
     likeCount: raw.engagement?.likeCount ?? 0,
@@ -698,6 +701,22 @@ export class BookmarksManager extends EventEmitter {
       const tb = Date.parse(b.bookmarkedAt || b.savedAt || b.postedAt) || 0;
       return tb - ta;
     });
+
+    // X provides an opaque ordering key, not a save timestamp. Preserve that order
+    // within X's slots while keeping web bookmarks in their date-based positions.
+    const orderedX = bookmarks.filter(bookmark => bookmark.sourceType === 'x').sort((a, b) => {
+      if (a.sortIndex && b.sortIndex) {
+        const left = BigInt(a.sortIndex);
+        const right = BigInt(b.sortIndex);
+        return left === right ? 0 : left > right ? -1 : 1;
+      }
+      if (a.sortIndex || b.sortIndex) return a.sortIndex ? -1 : 1;
+      return 0;
+    });
+    let xIndex = 0;
+    for (let index = 0; index < bookmarks.length; index++) {
+      if (bookmarks[index].sourceType === 'x') bookmarks[index] = orderedX[xIndex++];
+    }
 
     this.cached = { bookmarks, folders, xLastSyncedAt: xBookmarksLastSyncedAt() };
     this.saveCachedSnapshot(gate, this.cached);

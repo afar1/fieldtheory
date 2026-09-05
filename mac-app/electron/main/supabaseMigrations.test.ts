@@ -16,9 +16,15 @@ function migrationFiles(): string[] {
 }
 
 describeSupabaseMigrations('Supabase River migrations', () => {
-  it('keeps migration numeric prefixes unique', () => {
-    const prefixes = migrationFiles().map((fileName) => fileName.split('_')[0]);
-    expect(prefixes).toHaveLength(new Set(prefixes).size);
+  it('prevents new migration prefix collisions without renumbering historical migrations', () => {
+    const filesByPrefix = new Map<string, string[]>();
+    for (const file of migrationFiles()) {
+      const prefix = file.split('_')[0];
+      filesByPrefix.set(prefix, [...(filesByPrefix.get(prefix) ?? []), file]);
+    }
+    // These two historical migrations already share 011; changing their IDs would change deployment history.
+    const collisions = Object.fromEntries([...filesByPrefix].filter(([, files]) => files.length > 1));
+    expect(collisions).toEqual({ '011': ['011_fix_popular_commands_insert_policy.sql', '011_sketch_items.sql'] });
   });
 
   it('puts River documents, grants, and pins in the realtime publication', () => {

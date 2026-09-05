@@ -11921,7 +11921,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   isFullScreen={isFullScreen || focusImmersive}
                   onToggleFullScreen={toggleFocusChromeShortcut}
                   dragSpacer={!focusChromeActive}
-                  forceVisibleActions={kindleToolbarVisible ? ['kindle'] : []}
+                  forceVisibleActions={[...(kindleToolbarVisible ? ['kindle' as const] : []), ...(ambientActive ? ['meeting' as const] : [])]}
                   textSize={textSize}
                   onTextSizeChange={setTextSize}
                   showTextSize
@@ -12001,7 +12001,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   meetingTitle={ambientFinishing ? 'Finishing Ambient' : ambientRecording ? 'Stop Ambient' : 'Start Ambient'}
                   meetingRecording={ambientActive}
                   meetingDisabled={ambientActionPending || ambientFinishing}
-                  forceVisibleActions={ambientActive ? ['meeting'] : undefined}
                   onMeetingClick={handleAmbientToggle}
                 />
                 </>

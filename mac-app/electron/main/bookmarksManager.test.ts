@@ -161,6 +161,16 @@ describe('BookmarksManager.getSnapshot', () => {
     ]);
   });
 
+  it('uses X bookmark ordering keys so saving an old post puts it before newer posts', () => {
+    fs.writeFileSync(path.join(tmpDir, 'bookmarks.jsonl'), [
+      { id: 'new-post-old-save', postedAt: '2026-09-04', sortIndex: '900000000000000001' },
+      { id: 'old-post-new-save', postedAt: '2020-01-01', sortIndex: '900000000000000002' },
+    ].map(row => JSON.stringify(row)).join('\n'));
+    const rows = new BookmarksManager().getSnapshot().bookmarks;
+    expect(rows.map(row => row.id)).toEqual(['old-post-new-save', 'new-post-old-save']);
+    expect(rows[0].bookmarkedAt).toBeUndefined();
+  });
+
   it('reuses parsed bookmarks on media refresh and clears removed media attachments', () => {
     const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
     const manifest = path.join(tmpDir, 'media-manifest.json');

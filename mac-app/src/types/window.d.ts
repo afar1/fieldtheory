@@ -542,7 +542,7 @@ interface ClipboardAPI {
   closeWindow: () => Promise<void>;
   showNoTargetError?: (message?: string) => void;
   setSketchMode?: (active: boolean) => void;
-  
+
   // Stack operations for prompt stacking feature
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
   getUniqueStacks?: () => Promise<StackInfo[]>;
@@ -568,7 +568,7 @@ interface ClipboardAPI {
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent?: (itemId: number) => Promise<{ success: boolean; error?: string }>;
   setUseImprovedVersion?: (itemId: number, useImproved: boolean) => Promise<{ success: boolean; error?: string }>;
-  
+
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession?: () => Promise<boolean>;
@@ -576,7 +576,7 @@ interface ClipboardAPI {
   forceSyncAll?: () => Promise<number>;
   getSyncEnabled?: () => Promise<boolean>;
   setSyncEnabled?: (enabled: boolean) => Promise<boolean>;
-  
+
   // Continuous Context mode - multi-screenshot capture sessions
   getContinuousContextState?: () => Promise<ContinuousContextState>;
   getContinuousContextEnabled?: () => Promise<boolean>;
@@ -590,11 +590,11 @@ interface ClipboardAPI {
   // Permission banner settings
   getHideScreenRecordingBanner?: () => Promise<boolean>;
   setHideScreenRecordingBanner?: (hide: boolean) => Promise<boolean>;
-  
+
   // Cursor status indicator settings
   getCursorStatusEnabled?: () => Promise<boolean>;
   setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
-  
+
   // Performance HUD settings and process telemetry
   getPerformanceHudEnabled?: () => Promise<boolean>;
   setPerformanceHudEnabled?: (enabled: boolean) => Promise<boolean>;
@@ -1064,7 +1064,7 @@ interface SocialAPI {
   updateFeedbackStatus: (feedbackId: string, status: 'open' | 'resolved' | 'archived') => Promise<boolean>;
   getActivityLog: (feedbackId: string) => Promise<ActivityLogEntry[]>;
   setFeedbackRealtimeActive: (active: boolean) => Promise<boolean>;
-  
+
   // Contact operations
   getContacts: () => Promise<SocialContact[]>;
   addFriend: (email: string) => Promise<{ success: boolean; error?: string }>;
@@ -1072,14 +1072,14 @@ interface SocialAPI {
   getPendingInvites: () => Promise<SocialContact[]>;
   respondToInvite: (contactId: string, accept: boolean) => Promise<boolean>;
   removeFriend: (contactId: string) => Promise<boolean>;
-  
+
   // Hot mic
   getHotMic: () => Promise<boolean>;
   setHotMic: (enabled: boolean) => Promise<boolean>;
-  
+
   // Admin check
   isAdmin: () => Promise<boolean>;
-  
+
   // Events
   onMessageReceived: (callback: (message: SocialMessage) => void) => () => void;
 }
@@ -1505,18 +1505,20 @@ interface MeetingActionResult {
   summaryError?: string;
 }
 
-type AmbientAccessMode = 'codex-defaults';
+declare global {
+  type AmbientAccessMode = 'codex-defaults';
 
-interface AmbientSettingsValue {
-  instructions: string;
-  accessMode: AmbientAccessMode;
-}
+  interface AmbientSettingsValue {
+    instructions: string;
+    accessMode: AmbientAccessMode;
+  }
 
-interface AmbientSettingsSaveResult {
-  success: boolean;
-  settings: AmbientSettingsValue;
-  appliedToActiveTask: boolean;
-  error?: string;
+  interface AmbientSettingsSaveResult {
+    success: boolean;
+    settings: AmbientSettingsValue;
+    appliedToActiveTask: boolean;
+    error?: string;
+  }
 }
 
 interface LauncherFileInfo {

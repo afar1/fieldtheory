@@ -2659,7 +2659,9 @@ describe('LibrarianView render', () => {
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
     const terminalButton = screen.getByRole('button', { name: 'Close Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
-    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    const kindleButton = screen.getByRole('button', { name: 'Send to Kindle' });
+    expect(riverButton.nextElementSibling).toBe(kindleButton);
+    expect(kindleButton.nextElementSibling).toBe(popOutButton);
     const popOutDivider = popOutButton.nextElementSibling;
     expect(popOutDivider?.getAttribute('data-content-toolbar-divider')).toBe('true');
     expect(popOutDivider?.nextElementSibling).toBe(markdownButton);
