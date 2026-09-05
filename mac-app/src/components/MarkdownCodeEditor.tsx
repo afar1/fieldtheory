@@ -46,6 +46,7 @@ import {
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { markdownTableRanges, markdownTablesExtension } from './markdownTables';
 import {
   HighlightStyle,
   syntaxHighlighting,
@@ -2747,6 +2748,7 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   const decorations: RenderedMarkdownDecoration[] = [];
   const bookmarksById = new Map((bookmarksSnapshot?.bookmarks ?? []).map((bookmark) => [bookmark.id, bookmark] as const));
   const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, [...ranges, ...stableRanges]);
+  const tables = state.field(markdownTableRanges, false) ?? [];
   const inlineHtmlBlocks = getRenderedMarkdownInlineHtmlBlocks(state);
   const visibleInlineHtmlBlocks = inlineHtmlBlocks.filter((block) => (
     ranges.some((range) => rangesIntersect(block, range))
@@ -2769,6 +2771,8 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   for (const range of lineRanges) {
     let codeFenceMarker = getRenderedMarkdownCodeFenceMarkerBeforeLine(state, range.fromLine);
     for (let lineNumber = range.fromLine; lineNumber <= range.toLine; lineNumber += 1) {
+      const lineFrom = state.doc.line(lineNumber).from;
+      if (tables.some((table) => lineFrom >= table.from && lineFrom <= table.to)) continue;
       if (visibleInlineHtmlBlocks.some((block) => lineNumber >= block.fromLine && lineNumber <= block.toLine)) {
         continue;
       }
@@ -4007,7 +4011,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           bookmarksVersionCompartment.of(renderedMarkdownBookmarksVersionFacet.of(bookmarksVersion)),
           findQueryCompartment.of(markdownCodeEditorFindQueryFacet.of(findQuery)),
           markdownCodeEditorFindMatchExtension,
-          ...(presentation === 'rendered' ? [createRenderedMarkdownEditorPresentationExtension()] : []),
+          ...(presentation === 'rendered' ? [markdownTablesExtension, createRenderedMarkdownEditorPresentationExtension()] : []),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
