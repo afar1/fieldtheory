@@ -115,7 +115,9 @@
     "node_modules/**/*",
     "!electron-dist/**/*.test.js",
     "!electron-dist/**/*.test.js.map",
-    "!node_modules/.cache/**/*",
+    "!**/node_modules/.cache{,/**/*}",
+    "!**/node_modules/.vite{,/**/*}",
+    "!**/node_modules/.vitest{,/**/*}",
     "!node_modules/.bin/**/*",
     "!node_modules/@dnd-kit{,/**/*}",
     "!node_modules/@electron{,/**/*}",
@@ -151,5 +153,6 @@
   ],
   "directories": {
     "output": "release-experimental"
-  }
+  },
+  "afterPack": "scripts/verify-packaged-archive.cjs"
 }

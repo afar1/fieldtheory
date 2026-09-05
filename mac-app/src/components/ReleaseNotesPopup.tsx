@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.36': [
+    'Fixed a packaging error that prevented the app from starting',
+    'Packaged file integrity and startup JavaScript are now checked before signing',
+    'Includes the latest launcher search, keyboard browsing, and wide-table improvements',
+  ],
   '0.3.35': [
     'Arrow Down and Show more browse beyond the first five recent files, clipboard items, and bookmarks',
     'Launcher search includes clipboard, bookmarks, and Markdown files, with local sources loaded promptly',
@@ -506,6 +511,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.36': 'September 5, 2026',
   '0.3.35': 'September 5, 2026',
   '0.3.34': 'September 5, 2026',
   '0.3.33': 'September 5, 2026',

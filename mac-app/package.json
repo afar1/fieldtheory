@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "description": "Field Theory local-first macOS app.",
   "private": true,
   "license": "AGPL-3.0-or-later",
@@ -233,7 +233,9 @@
       "node_modules/**/*",
       "!electron-dist/**/*.test.js",
       "!electron-dist/**/*.test.js.map",
-      "!node_modules/.cache/**/*",
+      "!**/node_modules/.cache{,/**/*}",
+      "!**/node_modules/.vite{,/**/*}",
+      "!**/node_modules/.vitest{,/**/*}",
       "!node_modules/.bin/**/*",
       "!node_modules/@dnd-kit{,/**/*}",
       "!node_modules/@electron{,/**/*}",
@@ -272,6 +274,7 @@
     },
     "asarUnpack": [
       "node_modules/{fieldtheory,commander,dotenv,sql.js,sql.js-fts5,undici}/**/*"
-    ]
+    ],
+    "afterPack": "scripts/verify-packaged-archive.cjs"
   }
 }

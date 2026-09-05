@@ -31,6 +31,8 @@ npm run guard:package-safety:experimental
 npm run guard:electron-dist-requires
 ```
 
+Finish tests before packaging. Do not run tests, builds, dependency installs, or other file writers against the same checkout while electron-builder is archiving it. The afterPack hook verifies every archived file hash and parses the Electron JavaScript before signing; signature/notarization checks alone do not validate JavaScript or archive offsets.
+
 Do not expect release-channel guards or package commands to pass from feature branches.
 
 ## Scope Guidelines

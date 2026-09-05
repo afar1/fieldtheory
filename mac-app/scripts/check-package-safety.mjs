@@ -96,6 +96,15 @@ if (!Array.isArray(files)) {
   }
 }
 
+if (buildConfig.afterPack !== 'scripts/verify-packaged-archive.cjs') {
+  failures.push('build.afterPack must verify packaged archive integrity before signing');
+}
+for (const cache of ['.vite', '.vitest', '.cache']) {
+  if (!files?.includes(`!**/node_modules/${cache}{,/**/*}`)) {
+    failures.push(`build.files must exclude ${cache} caches at every dependency depth`);
+  }
+}
+
 if (!fs.existsSync(path.join(rootDir, 'browser-library.html'))) {
   failures.push('missing browser-library.html renderer entrypoint');
 }
