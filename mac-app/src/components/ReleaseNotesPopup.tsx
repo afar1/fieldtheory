@@ -60,6 +60,9 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.37': [
+    'Restored Command-key release after portable paste to address interrupted follow-up typing',
+  ],
   '0.3.36': [
     'Fixed a packaging error that prevented the app from starting',
     'Packaged file integrity and startup JavaScript are now checked before signing',
@@ -511,6 +514,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.37': 'September 5, 2026',
   '0.3.36': 'September 5, 2026',
   '0.3.35': 'September 5, 2026',
   '0.3.34': 'September 5, 2026',
