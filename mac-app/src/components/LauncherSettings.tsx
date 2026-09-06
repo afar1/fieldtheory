@@ -1,4 +1,5 @@
-import { LAUNCHER_SECTIONS, normalizeLauncherSections, type LauncherSection } from '../../electron/shared/launcherSections';
+import { getLauncherSidebarFolders } from './WikiSidebar';
+import { LAUNCHER_SECTIONS, launcherFolderSection, parseLauncherFolder, normalizeLauncherSections, type LauncherSection } from '../../electron/shared/launcherSections';
 import { useCallback, useEffect, useState } from 'react';
 import {
   getLauncherDefaultPanelSourceLabel,
@@ -21,6 +22,10 @@ const ACTIVE_LAUNCHER_ROOT_KINDS: LauncherRootSearchKind[] = ['file'];
 export default function LauncherSettings() {
   const { theme } = useTheme();
   const [sections, setSections] = useState<LauncherSection[]>([...LAUNCHER_SECTIONS]);
+  const [folderOptions, setFolderOptions] = useState<{ path: string; label: string }[]>([]);
+  const [folderChoice, setFolderChoice] = useState('');
+  const [folderError, setFolderError] = useState('');
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -39,6 +44,19 @@ export default function LauncherSettings() {
         console.error('[LauncherSettings] Failed to load launcher settings:', err);
         setError('Could not load launcher settings. Reopen Settings to try again.');
       });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    Promise.all([window.libraryAPI?.getRoots(), window.libraryAPI?.getHiddenFolders(), window.librarianAPI?.getReadings()])
+      .then(([roots, hidden, readings]) => {
+        if (disposed) return;
+        const options = getLauncherSidebarFolders(roots ?? [], hidden ?? []);
+        if (readings?.length && !(hidden ?? []).includes('artifacts')) options.unshift({ path: 'artifacts', label: 'Artifacts' });
+        setFolderOptions(options);
+        setFoldersLoaded(true);
+      }).catch(() => { if (!disposed) setFolderError('Could not load Library folders. Reopen Settings to retry.'); });
+    return () => { disposed = true; };
   }, []);
 
   const persistEnabledKinds = useCallback(async (next: Record<LauncherRootSearchKind, boolean>) => {
@@ -94,11 +112,25 @@ export default function LauncherSettings() {
             <label style={{ flex: 1, color: theme.text }}>
               <input type="checkbox" checked={enabled} disabled={loading || saving || (enabled && sections.length === 1)}
                 onChange={() => void saveSections(enabled ? sections.filter(item => item !== section) : [...sections, section])} /> {label}
+              {foldersLoaded && parseLauncherFolder(section) && !folderOptions.some(folder => folder.path === parseLauncherFolder(section)?.path)
+                && <small style={{ display: 'block', color: theme.textSecondary }}>Folder unavailable or hidden. Remove it here or restore it in the Library.</small>}
             </label>
             <button style={reorderButtonStyle} aria-label={`Move ${label} up`} disabled={loading || saving || index <= 0} onClick={() => moveSection(index, -1)}>↑</button>
             <button style={reorderButtonStyle} aria-label={`Move ${label} down`} disabled={loading || saving || index < 0 || index === sections.length - 1} onClick={() => moveSection(index, 1)}>↓</button>
           </div>;
         })}
+        <div style={{ display: 'flex', gap: 8, paddingTop: 12 }}>
+          <select aria-label="Library folder" value={folderChoice} onChange={event => setFolderChoice(event.target.value)} disabled={loading || saving} style={{ flex: 1, minWidth: 0 }}>
+            <option value="">Choose a Library folder…</option>
+            {folderOptions.filter(folder => !sections.some(section => parseLauncherFolder(section)?.path === folder.path)).map(folder =>
+              <option key={folder.path} value={folder.path}>{folder.label}</option>)}
+          </select>
+          <button style={reorderButtonStyle} disabled={loading || saving || !folderChoice} onClick={() => {
+            const folder = folderOptions.find(item => item.path === folderChoice);
+            if (folder) { void saveSections([...sections, launcherFolderSection(folder)]); setFolderChoice(''); }
+          }}>Add folder</button>
+        </div>
+        {folderError && <p role="alert" style={{ color: theme.error }}>{folderError}</p>}
         {error && <p role="alert" style={{ color: theme.error }}>{error}</p>}
       </SettingsCard>
       <SettingsCard theme={theme}>

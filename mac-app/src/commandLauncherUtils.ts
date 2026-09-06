@@ -1,3 +1,4 @@
+import { parseLauncherFolder, type LauncherSection } from '../electron/shared/launcherSections';
 import type { MarkdownContentMode } from './utils/markdownContentMode';
 
 // =============================================================================
@@ -114,7 +115,9 @@ export function formatLauncherBookmarkEmbedMarkdown(input: {
   return `![${alt}](bookmark://${encodeURIComponent(input.bookmarkId)})`;
 }
 
-export function getLauncherDefaultPanelSourceLabel(source: 'recents' | 'clipboard' | 'bookmarks' | 'river'): string {
+export function getLauncherDefaultPanelSourceLabel(source: LauncherSection): string {
+  const folder = parseLauncherFolder(source);
+  if (folder) return folder.label;
   if (source === 'river') return 'River';
   if (source === 'clipboard') return 'Clipboard';
   if (source === 'bookmarks') return 'Bookmarks';
@@ -962,15 +965,17 @@ export function isLauncherRiverItem(item: { source?: string; sourceLabel?: strin
 export function getLauncherDefaultPanelItems<T>(input: {
   expanded: boolean;
   isRootIdle: boolean;
-  source: 'recents' | 'clipboard' | 'bookmarks' | 'river';
+  source: LauncherSection;
   recentItems: T[];
   clipboardItems: T[];
   bookmarkItems?: T[];
   riverItems?: T[];
+  folderItems?: T[];
   maxItems?: number;
 }): T[] {
   if (!input.expanded || !input.isRootIdle) return [];
   const maxItems = input.maxItems ?? Infinity;
+  if (parseLauncherFolder(input.source)) return (input.folderItems ?? []).slice(0, maxItems);
   if (input.source === 'river') return (input.riverItems ?? []).slice(0, maxItems);
   if (input.source === 'clipboard') return input.clipboardItems.slice(0, maxItems);
   if (input.source === 'bookmarks') return (input.bookmarkItems ?? []).slice(0, maxItems);

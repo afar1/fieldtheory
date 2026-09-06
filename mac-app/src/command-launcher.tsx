@@ -1,4 +1,4 @@
-import { normalizeLauncherSections, nextLauncherSection, type LauncherSection } from '../electron/shared/launcherSections';
+import { normalizeLauncherSections, parseLauncherFolder, nextLauncherSection, type LauncherSection } from '../electron/shared/launcherSections';
 /**
  * Command Launcher UI
  *
@@ -394,7 +394,7 @@ const LAUNCHER_DEFAULT_PANEL_EXPANDED_STORAGE_KEY = 'fieldTheory.launcher.defaul
 function readLauncherDefaultPanelSource(): LauncherDefaultPanelSource {
   try {
     const stored = localStorage.getItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY);
-    return stored === 'clipboard' || stored === 'bookmarks' || stored === 'river' ? stored : 'recents';
+    return normalizeLauncherSections([stored])[0];
   } catch {
     return 'recents';
   }
@@ -2253,6 +2253,15 @@ export function CommandLauncher() {
     && launcherDefaultPanelSource === 'bookmarks';
   const clipboardLauncherModeActive = clipboardSearchQuery !== null || defaultClipboardPanelActive;
   const riverPanelItems = useMemo(() => [...libraryMarkdownSearchItems, ...commandItems, ...artifactReadings].filter(isLauncherRiverItem), [libraryMarkdownSearchItems, commandItems, artifactReadings]);
+  const getFolderPanelItems = useCallback((source: LauncherSection, search = ''): LauncherItem[] => {
+    const folder = parseLauncherFolder(source);
+    if (!folder) return [];
+    if (folder.path === 'artifacts') return filterLauncherNamespaceItems(artifactReadings, search);
+    return filterLauncherDirectoryNamespaceItems(
+      [...libraryMarkdownSearchItems, ...commandItems, ...artifactReadings],
+      { label: folder.label, directoryPath: folder.path }, search,
+    );
+  }, [libraryMarkdownSearchItems, commandItems, artifactReadings]);
   const defaultPanelItems = useMemo((): LauncherItem[] => {
     return getLauncherDefaultPanelItems({
       expanded: launcherDefaultPanelExpanded,
@@ -2262,8 +2271,9 @@ export function CommandLauncher() {
       clipboardItems: clipboardLauncherItems,
       bookmarkItems: bookmarkPostItems,
       riverItems: riverPanelItems,
+      folderItems: getFolderPanelItems(launcherDefaultPanelSource),
     });
-  }, [riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
+  }, [getFolderPanelItems, riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, launcherDefaultPanelExpanded, launcherDefaultPanelSource, recentFileItems]);
 
   const getDefaultPanelItemsForSource = useCallback((source: LauncherDefaultPanelSource, expanded: boolean): LauncherItem[] => (
     getLauncherDefaultPanelItems({
@@ -2274,8 +2284,9 @@ export function CommandLauncher() {
       clipboardItems: clipboardLauncherItems,
       bookmarkItems: bookmarkPostItems,
       riverItems: riverPanelItems,
+      folderItems: getFolderPanelItems(source),
     })
-  ), [riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+  ), [getFolderPanelItems, riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
 
   const nextDefaultPanelSource = nextLauncherSection(launcherDefaultPanelSource, launcherSections);
   const defaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(launcherDefaultPanelSource);
@@ -2949,6 +2960,13 @@ export function CommandLauncher() {
       return;
     }
 
+    if (parseLauncherFolder(launcherDefaultPanelSource) && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource && clipboardSearchQuery === null && fileSearchQuery === null) {
+      const results = getFolderPanelItems(launcherDefaultPanelSource, q);
+      showResults(results);
+      resizeForResults(results.length, true);
+      return;
+    }
+
     if (directoryNamespace) {
       const results = filterLauncherDirectoryNamespaceItems(
         [...libraryMarkdownSearchItems, ...artifactReadings, ...commandItems],
@@ -3037,7 +3055,7 @@ export function CommandLauncher() {
         : getLauncherElapsedMs(launcherFirstInputAtRef.current),
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults, rootSourcesLoading]);
+  }, [getFolderPanelItems, launcherDefaultPanelSource, committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, defaultPanelItems, isRootIdleLauncher, launcherDefaultPanelExpanded, localInstructionFallbackForQuery, resizeLauncher, resetSoftSelection, selectIndex, launcherDataLoading, libraryMarkdownLoading, getNormalModeMatches, applyFilteredResults, rootSourcesLoading]);
 
   // Reset soft selection only when results change before keyboard navigation starts.
   useEffect(() => {

@@ -1757,6 +1757,22 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
   ], sortMode);
 }
 
+/** Use the same root flattening and visibility rules as the navigation tree. */
+export function getLauncherSidebarFolders(roots: LibraryRoot[], hidden: string[]): { path: string; label: string }[] {
+  const nodes = filterHiddenDefaultSidebarNodes(
+    flattenBuiltinSidebarRoots(roots.map(root => rootToSidebarNode(root, 'alpha', new Map()))), hidden,
+  );
+  const folders: { path: string; label: string }[] = [];
+  const visit = (node: SidebarNode, parent = '') => {
+    if (node.kind !== 'dir') return;
+    const label = parent ? `${parent} / ${node.label}` : node.label;
+    folders.push({ path: `${node.rootPath.replace(/\/+$/, '')}${node.relPath ? `/${node.relPath}` : ''}`, label });
+    node.children.forEach(child => visit(child, label));
+  };
+  nodes.forEach(node => visit(node));
+  return folders;
+}
+
 function rootToSidebarNode(
   root: LibraryRoot,
   sortMode: SortMode,

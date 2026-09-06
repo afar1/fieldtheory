@@ -1,3 +1,4 @@
+import { launcherFolderSection } from '../../electron/shared/launcherSections';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,6 +72,26 @@ describe('launcher source navigation', () => {
       fireEvent.keyDown(input, { key: 'Tab' });
       await waitFor(() => expect(screen.getByRole('button', { name: 'Switch to River' })).toBeTruthy());
       expect(commands.launcherResize.mock.calls.every(([height]) => height === 430)).toBe(true);
+    } finally { window.libraryAPI!.getRoots = originalRoots; commands.getLauncherSettings.mockResolvedValue({}); }
+  });
+
+  it('cycles to a configured folder and searches only inside it', async () => {
+    const folder = launcherFolderSection({ path: '/library', label: 'My notes' });
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', folder] });
+    const originalRoots = window.libraryAPI!.getRoots;
+    window.libraryAPI!.getRoots = vi.fn(async () => [
+      { path: '/library', label: 'Library', builtin: true, tree: files },
+      { path: '/other', label: 'Other', builtin: false, tree: files.map(file => ({ ...file, absPath: `/other/${file.name}.md`, title: `Outside ${file.title}` })) },
+    ]) as typeof originalRoots;
+    try {
+      const { container, input } = await mount('recents');
+      fireEvent.keyDown(input, { key: 'Tab' });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Markdown note'));
+      expect(container.textContent).not.toContain('Outside Markdown');
+      fireEvent.change(input, { target: { value: 'Clipboard example' } });
+      await waitFor(() => expect(container.querySelectorAll('[data-item-index]')).toHaveLength(0));
+      fireEvent.change(input, { target: { value: 'Markdown note 12' } });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Markdown note 12'));
     } finally { window.libraryAPI!.getRoots = originalRoots; commands.getLauncherSettings.mockResolvedValue({}); }
   });
 
