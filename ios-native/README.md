@@ -1,10 +1,12 @@
 # Field Theory for iPhone and iPad
 
-Fully native SwiftUI app (iOS 26). Four sections: **Library** (synced
+Fully native SwiftUI app (iOS 26). Three sections: **Library** (synced
 markdown with a rendered reader and a live-styled TextKit 2 editor), **River**
 (team-shared documents as cards with Mailbox-style read/unread swipes), and
-**Voice** (fully offline whisper.cpp transcription with stackable items), plus
-**Goals** (a local feedback feed for evaluating product directions).
+**Voice** (on-device whisper.cpp transcription with stackable items).
+
+Goals is temporarily excluded from the app target, including its bundled cards.
+Its source and local feedback schema remain for future work.
 
 The same target runs on iPhone and iPad. Compact windows retain the phone tab
 bar and stacked navigation. Regular-width iPad windows use an adaptive top tab

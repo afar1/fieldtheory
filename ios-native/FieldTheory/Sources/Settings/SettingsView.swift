@@ -128,7 +128,14 @@ struct SettingsView: View {
                 } header: {
                     Text("Account")
                 } footer: {
-                    Text("Everything works offline — reading, writing, recording, transcribing. A connection is only used to sync. Signing out removes the synced copy from this device.")
+                    Text("After signing in and downloading the speech model, reading, writing, and transcription work offline. Documents and transcripts sync when connected. Signing out removes local documents, transcripts, and unfinished recordings.")
+                }
+
+                Section("Privacy & Support") {
+                    Link("Privacy Policy", destination: AppLinks.privacyPolicy)
+                        .accessibilityIdentifier("PrivacyPolicyLink")
+                    Link("Contact Support", destination: AppLinks.support)
+                        .accessibilityIdentifier("SupportLink")
                 }
 
                 Section {

@@ -11,9 +11,10 @@ final class AppModel {
     let library: LibraryStore
     let river: RiverStore
     let transcripts: TranscriptStore
-    let goals: GoalsStore
     let sync: SyncEngine
     let recorder: RecorderController
+
+    private(set) var isSigningOut = false
 
     private let db: Database
 
@@ -26,7 +27,6 @@ final class AppModel {
         let library = LibraryStore(db: db)
         let river = RiverStore(db: db)
         let transcripts = TranscriptStore(db: db)
-        let goals = GoalsStore(db: db)
         let auth = AuthStore(client: client)
         let sync = SyncEngine(client: client, db: db, settings: settings,
                               library: library, river: river, transcripts: transcripts)
@@ -37,14 +37,16 @@ final class AppModel {
         self.library = library
         self.river = river
         self.transcripts = transcripts
-        self.goals = goals
         self.sync = sync
         self.recorder = RecorderController()
+        self.recorder.setWorkEnabled(auth.hasIdentity)
 
         auth.onPhaseChange = { [weak self] phase in
             guard let self else { return }
             switch phase {
             case .signedIn(let userId, let email):
+                guard !self.isSigningOut else { return }
+                self.recorder.setWorkEnabled(true)
                 self.sync.start(userId: userId, email: email)
             case .signedOut:
                 // Session died (offline, refresh failure, revocation). Stop
@@ -60,7 +62,6 @@ final class AppModel {
             await library.reload()
             await river.reload()
             await transcripts.reload()
-            await goals.reload()
             if case .signedIn(let userId, let email) = auth.phase {
                 sync.start(userId: userId, email: email)
             }
@@ -129,8 +130,21 @@ final class AppModel {
     /// The explicit sign-out: ends the session, clears identity, wipes the
     /// device copy. The only road back to the login screen.
     func signOutCompletely() async {
+        guard !isSigningOut else { return }
+        isSigningOut = true
+        defer { isSigningOut = false }
+#if targetEnvironment(simulator)
+        previewMode = false
+#endif
         sync.stop()
+        auth.clearIdentity()
+        do {
+            try await recorder.discardRecordings()
+        } catch {
+            auth.lastError = "Could not remove saved recordings. Recording stays disabled until cleanup succeeds."
+        }
         await auth.signOut()
+        // A token-refresh event may have repersisted identity while cleanup awaited.
         auth.clearIdentity()
         await wipeLocalData()
     }
@@ -142,6 +156,7 @@ final class AppModel {
 
     func enterPreviewMode() {
         previewMode = true
+        recorder.setWorkEnabled(true)
         Task {
             await PreviewFixtures.seed(library: library, river: river, transcripts: transcripts, db: db)
             await library.reload()
@@ -157,6 +172,5 @@ final class AppModel {
         await library.reload()
         await river.reload()
         await transcripts.reload()
-        await goals.reload()
     }
 }

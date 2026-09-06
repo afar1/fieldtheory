@@ -17,6 +17,7 @@ targets:
     platform: iOS
     sources:
       - path: FieldTheory/Tests
+        excludes: [GoalsTests.swift]
     dependencies:
       - target: FieldTheory
     settings:
@@ -43,7 +44,9 @@ targets:
         - FieldTheoryUITests
     sources:
       - path: FieldTheory/Sources
+        excludes: [Goals]
       - path: FieldTheory/Resources
+        excludes: [goals-cards.json]
     dependencies:
       - package: Supabase
         product: Supabase

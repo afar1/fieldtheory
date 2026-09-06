@@ -35,6 +35,14 @@ final class RecorderController {
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
     private var draining = false
+    private var workEnabled = false
+    private var workGeneration = UUID()
+    private var deliveryTask: Task<Void, Never>?
+    private let pendingDirectory: URL
+    private let defaults: UserDefaults
+    private let transcribeOverride: ((URL, URL) async throws -> String)?
+    private let modelURLOverride: (() -> URL?)?
+    private static let cleanupKey = "voice-recording-cleanup-required"
     private var backgroundTasks = Set<UIBackgroundTaskIdentifier>()
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "Voice")
 
@@ -48,12 +56,19 @@ final class RecorderController {
     let models = ModelManager()
 
     /// Recordings waiting for the model; survives relaunches.
-    static var pendingAudioDir: URL {
+    nonisolated static var pendingAudioDir: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pending-audio", isDirectory: true)
     }
 
-    init() {
+    init(pendingDirectory: URL = RecorderController.pendingAudioDir,
+         defaults: UserDefaults = .standard,
+         transcribe: ((URL, URL) async throws -> String)? = nil,
+         modelURL: (() -> URL?)? = nil) {
+        self.pendingDirectory = pendingDirectory
+        self.defaults = defaults
+        self.transcribeOverride = transcribe
+        self.modelURLOverride = modelURL
         refreshPendingAudioStatus()
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -69,6 +84,62 @@ final class RecorderController {
 
     var isRecording: Bool { phase == .recording }
 
+    /// Offline identity is sufficient; explicit sign-out disables all work.
+    /// A persisted cleanup marker makes an interrupted/failed sign-out fail closed.
+    func setWorkEnabled(_ enabled: Bool) {
+        guard enabled else {
+            workEnabled = false
+            return
+        }
+        if defaults.bool(forKey: Self.cleanupKey) {
+            do {
+                try removeRecordingFiles()
+                defaults.removeObject(forKey: Self.cleanupKey)
+                refreshPendingAudioStatus()
+            } catch {
+                lastError = "Could not remove signed-out recordings. Please try signing in again."
+                return
+            }
+        }
+        workEnabled = true
+    }
+
+    /// Stop capture immediately, invalidate every suspended completion, then
+    /// settle any delivery already in progress before AppModel wipes its stores.
+    func discardRecordings() async throws {
+        workEnabled = false
+        workGeneration = UUID()
+        defaults.set(true, forKey: Self.cleanupKey)
+        meterTimer?.invalidate()
+        meterTimer = nil
+        recorder?.stop()
+        recorder = nil
+        phase = .idle
+        startedAt = nil
+        level = 0
+        elapsed = 0
+        draining = false
+        for task in Array(backgroundTasks) { finishBackgroundTask(task) }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        await deliveryTask?.value
+        deliveryTask = nil
+        try removeRecordingFiles()
+        segmentURLs = []
+        defaults.removeObject(forKey: Self.cleanupKey)
+        lastError = nil
+        refreshPendingAudioStatus()
+    }
+
+    private func removeRecordingFiles() throws {
+        let files = FileManager.default
+        if files.fileExists(atPath: pendingDirectory.path) {
+            try files.removeItem(at: pendingDirectory)
+        }
+        for url in segmentURLs where files.fileExists(atPath: url.path) {
+            try files.removeItem(at: url)
+        }
+    }
+
     func toggle() {
         switch phase {
         case .idle: start()
@@ -78,11 +149,12 @@ final class RecorderController {
     }
 
     func start() {
-        guard phase == .idle else { return }
+        guard workEnabled, phase == .idle else { return }
+        let generation = workGeneration
         lastError = nil
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.workEnabled, self.workGeneration == generation else { return }
                 guard granted else {
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     return
@@ -168,7 +240,7 @@ final class RecorderController {
     }
 
     func stopAndTranscribe() async {
-        guard phase == .recording else { return }
+        guard workEnabled, phase == .recording else { return }
         meterTimer?.invalidate()
         recorder?.stop()
         recorder = nil
@@ -199,11 +271,18 @@ final class RecorderController {
         await drainPendingQueue()
     }
 
-    private func transcribeSegments(_ urls: [URL], modelURL: URL) async throws -> String {
+    private func transcribeSegments(_ urls: [URL], modelURL: URL, generation: UUID) async throws -> String {
         var parts: [String] = []
         for url in urls {
+            guard workEnabled, workGeneration == generation else { throw CancellationError() }
             logger.info("Voice transcription starting for \(url.lastPathComponent, privacy: .public)")
-            let text = try await whisper.transcribe(audioURL: url, modelURL: modelURL)
+            let text: String
+            if let transcribeOverride {
+                text = try await transcribeOverride(url, modelURL)
+            } else {
+                text = try await whisper.transcribe(audioURL: url, modelURL: modelURL)
+            }
+            guard workEnabled, workGeneration == generation else { throw CancellationError() }
             logger.info("Voice transcription finished for \(url.lastPathComponent, privacy: .public)")
             if !text.isEmpty { parts.append(text) }
         }
@@ -215,12 +294,13 @@ final class RecorderController {
     /// so one long capture stays one transcript.
     func drainPendingQueue() async {
         refreshPendingAudioStatus()
-        guard !draining, phase != .recording, pendingSessionCount > 0 else { return }
+        guard workEnabled, !draining, phase != .recording, pendingSessionCount > 0 else { return }
+        let generation = workGeneration
         guard onTranscript != nil else {
             logger.info("Voice pending queue is waiting for transcript routing")
             return
         }
-        guard let modelURL = models.readyModelURL else {
+        guard let modelURL = modelURLOverride.map({ $0() }) ?? models.readyModelURL else {
             models.ensureDownloaded()
             return
         }
@@ -230,26 +310,36 @@ final class RecorderController {
         phase = .transcribing
         logger.info("Voice pending queue drain started")
         defer {
-            phase = .idle
-            startedAt = nil
-            draining = false
             finishBackgroundTask(task)
-            refreshPendingAudioStatus()
-            logger.info("Voice pending queue drain ended with \(self.pendingSessionCount, privacy: .public) pending session(s)")
+            if workGeneration == generation {
+                phase = .idle
+                startedAt = nil
+                draining = false
+                refreshPendingAudioStatus()
+            }
         }
 
-        for session in Self.pendingSessions(in: Self.pendingAudioDir) {
+        for session in Self.pendingSessions(in: pendingDirectory) {
             do {
-                let transcript = try await transcribeSegments(session.files, modelURL: modelURL)
+                let transcript = try await transcribeSegments(session.files, modelURL: modelURL, generation: generation)
+                guard workEnabled, workGeneration == generation else { return }
                 if transcript.isEmpty {
                     onNotice?("No speech detected", "waveform.badge.magnifyingglass")
                 } else {
-                    await onTranscript?(transcript)
+                    let task = Task<Void, Never> {
+                        guard workEnabled, workGeneration == generation else { return }
+                        await onTranscript?(transcript)
+                    }
+                    deliveryTask = task
+                    await task.value
+                    guard workEnabled, workGeneration == generation else { return }
+                    deliveryTask = nil
                 }
                 for url in session.files { try? FileManager.default.removeItem(at: url) }
                 lastError = nil
                 refreshPendingAudioStatus()
             } catch {
+                guard workEnabled, workGeneration == generation else { return }
                 lastError = "Transcription failed: \(error.localizedDescription)"
                 logger.error("Voice transcription failed: \(error.localizedDescription, privacy: .public)")
                 onNotice?("Saved — retry transcription when Field Theory is open", "clock.arrow.circlepath")
@@ -264,13 +354,13 @@ final class RecorderController {
     }
 
     func refreshPendingAudioStatus() {
-        pendingSessionCount = Self.pendingSessions(in: Self.pendingAudioDir).count
+        pendingSessionCount = Self.pendingSessions(in: pendingDirectory).count
     }
 
     private func queueForRetry(_ urls: [URL]) -> [URL] {
         guard !urls.isEmpty else { return [] }
         do {
-            try FileManager.default.createDirectory(at: Self.pendingAudioDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: pendingDirectory, withIntermediateDirectories: true)
         } catch {
             lastError = "Could not save recording: \(error.localizedDescription)"
             logger.error("Voice pending directory could not be created: \(error.localizedDescription, privacy: .public)")
@@ -280,7 +370,7 @@ final class RecorderController {
 
         var queued: [URL] = []
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
-            let parked = Self.pendingAudioDir.appendingPathComponent(url.lastPathComponent)
+            let parked = pendingDirectory.appendingPathComponent(url.lastPathComponent)
             do {
                 if parked != url, FileManager.default.fileExists(atPath: parked.path) {
                     try FileManager.default.removeItem(at: parked)

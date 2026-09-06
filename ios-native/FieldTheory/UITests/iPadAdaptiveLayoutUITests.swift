@@ -16,7 +16,7 @@ final class iPadAdaptiveLayoutUITests: XCTestCase {
         app.launchArguments = ["ft-preview"]
         app.launch()
 
-        for tab in ["Voice", "Library", "River", "Goals"] {
+        for tab in ["Voice", "Library", "River"] {
             let button = app.buttons[tab].firstMatch
             XCTAssertTrue(button.waitForExistence(timeout: 10), "\(tab) navigation item is missing")
             button.tap()
@@ -25,7 +25,7 @@ final class iPadAdaptiveLayoutUITests: XCTestCase {
         attachScreenshot(named: "Field Theory iPad Landscape", app: app)
 
         XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(app.buttons["Goals"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["River"].firstMatch.waitForExistence(timeout: 5))
         attachScreenshot(named: "Field Theory iPad Portrait", app: app)
     }
 

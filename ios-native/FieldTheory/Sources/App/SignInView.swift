@@ -93,6 +93,11 @@ struct SignInView: View {
 
             Spacer()
 
+            Link("Privacy Policy", destination: AppLinks.privacyPolicy)
+                .accessibilityIdentifier("PrivacyPolicyLink")
+                .font(.footnote)
+                .padding(.bottom, 8)
+
 #if targetEnvironment(simulator)
             Button("Preview UI with sample data") {
                 model.enterPreviewMode()

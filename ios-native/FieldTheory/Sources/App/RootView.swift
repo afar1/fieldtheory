@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: Hashable, CaseIterable {
-    case voice, library, river, goals
+    case voice, library, river
 }
 
 /// Screen-edge strips reserved for hopping between the sections.
@@ -37,7 +37,9 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if model.showMainUI {
+            if model.isSigningOut {
+                ProgressView("Signing out…")
+            } else if model.showMainUI {
                 mainTabs
             } else if model.auth.phase == .loading {
                 ProgressView()
@@ -58,7 +60,6 @@ struct RootView: View {
             }
             if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
             if model.launchDirectives.contains("ft-tab-voice") { selectedTab = .voice }
-            if model.launchDirectives.contains("ft-tab-goals") { selectedTab = .goals }
         }
     }
 
@@ -75,9 +76,6 @@ struct RootView: View {
                     RiverView(showSettings: $showSettings)
                 }
                 .badge(model.river.unreadCount)
-                Tab("Goals", systemImage: "scope", value: AppTab.goals) {
-                    GoalsView(showSettings: $showSettings)
-                }
             }
             // Compact windows keep the phone tab bar. Regular-width iPad
             // windows gain a collapsible sidebar without duplicating routes.
@@ -105,7 +103,7 @@ struct RootView: View {
                     }
             )
             .overlay {
-                if selectedTab != .voice && selectedTab != .goals {
+                if selectedTab != .voice {
                     DraggableMicOverlay()
                 }
             }
@@ -127,10 +125,13 @@ struct RootView: View {
     /// land in Voice as a fresh transcription.
     private func wireRecorder() {
         model.recorder.onTranscript = { text in
+            guard model.showMainUI, !model.isSigningOut else { return }
+            let userID = model.auth.userId
             if editorFocus.insert(text) {
                 toast.show("Inserted", symbol: "text.cursor")
             } else {
                 await model.transcripts.add(text: text)
+                guard !model.isSigningOut, model.auth.userId == userID else { return }
                 if model.settings.autoCopyTranscripts {
                     UIPasteboard.general.string = text
                 }
