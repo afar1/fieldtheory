@@ -125,7 +125,8 @@ const testState = vi.hoisted(() => {
       this.bounds = { ...bounds };
     }
 
-    setFocusable(_focusable: boolean): void {}
+    focusableCalls: boolean[] = [];
+    setFocusable(focusable: boolean): void { this.focusableCalls.push(focusable); }
 
     emitEvent(event: string, ...args: unknown[]): void {
       this.emit(event, ...args);
@@ -687,6 +688,41 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     expect(floating?.isVisible()).toBe(true);
     expect(floating?.getOpacity()).toBe(0);
+  });
+
+  it('preserves focus restoration for interactive notch controls', () => {
+    manager = createNotchManager();
+    manager.setClipboardManager({ queryItems: () => [] });
+    const unified = testState.getWindowBySide('unified')!;
+    manager.setLeftWindowFocusable(false);
+    manager.setLeftWindowFocusable(true);
+    expect(unified.focusableCalls.slice(-2)).toEqual([false, true]);
+  });
+
+  it('keeps floating controls non-focusable when Library dismissal restores focus', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({ queryItems: () => [] });
+    manager.setState('recording');
+    const floating = testState.getWindowBySide('floating')!;
+
+    manager.setLeftWindowFocusable(false);
+    manager.setLeftWindowFocusable(true);
+    expect(floating.focusableCalls.at(-1)).toBe(false);
+    expect(floating.isVisible()).toBe(true);
+    expect(floating.getOpacity()).toBe(1);
+    expect(floating.ignoreMouseEventsCalls.at(-1)).toBe(false);
+
+    manager.setState('idle');
+    manager.setLeftWindowFocusable(true);
+    expect(floating.focusableCalls.at(-1)).toBe(false);
+    expect(floating.getOpacity()).toBe(0);
+    expect(floating.ignoreMouseEventsCalls.at(-1)).toBe(true);
+
+    manager.setState('recording');
+    expect(floating.getOpacity()).toBe(1);
+    expect(floating.ignoreMouseEventsCalls.at(-1)).toBe(false);
+    expect(floating.focusableCalls).not.toContain(true);
   });
 
   it('does not reveal a concealed floating pill during window property refresh', () => {

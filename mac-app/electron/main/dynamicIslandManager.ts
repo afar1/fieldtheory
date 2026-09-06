@@ -800,7 +800,9 @@ export class DynamicIslandManager extends EventEmitter {
   setLeftWindowFocusable(focusable: boolean): void {
     this.leftWindowFocusable = focusable;
     if (this.window && !this.window.isDestroyed()) {
-      this.window.setFocusable(focusable);
+      // Library dismissal may restore focusability while this panel is invisible.
+      // Floating controls accept mouse clicks without owning keyboard focus.
+      this.window.setFocusable(this.getResolvedRecordingIndicatorMode() === 'floating' ? false : focusable);
     }
   }
 
@@ -815,6 +817,7 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.window || this.window.isDestroyed()) return;
 
     if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      this.window.setFocusable(false);
       this.window.setOpacity(0);
       this.window.setIgnoreMouseEvents(true);
       if (isVisibilityTraceEnabled()) {
