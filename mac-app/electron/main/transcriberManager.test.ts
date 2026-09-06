@@ -3335,3 +3335,25 @@ describe('TranscriberManager parakeet uninstall', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 });
+
+describe('standard recording cold model startup', () => {
+  it('starts capture without awaiting model warmup', async () => {
+    let release!: () => void;
+    const warmup = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    const capture = vi.fn(async () => undefined);
+    const manager: any = Object.create(TranscriberManager.prototype);
+    Object.assign(manager, {
+      status: 'idle', getRecordingSource: () => 'microphone',
+      preferences: { getPreference: (key: string) => key === 'onboardingComplete' },
+      setStatus: vi.fn(), overlay: { showRecording: vi.fn() },
+      registerAbandonHotkey: vi.fn(), soundManager: { play: vi.fn() },
+      resetStandardRealtimeSession: vi.fn(), startLiveTypingSessionIfEligible: vi.fn(),
+      attachStandardChunkListener: vi.fn(), setStandardRealtimeHarvestMode: vi.fn(),
+      warmup, nativeHelper: { startRecording: capture },
+    });
+    await manager.startRecording();
+    expect(warmup).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledWith('microphone');
+    release();
+  });
+});

@@ -980,6 +980,9 @@ export class TranscriberManager extends EventEmitter {
       } else {
         this.nativeHelper.setHarvestMode('off');
       }
+      // Start model loading alongside device capture after sleep/crash. start()
+      // deduplicates concurrent warmup/chunk requests; never delay microphone capture.
+      void this.warmup().catch((error) => log.warn('Standard recording warmup failed: %s', (error as Error).message));
       await this.nativeHelper.startRecording(recordingSource);
       log.info('Recording started');
     } catch (error) {
