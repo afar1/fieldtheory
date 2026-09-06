@@ -2,6 +2,7 @@ const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { Script } = require('node:vm');
 const asar = require('@electron/asar');
+const { normalizeUpdatePermissions } = require('./normalize-update-permissions.cjs');
 
 // Inspect the packaged bytes, never require or execute the application's modules.
 function verifyPackagedArchive(archivePath) {
@@ -51,6 +52,10 @@ exports.default = async function afterPack(context) {
   const resources = context.electronPlatformName === 'darwin'
     ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
     : path.join(context.appOutDir, 'resources');
+  if (context.electronPlatformName === 'darwin') {
+    const changed = normalizeUpdatePermissions(path.resolve(resources, '..', '..'));
+    console.log(`Prepared ${changed} bundle entries for updater quarantine handling before signing`);
+  }
   const result = verifyPackagedArchive(path.join(resources, 'app.asar'));
   console.log(`Packaged archive verified before signing: ${result.files} file hashes, ${result.scripts} JavaScript syntax checks`);
 };
