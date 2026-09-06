@@ -1,4 +1,4 @@
-import { getResizeCaptureStatus, startResizeCapture, stopResizeCapture, isResizeCaptureActive } from '../utils/resizeDiagnostics';
+import { exportResizeCapture, hasResizeCapture, saveResizeCapture, getResizeCaptureStatus, startResizeCapture, stopResizeCapture, isResizeCaptureActive } from '../utils/resizeDiagnostics';
 import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -126,7 +126,14 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
               startResizeCapture();
 
             }
-          }}>Capture / stop resize diagnostics</button>
+          }}>{isResizeCaptureActive() ? 'Stop resize capture' : 'Start new resize capture'}</button>
+          {hasResizeCapture() && !isResizeCaptureActive() && <>
+            <button style={{ ...styles.closeButtonSecondary, borderColor: theme.border, color: theme.text }} onClick={() => { void saveResizeCapture().catch(() => {}); }}>Save capture again</button>
+            <button style={{ ...styles.closeButtonSecondary, borderColor: theme.border, color: theme.text }} onClick={async () => {
+              try { await navigator.clipboard.writeText(exportResizeCapture()); setResizeStatus('Resize capture copied.'); }
+              catch { setResizeStatus('Could not copy resize capture. You can retry saving it.'); }
+            }}>Copy resize capture</button>
+          </>}
           {resizeStatus && <span role="status">{resizeStatus}</span>}
         </div>
         <div style={{ ...styles.footer, borderTopColor: theme.border }}>

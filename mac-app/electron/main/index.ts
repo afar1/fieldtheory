@@ -277,7 +277,8 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
-const renderedEditorDebugLogPath = path.join(process.cwd(), '.logs', 'rendered-editor-debug.jsonl');
+// Resolve after the production userData override, independent of Finder's cwd.
+const getRenderedEditorDebugLogPath = () => path.join(app.getPath('userData'), 'diagnostics', 'rendered-editor-debug.jsonl');
 const scrollDiagnosticsLogPath = path.join(process.cwd(), '.logs', 'scroll-diagnostics.jsonl');
 const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
 const STARTUP_PROFILE_ENABLED = ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_STARTUP_PROFILE ?? '').toLowerCase());
@@ -362,11 +363,11 @@ function clearJsonlDiagnosticLog(filePath: string): { ok: boolean; path: string;
 }
 
 function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
-  return writeJsonlDiagnosticLog(renderedEditorDebugLogPath, entry);
+  return writeJsonlDiagnosticLog(getRenderedEditorDebugLogPath(), entry);
 }
 
 function clearRenderedEditorDebugLog(): { ok: boolean; path: string; error?: string } {
-  return clearJsonlDiagnosticLog(renderedEditorDebugLogPath);
+  return clearJsonlDiagnosticLog(getRenderedEditorDebugLogPath());
 }
 
 function writeScrollDiagnosticsLog(entry: unknown): { ok: boolean; path: string; error?: string } {
@@ -12100,7 +12101,7 @@ function setupClipboardIPCHandlers(): void {
     return writeScrollDiagnosticsLog(entry);
   });
 
-  ipcMain.handle('diagnostics:getRenderedEditorDebugLogPath', () => renderedEditorDebugLogPath);
+  ipcMain.handle('diagnostics:getRenderedEditorDebugLogPath', () => getRenderedEditorDebugLogPath());
 
   ipcMain.handle('diagnostics:clearRenderedEditorDebugLog', () => clearRenderedEditorDebugLog());
 

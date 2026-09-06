@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.43': [
+    'Fixed resize diagnostics saving when Field Theory is opened from Finder',
+    'Copy or retry saving a resize capture from Diagnostics',
+  ],
   '0.3.42': [
     'Capture 60 seconds of resize diagnostics from Settings → Diagnostics to investigate document rendering',
   ],
@@ -535,6 +539,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.43': 'September 6, 2026',
   '0.3.42': 'September 6, 2026',
   '0.3.41': 'September 6, 2026',
   '0.3.40': 'September 5, 2026',

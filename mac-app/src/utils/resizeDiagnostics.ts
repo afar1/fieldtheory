@@ -7,6 +7,9 @@ let events: ResizeDiagnosticEvent[] = [];
 let dropped = 0;
 let cleanup: (() => void) | undefined;
 let saving: Promise<unknown> | undefined;
+let savedCapture: Record<string, unknown> | undefined;
+export const exportResizeCapture = () => JSON.stringify(savedCapture ?? resizeCaptureSnapshot(), null, 2);
+export const hasResizeCapture = () => events.length > 0;
 let status = 'Ready to capture resize diagnostics.';
 export const getResizeCaptureStatus = () => status;
 function setStatus(value: string) { status = value; window.dispatchEvent(new Event('fieldtheory:resize-capture-status')); }
@@ -41,17 +44,24 @@ export async function stopResizeCapture() {
     longestFrameGapMs: Math.max(0, ...frames.map(event => Number(event.gapMs))),
     gapsOver33Ms: frames.filter(event => Number(event.gapMs) > 33).length,
   };
+  savedCapture = { stage: 'resize-capture', timestamp: Date.now(), summary, events: snapshot.events };
+  return saveResizeCapture();
+}
+export async function saveResizeCapture() {
+  if (saving) return saving;
+  if (active || !savedCapture) return;
   saving = (async () => {
     if (!window.diagnosticsAPI?.appendRenderedEditorDebug) throw new Error('Diagnostic log API unavailable');
-    const result = await window.diagnosticsAPI.appendRenderedEditorDebug({ stage: 'resize-capture', timestamp: Date.now(), summary, events: snapshot.events });
+    const result = await window.diagnosticsAPI.appendRenderedEditorDebug(savedCapture);
     if (!result.ok) throw new Error(result.error || 'Could not save resize capture');
     setStatus(`Resize capture saved: ${result.path}`);
     return result;
-  })().catch(error => { setStatus('Could not save resize capture. The in-memory snapshot remains available until the next capture.'); throw error; });
+  })().catch(error => { setStatus('Could not save resize capture. The in-memory snapshot remains available until the next capture.'); throw error; }).finally(() => { saving = undefined; });
   return saving;
 }
 export function startResizeCapture(durationMs = 60_000) {
-  if (active) return;
+  if (active || saving) return;
+  savedCapture = undefined;
   active = true; events = []; dropped = 0; origin = performance.now();
   setStatus('Capturing for 60 seconds. Close Settings, open your file, then resize the window.');
   let lastResize = -Infinity;

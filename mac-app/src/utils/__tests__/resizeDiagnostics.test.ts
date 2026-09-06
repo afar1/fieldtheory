@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { isResizeCaptureActive, recordResizeDiagnostic, resizeCaptureSnapshot, startResizeCapture, stopResizeCapture } from '../resizeDiagnostics';
+import { exportResizeCapture, saveResizeCapture, isResizeCaptureActive, recordResizeDiagnostic, resizeCaptureSnapshot, startResizeCapture, stopResizeCapture } from '../resizeDiagnostics';
 afterEach(async () => { await stopResizeCapture(); vi.useRealTimers(); delete window.diagnosticsAPI; });
 it('buffers metadata until stopped and excludes text', async () => {
   const append = vi.fn(async () => ({ ok: true, path: '/tmp/capture.jsonl' }));
@@ -27,4 +27,18 @@ it('bounds the event buffer and automatically ends capture', async () => {
   await vi.advanceTimersByTimeAsync(1000);
   expect(isResizeCaptureActive()).toBe(false);
   expect(append).toHaveBeenCalledOnce();
+});
+
+it('retains a failed capture for export and retries the identical payload', async () => {
+  const append = vi.fn().mockResolvedValueOnce({ ok: false, error: 'permission denied' }).mockResolvedValueOnce({ ok: true, path: '/data/capture.jsonl' });
+  window.diagnosticsAPI = { appendRenderedEditorDebug: append } as unknown as Window['diagnosticsAPI'];
+  startResizeCapture();
+  recordResizeDiagnostic('layout', { durationMs: 17, text: 'private' });
+  await expect(stopResizeCapture()).rejects.toThrow('permission denied');
+  const exported = JSON.parse(exportResizeCapture());
+  expect(exported.events.some((event: { stage: string }) => event.stage === 'layout')).toBe(true);
+  expect(exportResizeCapture()).not.toContain('private');
+  await saveResizeCapture();
+  expect(append.mock.calls[0][0]).toEqual(exported);
+  expect(append.mock.calls[1][0]).toEqual(exported);
 });
