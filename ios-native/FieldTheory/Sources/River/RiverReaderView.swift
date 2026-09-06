@@ -1,10 +1,17 @@
 import SwiftUI
 
-/// Full-screen reading: swipe horizontally to move between river items,
-/// scroll vertically inside an item. Dwelling on a card marks it read.
+enum RiverReaderPresentation: Equatable {
+    case fullScreen
+    case splitDetail
+}
+
+/// Horizontally paged reading with a vertically scrolling document. The phone
+/// presents it full-screen; iPad keeps it synchronized with the master list.
 struct RiverReaderView: View {
     let items: [RiverItem]
     let startAt: RiverItem
+    let selection: Binding<String?>?
+    let presentation: RiverReaderPresentation
 
     @Environment(AppModel.self) private var model
     @Environment(ToastCenter.self) private var toast
@@ -13,26 +20,71 @@ struct RiverReaderView: View {
 
     @State private var currentId: String?
 
+    init(
+        items: [RiverItem],
+        startAt: RiverItem,
+        selection: Binding<String?>? = nil,
+        presentation: RiverReaderPresentation = .fullScreen
+    ) {
+        self.items = items
+        self.startAt = startAt
+        self.selection = selection
+        self.presentation = presentation
+    }
+
     var body: some View {
+        Group {
+            if presentation == .fullScreen {
+                pages
+                    .ignoresSafeArea(edges: .bottom)
+                    .overlay(alignment: .bottomTrailing) { compactControls }
+            } else {
+                pages
+                    .safeAreaInset(edge: .top, spacing: 0) { detailControls }
+            }
+        }
+        .background(Theme.background(colorScheme))
+        .onAppear {
+            currentId = selection?.wrappedValue ?? startAt.id
+        }
+        .onChange(of: selection?.wrappedValue) { _, id in
+            guard let id, id != currentId else { return }
+            currentId = id
+        }
+        .onChange(of: currentId) { _, id in
+            guard let id, let item = items.first(where: { $0.id == id }) else { return }
+            if selection?.wrappedValue != id {
+                selection?.wrappedValue = id
+            }
+            if presentation == .fullScreen {
+                Task { await model.river.markRead(item) }
+            }
+        }
+        .onChange(of: items.map(\.id)) { _, ids in
+            guard let currentId, !ids.contains(currentId) else { return }
+            let fallback = items.first?.id
+            self.currentId = fallback
+            selection?.wrappedValue = fallback
+        }
+    }
+
+    private var pages: some View {
         TabView(selection: $currentId) {
             ForEach(items) { item in
-                RiverPageView(item: item)
+                RiverPageView(
+                    item: item,
+                    topInset: presentation == .fullScreen ? 60 : 26,
+                    bottomInset: presentation == .fullScreen ? 120 : 72,
+                    allowsPullToDismiss: presentation == .fullScreen
+                )
                     .tag(Optional(item.id))
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .ignoresSafeArea(edges: .bottom)
-        .background(Theme.background(colorScheme))
-        .overlay(alignment: .bottomTrailing) { controls }
-        .onAppear { currentId = startAt.id }
-        .onChange(of: currentId) { _, id in
-            guard let id, let item = items.first(where: { $0.id == id }) else { return }
-            Task { await model.river.markRead(item) }
-        }
     }
 
     /// Thumb-reach controls, bottom-right: copy, more, close.
-    private var controls: some View {
+    private var compactControls: some View {
         HStack(spacing: 14) {
             if let item = currentItem {
                 Button {
@@ -73,6 +125,142 @@ struct RiverReaderView: View {
         .padding(.bottom, 30)
     }
 
+    /// Persistent iPad reader controls. Read state is explicit here: moving
+    /// through the list or paging does not silently triage a document.
+    private var detailControls: some View {
+        HStack(spacing: 6) {
+            detailButton(
+                symbol: "chevron.left",
+                label: "Previous document",
+                disabled: !canMove(by: -1),
+                shortcut: "["
+            ) {
+                moveCurrent(by: -1)
+            }
+
+            detailButton(
+                symbol: "chevron.right",
+                label: "Next document",
+                disabled: !canMove(by: 1),
+                shortcut: "]"
+            ) {
+                moveCurrent(by: 1)
+            }
+
+            Spacer(minLength: 20)
+
+            if let item = currentItem {
+                let unread = model.river.isUnread(item)
+
+                detailButton(
+                    symbol: unread ? "envelope.open" : "envelope.badge",
+                    label: unread ? "Mark read" : "Mark unread",
+                    shortcut: "u",
+                    modifiers: [.command, .shift]
+                ) {
+                    toggleRead(item)
+                }
+
+                detailButton(
+                    symbol: "doc.on.doc",
+                    label: "Copy",
+                    shortcut: "c",
+                    modifiers: [.command, .shift]
+                ) {
+                    UIPasteboard.general.string = item.clipboardText
+                    toast.show("Copied", symbol: "doc.on.doc")
+                }
+
+                Menu {
+                    Button {
+                        Task {
+                            await model.transcripts.addFileSegment(
+                                fileName: item.fileName,
+                                content: item.content,
+                                into: nil
+                            )
+                            toast.show("Stacked in Voice", symbol: "square.stack.3d.up")
+                        }
+                    } label: {
+                        Label("Add to Voice stack", systemImage: "square.stack.3d.up")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 38, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+                .help("More actions")
+                .accessibilityLabel("More actions")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.border(colorScheme))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func detailButton(
+        symbol: String,
+        label: String,
+        disabled: Bool = false,
+        shortcut: KeyEquivalent,
+        modifiers: EventModifiers = .command,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 38, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(disabled ? Theme.textMuted(colorScheme).opacity(0.45) : Theme.text(colorScheme))
+        .disabled(disabled)
+        .hoverEffect(.highlight)
+        .help("\(label) (\(shortcutLabel(shortcut, modifiers: modifiers)))")
+        .accessibilityLabel(label)
+        .keyboardShortcut(shortcut, modifiers: modifiers)
+    }
+
+    private func shortcutLabel(_ shortcut: KeyEquivalent, modifiers: EventModifiers) -> String {
+        let command = modifiers.contains(.command) ? "⌘" : ""
+        let shift = modifiers.contains(.shift) ? "⇧" : ""
+        return command + shift + String(shortcut.character).uppercased()
+    }
+
+    private func canMove(by offset: Int) -> Bool {
+        guard let currentId, let index = items.firstIndex(where: { $0.id == currentId }) else {
+            return false
+        }
+        return items.indices.contains(index + offset)
+    }
+
+    private func moveCurrent(by offset: Int) {
+        guard let currentId, let index = items.firstIndex(where: { $0.id == currentId }) else { return }
+        let destination = index + offset
+        guard items.indices.contains(destination) else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            self.currentId = items[destination].id
+        }
+    }
+
+    private func toggleRead(_ item: RiverItem) {
+        Task {
+            if model.river.isUnread(item) {
+                await model.river.markRead(item)
+            } else {
+                await model.river.markUnread(item)
+            }
+        }
+    }
+
     private var currentItem: RiverItem? {
         items.first { $0.id == currentId }
     }
@@ -89,6 +277,10 @@ private extension Image {
 
 struct RiverPageView: View {
     let item: RiverItem
+    var topInset: CGFloat = 60
+    var bottomInset: CGFloat = 120
+    var allowsPullToDismiss = true
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -129,7 +321,7 @@ struct RiverPageView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                 }
-                .padding(.top, 60)
+                .padding(.top, topInset)
 
                 Text(item.title)
                     .font(.custom("Source Serif 4", size: styling.typography.h1Size + 6).weight(.semibold))
@@ -143,15 +335,16 @@ struct RiverPageView: View {
                 .padding(.top, 4)
             }
             .frame(maxWidth: 680, alignment: .leading)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 22)
-            .padding(.bottom, 120)
+            .padding(.bottom, bottomInset)
         }
         .scrollIndicators(.hidden)
         // One firm pull past the top closes the reader.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
-            if offset < -70, !pulledToDismiss {
+            if allowsPullToDismiss, offset < -70, !pulledToDismiss {
                 pulledToDismiss = true
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 dismiss()

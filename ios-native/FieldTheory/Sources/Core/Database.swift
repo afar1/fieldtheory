@@ -100,6 +100,15 @@ actor Database {
             source_path TEXT PRIMARY KEY,
             last_opened_at_ms INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS goal_feedback (
+            id TEXT PRIMARY KEY,
+            card_id TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            project TEXT NOT NULL,
+            action TEXT NOT NULL,
+            context TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
         """
         guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
             throw DatabaseError(message: lastErrorMessage())
@@ -183,7 +192,7 @@ actor Database {
 
     /// Wipes all user-scoped data; used on sign-out.
     func reset() throws {
-        for table in ["library_index", "library_tombstones", "river_items", "river_read_state", "transcripts", "transcript_tombstones", "meta"] {
+        for table in ["library_index", "library_tombstones", "river_items", "river_read_state", "transcripts", "transcript_tombstones", "meta", "goal_feedback"] {
             try run("DELETE FROM \(table)")
         }
     }

@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(ToastCenter.self) private var toast
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var showFolderPicker = false
 
@@ -29,6 +30,7 @@ struct SettingsView: View {
                             Text(height.displayName).tag(height)
                         }
                     }
+                    Toggle("Line numbers", isOn: $settings.showLineNumbers)
                     Picker("Accent", selection: $settings.accentPreset) {
                         ForEach(AccentPreset.allCases) { preset in
                             HStack {
@@ -126,7 +128,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Account")
                 } footer: {
-                    Text("Everything works offline — reading, writing, recording, transcribing. A connection is only used to sync. Signing out removes the synced copy from this phone.")
+                    Text("Everything works offline — reading, writing, recording, transcribing. A connection is only used to sync. Signing out removes the synced copy from this device.")
                 }
 
                 Section {
@@ -140,11 +142,16 @@ struct SettingsView: View {
                     Text("Reading preferences use the same names and values as the Mac app, ready for preference sync.")
                 }
             }
+            .modifier(SettingsFormLayout(
+                regularWidth: horizontalSizeClass == .regular,
+                colorScheme: colorScheme
+            ))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
                 }
             }
             .sheet(isPresented: $showFolderPicker) {
@@ -187,6 +194,24 @@ struct SettingsView: View {
                     model.recorder.models.ensureDownloaded()
                 }
             }
+        }
+    }
+}
+
+private struct SettingsFormLayout: ViewModifier {
+    let regularWidth: Bool
+    let colorScheme: ColorScheme
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if regularWidth {
+            content
+                .scrollContentBackground(.hidden)
+                .background(Theme.background(colorScheme))
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+        } else {
+            content
         }
     }
 }

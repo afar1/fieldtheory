@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum AppTab: Hashable, CaseIterable {
-    case library, river, voice
+    case voice, library, river, goals
 }
 
-/// Screen-edge strips reserved for hopping between the three sections.
+/// Screen-edge strips reserved for hopping between the sections.
 /// Content gestures (river card triage, etc.) must ignore drags that
 /// start inside these zones.
 enum EdgeSwipe {
@@ -27,8 +27,9 @@ final class ReadingState {
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var selectedTab: AppTab = .library
+    @State private var selectedTab: AppTab = .voice
     @State private var editorFocus = EditorFocusBus()
     @State private var toast = ToastCenter()
     @State private var readingState = ReadingState()
@@ -52,54 +53,70 @@ struct RootView: View {
         .preferredColorScheme(model.settings.appearanceMode.colorScheme)
         .onAppear {
             wireRecorder()
+            if model.launchDirectives.contains("ft-open-doc") || model.launchDirectives.contains("ft-edit-doc") {
+                selectedTab = .library
+            }
             if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
             if model.launchDirectives.contains("ft-tab-voice") { selectedTab = .voice }
+            if model.launchDirectives.contains("ft-tab-goals") { selectedTab = .goals }
         }
     }
 
     private var mainTabs: some View {
-        TabView(selection: $selectedTab) {
-            Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
-                LibraryView(showSettings: $showSettings)
-            }
-            Tab("River", systemImage: "water.waves", value: AppTab.river) {
-                RiverView(showSettings: $showSettings)
-            }
-            .badge(model.river.unreadCount)
-            Tab("Voice", systemImage: "waveform", value: AppTab.voice) {
-                VoiceView(showSettings: $showSettings)
-            }
-        }
-        .tabBarMinimizeBehavior(.onScrollDown)
-        // Edge swipes hop between the three sections (disabled while a
-        // document is open so the system back-swipe keeps its lane).
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 25, coordinateSpace: .global)
-                .onEnded { value in
-                    guard !readingState.isReading else { return }
-                    let width = UIScreen.main.bounds.width
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    guard abs(dx) > 55, abs(dx) > abs(dy) * 1.6 else { return }
-                    let tabs = AppTab.allCases
-                    guard let index = tabs.firstIndex(of: selectedTab) else { return }
-                    if value.startLocation.x > width - EdgeSwipe.zoneWidth, dx < 0, index < tabs.count - 1 {
-                        withAnimation { selectedTab = tabs[index + 1] }
-                    } else if value.startLocation.x < EdgeSwipe.zoneWidth, dx > 0, index > 0 {
-                        withAnimation { selectedTab = tabs[index - 1] }
-                    }
+        GeometryReader { geometry in
+            TabView(selection: $selectedTab) {
+                Tab("Voice", systemImage: "waveform", value: AppTab.voice) {
+                    VoiceView(showSettings: $showSettings)
                 }
-        )
-        .overlay {
-            if selectedTab != .voice {
-                DraggableMicOverlay()
+                Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
+                    LibraryView(showSettings: $showSettings)
+                }
+                Tab("River", systemImage: "water.waves", value: AppTab.river) {
+                    RiverView(showSettings: $showSettings)
+                }
+                .badge(model.river.unreadCount)
+                Tab("Goals", systemImage: "scope", value: AppTab.goals) {
+                    GoalsView(showSettings: $showSettings)
+                }
             }
+            // Compact windows keep the phone tab bar. Regular-width iPad
+            // windows gain a collapsible sidebar without duplicating routes.
+            .tabViewStyle(.sidebarAdaptable)
+            .tabBarMinimizeBehavior(.onScrollDown)
+            .accessibilityIdentifier("FieldTheoryTabView")
+            // Edge swipes remain a compact-width affordance. On iPad the
+            // sidebar owns section navigation, and the leading edge remains
+            // available to reveal it.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 25, coordinateSpace: .local)
+                    .onEnded { value in
+                        guard horizontalSizeClass == .compact, !readingState.isReading else { return }
+                        let width = geometry.size.width
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        guard abs(dx) > 55, abs(dx) > abs(dy) * 1.6 else { return }
+                        let tabs = AppTab.allCases
+                        guard let index = tabs.firstIndex(of: selectedTab) else { return }
+                        if value.startLocation.x > width - EdgeSwipe.zoneWidth, dx < 0, index < tabs.count - 1 {
+                            withAnimation { selectedTab = tabs[index + 1] }
+                        } else if value.startLocation.x < EdgeSwipe.zoneWidth, dx > 0, index > 0 {
+                            withAnimation { selectedTab = tabs[index - 1] }
+                        }
+                    }
+            )
+            .overlay {
+                if selectedTab != .voice && selectedTab != .goals {
+                    DraggableMicOverlay()
+                }
+            }
+            .overlay { ToastOverlay(toast: toast) }
         }
-        .overlay { ToastOverlay(toast: toast) }
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environment(model)
                 .environment(toast)
+                .frame(idealWidth: horizontalSizeClass == .regular ? 560 : nil,
+                       idealHeight: horizontalSizeClass == .regular ? 720 : nil)
         }
         .task {
             model.recorder.models.ensureDownloaded()
@@ -123,6 +140,7 @@ struct RootView: View {
         model.recorder.onNotice = { message, symbol in
             toast.show(message, symbol: symbol, duration: 2.6)
         }
+        Task { await model.recorder.resumePendingWork() }
     }
 }
 
@@ -132,6 +150,7 @@ struct RootView: View {
 /// and rides above the keyboard automatically.
 struct DraggableMicOverlay: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var dragOffset: CGSize = .zero
 
     var body: some View {
@@ -161,7 +180,10 @@ struct DraggableMicOverlay: View {
     }
 
     private func restingPoint(in size: CGSize) -> CGPoint {
-        let fraction = model.settings.micPositionFraction ?? CGPoint(x: 0.86, y: 0.84)
+        let fallback = horizontalSizeClass == .regular
+            ? CGPoint(x: 0.93, y: 0.9)
+            : CGPoint(x: 0.86, y: 0.84)
+        let fraction = model.settings.micPositionFraction ?? fallback
         return clamp(CGPoint(x: fraction.x * size.width, y: fraction.y * size.height), in: size)
     }
 
@@ -189,6 +211,9 @@ struct FloatingMicButton: View {
                 .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
         }
         .buttonStyle(.plain)
+        .hoverEffect(.lift)
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .accessibilityLabel(model.recorder.phase == .recording ? "Stop recording" : "Start recording")
         .animation(.spring(duration: 0.3), value: model.recorder.phase)
     }
 

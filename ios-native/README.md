@@ -1,9 +1,15 @@
-# Field Theory for iPhone
+# Field Theory for iPhone and iPad
 
-Fully native SwiftUI app (iOS 26). Three sections: **Library** (synced
+Fully native SwiftUI app (iOS 26). Four sections: **Library** (synced
 markdown with a rendered reader and a live-styled TextKit 2 editor), **River**
 (team-shared documents as cards with Mailbox-style read/unread swipes), and
-**Voice** (fully offline whisper.cpp transcription with stackable items).
+**Voice** (fully offline whisper.cpp transcription with stackable items), plus
+**Goals** (a local feedback feed for evaluating product directions).
+
+The same target runs on iPhone and iPad. Compact windows retain the phone tab
+bar and stacked navigation. Regular-width iPad windows use an adaptive top tab
+bar/sidebar and persistent master-detail layouts. All iPad orientations are
+supported, including Split View and Stage Manager window sizes.
 
 ## Build
 
@@ -18,7 +24,7 @@ xcodebuild -project FieldTheory.xcodeproj -scheme FieldTheory \
   -allowProvisioningUpdates build
 ```
 
-Install on the phone (device id from `xcrun devicectl list devices`):
+Install on an iPhone or iPad (device id from `xcrun devicectl list devices`):
 
 ```bash
 xcrun devicectl device install app --device <UDID> \
@@ -31,7 +37,7 @@ Speaks the same Supabase dialects as the Mac app and the previous mobile app:
 
 - `library_documents` — private library; `client_id = "library-" + sha256(source_path)[0..<32]`,
   sha256 content hashes, tombstones are emptied rows with `deleted_at`,
-  conflict copies as `*.sync-conflict-<ms>.md`. The phone holds a **selected
+  conflict copies as `*.sync-conflict-<ms>.md`. The device holds a **selected
   subset** of folders and never treats absence as deletion.
 - `team_documents` — River, scoped by `team_scope_user_id` resolved from team
   `contacts`. Read state is local, keyed by `(id, revision)`.

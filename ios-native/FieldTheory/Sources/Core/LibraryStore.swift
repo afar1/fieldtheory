@@ -14,7 +14,7 @@ final class LibraryStore {
     private(set) var folders: [LibraryFolder] = []
     private(set) var docsByFolder: [String: [LibraryDocMeta]] = [:]
     private(set) var allDocs: [LibraryDocMeta] = []
-    /// Recently opened (visit-based, like the Mac sidebar), capped at 7.
+    /// Recently opened (visit-based, like the Mac sidebar), capped for load cost while still scrollable.
     private(set) var recents: [LibraryDocMeta] = []
 
     /// Bumped whenever a local edit should schedule a push.
@@ -56,7 +56,7 @@ final class LibraryStore {
 
             let bySourcePath = Dictionary(docs.map { ($0.sourcePath, $0) }, uniquingKeysWith: { a, _ in a })
             let recentRows = try await db.query(
-                "SELECT source_path FROM recents ORDER BY last_opened_at_ms DESC LIMIT 7"
+                "SELECT source_path FROM recents ORDER BY last_opened_at_ms DESC LIMIT 50"
             )
             recents = recentRows.compactMap { row in
                 guard let path = row["source_path"]?.stringValue,

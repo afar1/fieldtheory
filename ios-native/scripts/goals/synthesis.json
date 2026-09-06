@@ -1,0 +1,170 @@
+{
+  "v0.1-fieldtheory-2037766104722890982": {
+    "title": "Structured API access instead of scraping, as a pattern",
+    "whyNow": "fli gets clean Google Flights data by speaking the site's own protocol instead of scraping HTML. Field Theory's bookmark enrichment still scrapes article HTML with readability heuristics and misses paywalled or JS-heavy pages.",
+    "goal": "Audit the bookmark enrichment pipeline in fieldtheory-cli's bookmark-enrich.ts to find the top domains where article extraction currently fails or returns junk, then evaluate whether any of the top five failing domains expose a structured endpoint (RSS, oEmbed, JSON-LD, or an internal API like the one fli uses for Google Flights) that a fetcher could use instead of HTML scraping. Inspect real failure rows in ~/.fieldtheory/bookmarks/bookmarks.db first rather than guessing. Success is empirical: enrichment coverage on a fixed sample of 100 link-bearing bookmarks improves from its measured baseline by at least 15 percentage points without any new hallucinated article text.",
+    "firstTest": "Query the bookmarks DB for link-bearing rows with empty article_text, group by domain, and check the top domain for a structured endpoint."
+  },
+  "v0.1-fieldtheory-2069426951366807965": {
+    "title": "Hubble: a markdown notepad built for humans and agents together",
+    "whyNow": "Hubble is Notion-feel markdown with a live-reloading editor designed so agents and humans edit the same document. Field Theory's Library is exactly a human+agent markdown surface, but agent edits currently show up only after sync/reload.",
+    "goal": "Study Hubble's live-reloading collaboration model and apply the useful slice to Field Theory Library: when a file changes on disk while a document is open in the Mac app (typically because an agent edited it), the open editor should refresh within a second without losing unsaved local edits, cursor position, or scroll position. Inspect the current file-watching and editor state handling in mac-app first to see what already exists. Verify by scripting an external edit to an open document and measuring the visible refresh; success is the change appearing in under 1 second in 10 out of 10 trials with zero lost keystrokes when local edits are pending.",
+    "firstTest": "Open a Library doc in the Mac app, append a line to the file from a terminal, and time what happens today."
+  },
+  "v0.1-fieldtheory-1857664507805368663": {
+    "title": "Llamafile: one-file local model distribution",
+    "whyNow": "Llamafile packs weights and runtime into a single executable. Field Theory's iOS app already ships whisper locally and downloads models at first run; the packaging idea speaks to how Field Theory could ship or update on-device models with less ceremony.",
+    "goal": "Review how the iOS app's ModelManager downloads and stores whisper models today, then evaluate whether a single-artifact packaging approach in the spirit of llamafile (one versioned, checksummed model bundle with a manifest) would simplify model updates across the Mac and iOS apps. Produce a short written recommendation with the actual current download flow documented from code, not memory, and a measured baseline of current first-run model setup time on simulator averaged over 3 cold runs. Success criterion: a decision memo that names the measured setup time in seconds, the proposed change, and either commits to it with a first slice or rejects it with reasons.",
+    "firstTest": "Read ModelManager.swift and time a cold first-run whisper model download on the simulator."
+  },
+  "v0.1-fieldtheory-2027292039914684643": {
+    "title": "LLM Council: several models deliberate before answering",
+    "whyNow": "Karpathy's llm-council fans a question out to multiple models that read each other's answers before a chairman model synthesizes. Field Theory already has a council MCP concept for planning; the pattern could raise the floor on Theories findings quality.",
+    "goal": "Evaluate applying the llm-council deliberation pattern to one high-judgment pipeline stage in Field Theory: the Theories scan's finding-synthesis step. Read the current single-model synthesis prompt and its recent outputs first, then run an A/B on a fixed set of 20 recent inputs comparing single-model output against a two-model-plus-judge council on the same inputs. Success is empirical: in a blind review, council output is preferred in at least 60% of the 20 cases and never hallucinates a source that the single model did not; otherwise write down why the extra cost is not paid for and close the idea.",
+    "firstTest": "Pick one recent Theories finding and rerun its synthesis prompt through two different models plus a judge, compare by hand."
+  },
+  "v0.1-fieldtheory-1995184588415750376": {
+    "title": "Beads: durable memory and todos for coding agents",
+    "whyNow": "Beads gives coding agents a persistent, queryable issue/memory layer that survives across sessions. Field Theory orchestrates long-running agent work (Fable handoffs, Codex branches) mostly through markdown briefs that agents re-read from scratch.",
+    "goal": "Investigate whether a beads-style durable work ledger would reduce re-orientation cost for agents working across Field Theory sessions: inspect how current handoffs actually happen (briefs in ~/.fieldtheory/library, plan files, memory directories) and prototype one shared ledger file format that records open threads of work, their state, and their verification status, writable by agents and readable at session start. Success is measurable on the next three real multi-session tasks: the agent's first correct action happens with at least 30% fewer orientation tool calls than the current baseline, counted from session transcripts.",
+    "firstTest": "Count orientation tool calls in one recent session transcript that resumed prior work, to establish the baseline."
+  },
+  "v0.1-fieldtheory-2023444228018499846": {
+    "title": "Voicebox: local voice cloning on your own machine",
+    "whyNow": "Voicebox does ElevenLabs-quality voice cloning fully on-device with Qwen3-TTS. Field Theory is voice-in only today (whisper transcription); local TTS would open a voice-out channel — hearing briefs, Kindle-style listening — without any cloud dependency.",
+    "goal": "Assess adding a local text-to-speech capability to Field Theory using an on-device model in the Voicebox/Qwen3-TTS family: first inspect what Apple's built-in AVSpeechSynthesizer already gives the iOS app for free, then compare it against one local neural TTS option on quality and latency for reading a real Library brief aloud. Deliver a listening test with the same 500-word brief rendered by both and a decision: ship the platform voice as a v1 read-aloud feature or hold for neural. Success criterion: a working read-aloud spike on one Library document on simulator, with time-to-first-audio under 2 seconds.",
+    "firstTest": "Spike AVSpeechSynthesizer reading one Library document aloud on the simulator and time it."
+  },
+  "v0.1-fieldtheory-1829605447990722912": {
+    "title": "Automerge: offline edits that merge with zero conflicts",
+    "whyNow": "Automerge is a CRDT library that makes offline-first editing merge cleanly when you reconnect. Field Theory's Library sync is hash-based last-writer-wins today, which can drop a side of concurrent edits between Mac and iPhone.",
+    "goal": "Establish empirically whether Field Theory's current library sync loses data under concurrent offline edits, before considering any CRDT adoption: write a repeatable test that edits the same document on two clients while both are offline (Mac app and iOS app or two simulated clients against Supabase), brings them online in both orders, and records what survives. Run it on 10 conflict scenarios and document the loss rate. Only if the measured loss rate is nonzero, scope the smallest fix — which may be conflict detection with a duplicate-copy fallback rather than Automerge itself. Success is the measured conflict matrix existing and a decision recorded against it.",
+    "firstTest": "Reproduce one concurrent offline edit of the same doc on two clients and observe which side survives."
+  },
+  "v0.1-fieldtheory-2043821909335212218": {
+    "title": "Cold-start speed as a markdown editor's headline feature",
+    "whyNow": "This launch brags about cold starts faster than Apple Notes and Sublime-class file indexing. Field Theory's Mac app is an Electron app where launch and library indexing time is a real tax Andrew pays many times a day.",
+    "goal": "Measure Field Theory Mac app's actual cold-start and library-ready times today (process launch to window interactive, and to library fully indexed) with a repeatable script, then profile where the time goes and take the single largest win. Inspect the real startup path in mac-app's electron main process first; do not guess at bottlenecks. Success is empirical: cold-start-to-interactive improves by at least 25% from the measured baseline on the same machine, with the measurement script checked in so the number can't regress silently.",
+    "firstTest": "Script five timed cold launches of the Mac app and record baseline mean time-to-interactive."
+  },
+  "v0.1-fieldtheory-cli-2028937646798766109": {
+    "title": "Osaurus: a native, fully local agent harness in Swift",
+    "whyNow": "Osaurus is an open-source macOS-native agent harness — any model, persistent memory, offline, in Swift. It is a working reference for the direction Field Theory keeps circling: local-first agent infrastructure that doesn't rent its runtime.",
+    "goal": "Read the Osaurus codebase with a specific question: how does a native Swift harness structure model abstraction, persistent agent memory, and tool execution, and which one of those designs would most improve the ft CLI's agent-facing surface (ft possible's engine layer being the obvious candidate). Produce a short comparison of Osaurus's engine abstraction against fieldtheory-cli's src/engine.ts and name one concrete adoption or one explicit rejection. Success criterion: the memo cites at least 3 specific files from each codebase and ends in a committed next slice or a reasoned close, not a vibe.",
+    "firstTest": "Clone osaurus and read its model-abstraction layer side by side with fieldtheory-cli's engine.ts."
+  },
+  "v0.1-fieldtheory-cli-2041431639985725623": {
+    "title": "MemPalace: a benchmarked open-source memory system for agents",
+    "whyNow": "MemPalace claims to be the best-benchmarked open AI memory system. The ft CLI's bookmark and possibility pipelines re-derive context every run; a measured memory layer is the missing piece the Algorithm brief calls caching.",
+    "goal": "Evaluate MemPalace's benchmark methodology and its actual storage/retrieval design against what fieldtheory-cli already has (bookmarks FTS5 plus run artifacts under ~/.fieldtheory/ideas), asking one narrow question: would a memory layer measurably improve ft possible's candidate generation by remembering prior accepted and rejected ideas per repo? Design the offline eval first: take past possibility runs, hold out the user's actual keep/dismiss choices, and test whether memory-informed generation ranks kept ideas higher. Success is a measured ranking improvement (kept ideas' mean rank improves by at least 20%) on that held-out set, or a documented negative result.",
+    "firstTest": "Inventory past ft possible runs on disk to see how many have recorded keep/dismiss signal worth evaluating against."
+  },
+  "v0.1-fieldtheory-cli-2025411776700121280": {
+    "title": "AnemllClaw: driving an agent server from iOS",
+    "whyNow": "AnemllClaw runs an OpenClaw-compatible agent server reachable from iOS and tvOS. Field Theory's iOS app can capture voice and text but can't yet hand work to the agent fleet running on the Mac.",
+    "goal": "Scope the thinnest possible phone-to-Mac agent handoff for Field Theory: from the iOS app, send one captured intent (a transcript or a Goals-feed pursue action) to an agent runtime on the Mac and get a completion notification back. Read AnemllClaw's client/server protocol for the shape, then inspect what Field Theory already has running on the Mac (existing sync tables or a small local HTTP surface) and pick the least-new-infrastructure path — a synced intent row that a Mac-side watcher picks up is acceptable and preferred over new networking. Success is one real end-to-end run: intent sent from the phone, agent run started on the Mac within 30 seconds, result visible on the phone.",
+    "firstTest": "Write the intent row schema and a Mac-side watcher stub that tails it, before touching iOS."
+  },
+  "v0.1-fieldtheory-cli-2070394629250601330": {
+    "title": "Lore: Epic's answer to Git for mixed binary/code work",
+    "whyNow": "Epic built Lore because Git fits large mixed-asset projects badly. Field Theory's library corpus (markdown plus images plus SQLite artifacts, versioned across devices) has the same mixed-asset shape at miniature scale.",
+    "goal": "Read Lore's design notes with one question: what does a version-control model built for mixed text-and-binary corpora do differently that Field Theory's library sync could borrow — particularly around identity for renamed files and history for binary artifacts. Then check the actual current behavior of Field Theory sync when a document is renamed or an image is replaced, from code and a live test, and write up the two most fragile behaviors found with a proposed contract for each. Success criterion: 2 reproducible fragility cases documented with exact steps, each with a proposed and testable invariant.",
+    "firstTest": "Rename a synced Library document on one device and observe from the DB whether identity or history survives."
+  },
+  "v0.1-fieldtheory-cli-2071692278582890889": {
+    "title": "Memory as the moat: an enterprise lens on agent context",
+    "whyNow": "Arora's claim is that consumers forgive AI mistakes while enterprises don't, and durable memory is what separates toys from tools. It's a strategy lens, not a spec, but it names the bet Field Theory is already making with local context.",
+    "goal": "Write a one-page position brief for the Field Theory library that answers, concretely: what is Field Theory's memory moat — which stores (bookmarks DB, transcripts, library, feedback tables) accumulate value that a fresh competitor cannot copy, and which pipelines actually consume that accumulated value today versus merely storing it. Ground every claim in a real table row count or a real consuming code path, not aspiration. Success criterion: the brief lists at least 5 stores with their current row counts and its consumers by file path, and names the single highest-leverage unconsumed store as the next target.",
+    "firstTest": "Run row-count queries across the Field Theory SQLite stores and list which code paths read each table."
+  },
+  "v0.1-fieldtheory-cli-2065458879442375147": {
+    "title": "Extend CLI: document extraction agents ship with a skill built in",
+    "whyNow": "Extend shipped their CLI with a bundled agent skill so Claude Code and Codex can drive it immediately. The ft CLI is agent-adjacent but agents still learn it from READMEs and trial-and-error.",
+    "goal": "Ship an agent skill for the ft CLI in the pattern Extend uses: a checked-in skill file that teaches coding agents the core surfaces (ft search, ft possible run/grid/prompt, seeds) with exact command shapes, JSON output flags, and the FT_DATA_DIR contract, discoverable in the repos Andrew works in. Inspect the current --json output contracts in src/cli.ts first so nothing is documented that isn't real. Verify empirically: in a fresh agent session with the skill installed, the agent completes 'find my 5 most recent bookmarks about X and run a possibility pass against repo Y' correctly on the first attempt with zero invented flags, 3 sessions in a row.",
+    "firstTest": "Draft the skill file for ft search alone and test one fresh-session retrieval task against it."
+  },
+  "v0.1-fieldtheory-cli-2042378139897086107": {
+    "title": "Claude Code on a local 122B model at usable speed",
+    "whyNow": "claude-code-local runs a 122B model at 41 tok/s on Apple Silicon under Claude Code. If local models can drive real coding sessions, ft's engine layer gains a free, offline engine option.",
+    "goal": "Benchmark one local-model engine against the cloud engines fieldtheory-cli already supports: wire or shim a local OpenAI-compatible endpoint into src/engine.ts as an engine option, then run the same three bounded ft possible stages (read, survey, score) on the same seed and repo with the cloud engine and the local one. Record tokens/sec, wall time, and output quality judged blind. Success criterion: the comparison table exists with real numbers, and either local mode ships behind a flag (if score-stage output is judged equal or better on 2 of 3 runs) or the gap is documented with specifics.",
+    "firstTest": "Stand up any local OpenAI-compatible server and point one hand-built read-stage prompt at it, timing the run."
+  },
+  "v0.1-fieldtheory-cli-2022123808296251451": {
+    "title": "Gemini ships first-party skills for its own API",
+    "whyNow": "Google publishing a skills repo for the Gemini API confirms the pattern: the tool author writes the skill, not the agent user. The ft CLI and Field Theory's commands library are exactly the surfaces that should carry their own skills.",
+    "goal": "Adopt the first-party-skill pattern across Field Theory's own tooling: enumerate the surfaces agents regularly drive (ft CLI commands, the library Commands markdown, the bookmarks DB contract) and produce a skills directory where each skill is generated or hand-checked against the real current interface, with a CI-style check that fails when a documented flag no longer exists in the source. Success is empirical and regressive: the checker covers at least 3 commands and runs green against current source, and deliberately renaming one CLI option makes it fail — proving docs can no longer silently rot.",
+    "firstTest": "Write the checker for one command (ft search) that diffs its documented flags against the commander definition in src/cli.ts."
+  },
+  "v0.1-fieldtheory-cli-2031150042334089255": {
+    "title": "Jean: a desktop cockpit for agents working in git worktrees",
+    "whyNow": "Jean gives parallel agents-in-worktrees a visual cockpit. Andrew already runs multiple agents against Field Theory repos in worktrees; visibility into what each one is doing is currently terminal archaeology.",
+    "goal": "Evaluate Jean against the actual multi-agent workflow used on Field Theory repos: install it, run two real parallel agent tasks in worktrees through it for a day, and record where it beats the current tmux/terminal setup and where it fights it. The deliverable is an adopt/reject decision with specifics, plus — if rejected — the one feature worth stealing for a minimal 'ft agents' status command that lists live worktrees, their branches, diff sizes, and last activity. Success criterion: the decision memo exists after at least two real tasks ran through Jean, not a docs-only review.",
+    "firstTest": "Install Jean and run one already-planned agent task through it instead of the terminal."
+  },
+  "v0.1-fieldtheory-cli-1989048467608707529": {
+    "title": "GPT-5.1 prompting guide: cross-vendor prompt hygiene",
+    "whyNow": "OpenAI's prompting guide encodes vendor-specific behaviors that quietly matter when ft possible runs on codex engines. ft's prompts are currently written once and sent to whichever engine is selected.",
+    "goal": "Audit fieldtheory-cli's pipeline prompts in src/adjacent/prompts.ts against the current vendor prompting guides for the engines ft actually supports, looking for constructs one vendor handles well and another degrades on (system-message conventions, JSON output enforcement, refusal-adjacent phrasing). Produce per-engine prompt variants only where a measured difference exists: run the score stage on a fixed candidate set through both engines before and after each proposed tweak. Success criterion: at least one measured improvement in score-stage validity rate (parseable, in-range scores) on one engine, or a documented finding that current prompts are already engine-robust.",
+    "firstTest": "Run the batch score prompt on the same 10 candidates through claude and codex engines and diff validity rates."
+  },
+  "v0.1-fieldtheory-labs-2055277918633562153": {
+    "title": "X open-sourced the For You feed algorithm",
+    "whyNow": "The exact class of system the Goals feed is a miniature of — candidate sourcing, heuristic scoring, engagement feedback — is now readable in full. This card was itself selected by Goals algorithm v0.1, which needs exactly this study.",
+    "goal": "Read the x-algorithm repo's candidate-sourcing and ranking stages and extract the three ideas most transferable to the Field Theory Goals feed's next iteration (v0.2): likely candidates are separate in-network/out-of-network sourcing pools, explicit negative-feedback features, and score calibration across candidate sources. For each, write how it maps onto the bookmarks-to-projects pipeline in ios-native/scripts/goals/generate-candidates.mjs and what new signal it would need from the goal_feedback table. Success is empirical: a v0.2 design note where each borrowed idea names the feedback rows that would validate it, and at least one is implementable against feedback data Andrew has already generated by using the feed.",
+    "firstTest": "Read x-algorithm's ranking README and map its stages onto generate-candidates.mjs stage by stage."
+  },
+  "v0.1-fieldtheory-labs-2069860656678048004": {
+    "title": "Immortals: conviction-led company reframing",
+    "whyNow": "This is a longevity manifesto, not a systems idea — its selection is v0.1 retrieval noise from the 'human feedback' query. The only honest Labs angle is rhetorical: it shows how a bold reframe reorganizes a product story.",
+    "goal": "Treat this card primarily as feed-quality signal: if it isn't useful, mark it not-useful so v0.2 learns that engagement-heavy manifesto threads shouldn't rank. If there is a kernel worth keeping, it is the reframing exercise — write the one-paragraph version of Field Theory's story told as a single non-obvious conviction (in the way 'we will not die' organizes Immortals) and test it on three real people for whether they can repeat the claim back accurately. Success criterion: either a recorded not-useful judgment improving the eval set, or a conviction paragraph that all three listeners could restate without prompting.",
+    "firstTest": "Judge the card honestly in the feed; that judgment is the deliverable v0.1 needs from it."
+  },
+  "v0.1-fieldtheory-labs-2069689212643971234": {
+    "title": "Harness engineering: the skill list beyond prompting",
+    "whyNow": "The thread's list — harness engineering, context engineering, KV-cache economics, prefill vs decode — is a syllabus for exactly the layer Field Theory Labs builds at. Some items already bind (prompt caching costs shaped this repo's agent loops).",
+    "goal": "Turn the thread's skill list into a gap analysis against Field Theory's actual agent infrastructure: for each listed competency, record in one line where Field Theory currently stands with a code or config citation (e.g. prompt-cache-aware scheduling in agent loops, context budgets in ft possible's pipeline stages), producing a scored inventory of which two gaps cost the most real money or latency today. Then close the highest-cost gap with one measured change. Success is empirical: the inventory exists with citations, and the one implemented change shows a measured improvement (token cost or wall time down at least 15% on a repeated real workload).",
+    "firstTest": "Measure current token cost of one nightly-style ft possible run as the baseline the inventory scores against."
+  },
+  "v0.1-fieldtheory-labs-2062037577755238561": {
+    "title": "A stock thesis thread — retrieval noise worth judging",
+    "whyNow": "This is an $OUST investment thesis; it matched Labs queries on surface vocabulary ('long term view', 'position'). It has no engineering content for Field Theory — which makes it a perfect calibration card for the feedback loop.",
+    "goal": "Mark this card not-useful in the Goals feed and let it do its real job: teaching algorithm v0.2 that finance-thread vocabulary collides with idea-generation queries. When enough judgments exist, use this card's row in goal_feedback as a known-bad anchor for the offline eval: any v0.2 ranking that still places finance threads above the median of useful-judged cards fails the eval. Success criterion: this card's id appears in the not-useful set and the v0.2 eval harness cites at least one known-bad anchor of this type.",
+    "firstTest": "Swipe not-useful and add one word of context ('finance') so the eval set records why."
+  },
+  "v0.1-fieldtheory-labs-2033567781342396884": {
+    "title": "A working multi-agent stack: one primary, specialized spawns",
+    "whyNow": "The described stack — one high-context primary agent that spawns tool-building subagents — matches how Fable-orchestrated work on Field Theory already runs, but Field Theory hasn't written its own version of this recipe down as an operating doctrine.",
+    "goal": "Codify Field Theory's multi-agent operating recipe from evidence: mine the last 5 substantial agent sessions (Fable handoffs, Codex branches) for what the primary agent actually delegated versus kept, where delegation produced rework, and what context each subagent needed to succeed. Write the resulting recipe into the fable-mind library as a short doctrine with delegation criteria, and apply it on the next orchestrated task. Success is empirical: on that next task, zero subagent outputs require redoing due to missing context or overlapping write scopes, measured against the prior sessions' rework count.",
+    "firstTest": "Pull delegation and rework counts out of one recent orchestrated session transcript."
+  },
+  "v0.1-fieldtheory-labs-1896387913128251636": {
+    "title": "Karpathy on how he actually uses LLMs day to day",
+    "whyNow": "A practitioner-workflow survey from a first-rate source: which model for which task, voice input, custom instructions, memory. Useful as a checklist against Field Theory's own daily-driver setup rather than as a build target.",
+    "goal": "Watch the video with a scorecard, not passively: list each concrete workflow Karpathy demonstrates, mark which ones Field Theory already covers (voice capture, transcript routing, bookmarks as memory), which it covers worse than his setup, and which it deliberately rejects. The output is a gap list ranked by daily frequency of the underlying task in Andrew's actual usage. Success criterion: the scorecard exists with at least ten workflows scored, and the top-ranked gap becomes a written Labs experiment brief with its own success metric.",
+    "firstTest": "Skim the video's chapter list and pre-build the empty scorecard before watching."
+  },
+  "v0.1-fieldtheory-labs-2026374584644284606": {
+    "title": "Re-onboard yourself a dozen times",
+    "whyNow": "The advice — repeatedly onboard yourself and progressively less-technical people until concierge onboarding becomes self-serve — applies directly to Field Theory's current single-user reality and its ambition to hand agents and eventually other humans a working setup.",
+    "goal": "Run the re-onboarding exercise on Field Theory itself with agents as the onboardees: 3 times, from a clean machine or clean session, have a fresh agent (no memory, no prior context) set up and perform one core workflow (sync a Library doc, run ft search, build the iOS app) using only checked-in documentation, recording every point of confusion as an issue. Fix the top confusion after each round. Success is empirical: round 3 completes with at most one-third of round 1's confusion count, and the fixes live in the repos as docs or scripts, not in memory.",
+    "firstTest": "Start round one now: fresh agent, clean context, instruction 'build and run the Field Theory iOS app on a simulator' using only the repo."
+  },
+  "v0.1-fieldtheory-labs-2060037913694364151": {
+    "title": "After Automation: what work becomes when agents do the tasks",
+    "whyNow": "An essay-length frame for the question under all of Field Theory Labs: when agents absorb execution, what does the human's day consist of — taste, direction, judgment loops. Reading it may sharpen what the Goals feed's human feedback is actually for.",
+    "goal": "Read After Automation and extract its claims into the Field Theory library as a brief that answers one pointed question: which human judgments does the essay say survive automation, and does the Goals feed capture exactly those (usefulness, timing, taste) or proxies of them. If the essay names judgment types the feedback schema misses, propose the smallest schema addition to goal_feedback that would capture one of them. Success criterion: the brief exists in the library with a direct keep-or-change recommendation for the feedback schema, citing at least 3 specific passages.",
+    "firstTest": "Fetch the essay and read it with the goal_feedback schema open beside it."
+  },
+  "v0.1-fieldtheory-labs-2066889074343026723": {
+    "title": "Mercury Command: agentic OS grafted onto trusted product UX",
+    "whyNow": "Mercury shipped agent capability inside the surfaces its users already trust, rather than as a separate chat app. That is the same integration thesis as Field Theory's: agents reached through Library, Voice, and feeds rather than a chatbox.",
+    "goal": "Study how Command surfaces agentic actions inside Mercury's existing UX (entry points, confirmation patterns, how it shows work-in-progress and results), then audit Field Theory's surfaces for the one place an agent action is most naturally reachable but currently isn't — the Goals feed's Pursue button being the live candidate, since it currently copies a goal to the pasteboard rather than dispatching it. Scope the smallest dispatch path from Pursue to an actual agent run. Success is empirical: one pursued goal travels from phone tap to a started agent run without manual pasting, demonstrated end to end at least once with tap-to-run latency under 60 seconds recorded.",
+    "firstTest": "Write down the current Pursue-to-execution path (tap → pasteboard → manual /goal paste) and mark each manual step."
+  },
+  "v0.1-fieldtheory-labs-2057869205740069212": {
+    "title": "Intelligence is getting cheaper — the cost curves",
+    "whyNow": "a16z's charts quantify the collapse in per-token intelligence cost. For Labs, the actionable question is which Field Theory pipelines were designed under cost assumptions that are now false.",
+    "goal": "Re-audit Field Theory's model-usage economics against current prices: pull the actual model calls made by the recurring pipelines (Theories scans, ft possible runs, enrichment passes), compute what each costs per run today, and identify which quality-reducing compromises (smaller models, skipped stages, truncated context) were made for cost reasons that no longer hold. Upgrade the one compromise with the best quality-per-dollar case and measure the difference on real output. Success criterion: a cost table for at least three pipelines exists with real per-run numbers, and one upgraded pipeline shows a blind-judged quality improvement at a computed acceptable cost delta.",
+    "firstTest": "Instrument or tally one Theories scan's actual token usage and price it at current rates."
+  }
+}
