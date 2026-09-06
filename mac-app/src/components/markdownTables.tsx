@@ -64,38 +64,76 @@ export function tableViewportLayout(content: HorizontalBounds, viewport: Horizon
   return { width, marginLeft: left - content.left };
 }
 
+// All mounted tables share one read phase, followed by one write phase.
+const pendingTableMeasurements = new Set<() => (() => void) | undefined>();
+let tableMeasurementFrame = 0;
+let tableLayoutCache = new WeakMap<HTMLElement, ReturnType<typeof tableViewportLayout>>();
+function scheduleTableMeasurement(read: () => (() => void) | undefined) {
+  pendingTableMeasurements.add(read);
+  if (tableMeasurementFrame) return;
+  tableMeasurementFrame = requestAnimationFrame(() => {
+    tableMeasurementFrame = 0;
+    tableLayoutCache = new WeakMap();
+    const reads = [...pendingTableMeasurements];
+    pendingTableMeasurements.clear();
+    const writes = reads.map(read => read());
+    writes.forEach(write => write?.());
+  });
+}
+
 /** Event-driven measurements only: no polling and no document-wide scroll handling. */
 export function observeTableViewport(wrapper: HTMLElement, scroller: HTMLElement, content: HTMLElement) {
   const table = scroller.querySelector('table')!;
   const ancestors: HTMLElement[] = [];
   for (let parent = content.parentElement; parent; parent = parent.parentElement) ancestors.push(parent);
-  let frame = 0;
+  let overflowFrame = 0;
   let disposed = false;
   const updateFades = () => {
+    const width = scroller.clientWidth;
+    const total = scroller.scrollWidth;
+    const remaining = total - width;
     wrapper.classList.toggle('can-scroll-left', scroller.scrollLeft > 1);
-    wrapper.classList.toggle('can-scroll-right', scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1);
+    wrapper.classList.toggle('can-scroll-right', remaining - scroller.scrollLeft > 1);
+    wrapper.classList.toggle('has-horizontal-overflow', remaining > 1);
+    const thumb = wrapper.querySelector<HTMLElement>('.cm-markdown-table-overflow-thumb');
+    if (thumb) {
+      const fraction = total > 0 ? Math.min(1, width / total) : 1;
+      const thumbWidth = Math.max(8, fraction * 100);
+      thumb.style.width = `${thumbWidth}%`;
+      thumb.style.left = `${remaining > 0 ? Math.max(0, Math.min(1, scroller.scrollLeft / remaining)) * (100 - thumbWidth) : 0}%`;
+    }
   };
   const measure = () => {
-    frame = 0;
     if (disposed || !wrapper.isConnected) return;
-    const contentRect = content.getBoundingClientRect();
-    if (!contentRect.width) return;
-    let left = 0;
-    let right = document.documentElement.clientWidth;
-    for (const ancestor of ancestors) {
-      if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(ancestor).overflowX)) continue;
-      const rect = ancestor.getBoundingClientRect();
-      left = Math.max(left, rect.left + ancestor.clientLeft);
-      right = Math.min(right, rect.left + ancestor.clientLeft + ancestor.clientWidth);
+    let layout = tableLayoutCache.get(content);
+    if (!layout) {
+      const contentRect = content.getBoundingClientRect();
+      if (!contentRect.width) return;
+      let left = 0;
+      let right = document.documentElement.clientWidth;
+      for (const ancestor of ancestors) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(ancestor).overflowX)) continue;
+        const rect = ancestor.getBoundingClientRect();
+        left = Math.max(left, rect.left + ancestor.clientLeft);
+        right = Math.min(right, rect.left + ancestor.clientLeft + ancestor.clientWidth);
+      }
+      // Leave room for the document gutter and avoid touching the pane edges.
+      const inset = Math.min(24, Math.max(0, (right - left) / 10));
+      layout = tableViewportLayout(contentRect, { left: left + inset, right: right - inset });
+      tableLayoutCache.set(content, layout);
     }
-    // Leave room for the document gutter and avoid touching the pane edges.
-    const inset = Math.min(24, Math.max(0, (right - left) / 10));
-    const layout = tableViewportLayout(contentRect, { left: left + inset, right: right - inset });
-    wrapper.style.width = `${layout.width}px`;
-    wrapper.style.marginLeft = `${layout.marginLeft}px`;
-    updateFades();
+    const measured = layout;
+    return () => {
+      if (disposed) return;
+      const width = `${measured.width}px`;
+      const margin = `${measured.marginLeft}px`;
+      if (wrapper.style.width !== width) wrapper.style.width = width;
+      if (wrapper.style.marginLeft !== margin) wrapper.style.marginLeft = margin;
+      cancelAnimationFrame(overflowFrame);
+      overflowFrame = requestAnimationFrame(updateFades);
+    };
   };
-  const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(measure); };
+  const schedule = () => { if (!disposed) scheduleTableMeasurement(measure); };
   const observer = new ResizeObserver(schedule);
   for (const element of [content, table, ...ancestors]) observer.observe(element);
   scroller.addEventListener('scroll', updateFades, { passive: true });
@@ -103,7 +141,9 @@ export function observeTableViewport(wrapper: HTMLElement, scroller: HTMLElement
   schedule();
   return () => {
     disposed = true;
-    cancelAnimationFrame(frame);
+    pendingTableMeasurements.delete(measure);
+    if (!pendingTableMeasurements.size) { cancelAnimationFrame(tableMeasurementFrame); tableMeasurementFrame = 0; }
+    cancelAnimationFrame(overflowFrame);
     observer.disconnect();
     scroller.removeEventListener('scroll', updateFades);
     window.removeEventListener('resize', schedule);
@@ -192,6 +232,10 @@ class MarkdownTableWidget extends WidgetType {
         });
       });
     });
+    const track = wrapper.appendChild(document.createElement('div'));
+    track.className = 'cm-markdown-table-overflow-track';
+    track.setAttribute('aria-hidden', 'true');
+    track.appendChild(document.createElement('div')).className = 'cm-markdown-table-overflow-thumb';
     tableCleanups.set(wrapper, observeTableViewport(wrapper, scroller, view.contentDOM));
     return wrapper;
   }
@@ -216,7 +260,16 @@ export const markdownTablesExtension = [markdownTableRanges, tableDecorations,
     // Flex/grid intrinsic sizing must never propagate the table width to prose.
     contain: 'inline-size', paddingBottom: '6px',
   },
-  '.cm-markdown-table-scroll:focus-visible': { outline: '2px solid currentColor', outlineOffset: '3px' },
+  '.cm-markdown-table-overflow-track': {
+    display: 'none', position: 'relative', height: '4px', marginTop: '2px',
+    background: 'color-mix(in srgb, currentColor 5%, transparent)', borderRadius: '4px', pointerEvents: 'none',
+  },
+  '.has-horizontal-overflow > .cm-markdown-table-overflow-track': { display: 'block' },
+  '.cm-markdown-table-overflow-thumb': {
+    position: 'absolute', height: '100%', borderRadius: '4px',
+    background: 'color-mix(in srgb, currentColor 24%, transparent)',
+  },
+  '.cm-markdown-table-scroll:focus-visible' : { outline: '2px solid currentColor', outlineOffset: '3px' },
   '.cm-markdown-table-viewport.can-scroll-left .cm-markdown-table-scroll': {
     maskImage: 'linear-gradient(to right, transparent, black 24px)',
   },

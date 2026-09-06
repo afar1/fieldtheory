@@ -92,6 +92,27 @@ describe('table viewport containment', () => {
     expect(80 + narrow.marginLeft).toBe(24);
   });
 
+  it('shares the content layout read across multiple tables in the same frame', () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callbacks.push(callback); return callbacks.length; });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1200);
+    const content = document.body.appendChild(document.createElement('div'));
+    const measure = vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ left: 200, right: 1000, width: 800 } as DOMRect);
+    const cleanups = Array.from({ length: 3 }, () => {
+      const wrapper = content.appendChild(document.createElement('div'));
+      const scroller = wrapper.appendChild(document.createElement('div'));
+      scroller.appendChild(document.createElement('table'));
+      return observeTableViewport(wrapper, scroller, content);
+    });
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(measure).toHaveBeenCalledOnce();
+    expect([...content.children].map(child => (child as HTMLElement).style.width)).toEqual(['1152px', '1152px', '1152px']);
+    cleanups.forEach(cleanup => cleanup());
+  });
+
   it('measures clipping ancestors, updates only table fades, and disconnects on removal', () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callbacks.push(callback); return callbacks.length; });
@@ -112,6 +133,8 @@ describe('table viewport containment', () => {
     const wrapper = content.appendChild(document.createElement('div'));
     const scroller = wrapper.appendChild(document.createElement('div'));
     scroller.appendChild(document.createElement('table'));
+    const thumb = wrapper.appendChild(document.createElement('div'));
+    thumb.className = 'cm-markdown-table-overflow-thumb';
     let paneWidth = 1000;
     let viewportWidth = 952;
     Object.defineProperty(pane, 'clientWidth', { get: () => paneWidth });
@@ -121,7 +144,10 @@ describe('table viewport containment', () => {
     vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ left: 500, right: 1300, width: 800 } as DOMRect);
     const cleanup = observeTableViewport(wrapper, scroller, content);
     callbacks.shift()!(0);
+    callbacks.shift()!(0);
     expect(wrapper.style.width).toBe('952px');
+    expect(wrapper.classList.contains('has-horizontal-overflow')).toBe(true);
+    expect(thumb.style.width).toBe('68%');
     expect(wrapper.style.marginLeft).toBe('-76px');
     expect(wrapper.classList.contains('can-scroll-left')).toBe(false);
     expect(wrapper.classList.contains('can-scroll-right')).toBe(true);
@@ -137,6 +163,7 @@ describe('table viewport containment', () => {
     paneWidth = 600;
     viewportWidth = 552;
     resized();
+    callbacks.shift()!(0);
     callbacks.shift()!(0);
     expect(wrapper.style.width).toBe('552px');
     expect(wrapper.classList.contains('can-scroll-right')).toBe(true);

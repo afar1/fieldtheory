@@ -4820,6 +4820,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useLayoutEffect(() => {
+    let measuredWidth = -1;
+    let measuredHeight = -1;
     let frame: number | null = null;
     let settleTimer: number | null = null;
     const refreshEditorLayout = () => {
@@ -4833,7 +4835,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
       const width = Math.round(containerRect.width);
       const height = Math.round(containerRect.height);
-      const containerSizeChanged = responsivePanelSize.width !== width || responsivePanelSize.height !== height;
+      const containerSizeChanged = measuredWidth !== width || measuredHeight !== height;
+      measuredWidth = width;
+      measuredHeight = height;
       if (containerSizeChanged && sidebarHoverExpanded) {
         setSidebarHoverExpanded(false);
       }
@@ -4887,7 +4891,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       scheduleSettledUpdate();
     };
 
-    updateCenter();
     scheduleUpdateCenter();
     const resizeObserver = new ResizeObserver(scheduleResizeUpdate);
     if (containerRef.current) resizeObserver.observe(containerRef.current);
@@ -4902,7 +4905,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       resizeObserver.disconnect();
       window.removeEventListener('resize', scheduleResizeUpdate);
     };
-  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, responsivePanelSize.height, responsivePanelSize.width, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
