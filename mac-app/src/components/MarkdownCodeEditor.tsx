@@ -1,3 +1,4 @@
+import { isResizeCaptureActive, recordResizeDiagnostic, measureResizeStage } from '../utils/resizeDiagnostics';
 /**
  * MarkdownCodeEditor — CodeMirror 6 based markdown source editor.
  *
@@ -135,6 +136,7 @@ const DRAWING_ALT_PREFIX = 'Drawing: ';
 export type MarkdownCodeEditorPresentation = 'source' | 'rendered';
 
 function renderedMarkdownEditorTimingEnabled(): boolean {
+  if (isResizeCaptureActive()) return true;
   try {
     return window.localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
   } catch {
@@ -143,6 +145,8 @@ function renderedMarkdownEditorTimingEnabled(): boolean {
 }
 
 function emitRenderedMarkdownEditorTiming(stage: string, details: Record<string, unknown>): void {
+  recordResizeDiagnostic(stage, details);
+  if (isResizeCaptureActive()) return;
   if (!renderedMarkdownEditorTimingEnabled()) return;
   window.dispatchEvent(new CustomEvent(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, {
     detail: {
@@ -715,13 +719,13 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
       this.pendingMeasure = true;
       const overlayHost = getMarkdownCodeEditorLineNumberOverlayHost(view);
       view.requestMeasure({
-        read: (measuredView) => buildVisualLineNumberOverlayRows(measuredView, overlayHost),
+        read: (measuredView) => measureResizeStage('line-numbers-measure', () => buildVisualLineNumberOverlayRows(measuredView, overlayHost)),
         write: (result, measuredView) => {
           this.pendingMeasure = false;
           if (this.destroyed) return;
           if (result.signature === this.signature) return;
           this.signature = result.signature;
-          this.render(result.rows, measuredView);
+          measureResizeStage('line-numbers-render', () => this.render(result.rows, measuredView));
         },
       });
     }

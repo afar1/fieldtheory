@@ -1,3 +1,4 @@
+import { getResizeCaptureStatus, startResizeCapture, stopResizeCapture, isResizeCaptureActive } from '../utils/resizeDiagnostics';
 import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -18,6 +19,12 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [resizeStatus, setResizeStatus] = useState(getResizeCaptureStatus);
+  useEffect(() => {
+    const update = () => setResizeStatus(getResizeCaptureStatus());
+    window.addEventListener('fieldtheory:resize-capture-status', update);
+    return () => window.removeEventListener('fieldtheory:resize-capture-status', update);
+  }, []);
   const [sendError, setSendError] = useState<string | null>(null);
 
   // Load diagnostics when modal opens.
@@ -111,6 +118,17 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
           </pre>
         </div>
         
+        <div style={{ padding: '12px 24px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+          <button style={{ ...styles.closeButtonSecondary, borderColor: theme.border, color: theme.text }} onClick={() => {
+            if (isResizeCaptureActive()) {
+              void stopResizeCapture().catch(() => {});
+            } else {
+              startResizeCapture();
+
+            }
+          }}>Capture / stop resize diagnostics</button>
+          {resizeStatus && <span role="status">{resizeStatus}</span>}
+        </div>
         <div style={{ ...styles.footer, borderTopColor: theme.border }}>
           <button
             onClick={handleSendAsFeedback}

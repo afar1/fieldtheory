@@ -1,3 +1,4 @@
+import { recordResizeDiagnostic, measureResizeStage } from '../utils/resizeDiagnostics';
 import { EditorState, StateField } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType } from '@codemirror/view';
 import { parser, Table } from '@lezer/markdown';
@@ -76,8 +77,9 @@ function scheduleTableMeasurement(read: () => (() => void) | undefined) {
     tableLayoutCache = new WeakMap();
     const reads = [...pendingTableMeasurements];
     pendingTableMeasurements.clear();
-    const writes = reads.map(read => read());
-    writes.forEach(write => write?.());
+    recordResizeDiagnostic('table-batch', { tables: reads.length });
+    const writes = measureResizeStage('table-layout-read', () => reads.map(read => read()));
+    measureResizeStage('table-layout-write', () => writes.forEach(write => write?.()));
   });
 }
 

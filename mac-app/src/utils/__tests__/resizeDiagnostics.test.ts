@@ -1,0 +1,30 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { isResizeCaptureActive, recordResizeDiagnostic, resizeCaptureSnapshot, startResizeCapture, stopResizeCapture } from '../resizeDiagnostics';
+afterEach(async () => { await stopResizeCapture(); vi.useRealTimers(); delete window.diagnosticsAPI; });
+it('buffers metadata until stopped and excludes text', async () => {
+  const append = vi.fn(async () => ({ ok: true, path: '/tmp/capture.jsonl' }));
+  window.diagnosticsAPI = { appendRenderedEditorDebug: append } as unknown as Window['diagnosticsAPI'];
+  recordResizeDiagnostic('inactive');
+  startResizeCapture();
+  recordResizeDiagnostic('layout', { durationMs: 8, text: 'private document', path: '/private', changed: true });
+  window.dispatchEvent(new Event('resize'));
+  expect(append).not.toHaveBeenCalled();
+  await stopResizeCapture();
+  expect(append).toHaveBeenCalledOnce();
+  const data = JSON.stringify(append.mock.calls);
+  expect(data).toContain('window-resize');
+  expect(data).not.toContain('private');
+  expect(isResizeCaptureActive()).toBe(false);
+});
+it('bounds the event buffer and automatically ends capture', async () => {
+  vi.useFakeTimers();
+  const append = vi.fn(async () => ({ ok: true, path: '/tmp/capture.jsonl' }));
+  window.diagnosticsAPI = { appendRenderedEditorDebug: append } as unknown as Window['diagnosticsAPI'];
+  startResizeCapture(1000);
+  for (let i = 0; i < 7000; i++) recordResizeDiagnostic('layout', { count: i });
+  expect(resizeCaptureSnapshot().events).toHaveLength(6000);
+  expect(resizeCaptureSnapshot().dropped).toBeGreaterThan(0);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(isResizeCaptureActive()).toBe(false);
+  expect(append).toHaveBeenCalledOnce();
+});

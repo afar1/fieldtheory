@@ -1,3 +1,4 @@
+import { recordResizeDiagnostic, measureResizeStage } from '../utils/resizeDiagnostics';
 // =============================================================================
 // LibrarianView - reading and writing experience for collected readings.
 // Named after the AI assistant in Snow Crash that provides contextual intel.
@@ -4820,6 +4821,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   useLayoutEffect(() => {
+    recordResizeDiagnostic('reader-observer-attach');
     let measuredWidth = -1;
     let measuredHeight = -1;
     let frame: number | null = null;
@@ -4836,6 +4838,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const width = Math.round(containerRect.width);
       const height = Math.round(containerRect.height);
       const containerSizeChanged = measuredWidth !== width || measuredHeight !== height;
+      recordResizeDiagnostic('reader-size', { width, height, changed: containerSizeChanged });
       measuredWidth = width;
       measuredHeight = height;
       if (containerSizeChanged && sidebarHoverExpanded) {
@@ -4848,8 +4851,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
     const updateCenter = () => {
       frame = null;
-      updateResponsivePanelSize();
-      refreshEditorLayout();
+      measureResizeStage('reader-size-update', updateResponsivePanelSize);
+      measureResizeStage('editor-layout-request', refreshEditorLayout);
       const readerPane = readerPaneRef.current;
       const containerRect = containerRef.current?.getBoundingClientRect() ?? null;
       if (!readerPane || !containerRect) {
@@ -4887,6 +4890,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }, 80);
     };
     const scheduleResizeUpdate = () => {
+      recordResizeDiagnostic('reader-resize-notification');
       scheduleUpdateCenter();
       scheduleSettledUpdate();
     };
@@ -4902,6 +4906,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
       if (settleTimer !== null) window.clearTimeout(settleTimer);
+      recordResizeDiagnostic('reader-observer-detach');
       resizeObserver.disconnect();
       window.removeEventListener('resize', scheduleResizeUpdate);
     };
