@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.41': [
+    'Add Library folders to launcher sections and search within them',
+    'Tables show a subtle horizontal overflow indicator',
+    'Reduced repeated layout work while resizing documents and tables',
+    'Standard recording warms transcription alongside microphone capture',
+  ],
   '0.3.40': [
     'Keep the floating recording indicator from taking keyboard focus, including while hidden',
   ],
@@ -526,6 +532,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.41': 'September 6, 2026',
   '0.3.40': 'September 5, 2026',
   '0.3.39': 'September 5, 2026',
   '0.3.38': 'September 5, 2026',
