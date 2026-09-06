@@ -46,9 +46,12 @@
     <p>We use your email address and account identifier to sign you in and connect your workspace. Library documents, document metadata, and voice transcripts are stored locally and synchronized through Supabase when you are connected. Documents shared with a team are available to that team. Reading preferences and other app settings are stored on your device.</p>
     <p>We use this information to provide authentication, synchronization, shared documents, and support. The native app does not include advertising or cross-app tracking.</p>
 
+    <p>If you submit a River content report, we receive your account identifier, the document and author identifiers, the document title and source path, the report reason, and any notes you provide. Reports are stored through Supabase for human review. The report form does not copy the full document content.</p>
+    <p>Reviewer Demo uses a separate local sample workspace. It does not create an account or synchronize its sample content, and its changes are removed when you exit the demo.</p>
+
     <h2>Voice recordings</h2>
     <p>The app asks for microphone permission before recording. Speech transcription runs on your device using whisper.cpp. Audio is not uploaded to a cloud transcription service. The speech model is downloaded from Hugging Face; that download requires an internet connection.</p>
-    <p>Unfinished recordings are kept on your device so transcription can resume. The app removes the queued audio after processing or when you sign out. Completed transcripts can sync to your account. If automatic copying is enabled, completed transcripts are also placed on your device clipboard; you can turn this off in Settings.</p>
+    <p>Unfinished recordings are kept on your device so transcription can resume. The app removes queued audio after its transcript is delivered successfully or when you sign out. Pending audio and downloaded speech models are excluded from device backups. Completed transcripts can sync to your account. If automatic copying is enabled, completed transcripts are also placed on your device clipboard; you can turn this off in Settings.</p>
 
     <h2>Service providers and sharing</h2>
     <p>Supabase processes account and synced workspace data to provide authentication and storage. Hugging Face receives ordinary connection information, such as an IP address, when your device downloads a model. We share information with service providers as needed to operate Field Theory, respond to support requests, and meet legal obligations. Opening an external link takes you to a service with its own privacy practices.</p>
@@ -58,7 +61,7 @@
 
     <h2>Retention and your choices</h2>
     <p>You can delete documents and transcripts using the app, choose which library folders sync, and change microphone access in your device settings. Signing out removes the app's local workspace copy and unfinished recordings; it does not delete your account or its synced content. Device backups may retain data according to your backup settings.</p>
-    <p>To request access, correction, or deletion of your account or server-side data, email <a href="mailto:support@fieldtheory.dev">support@fieldtheory.dev</a>. We may verify your identity before acting on a request. Some records may need to be retained for security, legal obligations, or resolving disputes, and removal from backups may take additional time.</p>
+    <p>You can initiate account deletion in Settings &gt; Delete Account in the native app. To request access, correction, or help deleting your account or server-side data, email <a href="mailto:support@fieldtheory.dev">support@fieldtheory.dev</a>. We may verify your identity before acting on a request. Some records may need to be retained for security, legal obligations, or resolving disputes, and removal from backups may take additional time.</p>
 
     <h2>Security</h2>
     <p>Field Theory uses HTTPS for its app service connections and the platform's secure storage for authentication sessions. No system can guarantee absolute security. Please avoid sending sensitive information in public issue reports.</p>
