@@ -1,5 +1,7 @@
 # Field Theory Voice local DMG preview
 
+**Replacement available:** `0.3.47-voice.2` fixes the Library Settings readiness regression in the original preview. Use `mac-app/release/Field-Theory-0.3.47-voice.2-arm64-local.dmg`; see [repair and artifact verification](VOICE_SETTINGS_REPAIR.md). No candidate installation or backend activation was performed.
+
 Candidate version: **0.3.47-voice.1**. This local preview is based on the released 0.3.46 source (`5101e545d`), isolated in `codex/voice-event-delivery`. It retains the released explicit bookmark sign-in fix. The currently installed 0.3.45 source was independently verified as `de07567a2`. Original checkout changes remain untouched.
 
 ## Approved release notes
