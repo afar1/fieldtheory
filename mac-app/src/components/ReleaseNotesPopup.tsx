@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.46': [
+    'Background bookmark sync no longer requests Chrome Safe Storage access',
+    'Connect X explicitly to sync bookmarks; expired sessions pause until you reconnect',
+    'Saved bookmarks remain available while disconnected',
+  ],
   '0.3.45': [
     'Fixed automatic update installation failing on a read-only bundled license file',
   ],
@@ -546,6 +551,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.46': 'September 7, 2026',
   '0.3.45': 'September 6, 2026',
   '0.3.44': 'September 6, 2026',
   '0.3.43': 'September 6, 2026',
