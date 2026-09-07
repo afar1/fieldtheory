@@ -1,0 +1,42 @@
+/** User-visible contract for the bundled Voice requests worker. */
+export interface VoiceWorkSettings {
+  enabled: boolean;
+  workspacePath: string | null;
+}
+
+export interface VoiceWorkTask {
+  threadId: string;
+  title?: string;
+  status: string;
+  summary?: string;
+  finalResponse?: string;
+  question?: string;
+  canOpen?: boolean;
+}
+
+export interface VoiceWorkState {
+  settings: VoiceWorkSettings;
+  status: 'disabled' | 'signed_out' | 'connecting' | 'ready' | 'working' | 'needs_setup' | 'error';
+  message?: string;
+  codex: { available: boolean; signedIn: boolean | null };
+  lastEventAt?: number;
+  lastTask?: VoiceWorkTask;
+}
+
+export interface VoiceWorkAPI {
+  getState(): Promise<VoiceWorkState>;
+  updateSettings(settings: Partial<VoiceWorkSettings>): Promise<VoiceWorkState>;
+  chooseWorkspace(): Promise<string | null>;
+  refreshStatus(): Promise<VoiceWorkState>;
+  openTask(threadId: string): Promise<{ opened: boolean; error?: string }>;
+  onStateChanged(callback: (state: VoiceWorkState) => void): () => void;
+}
+
+export const VOICE_WORK_CHANNELS = {
+  getState: 'voiceWork:getState',
+  updateSettings: 'voiceWork:updateSettings',
+  chooseWorkspace: 'voiceWork:chooseWorkspace',
+  refreshStatus: 'voiceWork:refreshStatus',
+  openTask: 'voiceWork:openTask',
+  stateChanged: 'voiceWork:stateChanged',
+} as const;

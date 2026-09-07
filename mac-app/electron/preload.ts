@@ -1,4 +1,5 @@
 import type { LinkRelationRequest, LinkRelationSnapshot } from './shared/libraryLinkRelations';
+import type { VoiceWorkAPI, VoiceWorkState } from './shared/voiceWork';
 import { contextBridge, ipcRenderer } from 'electron';
 
 // Define IPC channels locally to avoid import issues
@@ -5203,6 +5204,20 @@ const agentKickoffAPI = {
   },
 };
 contextBridge.exposeInMainWorld('agentKickoffAPI', agentKickoffAPI);
+
+const voiceWorkAPI: VoiceWorkAPI = {
+  getState: () => ipcRenderer.invoke('voiceWork:getState'),
+  updateSettings: (settings) => ipcRenderer.invoke('voiceWork:updateSettings', settings),
+  chooseWorkspace: () => ipcRenderer.invoke('voiceWork:chooseWorkspace'),
+  refreshStatus: () => ipcRenderer.invoke('voiceWork:refreshStatus'),
+  openTask: (threadId) => ipcRenderer.invoke('voiceWork:openTask', threadId),
+  onStateChanged: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: VoiceWorkState) => callback(state);
+    ipcRenderer.on('voiceWork:stateChanged', handler);
+    return () => ipcRenderer.removeListener('voiceWork:stateChanged', handler);
+  },
+};
+contextBridge.exposeInMainWorld('voiceWorkAPI', voiceWorkAPI);
 
 interface ExternalMarkdownFile {
   path: string;

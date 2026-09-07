@@ -7,6 +7,7 @@
 import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import AmbientSettings from './AmbientSettings';
+import VoiceWorkSettings from './VoiceWorkSettings';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
 import HotMicSettings from './HotMicSettings';
@@ -54,6 +55,7 @@ type SettingsSection =
   | 'sounds'
   | 'stats'
   | 'team'
+  | 'voice-requests'
   | 'terminal-commands'
   | 'hot-mic'
   | 'rectangle';
@@ -97,6 +99,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'sounds': 'Sounds',
   'stats': 'Stats',
   'team': 'Team',
+  'voice-requests': 'Voice requests',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
   'rectangle': 'Window Management',
@@ -116,6 +119,7 @@ const SECTION_GLYPHS: Record<SettingsSection, string> = {
   'sounds': '♪',
   'stats': '▥',
   'team': '◎',
+  'voice-requests': '↗',
   'terminal-commands': '/',
   'hot-mic': '⚇',
   'rectangle': '▣',
@@ -135,6 +139,7 @@ const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
   'sounds': 'Sound cues for recording and app events.',
   'stats': 'Usage metrics from this installation.',
   'team': 'Invite teammates and manage River membership.',
+  'voice-requests': 'Connect synced voice requests to Codex on this Mac.',
   'terminal-commands': 'Terminal command allowlist rules.',
   'hot-mic': 'Always-listening voice controls and hotkey behavior.',
   'rectangle': 'Window actions, tiling, and spoken window commands.',
@@ -157,6 +162,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'sounds',
   'stats',
   'team',
+  'voice-requests',
   'rectangle', // Window Management
 ];
 
@@ -2160,6 +2166,13 @@ export default function SettingsPanel({
             </p>
           )}
         </div>
+      </div>
+      )}
+
+      {/* Voice requests Section */}
+      {selectedSection === 'voice-requests' && (
+      <div style={styles.sectionStack}>
+        <VoiceWorkSettings />
       </div>
       )}
 

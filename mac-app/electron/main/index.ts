@@ -1,4 +1,7 @@
 import { normalizeLauncherSections } from '../shared/launcherSections';
+import { VoiceWorkManager } from './voiceWorkManager';
+import { assertVoiceWorkSender, isVoiceWorkWindowTrusted } from './voiceWorkIpcTrust';
+import { VOICE_WORK_CHANNELS, type VoiceWorkSettings } from '../shared/voiceWork';
 import { LibraryLinkRelationReader } from './libraryLinkRelationReader';
 import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
@@ -5108,7 +5111,8 @@ function getQuitBlockingActivities() {
     transcriptionStatus: transcriberManager?.getStatus() ?? 'idle',
     hotMicActive: hotMicManager?.isActive ?? false,
     localLlmActive: localLlmManager?.isRunning() ?? false,
-    agentRunCount: agentKickoffManager?.getInFlightCount() ?? 0,
+    agentRunCount: (agentKickoffManager?.getInFlightCount() ?? 0)
+      + (voiceWorkManager?.getState().status === 'working' ? 1 : 0),
     codexTerminalSessions: codexTerminalManager?.listSessions() ?? [],
   });
 }
@@ -7645,7 +7649,63 @@ let pendingOpenMarkdownPath: string | null = null;
 /**
  * Set up all IPC handlers for audio-related communication.
  */
+let voiceWorkManager: VoiceWorkManager | null = null;
+
+function setupVoiceWorkIPCHandlers(): void {
+  const requireSender = (event: Electron.IpcMainInvokeEvent): void => assertVoiceWorkSender(event, mainWindow, {
+    appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL,
+  });
+  const worker = (): VoiceWorkManager => {
+    if (!voiceWorkManager) throw new Error('Field Theory is still starting. Try again shortly.');
+    return voiceWorkManager;
+  };
+  ipcMain.handle(VOICE_WORK_CHANNELS.getState, (event) => {
+    requireSender(event);
+    return worker().getState();
+  });
+  ipcMain.handle(VOICE_WORK_CHANNELS.refreshStatus, async (event) => {
+    requireSender(event);
+    const state = await worker().refreshStatus();
+    requireSender(event);
+    return state;
+  });
+  ipcMain.handle(VOICE_WORK_CHANNELS.updateSettings, async (event, changes: Partial<VoiceWorkSettings>) => {
+    requireSender(event);
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)
+      || Object.keys(changes).some((key) => key !== 'enabled' && key !== 'workspacePath')) {
+      throw new Error('Invalid voice request settings.');
+    }
+    const state = await worker().updateSettings(changes);
+    requireSender(event);
+    return state;
+  });
+  ipcMain.handle(VOICE_WORK_CHANNELS.chooseWorkspace, async (event) => {
+    requireSender(event);
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Choose the folder Codex may read and edit',
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: 'Use this folder',
+    });
+    requireSender(event);
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle(VOICE_WORK_CHANNELS.openTask, async (event, threadId: unknown) => {
+    requireSender(event);
+    if (typeof threadId !== 'string' || !worker().canOpenTask(threadId)) {
+      return { opened: false, error: 'This task is not available to open from Field Theory yet.' };
+    }
+    try {
+      await shell.openExternal(`codex://threads/${encodeURIComponent(threadId)}`);
+      requireSender(event);
+      return { opened: true };
+    } catch {
+      return { opened: false, error: 'Codex could not open this task.' };
+    }
+  });
+}
+
 function setupIPCHandlers(): void {
+  setupVoiceWorkIPCHandlers();
   ipcMain.on('window:setWindowButtonVisibility', (event: IpcMainEvent, visible: boolean) => {
     const sourceWindow = BrowserWindow.fromWebContents(event.sender);
     if (!sourceWindow || sourceWindow.isDestroyed()) return;
@@ -11219,6 +11279,7 @@ function setupClipboardIPCHandlers(): void {
 
   // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
+    voiceWorkManager?.stop();
     clearBrowserHelperState();
 
     // Unregister all hotkeys via HotkeyManager
@@ -15286,6 +15347,19 @@ async function initTranscriberSystem(): Promise<void> {
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
+  voiceWorkManager = new VoiceWorkManager({
+    auth: authManager,
+    stateDirectory: path.join(app.getPath('userData'), 'voice-work'),
+  });
+  voiceWorkManager.on('stateChanged', (state) => {
+    const window = mainWindow;
+    if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
+      window.webContents.send(VOICE_WORK_CHANNELS.stateChanged, state);
+    }
+  });
+  authManager.on('sessionChanged', () => { void voiceWorkManager?.authChanged(); });
+  authManager.on('userLoggedOut', () => { void voiceWorkManager?.authChanged(); });
+
   taggedDocsManager = new TaggedDocsManager({
     dbPath: userDataManager.isLoggedIn()
       ? userDataManager.getUserDataPath('tagged.db')
@@ -15482,6 +15556,7 @@ async function initTranscriberSystem(): Promise<void> {
   };
 
   powerMonitor.on('suspend', () => {
+    voiceWorkManager?.stop();
     bookmarkSyncController?.suspend();
     log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
     if (wakeOverlayRefreshTimeout) {
@@ -15492,6 +15567,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   powerMonitor.on('resume', () => {
+    void voiceWorkManager?.resume();
     bookmarkSyncController?.resume();
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');

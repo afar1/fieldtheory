@@ -1,0 +1,294 @@
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import type { VoiceWorkState } from '../../electron/shared/voiceWork';
+import { useTheme } from '../contexts/ThemeContext';
+import { SettingsCard, SettingsRow, SettingsSectionHeading } from './settings/SettingsPrimitives';
+
+function readinessMessage(state: VoiceWorkState): string {
+  if (state.message) return state.message;
+  if (!state.codex.available) return 'Install Codex on this Mac and sign in, then check again.';
+  if (state.codex.signedIn !== true) return 'Sign in to Codex on this Mac, then check again.';
+  if (state.status === 'signed_out') return 'Sign in to Field Theory, then check again.';
+  if (!state.settings.workspacePath) return 'Choose the project folder where Codex may read and edit files.';
+  if (state.status === 'connecting') return 'Checking your connection…';
+  if (state.status === 'needs_setup' || state.status === 'error') return 'Check again to see what needs attention.';
+  if (state.status === 'working') return 'Codex is working on a voice request.';
+  return state.settings.enabled ? 'Listening for new synced voice requests.' : 'Ready when you turn on Voice requests.';
+}
+
+function statusLabel(state: VoiceWorkState): string {
+  switch (state.status) {
+    case 'signed_out': return 'Sign-in needed';
+    case 'connecting': return 'Connecting…';
+    case 'working': return 'Working';
+    case 'needs_setup': return 'Setup needed';
+    case 'error': return 'Needs attention';
+    case 'ready': return state.settings.enabled ? 'Ready' : 'Ready to enable';
+    case 'disabled': return 'Off';
+  }
+}
+
+function taskStatusLabel(status: string): string {
+  switch (status) {
+    case 'completed': return 'Done';
+    case 'context': return 'Saved as context';
+    case 'queued':
+    case 'pending': return 'Queued';
+    case 'running':
+    case 'working':
+    case 'started':
+    case 'delegated': return 'Working';
+    case 'needs_user':
+    case 'needs_attention': return 'Needs you';
+    case 'failed':
+    case 'error': return 'Failed';
+    case 'interrupted':
+    case 'cancelled': return 'Stopped';
+    default: return 'Status unavailable';
+  }
+}
+
+export default function VoiceWorkSettings() {
+  const { theme } = useTheme();
+  const [state, setState] = useState<VoiceWorkState | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const revision = useRef(0);
+  const mutationPending = useRef(false);
+  const api = window.voiceWorkAPI;
+
+  useEffect(() => {
+    let active = true;
+    mounted.current = true;
+    const requestRevision = ++revision.current;
+    if (!api) {
+      setChecking(false);
+      setError('Open Settings in the Field Theory Mac app to set up Voice requests.');
+      return () => { active = false; mounted.current = false; };
+    }
+
+    const unsubscribe = api.onStateChanged((next) => {
+      if (!active) return;
+      revision.current++;
+      setState(next);
+    });
+    void (async () => {
+      try {
+        const initial = await api.getState();
+        if (!active || requestRevision !== revision.current) return;
+        setState(initial);
+        const refreshed = await api.refreshStatus();
+        if (active && requestRevision === revision.current) setState(refreshed);
+      } catch {
+        if (active && requestRevision === revision.current) {
+          setError('Could not check Voice requests. Check again to retry.');
+        }
+      } finally {
+        if (active) setChecking(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+      mounted.current = false;
+      revision.current++;
+      unsubscribe();
+    };
+  }, [api]);
+
+  const refresh = async () => {
+    if (!api || checking) return;
+    const requestRevision = ++revision.current;
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await api.refreshStatus();
+      if (mounted.current && requestRevision === revision.current) setState(next);
+    } catch {
+      if (mounted.current && requestRevision === revision.current) {
+        setError('Could not check Voice requests. Check again to retry.');
+      }
+    } finally {
+      if (mounted.current) setChecking(false);
+    }
+  };
+
+  const toggle = async () => {
+    if (!api || !state || mutationPending.current) return;
+    mutationPending.current = true;
+    const enabled = !state.settings.enabled;
+    const requestRevision = ++revision.current;
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await api.updateSettings({ enabled });
+      if (mounted.current && requestRevision === revision.current) setState(next);
+    } catch {
+      if (mounted.current) setError(`Could not turn ${enabled ? 'on' : 'off'} Voice requests. Check again and try once more.`);
+    } finally {
+      mutationPending.current = false;
+      if (mounted.current) setSaving(false);
+    }
+  };
+
+  const chooseWorkspace = async () => {
+    if (!api || !state || mutationPending.current) return;
+    mutationPending.current = true;
+    const requestRevision = ++revision.current;
+    setChoosing(true);
+    setError(null);
+    try {
+      const workspacePath = await api.chooseWorkspace();
+      // A cancelled picker never changes settings. A newer account/status event
+      // also invalidates the choice so it cannot be applied to another account.
+      if (!workspacePath || !mounted.current) return;
+      if (requestRevision !== revision.current) {
+        setError('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
+        return;
+      }
+      const next = await api.updateSettings({ workspacePath });
+      if (mounted.current && requestRevision === revision.current) setState(next);
+    } catch {
+      if (mounted.current) setError('Could not save the project folder. Choose the folder again to retry.');
+    } finally {
+      mutationPending.current = false;
+      if (mounted.current) setChoosing(false);
+    }
+  };
+
+  const openTask = async () => {
+    if (!api || !state?.lastTask?.canOpen || opening) return;
+    setOpening(true);
+    setError(null);
+    try {
+      const result = await api.openTask(state.lastTask.threadId);
+      if (mounted.current && !result.opened) {
+        setError(result.error || 'Could not open the task. Open Codex to find it.');
+      }
+    } catch {
+      if (mounted.current) setError('Could not open the task. Open Codex to find it.');
+    } finally {
+      if (mounted.current) setOpening(false);
+    }
+  };
+
+  const enabled = state?.settings.enabled === true;
+  const canEnable = Boolean(state?.settings.workspacePath && state.codex.available && state.codex.signedIn === true
+    && !['signed_out', 'connecting', 'needs_setup', 'error'].includes(state.status));
+  const toggleDisabled = !api || !state || saving || choosing || (!enabled && (checking || !canEnable));
+  const folderDisabled = !api || !state || checking || saving || choosing || enabled || state?.status === 'working';
+  const buttonStyle: CSSProperties = {
+    padding: '7px 11px', borderRadius: 6, border: `1px solid ${theme.border}`,
+    background: 'transparent', color: theme.text, fontSize: 12, cursor: 'pointer',
+  };
+
+  return (
+    <section aria-label="Voice requests">
+      <SettingsCard theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Voice requests"
+          description="Let Codex work on requests in your synced voice recordings. Keep Field Theory running in the background and this Mac awake and online."
+        />
+        <SettingsRow
+          theme={theme}
+          label="Enable voice requests"
+          hint="Turning this on allows Codex to read and edit files in the selected folder when you ask. Its existing permissions still apply."
+          control={(
+            <button
+              type="button"
+              role="switch"
+              aria-label="Enable voice requests"
+              aria-checked={enabled}
+              disabled={toggleDisabled}
+              onClick={() => void toggle()}
+              style={{
+                ...buttonStyle, minWidth: 46,
+                color: enabled ? '#ffffff' : theme.textSecondary,
+                background: enabled ? theme.accent : theme.selectedBg,
+                borderColor: enabled ? theme.accent : theme.border,
+                opacity: toggleDisabled ? 0.55 : 1,
+                cursor: toggleDisabled ? 'default' : 'pointer',
+              }}
+            >
+              {enabled ? 'On' : 'Off'}
+            </button>
+          )}
+        />
+        <SettingsRow
+          theme={theme}
+          label="Allowed project folder"
+          hint={(
+            <>
+              <span style={{ overflowWrap: 'anywhere' }}>{state?.settings.workspacePath || 'Choose a folder before enabling.'}</span>
+              {enabled && <span style={{ display: 'block' }}>Pause Voice requests to change this folder.</span>}
+            </>
+          )}
+          control={(
+            <button
+              type="button"
+              disabled={folderDisabled}
+              onClick={() => void chooseWorkspace()}
+              style={{ ...buttonStyle, opacity: folderDisabled ? 0.55 : 1, cursor: folderDisabled ? 'default' : 'pointer' }}
+            >
+              {choosing ? 'Choosing…' : state?.settings.workspacePath ? 'Change folder…' : 'Choose folder…'}
+            </button>
+          )}
+        />
+        <SettingsRow
+          theme={theme}
+          label={(
+            <span role="status" aria-live="polite" aria-atomic="true">
+              {checking ? 'Checking…' : state ? statusLabel(state) : 'Unavailable'}
+            </span>
+          )}
+          hint={state ? readinessMessage(state) : 'Checking that Field Theory and Codex are ready.'}
+          control={(
+            <button
+              type="button"
+              disabled={!api || checking || saving || choosing}
+              onClick={() => void refresh()}
+              style={{ ...buttonStyle, opacity: !api || checking || saving || choosing ? 0.55 : 1 }}
+            >
+              Check again
+            </button>
+          )}
+          last
+        />
+        <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
+          “Just context” and “hold off” remain notes. Recordings kept local on your phone stay there.
+        </p>
+        {state?.lastTask && (
+          <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 18, paddingTop: 16 }}>
+            <div style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 7 }}>Latest voice task · {taskStatusLabel(state.lastTask.status)}</div>
+            <div style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}>{state.lastTask.title || 'Voice task'}</div>
+            {state.lastTask.summary && <p style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{state.lastTask.summary}</p>}
+            {state.lastTask.question?.trim() && <p style={{ color: theme.text, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{state.lastTask.question}</p>}
+            {state.lastTask.finalResponse?.trim() && (
+              <details key={state.lastTask.threadId} style={{ marginTop: 12 }}>
+                <summary style={{ color: theme.text, fontSize: 12, cursor: 'pointer' }}>Read full response</summary>
+                <div style={{ marginTop: 10, color: theme.text, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                  {state.lastTask.finalResponse}
+                </div>
+              </details>
+            )}
+            {state.lastTask.canOpen && (
+              <button type="button" disabled={opening} onClick={() => void openTask()} style={{ ...buttonStyle, marginTop: 8 }}>
+                {opening ? 'Opening…' : 'Open task'}
+              </button>
+            )}
+          </div>
+        )}
+        {state?.lastEventAt && Number.isFinite(state.lastEventAt) ? (
+          <p style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 0 }}>
+            Last update: {new Date(state.lastEventAt).toLocaleString()}
+          </p>
+        ) : null}
+        {error && <p role="alert" style={{ color: theme.error, fontSize: 12, lineHeight: 1.5, marginBottom: 0 }}>{error}</p>}
+      </SettingsCard>
+    </section>
+  );
+}

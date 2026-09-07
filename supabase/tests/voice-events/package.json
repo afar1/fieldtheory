@@ -1,0 +1,7 @@
+{
+  "name": "field-theory-voice-event-backend-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test voice_event_delivery.test.mjs" },
+  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
+}

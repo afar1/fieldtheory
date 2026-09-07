@@ -2,6 +2,8 @@
 // Window Type Declarations - Extend the Window interface with our APIs.
 // =============================================================================
 
+import type { VoiceWorkAPI } from '../../electron/shared/voiceWork';
+
 /**
  * Audio device transport type.
  */
@@ -3075,6 +3077,7 @@ declare global {
   }
 
   interface Window {
+    voiceWorkAPI?: VoiceWorkAPI;
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
     hotkeyAPI?: HotkeyAPI;

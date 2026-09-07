@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.47-voice.1': [
+    'Preview Voice requests in Settings: connect Codex and choose the folder it may work in',
+    'Read the latest voice task result or clarification in Field Theory',
+    'Automatic requests require the new voice delivery service to be activated; this local preview does not enable it',
+  ],
   '0.3.46': [
     'Background bookmark sync no longer requests Chrome Safe Storage access',
     'Connect X explicitly to sync bookmarks; expired sessions pause until you reconnect',
@@ -551,6 +556,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.47-voice.1': 'September 7, 2026',
   '0.3.46': 'September 7, 2026',
   '0.3.45': 'September 6, 2026',
   '0.3.44': 'September 6, 2026',
