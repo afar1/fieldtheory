@@ -2,20 +2,20 @@ import { restoreBookmarkSyncState, type PersistedBookmarkSyncState } from './boo
 
 /** App-owned freshness checks. Timers do no work until a bounded CLI job is due. */
 export type BookmarkSyncState = {
-  phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported';
+  phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported' | 'connection-required';
   lastCheckedAt: string | null;
   nextCheckAt: string | null;
   error: string | null;
 };
 export type QuickBookmarkSync = {
-  status: 'synced' | 'rate_limited' | 'timeout' | 'error' | 'unsupported';
+  status: 'synced' | 'rate_limited' | 'timeout' | 'error' | 'unsupported' | 'auth_required';
   added?: number;
   changed?: number;
   retryAfterSec?: number;
   error?: string;
 };
 export type BookmarkSyncResult = {
-  status: 'synced' | 'too-recent' | 'offline' | 'unavailable' | 'unsupported' | 'failed';
+  status: 'synced' | 'too-recent' | 'offline' | 'unavailable' | 'unsupported' | 'failed' | 'connection-required';
   lastCheckedAt: string | null;
   error?: string;
 };
@@ -24,6 +24,8 @@ const MINUTE = 60_000;
 const MAINTENANCE_INTERVAL = 15 * MINUTE;
 
 type Options = {
+  isConnected?: () => boolean;
+  onAuthenticationRequired?: () => void;
   quick: (signal: AbortSignal) => Promise<QuickBookmarkSync>;
   maintenance?: (signal: AbortSignal, work: { index: boolean }) => Promise<{ remaining?: boolean; changed?: boolean; retryAfterSec?: number }>;
   isOnline: () => boolean;
@@ -64,7 +66,14 @@ export class BookmarkSyncController {
       this.state = { ...this.state, lastCheckedAt: restored.lastCheckedAt, phase: restored.retryPhase ?? 'idle' };
     }
   }
-  getState(): BookmarkSyncState { return { ...this.state }; }
+  getState(): BookmarkSyncState { return this.options.isConnected?.() === false
+    ? { ...this.state, phase: 'connection-required', nextCheckAt: null } : { ...this.state }; }
+  connected(): Promise<BookmarkSyncResult> {
+    this.blockedUntil = 0; this.lastAttempt = -Infinity; this.failures = 0;
+    this.publish({ phase: 'idle', error: null });
+    this.start();
+    return this.request('activity');
+  }
 
   start(): void {
     if (this.started) return;
@@ -89,6 +98,10 @@ export class BookmarkSyncController {
     if (this.started) this.plan(Math.max(this.now() + 3_000, this.blockedUntil, this.lastAttempt + MINUTE));
   }
   request(reason: 'activity' | 'timer' | 'network' = 'activity'): Promise<BookmarkSyncResult> {
+    if (this.options.isConnected?.() === false) {
+      this.clearTimer(); this.publish({ phase: 'connection-required', nextCheckAt: null, error: null });
+      return Promise.resolve(this.result('connection-required'));
+    }
     if (reason === 'activity') this.lastActivity = this.now();
     if (!this.started || this.suspended) return Promise.resolve(this.result('unavailable'));
     if (this.running) {
@@ -155,6 +168,11 @@ export class BookmarkSyncController {
     return { status, lastCheckedAt: this.state.lastCheckedAt, ...(error ? { error } : {}) };
   }
   private failed(outcome: QuickBookmarkSync): BookmarkSyncResult {
+    if (outcome.status === 'auth_required') {
+      this.options.onAuthenticationRequired?.();
+      this.publish({ phase: 'connection-required', nextCheckAt: null, error: 'Connect X bookmarks to resume syncing.' });
+      return this.result('connection-required');
+    }
     this.failures++;
     const backoff = outcome.status === 'unsupported' ? 6 * 60 * MINUTE
       : Math.max(Math.min(30 * MINUTE, MINUTE * 2 ** Math.min(this.failures - 1, 5)),
@@ -171,12 +189,12 @@ export class BookmarkSyncController {
   }
   private planNext(): void {
     this.persist();
-    if (!this.started || this.suspended) return;
+    if (!this.started || this.suspended || this.options.isConnected?.() === false || this.state.phase === 'connection-required') return;
     const next = Math.max(this.now(), this.lastAttempt + this.interval(), this.blockedUntil);
     this.plan(this.maintenanceDue !== null && this.blockedUntil <= this.now() ? Math.min(next, this.maintenanceDue) : next);
   }
   private plan(at: number): void {
-    if (!this.started || this.suspended) return;
+    if (!this.started || this.suspended || this.options.isConnected?.() === false || this.state.phase === 'connection-required') return;
     this.clearTimer();
     this.publish({ nextCheckAt: new Date(at).toISOString() });
     this.timer = setTimeout(() => {

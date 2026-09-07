@@ -1446,6 +1446,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     getDataSource: async () => (
       await request<{ source: unknown }>('/native/bookmarks/source')
     ).source,
+    connectX: async () => (await request<{ result: unknown }>('/native/bookmarks/connect-x', { method: 'POST' })).result,
     syncIfStale: async () => (
       await request<{ result: unknown }>('/native/bookmarks/sync-if-stale', { method: 'POST' })
     ).result,

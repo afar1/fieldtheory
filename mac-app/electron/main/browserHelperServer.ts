@@ -242,6 +242,7 @@ export type BrowserHelperNativeBridge = {
   stopMeeting?: () => unknown | Promise<unknown>;
   getBookmarks?: () => unknown | Promise<unknown>;
   getBookmarkDataSource?: () => unknown | Promise<unknown>;
+  connectXBookmarks?: () => unknown | Promise<unknown>;
   syncBookmarksIfStale?: () => unknown | Promise<unknown>;
   getBookmarkSyncState?: () => BookmarkSyncState;
   getBookmarkAuthors?: () => unknown[] | Promise<unknown[]>;
@@ -1687,6 +1688,12 @@ export class BrowserHelperServer {
 
       if (req.method === 'GET' && parsed.pathname === '/native/bookmarks/sync-state') {
         writeJson(res, 200, { ok: true, state: this.nativeBridge.getBookmarkSyncState?.() ?? null }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/bookmarks/connect-x') {
+        const result = await this.nativeBridge.connectXBookmarks?.() ?? { status: 'unavailable' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 

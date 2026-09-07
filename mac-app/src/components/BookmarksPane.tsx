@@ -6,7 +6,7 @@ import ImmersiveToggle from './ImmersiveToggle';
 import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
-type BookmarkSyncStatus = 'idle' | 'syncing' | 'checked' | 'offline' | 'failed';
+type BookmarkSyncStatus = 'idle' | 'syncing' | 'checked' | 'offline' | 'failed' | 'connection-required';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
 const RENDERER_STORAGE_CHANGED_EVENT = 'fieldtheory:renderer-storage-changed';
@@ -214,7 +214,7 @@ function BookmarksPane({
     const applySyncState = (state: BookmarkSyncState) => {
       if (cancelled) return;
       setLastCheckedAt(state.lastCheckedAt);
-      setSyncStatus(state.phase === 'syncing' ? 'syncing'
+      setSyncStatus(state.phase === 'connection-required' ? 'connection-required' : state.phase === 'syncing' ? 'syncing'
         : state.phase === 'offline' ? 'offline'
         : state.phase === 'backoff' || state.phase === 'unsupported' ? 'failed'
         : state.lastCheckedAt ? 'checked' : 'idle');
@@ -237,7 +237,8 @@ function BookmarksPane({
         statusEvents++;
         // Native data notifications update the cache; a successful no-change
         // check must not pay for another full-library IPC transfer.
-        if (result.status === 'failed') setSyncStatus(isOfflineSyncError(result.error) ? 'offline' : 'failed');
+        if (result.status === 'connection-required') setSyncStatus('connection-required');
+        else if (result.status === 'failed') setSyncStatus(isOfflineSyncError(result.error) ? 'offline' : 'failed');
         else if (result.status === 'offline') setSyncStatus('offline');
         else if (['missing-cli', 'unavailable', 'unsupported'].includes(result.status)) setSyncStatus('failed');
         else if (result.status === 'already-running') setSyncStatus('syncing');
@@ -296,6 +297,16 @@ function BookmarksPane({
   const retryBookmarkSync = () => {
     if (syncStatus === 'syncing') return;
     setSyncRetryCount((count) => count + 1);
+  };
+
+  const connectX = async () => {
+    if (!window.bookmarksAPI?.connectX) return;
+    setSyncStatus('syncing');
+    try {
+      const result = await window.bookmarksAPI.connectX();
+      setSyncStatus(result.status === 'connection-required' ? 'connection-required' : result.status === 'synced' ? 'checked' : 'failed');
+      setLastCheckedAt(result.lastCheckedAt ?? null);
+    } catch { setSyncStatus('connection-required'); }
   };
 
   const syncStatusView = pendingNewCount > 0 ? null : (() => {
@@ -480,6 +491,13 @@ function BookmarksPane({
           </button>
         )}
 
+        {syncStatus === 'connection-required' && window.bookmarksAPI?.connectX && (
+          <button type="button" onClick={() => { void connectX(); }}
+            title="Sign in to X in a dedicated Field Theory window. Your browser's passwords are never accessed."
+            style={{ color: theme.text, background: 'transparent', border: `1px solid ${theme.textSecondary}`, borderRadius: 6, padding: '5px 8px', cursor: 'pointer' }}>
+            {lastCheckedAt ? 'Reconnect X bookmarks' : 'Connect X bookmarks'}
+          </button>
+        )}
         {syncStatusView && (
           <div
             style={{

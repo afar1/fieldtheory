@@ -13,6 +13,25 @@ function setup(quick = vi.fn(async (_signal: AbortSignal): Promise<QuickBookmark
 describe('BookmarkSyncController', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-05T12:00:00Z')); });
   afterEach(() => { vi.useRealTimers(); });
+  it('stays quiet at startup, activity, resume, and network changes until explicitly connected', async () => {
+    const quick = vi.fn(async () => ({ status: 'synced' as const }));
+    let connected = false;
+    const controller = new BookmarkSyncController({ quick, isConnected: () => connected, isOnline: () => true, onChanged: vi.fn(), onState: vi.fn() });
+    controller.start(); await vi.advanceTimersByTimeAsync(60 * MINUTE);
+    await controller.request(); await controller.request('network'); controller.suspend(); controller.resume();
+    expect(quick).not.toHaveBeenCalled(); expect(controller.getState().phase).toBe('connection-required');
+    connected = true; await controller.connected(); expect(quick).toHaveBeenCalledTimes(1); controller.stop();
+  });
+  it('stops all retries after expired credentials and resumes only after explicit reconnect', async () => {
+    let connected = true;
+    const quick = vi.fn(async () => ({ status: 'auth_required' as const }));
+    const options = { quick, isConnected: () => connected, onAuthenticationRequired: () => { connected = false; }, isOnline: () => true, onChanged: vi.fn(), onState: vi.fn() };
+    const controller = new BookmarkSyncController(options); controller.start(); await controller.request();
+    await vi.advanceTimersByTimeAsync(60 * MINUTE); await controller.request();
+    expect(quick).toHaveBeenCalledTimes(1); expect(controller.getState().nextCheckAt).toBeNull(); controller.stop();
+    const restarted = new BookmarkSyncController(options); restarted.start(); await vi.advanceTimersByTimeAsync(60 * MINUTE);
+    expect(quick).toHaveBeenCalledTimes(1); restarted.stop();
+  });
   it('delays startup and polls idle accounts only every 15 minutes', async () => {
     const { controller, quick } = setup(); controller.start();
     await vi.advanceTimersByTimeAsync(9999); expect(quick).not.toHaveBeenCalled();

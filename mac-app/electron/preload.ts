@@ -5346,6 +5346,7 @@ interface BookmarkSyncState {
 }
 
 const bookmarksAPI = {
+  connectX: () => ipcRenderer.invoke('bookmarks:connectX'),
   getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
   syncIfStale: (): Promise<{ status: string; lastCheckedAt?: string | null; error?: string }> => ipcRenderer.invoke('bookmarks:syncIfStale'),
   getSyncState: (): Promise<BookmarkSyncState> => ipcRenderer.invoke('bookmarks:getSyncState'),

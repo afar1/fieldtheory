@@ -2700,12 +2700,13 @@ declare global {
     lastPostedAt: string;
   }
   interface BookmarkSyncState {
-    phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported';
+    phase: 'idle' | 'syncing' | 'offline' | 'backoff' | 'unsupported' | 'connection-required';
     lastCheckedAt: string | null;
     nextCheckAt: string | null;
     error: string | null;
   }
   interface BookmarksAPI {
+    connectX?: () => Promise<{ status: string; lastCheckedAt?: string | null; error?: string }>;
     getAll: () => Promise<BookmarksSnapshot>;
     getDataSource?: () => Promise<unknown>;
     syncIfStale: () => Promise<{ status: string; lastCheckedAt?: string | null; error?: string }>;

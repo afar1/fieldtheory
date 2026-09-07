@@ -86,6 +86,18 @@ describe('BookmarksPane native preference sync', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps cached bookmarks available and connects only when the user clicks', async () => {
+    window.bookmarksAPI!.syncIfStale = vi.fn(async () => ({ status: 'connection-required' }));
+    window.bookmarksAPI!.connectX = vi.fn(async () => ({ status: 'connection-required' }));
+    render(<BookmarksPane active />);
+    const button = await screen.findByRole('button', { name: 'Connect X bookmarks' });
+    expect(screen.getByTestId('bookmarks-canvas')).toBeTruthy();
+    expect(window.bookmarksAPI!.connectX).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    await waitFor(() => expect(window.bookmarksAPI!.connectX).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Connect X bookmarks' })).toBeTruthy();
+  });
+
   it('shows checking and an actual successful check time while opening bookmarks runs a background sync', async () => {
     let resolveSync: (value: { status: string; lastCheckedAt?: string }) => void = () => {};
     window.bookmarksAPI!.syncIfStale = vi.fn(() => new Promise<{ status: string; lastCheckedAt?: string }>((resolve) => {

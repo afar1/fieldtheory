@@ -221,6 +221,7 @@ import { browserLibraryTargetFromProtocolUrl } from './fieldTheoryProtocolTarget
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { BookmarkSyncController, type BookmarkSyncResult } from './bookmarkSyncController';
+import { BookmarkAuth } from './bookmarkAuth';
 import { BookmarkSyncRunner } from './bookmarkSyncRunner';
 import { BookmarkSyncStateStore } from './bookmarkSyncStateStore';
 import {
@@ -398,6 +399,15 @@ const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 3;
 const commandClipboardRestoreCoordinator = new CommandClipboardRestoreCoordinator();
 const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
 let bookmarkSyncController: BookmarkSyncController | null = null;
+let bookmarkAuth: BookmarkAuth | null = null;
+function ensureBookmarkAuth(): BookmarkAuth {
+  return bookmarkAuth ??= new BookmarkAuth(path.join(require('./fieldTheoryPaths').bookmarkDataDir(), 'app-x-connection.json'));
+}
+async function connectXBookmarks(): Promise<BookmarkSyncResult> {
+  const controller = ensureBookmarkSyncController();
+  if (!await ensureBookmarkAuth().connect()) return { status: 'connection-required', lastCheckedAt: controller.getState().lastCheckedAt };
+  return controller.connected();
+}
 
 function findFieldTheoryCli(): string | null {
   const candidates = [
@@ -442,8 +452,10 @@ function ensureBookmarkSyncController(): BookmarkSyncController {
     }
     const cli = findFieldTheoryCli();
     return cli ? { executable: cli, env: fieldTheoryCliEnv() } : null;
-  }, execFileAsync);
+  }, execFileAsync, () => ensureBookmarkAuth().credentials());
   bookmarkSyncController = new BookmarkSyncController({
+    isConnected: () => ensureBookmarkAuth().isConnected(),
+    onAuthenticationRequired: () => ensureBookmarkAuth().requireConnection(),
     stateStore: new BookmarkSyncStateStore(path.join(require('./fieldTheoryPaths').bookmarkDataDir(), 'app-sync-state.json')),
     quick: (signal) => runner.quick(signal),
     maintenance: (signal, work) => runner.maintenance(signal, work),
@@ -3712,6 +3724,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         };
       },
       syncBookmarksIfStale: () => syncBookmarksFromCliIfStale(),
+      connectXBookmarks: () => connectXBookmarks(),
       getBookmarkSyncState: () => ensureBookmarkSyncController().getState(),
       getBookmarkAuthors: () => {
         const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
@@ -8464,6 +8477,7 @@ function setupLibrarianIPCHandlers(): void {
     return ensureBookmarksManager().getSnapshot();
   });
 
+  ipcMain.handle('bookmarks:connectX', () => connectXBookmarks());
   ipcMain.handle('bookmarks:syncIfStale', () => syncBookmarksFromCliIfStale());
   ipcMain.handle('bookmarks:getSyncState', () => ensureBookmarkSyncController().getState());
   ipcMain.on('bookmarks:networkOnline', () => { void bookmarkSyncController?.request('network'); });
