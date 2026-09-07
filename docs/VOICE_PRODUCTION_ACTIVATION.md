@@ -55,6 +55,8 @@ Observed timestamps in UTC:
 
 Execution began promptly after the database event. The first-sidebar-visible timestamp was not recorded, so the UI discovery delay is not measured and its cause is not proven by these timestamps.
 
+A read-only review of the installed Codex app found that ordinary Recents does not exclude the `field-theory-voice` source. It uses a cached task list refreshed through task-list/store events; this integration's separate stdio app-server has no explicit handoff to refresh that desktop list. Later discovery on refresh is a plausible explanation, not a measured root cause. The user confirmed that the existing task eventually appeared; it was not recreated or pinned as a workaround.
+
 The user's Library Inbox was physically empty, and the Library document search found no mountain result. This was not an indexing backlog. The selected Inbox is the Codex working directory; image generation saved into Codex's generated-image store. The runner retains only `agentMessage` completion items, discarding `imageGeneration.savedPath`, and the final structured response supplied prose without an artifact link. The Library scans Markdown documents; no Library note or output file was created. This is an output delivery gap despite successful execution. The user requested diagnosis, so the existing image/task were not recreated, moved, or copied, and no Inbox note was written.
 
 ## Remaining acceptance
