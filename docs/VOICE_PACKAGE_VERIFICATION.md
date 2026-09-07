@@ -1,5 +1,7 @@
 # Local Voice package verification
 
+**Final local artifact, September 7, 2026:** `mac-app/release/Field-Theory-0.3.47-voice.1-arm64-local.dmg` is signed, notarized, stapled, Gatekeeper accepted, and checksum verified. No DMG mounting, installation, or candidate app launch was performed, following the user's final DMG-file-only instruction. See [the final artifact receipt and scope](VOICE_LOCAL_INSTALL.md). The earlier development-runtime failure below is retained as evidence; it is not a failure of the completed DMG signature checks.
+
 This records the Voice event-delivery candidate audit and bounded harness work
 based on `mac-app/package.json` version `0.3.45`. No production profile, installed
 app, authentication state, release, or cloud resources were changed by this work.
