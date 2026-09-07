@@ -67,7 +67,7 @@ before(async () => {
       using(user_id=auth.uid()) with check(user_id=auth.uid());
     grant select, insert, update, delete on public.transcripts to authenticated;
   `);
-  const migration = await readFile(new URL('../../migrations/021_voice_event_delivery.sql', import.meta.url), 'utf8');
+  const migration = await readFile(new URL('../../migrations/20260907233700_voice_event_delivery.sql', import.meta.url), 'utf8');
   await db.exec(migration);
 });
 

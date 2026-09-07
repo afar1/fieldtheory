@@ -1,6 +1,6 @@
 # Voice event delivery backend
 
-Migration `supabase/migrations/021_voice_event_delivery.sql` prepares opt-in, authenticated Supabase Realtime delivery to the bundled Mac worker. Installation leaves every account disabled. This document is an operator runbook; users enable the feature in Field Theory Settings and do not run SQL, install a CLI, or configure a webhook.
+Migration `supabase/migrations/20260907233700_voice_event_delivery.sql` prepares opt-in, authenticated Supabase Realtime delivery to the bundled Mac worker. Installation leaves every account disabled. This document is an operator runbook; users enable the feature in Field Theory Settings and do not run SQL, install a CLI, or configure a webhook.
 
 ## Delivery contract
 
@@ -26,7 +26,7 @@ An unavailable Realtime insert causes enabled users' affected transcript writes 
 
 ## Deployment prerequisites and manual application
 
-No hosted migration, Realtime configuration change, or production canary was performed while implementing this change. Apply first to an explicitly authorized staging project. Existing schema migrations, particularly `001_init_schema.sql`, `003_rls_policies.sql`, `006_transcripts_metadata.sql`, and `017_mobile_row_soft_delete_timestamps.sql`, must already be applied.
+Production activation was explicitly authorized and completed on September 7, 2026, for the Field Theory project `cighxaroptskntwbrctl`. See [the deployment receipt](VOICE_PRODUCTION_ACTIVATION.md) for the exact migration, target checks, installed-app canary, and remaining physical acceptance. For subsequent deployments, review and authorize the target first. Existing schema migrations, particularly `001_init_schema.sql`, `003_rls_policies.sql`, `006_transcripts_metadata.sql`, and `017_mobile_row_soft_delete_timestamps.sql`, must already be applied.
 
 Use the project's approved database migration identity, with permission to create public objects, manage policies on `realtime.messages`, and execute/read the Realtime functions/table from the new security-definer functions. Keep database credentials in the operator's approved connection configuration. The commands below use a preconfigured `psql` service named `field_theory_staging`; replace that service name with the approved target. Do not put connection passwords or user tokens in a shell command or this document.
 
@@ -55,10 +55,12 @@ Expect all five prerequisite objects, all seven transcript columns, and Realtime
 From the repository root, after target review and deployment authorization:
 
 ```sh
-psql 'service=field_theory_staging' -X --set=ON_ERROR_STOP=1 --single-transaction --file=supabase/migrations/021_voice_event_delivery.sql
+psql 'service=field_theory_staging' -X --set=ON_ERROR_STOP=1 --single-transaction --file=supabase/migrations/20260907233700_voice_event_delivery.sql
 ```
 
 This is a one-time migration with ordinary `create` statements. Do not rerun it against an installed schema or use a broad `db push` that also applies unrelated pending migrations. Record the migration in the project's established deployment ledger if this manual SQL path does not do that automatically.
+
+The original candidate filename was `021_voice_event_delivery.sql`. Production already used version `021` for `newspaper_covers`, so Voice was renamed to `20260907233700_voice_event_delivery.sql` before application. Its SQL content was unchanged. The production application used the authenticated Supabase CLI in an isolated linked workspace, with an explicit transaction around the migration and its `supabase_migrations.schema_migrations` entry, followed by a PostgREST schema reload notification. No other migrations were applied.
 
 Read-only installation verification:
 
