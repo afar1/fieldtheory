@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assertVoiceWorkSender, isVoiceWorkWindowTrusted } from './voiceWorkIpcTrust';
 
 const entry = { appPath: '/Applications/Field Theory.app/Contents/Resources/app.asar' };
-const trusted = 'file:///Applications/Field%20Theory.app/Contents/Resources/app.asar/dist/index.html';
+const trusted = 'file:///Applications/Field%20Theory.app/Contents/Resources/app.asar/dist/clipboard-history.html';
 
 function fixture(url = trusted) {
   const frame = { url };
@@ -12,8 +12,8 @@ function fixture(url = trusted) {
 }
 
 describe('Voice work IPC trust', () => {
-  it('accepts only the current main-window top frame at the packaged Settings entry', () => {
-    const current = fixture(`${trusted}?view=settings#voice-requests`);
+  it.each(['library', 'clipboard'])('accepts the actual Settings host opened with initialView=%s', (initialView) => {
+    const current = fixture(`${trusted}?initialView=${initialView}#voice-requests`);
     expect(isVoiceWorkWindowTrusted(current.window, entry)).toBe(true);
     expect(() => assertVoiceWorkSender(current.event, current.window, entry)).not.toThrow();
   });
@@ -35,13 +35,13 @@ describe('Voice work IPC trust', () => {
   it.each([
     'https://example.com/',
     'file:///tmp/index.html',
-    trusted.replace('/dist/index.html', '/dist/clipboard-history.html'),
+    trusted.replace('/dist/clipboard-history.html', '/dist/index.html'),
     `${trusted}.backup`,
     `file://remote-host${new URL(trusted).pathname}`,
     'about:blank',
     'data:text/html,hello',
     'not a URL',
-  ])('rejects navigation of the main window to %s for invocation and state publication', (url) => {
+  ])('rejects navigation of the Settings window to %s for invocation and state publication', (url) => {
     const current = fixture(url);
     expect(isVoiceWorkWindowTrusted(current.window, entry)).toBe(false);
     expect(() => assertVoiceWorkSender(current.event, current.window, entry)).toThrow(/Field Theory Settings/);
@@ -77,12 +77,12 @@ describe('Voice work IPC trust', () => {
   });
 
   it('accepts the exact configured development entry while denying sibling pages and origins', () => {
-    const development = { ...entry, startUrl: 'http://localhost:5173/settings?mode=voice' };
-    const current = fixture('http://localhost:5173/settings?mode=other#voice');
+    const development = { ...entry, startUrl: 'http://localhost:5173' };
+    const current = fixture('http://localhost:5173/clipboard-history.html?initialView=library#voice');
     expect(isVoiceWorkWindowTrusted(current.window, development)).toBe(true);
     expect(() => assertVoiceWorkSender(current.event, current.window, development)).not.toThrow();
-    for (const url of ['http://localhost:5173/library', 'http://localhost:5174/settings',
-      'https://localhost:5173/settings', 'http://localhost:5173.evil.example/settings', trusted]) {
+    for (const url of ['http://localhost:5173/', 'http://localhost:5173/index.html', 'http://localhost:5174/clipboard-history.html',
+      'https://localhost:5173/clipboard-history.html', 'http://localhost:5173.evil.example/clipboard-history.html', trusted]) {
       expect(isVoiceWorkWindowTrusted(fixture(url).window, development)).toBe(false);
     }
   });

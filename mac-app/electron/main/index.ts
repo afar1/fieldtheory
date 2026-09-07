@@ -7652,9 +7652,13 @@ let pendingOpenMarkdownPath: string | null = null;
 let voiceWorkManager: VoiceWorkManager | null = null;
 
 function setupVoiceWorkIPCHandlers(): void {
-  const requireSender = (event: Electron.IpcMainInvokeEvent): void => assertVoiceWorkSender(event, mainWindow, {
-    appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL,
-  });
+  const requireSender = (event: Electron.IpcMainInvokeEvent): BrowserWindow => {
+    const window = clipboardHistoryWindow?.getWindow() ?? null;
+    assertVoiceWorkSender(event, window, {
+      appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL,
+    });
+    return window;
+  };
   const worker = (): VoiceWorkManager => {
     if (!voiceWorkManager) throw new Error('Field Theory is still starting. Try again shortly.');
     return voiceWorkManager;
@@ -7680,8 +7684,8 @@ function setupVoiceWorkIPCHandlers(): void {
     return state;
   });
   ipcMain.handle(VOICE_WORK_CHANNELS.chooseWorkspace, async (event) => {
-    requireSender(event);
-    const result = await dialog.showOpenDialog(mainWindow!, {
+    const window = requireSender(event);
+    const result = await dialog.showOpenDialog(window, {
       title: 'Choose the folder Codex may read and edit',
       properties: ['openDirectory', 'createDirectory'],
       buttonLabel: 'Use this folder',
@@ -15352,7 +15356,7 @@ async function initTranscriberSystem(): Promise<void> {
     stateDirectory: path.join(app.getPath('userData'), 'voice-work'),
   });
   voiceWorkManager.on('stateChanged', (state) => {
-    const window = mainWindow;
+    const window = clipboardHistoryWindow?.getWindow() ?? null;
     if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
       window.webContents.send(VOICE_WORK_CHANNELS.stateChanged, state);
     }

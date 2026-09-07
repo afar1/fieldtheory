@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { devServerPageUrl } from './devServerLoadRetry';
 
 interface VoiceFrame { readonly url: string }
 interface VoiceContents {
@@ -34,14 +35,16 @@ function entryUrl(value: string): string | null {
 export function isVoiceWorkWindowTrusted(window: VoiceWindow | null, entry: VoiceWorkEntry): window is VoiceWindow {
   try {
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return false;
-    const expected = entryUrl(entry.startUrl || pathToFileURL(path.join(entry.appPath, 'dist', 'index.html')).href);
+    const expected = entryUrl(entry.startUrl
+      ? devServerPageUrl(entry.startUrl, 'clipboard-history.html')
+      : pathToFileURL(path.join(entry.appPath, 'dist', 'clipboard-history.html')).href);
     return expected !== null && entryUrl(window.webContents.getURL()) === expected
       && entryUrl(window.webContents.mainFrame.url) === expected;
   } catch { return false; }
 }
 
-/** WebContents identity and frame identity must both match the current main window. */
-export function assertVoiceWorkSender(event: VoiceInvokeEvent, window: VoiceWindow | null, entry: VoiceWorkEntry): void {
+/** Settings lives in the Library/Clipboard window; only its top frame may invoke. */
+export function assertVoiceWorkSender(event: VoiceInvokeEvent, window: VoiceWindow | null, entry: VoiceWorkEntry): asserts window is VoiceWindow {
   if (!isVoiceWorkWindowTrusted(window, entry) || event.sender !== window.webContents
     || !event.senderFrame || event.senderFrame !== window.webContents.mainFrame) {
     throw new Error('Voice requests are only available from Field Theory Settings.');
