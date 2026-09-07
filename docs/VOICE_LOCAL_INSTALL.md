@@ -1,8 +1,8 @@
 # Field Theory Voice local preview
 
-Candidate version: **0.3.47-voice.1**. This is a local preview based on the currently installed 0.3.45 source (`de07567a2`), isolated in `codex/voice-event-delivery`. The prerelease version distinguishes it from the separate 0.3.46 release work. Original checkout changes remain untouched.
+Candidate version: **0.3.47-voice.1**. This local preview is based on the released 0.3.46 source (`5101e545d`), isolated in `codex/voice-event-delivery`. It retains the released explicit bookmark sign-in fix. The currently installed 0.3.45 source was independently verified as `de07567a2`. Original checkout changes remain untouched.
 
-## Release notes awaiting confirmation
+## Approved release notes
 
 - Preview Voice requests in Settings: connect Codex and choose the folder it may work in.
 - Read the latest voice task result or clarification in Field Theory.
@@ -10,7 +10,7 @@ Candidate version: **0.3.47-voice.1**. This is a local preview based on the curr
 
 These exact notes are drafted in `mac-app/src/components/ReleaseNotesPopup.tsx`, together with the version/date entries. No public release, hosted SQL, or production activation is authorized.
 
-The user's `local-install` command explicitly requires confirmation of these notes before building. After confirmation, use the normal signed/notarized DMG packaging path with `--publish never` and the documented intentional local branch override. Do not launch development Electron, strip quarantine, disable Gatekeeper, or retry a macOS-blocked application.
+The user confirmed these exact notes on September 7, 2026 and authorized the local build/install. Use the normal signed/notarized DMG packaging path with `--publish never` and the documented intentional local branch override. Do not launch development Electron, strip quarantine, disable Gatekeeper, or retry a macOS-blocked application.
 
 Before replacement, verify signatures, stapling, Gatekeeper and Secure Keyboard Entry; request a normal quit and confirm all installed app processes exited. Stage the replacement on the Applications volume, preserve the existing app as a timestamped backup, and only then rename the candidate into place. The command requires an observed installed launch, clean quit, relaunch, real global shortcut, and recording start/stop before local installation is accepted.
 
