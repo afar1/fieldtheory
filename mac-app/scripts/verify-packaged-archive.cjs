@@ -1,4 +1,5 @@
 const { createHash } = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 const { Script } = require('node:vm');
 const asar = require('@electron/asar');
@@ -48,6 +49,34 @@ function verifyPackagedArchive(archivePath) {
 }
 
 exports.verifyPackagedArchive = verifyPackagedArchive;
+
+function verifyPackagedNativePayload(archivePath, { platform = process.platform, arch = process.arch } = {}) {
+  const requireUnpacked = (name, candidates, executable = false) => {
+    const file = candidates.find(candidate => {
+      try { return !asar.statFile(archivePath, candidate).files; } catch { return false; }
+    });
+    if (!file) throw new Error(`Packaged native dependency missing: ${name} (${platform}-${arch})`);
+    if (!asar.statFile(archivePath, file).unpacked) throw new Error(`Native dependency must be unpacked: ${file}`);
+    const installedPath = path.join(`${archivePath}.unpacked`, file);
+    if (!fs.statSync(installedPath).isFile() || fs.statSync(installedPath).size === 0) throw new Error(`Native dependency is empty: ${file}`);
+    if (executable) fs.accessSync(installedPath, fs.constants.X_OK);
+    return file;
+  };
+  const sqlite = requireUnpacked('better-sqlite3', [
+    'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+  ]);
+  const pty = requireUnpacked('node-pty', [
+    'node_modules/node-pty/build/Release/pty.node',
+    `node_modules/node-pty/prebuilds/${platform}-${arch}/pty.node`,
+  ]);
+  const files = [sqlite, pty];
+  if (platform !== 'win32') files.push(requireUnpacked('node-pty spawn helper', [
+    path.posix.join(path.posix.dirname(pty), 'spawn-helper'),
+  ], true));
+  return { platform, arch, files };
+}
+
+exports.verifyPackagedNativePayload = verifyPackagedNativePayload;
 exports.default = async function afterPack(context) {
   const resources = context.electronPlatformName === 'darwin'
     ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
@@ -57,10 +86,16 @@ exports.default = async function afterPack(context) {
     console.log(`Prepared ${changed} bundle entries for updater quarantine handling before signing`);
   }
   const result = verifyPackagedArchive(path.join(resources, 'app.asar'));
+  const native = verifyPackagedNativePayload(path.join(resources, 'app.asar'), {
+    platform: context.electronPlatformName,
+    arch: require('builder-util').Arch[context.arch],
+  });
   console.log(`Packaged archive verified before signing: ${result.files} file hashes, ${result.scripts} JavaScript syntax checks`);
+  console.log(`Packaged native payload verified: ${native.files.length} files for ${native.platform}-${native.arch}`);
 };
 
 if (require.main === module) {
   if (!process.argv[2]) throw new Error('Usage: node scripts/verify-packaged-archive.cjs /path/to/app.asar');
-  console.log(JSON.stringify(verifyPackagedArchive(path.resolve(process.argv[2]))));
+  const archivePath = path.resolve(process.argv[2]);
+  console.log(JSON.stringify({ ...verifyPackagedArchive(archivePath), native: verifyPackagedNativePayload(archivePath) }));
 }

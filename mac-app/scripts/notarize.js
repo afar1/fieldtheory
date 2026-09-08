@@ -25,6 +25,7 @@
 
 const { notarize } = require('@electron/notarize');
 const path = require('path');
+const { verifyPackagedNativeRuntime } = require('./verify-packaged-native-runtime.cjs');
 
 exports.default = async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context;
@@ -58,6 +59,9 @@ exports.default = async function notarizing(context) {
   // Get app name from package.json
   const appName = context.packager.appInfo.productFilename;
   const appPath = path.join(appOutDir, `${appName}.app`);
+
+  const nativeRuntime = verifyPackagedNativeRuntime(appPath);
+  console.log(`Packaged native runtime verified: ${JSON.stringify(nativeRuntime)}`);
 
   console.log(`Notarizing ${appPath}...`);
   console.log('This may take several minutes...');

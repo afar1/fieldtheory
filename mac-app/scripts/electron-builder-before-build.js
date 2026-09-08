@@ -18,4 +18,7 @@ exports.default = async function beforeBuild() {
   if (result.status !== 0) {
     throw new Error('Aborting package: untracked source files were detected.');
   }
+
+  // electron-builder treats a falsy result as "native dependencies handled externally".
+  return true;
 };

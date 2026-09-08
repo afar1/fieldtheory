@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const asar = require('@electron/asar');
-const { verifyPackagedArchive } = require('./verify-packaged-archive.cjs');
+const { verifyPackagedArchive, verifyPackagedNativePayload } = require('./verify-packaged-archive.cjs');
 
 async function fixture(t, entries = {}, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-archive-test-'));
@@ -66,4 +66,45 @@ test('both release channels require archive verification and cache exclusions', 
     assert.equal(config.afterPack, 'scripts/verify-packaged-archive.cjs');
     for (const cache of ['.vite', '.vitest', '.cache']) assert.ok(config.files.includes(`!**/node_modules/${cache}{,/**/*}`));
   }
+});
+
+const nativeFiles = {
+  'node_modules/better-sqlite3/build/Release/better_sqlite3.node': 'sqlite fixture',
+  'node_modules/node-pty/prebuilds/darwin-arm64/pty.node': 'pty fixture',
+  'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper': 'helper fixture',
+};
+const nativeTarget = { platform: 'darwin', arch: 'arm64' };
+const unpackNative = { unpack: '{*.node,spawn-helper}' };
+
+test('rejects the delivered defect even though archive hashes and scripts pass', async t => {
+  const archive = await fixture(t);
+  verifyPackagedArchive(archive);
+  assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /native dependency missing: better-sqlite3/);
+});
+
+test('accepts unpacked native payloads for the target architecture and executable helper', async t => {
+  const archive = await fixture(t, nativeFiles, unpackNative);
+  fs.chmodSync(path.join(`${archive}.unpacked`, 'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'), 0o755);
+  assert.equal(verifyPackagedNativePayload(archive, nativeTarget).files.length, 3);
+});
+
+test('rejects native binaries embedded inside the archive', async t => {
+  const archive = await fixture(t, nativeFiles);
+  assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /must be unpacked/);
+});
+
+test('rejects missing or nonexecutable terminal spawn helper', async t => {
+  const archive = await fixture(t, nativeFiles, unpackNative);
+  const helper = path.join(`${archive}.unpacked`, 'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper');
+  fs.chmodSync(helper, 0o644);
+  assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /EACCES/);
+  fs.rmSync(helper);
+  assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /ENOENT/);
+});
+
+test('rejects another architecture prebuild and empty SQLite payloads', async t => {
+  const archive = await fixture(t, nativeFiles, unpackNative);
+  assert.throws(() => verifyPackagedNativePayload(archive, { platform: 'darwin', arch: 'x64' }), /native dependency missing: node-pty/);
+  fs.writeFileSync(path.join(`${archive}.unpacked`, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'), '');
+  assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /Native dependency is empty/);
 });
