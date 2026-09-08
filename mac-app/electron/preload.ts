@@ -5208,7 +5208,7 @@ contextBridge.exposeInMainWorld('agentKickoffAPI', agentKickoffAPI);
 const voiceWorkAPI: VoiceWorkAPI = {
   getState: () => ipcRenderer.invoke('voiceWork:getState'),
   updateSettings: (settings) => ipcRenderer.invoke('voiceWork:updateSettings', settings),
-  chooseWorkspace: () => ipcRenderer.invoke('voiceWork:chooseWorkspace'),
+  listFolders: () => ipcRenderer.invoke('voiceWork:listFolders'),
   refreshStatus: () => ipcRenderer.invoke('voiceWork:refreshStatus'),
   openTask: (threadId) => ipcRenderer.invoke('voiceWork:openTask', threadId),
   onStateChanged: (callback) => {

@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, shell } from 'electron';
 import fs from 'fs';
 import { createLogger } from './logger';
+import { isCodexTaskUrl } from '../shared/taskLinks';
 
 const log = createLogger('ShellIPC');
 
@@ -13,7 +14,7 @@ export const ShellIPCChannels = {
 export function isAllowedExternalShellUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:'
+    return isCodexTaskUrl(url) || parsed.protocol === 'https:'
       || parsed.protocol === 'http:'
       || parsed.protocol === 'mailto:'
       || parsed.protocol === 'x-apple.systempreferences:';

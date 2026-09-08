@@ -1,5 +1,9 @@
-import { normalizeLauncherSections } from '../shared/launcherSections';
+import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
+import { VoiceInboxService } from './voiceInboxService';
+import { VoiceInboxSync } from './voiceInboxSync';
+import { listVoiceLibraryFolders } from './voiceLibraryFolders';
+import { codexTaskUrl } from '../shared/taskLinks';
 import { assertVoiceWorkSender, isVoiceWorkWindowTrusted } from './voiceWorkIpcTrust';
 import { VOICE_WORK_CHANNELS, type VoiceWorkSettings } from '../shared/voiceWork';
 import { LibraryLinkRelationReader } from './libraryLinkRelationReader';
@@ -7650,6 +7654,9 @@ let pendingOpenMarkdownPath: string | null = null;
  * Set up all IPC handlers for audio-related communication.
  */
 let voiceWorkManager: VoiceWorkManager | null = null;
+let voiceInboxStore: VoiceInboxService | null = null;
+let voiceInboxSync: VoiceInboxSync | null = null;
+let voicePreferencesReady: Promise<unknown> = Promise.resolve();
 
 function setupVoiceWorkIPCHandlers(): void {
   const requireSender = (event: Electron.IpcMainInvokeEvent): BrowserWindow => {
@@ -7679,19 +7686,29 @@ function setupVoiceWorkIPCHandlers(): void {
       || Object.keys(changes).some((key) => key !== 'enabled' && key !== 'workspacePath')) {
       throw new Error('Invalid voice request settings.');
     }
+    const owner = authManager?.getSession()?.user.id;
+    const previousFolder = worker().getState().settings.workspacePath;
     const state = await worker().updateSettings(changes);
     requireSender(event);
+    if (!owner || owner !== authManager?.getSession()?.user.id) throw new Error('Voice request session changed.');
+    if (previousFolder && state.settings.workspacePath && previousFolder !== state.settings.workspacePath) {
+      await updateVoiceLauncherFolder(owner, previousFolder, state.settings.workspacePath);
+    }
+    requireSender(event);
+    if (owner !== authManager?.getSession()?.user.id) throw new Error('Voice request session changed.');
     return state;
   });
-  ipcMain.handle(VOICE_WORK_CHANNELS.chooseWorkspace, async (event) => {
-    const window = requireSender(event);
-    const result = await dialog.showOpenDialog(window, {
-      title: 'Choose the folder Codex may read and edit',
-      properties: ['openDirectory', 'createDirectory'],
-      buttonLabel: 'Use this folder',
-    });
+  ipcMain.handle(VOICE_WORK_CHANNELS.listFolders, async (event) => {
     requireSender(event);
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    const owner = authManager?.getSession()?.user.id;
+    try { worker().refreshInboxFolder(); } catch { /* The picker can replace an unavailable saved folder. */ }
+    const roots = (librarianManager?.getLibraryRootPaths() ?? []).map((rootPath) => ({
+      path: rootPath, label: path.basename(rootPath),
+    }));
+    const folders = await listVoiceLibraryFolders(roots);
+    requireSender(event);
+    if (!owner || owner !== authManager?.getSession()?.user.id) throw new Error('Voice request session changed.');
+    return folders;
   });
   ipcMain.handle(VOICE_WORK_CHANNELS.openTask, async (event, threadId: unknown) => {
     requireSender(event);
@@ -7699,12 +7716,27 @@ function setupVoiceWorkIPCHandlers(): void {
       return { opened: false, error: 'This task is not available to open from Field Theory yet.' };
     }
     try {
-      await shell.openExternal(`codex://threads/${encodeURIComponent(threadId)}`);
+      const url = codexTaskUrl(threadId);
+      if (!url) return { opened: false, error: 'This task link is unavailable.' };
+      await shell.openExternal(url);
       requireSender(event);
       return { opened: true };
     } catch {
       return { opened: false, error: 'Codex could not open this task.' };
     }
+  });
+}
+
+async function updateVoiceLauncherFolder(owner: string, previousPath: string, nextPath: string): Promise<void> {
+  await voicePreferencesReady;
+  if (owner !== authManager?.getSession()?.user.id) return;
+  await preferencesManager?.updateLauncherSectionsForUser(owner, (configured) => {
+    if (!configured) return;
+    return configured.map((section) => {
+      const folder = parseLauncherFolder(section);
+      return folder?.path === previousPath
+        ? launcherFolderSection({ path: nextPath, label: path.basename(nextPath) }) : section;
+    });
   });
 }
 
@@ -8475,6 +8507,7 @@ function setupLibrarianIPCHandlers(): void {
       }
     });
     librarianManager.on('wiki:renamed', (event: LibraryRenameEvent) => {
+      try { voiceWorkManager?.refreshInboxFolder(); } catch { /* Keep an unavailable folder selected until its replacement is chosen. */ }
       scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-wiki-renamed', {
         traceId: event.traceId,
@@ -8509,6 +8542,7 @@ function setupLibrarianIPCHandlers(): void {
       if (!launcherDirectNotified) commandLauncherWindow?.send('library:changed', event);
     });
     librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
+      try { voiceWorkManager?.refreshInboxFolder(); } catch { /* Keep the saved choice until a replacement is selected. */ }
       scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-library-renamed', {
         traceId: event.traceId,
@@ -11284,6 +11318,7 @@ function setupClipboardIPCHandlers(): void {
   // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
     voiceWorkManager?.stop();
+    voiceInboxSync?.stop();
     clearBrowserHelperState();
 
     // Unregister all hotkeys via HotkeyManager
@@ -15351,9 +15386,33 @@ async function initTranscriberSystem(): Promise<void> {
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
+  voiceInboxStore = new VoiceInboxService({
+    stateDirectory: path.join(app.getPath('userData'), 'voice-inbox'),
+    libraryRoot: librarianManager!.getWikiRoot(),
+    getLibraryRoots: () => librarianManager?.getLibraryRootPaths() ?? [],
+  });
+  voiceInboxSync = new VoiceInboxSync({
+    auth: authManager, store: voiceInboxStore,
+    onError: (message) => log.warn('[Voice Inbox]', message),
+  });
   voiceWorkManager = new VoiceWorkManager({
     auth: authManager,
     stateDirectory: path.join(app.getPath('userData'), 'voice-work'),
+    ensureInboxFolder: (owner, existingChoice) => voiceInboxStore!.ensureFolder(owner, existingChoice),
+    selectInboxFolder: (owner, folderPath) => voiceInboxStore!.selectFolder(owner, folderPath),
+    onInboxFolderChanged: (owner, previousPath, nextPath) => {
+      void updateVoiceLauncherFolder(owner, previousPath, nextPath).catch(() => log.warn('[Voice Inbox] Could not update the launcher folder.'));
+    },
+    onTranscript: (job) => {
+      voiceInboxStore!.materialize(job.user_id, [{
+        userId: job.user_id, transcriptId: job.transcript_id, text: job.text,
+        createdAtMs: job.client_created_at_ms ?? Date.now(), updatedAtMs: job.client_created_at_ms ?? Date.now(),
+      }]);
+    },
+    onDispatched: (job, event) => {
+      voiceInboxStore!.recordDispatch(job.user_id, { transcriptId: job.transcript_id, ...event, dispatchedAt: new Date().toISOString() });
+    },
+    onDeliveryWake: () => { void voiceInboxSync?.refresh().catch(() => log.warn('[Voice Inbox] Could not refresh task links.')); },
   });
   voiceWorkManager.on('stateChanged', (state) => {
     const window = clipboardHistoryWindow?.getWindow() ?? null;
@@ -15361,8 +15420,23 @@ async function initTranscriberSystem(): Promise<void> {
       window.webContents.send(VOICE_WORK_CHANNELS.stateChanged, state);
     }
   });
-  authManager.on('sessionChanged', () => { void voiceWorkManager?.authChanged(); });
-  authManager.on('userLoggedOut', () => { void voiceWorkManager?.authChanged(); });
+  const refreshVoiceAccount = () => {
+    const requestedOwner = authManager?.getSession()?.user.id;
+    void voiceWorkManager!.authChanged().then(async () => {
+      await voicePreferencesReady;
+      if (requestedOwner !== authManager?.getSession()?.user.id) return;
+      if (requestedOwner) {
+        const folderPath = voiceWorkManager!.getState().settings.workspacePath;
+        if (folderPath) await preferencesManager?.updateLauncherSectionsForUser(requestedOwner, (configured) => configured ?? [
+          launcherFolderSection({ path: folderPath, label: path.basename(folderPath) }), ...normalizeLauncherSections(undefined),
+        ]);
+      }
+      if (requestedOwner !== authManager?.getSession()?.user.id) return;
+      await voiceInboxSync!.authChanged();
+    }).catch(() => log.warn('[Voice Inbox] Could not initialize transcript storage.'));
+  };
+  authManager.on('sessionChanged', refreshVoiceAccount);
+  authManager.on('userLoggedOut', refreshVoiceAccount);
 
   taggedDocsManager = new TaggedDocsManager({
     dbPath: userDataManager.isLoggedIn()
@@ -15403,7 +15477,8 @@ async function initTranscriberSystem(): Promise<void> {
   authManager.on('userChanged', async (userId: string) => {
     // Reinitialize all managers with user-specific data
     if (preferencesManager) {
-      await preferencesManager.load();
+      voicePreferencesReady = preferencesManager.load();
+      await voicePreferencesReady;
 
       // Reload hotkeys from freshly loaded preferences
       const prefs = preferencesManager.get();
@@ -15561,6 +15636,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   powerMonitor.on('suspend', () => {
     voiceWorkManager?.stop();
+    voiceInboxSync?.stop();
     bookmarkSyncController?.suspend();
     log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
     if (wakeOverlayRefreshTimeout) {
@@ -15572,6 +15648,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   powerMonitor.on('resume', () => {
     void voiceWorkManager?.resume();
+    void voiceInboxSync?.resume().catch(() => log.warn('[Voice Inbox] Reconnect failed.'));
     bookmarkSyncController?.resume();
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');

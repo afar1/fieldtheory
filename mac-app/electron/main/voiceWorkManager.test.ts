@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { VoiceWorkManager, type VoiceJob } from './voiceWorkManager';
+import { VoiceWorkManager, type VoiceJob, type VoiceWorkManagerOptions } from './voiceWorkManager';
 import type { VoiceCodexRequest, VoiceCodexOutcome } from './voiceCodexRunner';
+import type { VoiceRoute, VoiceRouteRequest } from './voiceCodexRouter';
 
 const directories: string[] = [];
 const managers: VoiceWorkManager[] = [];
@@ -19,7 +20,7 @@ async function settle() {
   for (let i = 0; i < 80; i++) await Promise.resolve();
 }
 
-function harness(existingDirectory?: string) {
+function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManagerOptions, 'ensureInboxFolder' | 'selectInboxFolder'> = {}) {
   const directory = existingDirectory ?? fs.mkdtempSync(path.join(os.tmpdir(), 'voice-worker-test-'));
   if (!existingDirectory) directories.push(directory);
   let owner: string | null = 'account-a';
@@ -61,12 +62,16 @@ function harness(existingDirectory?: string) {
   });
   const recoverRequest = vi.fn(async () => outcome);
   const inspectRuntime = vi.fn(async () => ({ status: 'ready' as const, message: 'Codex is ready.' }));
+  const routeRequest = vi.fn(async (input: VoiceRouteRequest): Promise<VoiceRoute> => ({ decision: 'new', workspacePath: input.inboxPath }));
+  const onTranscript = vi.fn();
+  const onDispatched = vi.fn();
   const manager = new VoiceWorkManager({
     auth: {
       getSession: () => owner ? { user: { id: owner } } : null,
       getSupabaseClient: () => client as unknown as SupabaseClient,
     },
-    stateDirectory: directory, runRequest, recoverRequest, inspectRuntime,
+    stateDirectory: directory, runRequest, recoverRequest, inspectRuntime, routeRequest, onTranscript, onDispatched,
+    ...folderOptions,
   });
   managers.push(manager);
   const job = (id = 'job-1'): VoiceJob => ({
@@ -75,7 +80,7 @@ function harness(existingDirectory?: string) {
     lease_token: 'lease-1', lease_expires_at: new Date(Date.now() + 90_000).toISOString(),
   });
   return {
-    manager, directory, client, rpc, jobs, runRequest, recoverRequest, inspectRuntime, job,
+    manager, directory, client, rpc, jobs, runRequest, recoverRequest, inspectRuntime, routeRequest, onTranscript, onDispatched, job,
     push: () => push?.(), subscribed: () => subscription?.('SUBSCRIBED'), connectionError: () => subscription?.('CHANNEL_ERROR'),
     setOwner: (next: string | null) => { owner = next; },
     setServer: (value: boolean, nextGeneration: number) => { enabled = value; generation = nextGeneration; },
@@ -127,6 +132,109 @@ describe('bundled Voice push worker', () => {
     h.jobs.push(h.job()); h.push(); await settle();
     h.jobs.push(h.job()); h.push(); await settle();
     expect(h.runRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves context without dispatching a task or inventing a sent receipt', async () => {
+    const h = harness(); await h.enable();
+    h.routeRequest.mockResolvedValueOnce({ decision: 'context', workspacePath: h.directory });
+    h.jobs.push({ ...h.job(), text: 'Just context. Do not do anything yet.' }); h.push(); await settle();
+    expect(h.onTranscript).toHaveBeenCalledTimes(1);
+    expect(h.runRequest).not.toHaveBeenCalled();
+    expect(h.onDispatched).not.toHaveBeenCalled();
+    expect(h.manager.getState().lastTask).toBeUndefined();
+    expect(h.rpc).toHaveBeenCalledWith('voice_jobs_complete', expect.objectContaining({ p_status: 'context' }));
+  });
+
+  it('persists the chosen project before dispatch instead of using the Inbox for every request', async () => {
+    const h = harness(); await h.enable();
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-project-')); directories.push(projectPath);
+    const route: VoiceRoute = { decision: 'new', workspacePath: projectPath, projectId: 'project-1', title: 'Field Theory - Improve Voice' };
+    h.routeRequest.mockResolvedValueOnce(route);
+    h.runRequest.mockImplementationOnce(async (request) => {
+      const saved = JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8'));
+      expect(saved.attempts['job-1'].route).toEqual(route);
+      expect(request).toMatchObject({ workspacePath: projectPath, projectId: 'project-1', title: route.title });
+      return { status: 'completed', summary: 'Done.', finalResponse: 'Done.' };
+    });
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    expect(h.manager.getState().settings.workspacePath).toBe(h.directory);
+  });
+
+  it('asks an ambiguous routing question in a read-only task', async () => {
+    const h = harness(); await h.enable();
+    h.routeRequest.mockResolvedValueOnce({ decision: 'ask', workspacePath: h.directory, question: 'Which project should I update?' });
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledWith(expect.objectContaining({
+      sandboxMode: 'read-only', routingQuestion: 'Which project should I update?',
+    }));
+  });
+
+  it('records a link only after the actual turn starts and exposes it immediately', async () => {
+    const h = harness(); await h.enable();
+    const threadId = '01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3';
+    let finish!: (outcome: VoiceCodexOutcome) => void;
+    h.runRequest.mockImplementationOnce(async (request) => {
+      await request.onThreadStarted?.(threadId);
+      await request.onBeforeDispatch?.({ threadId, dispatchKey: request.dispatchKey });
+      expect(h.onDispatched).not.toHaveBeenCalled();
+      expect(h.manager.canOpenTask(threadId)).toBe(false);
+      await request.onStarted?.({ threadId, turnId: 'turn-1' });
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.onDispatched).toHaveBeenCalledWith(expect.objectContaining({ job_id: 'job-1', transcript_id: 'transcript-1' }), { threadId, turnId: 'turn-1' });
+    expect(h.manager.canOpenTask(threadId)).toBe(true);
+    expect(h.manager.getState().status).toBe('working');
+    finish({ threadId, turnId: 'turn-1', status: 'completed', summary: 'Done.', finalResponse: 'Done.' }); await settle();
+  });
+
+  it('does not dispatch a routing answer that arrives after an account switch', async () => {
+    const h = harness(); await h.enable();
+    let routed!: (route: VoiceRoute) => void;
+    h.routeRequest.mockImplementationOnce(() => new Promise((resolve) => { routed = resolve; }));
+    h.jobs.push(h.job()); h.push(); await settle();
+    h.setOwner('account-b'); await h.manager.authChanged();
+    routed({ decision: 'new', workspacePath: h.directory }); await settle();
+    expect(h.runRequest).not.toHaveBeenCalled();
+    expect(h.onDispatched).not.toHaveBeenCalled();
+    expect(h.manager.getState().lastTask).toBeUndefined();
+  });
+
+  it('recovers in the persisted destination without choosing or dispatching again', async () => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const file = path.join(h.directory, 'account-a.json');
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    snapshot.attempts['job-1'] = {
+      leaseToken: 'old-lease', threadId: 'existing-thread', dispatchStarted: true,
+      route: { decision: 'continue', workspacePath: os.tmpdir(), threadId: 'existing-thread' },
+    };
+    fs.writeFileSync(file, JSON.stringify(snapshot));
+    const restarted = harness(h.directory); restarted.setServer(true, 1);
+    restarted.jobs.push(h.job()); await restarted.manager.authChanged(); await settle();
+    expect(restarted.routeRequest).not.toHaveBeenCalled();
+    expect(restarted.runRequest).not.toHaveBeenCalled();
+    expect(restarted.recoverRequest).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: os.tmpdir(), threadId: 'existing-thread' }));
+  });
+
+  it('follows a renamed Inbox before routing a newly pushed request', async () => {
+    let resolved: string | undefined;
+    const ensureInboxFolder = vi.fn((_owner: string, saved: string | null) => resolved ?? saved ?? os.tmpdir());
+    const h = harness(undefined, { ensureInboxFolder }); await h.enable();
+    resolved = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-renamed-')); directories.push(resolved);
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.routeRequest).toHaveBeenCalledWith(expect.objectContaining({ inboxPath: resolved }));
+    expect(h.manager.getState().settings.workspacePath).toBe(resolved);
+    expect(h.manager.getState().settings.enabled).toBe(true);
+  });
+
+  it('keeps a missing saved folder visible and starts no work until the user replaces it', async () => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const restarted = harness(h.directory, { ensureInboxFolder: () => { throw new Error('Selected folder is unavailable.'); } });
+    await restarted.manager.authChanged();
+    expect(restarted.manager.getState()).toMatchObject({ status: 'error', settings: { workspacePath: h.directory } });
+    expect(restarted.runRequest).not.toHaveBeenCalled();
+    expect(restarted.client.channel).not.toHaveBeenCalled();
   });
 
   it('reconciles a prior thread without sending the request again', async () => {

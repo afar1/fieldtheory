@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type { VoiceWorkSettings, VoiceWorkState } from '../shared/voiceWork';
+import { codexTaskUrl } from '../shared/taskLinks';
+import { routeVoiceRequest, type VoiceRoute } from './voiceCodexRouter';
 import {
   inspectVoiceCodexRuntime, runVoiceRequest, recoverVoiceRequest,
   type VoiceCodexOutcome,
@@ -35,6 +37,7 @@ export interface VoiceJob {
   dispatch_started_at: string | null;
   lease_token: string;
   lease_expires_at: string;
+  client_created_at_ms?: number;
 }
 
 interface ClaimResult {
@@ -52,6 +55,7 @@ interface LocalAttempt {
   leaseToken: string;
   published?: boolean;
   needsReconciliation?: boolean;
+  route?: VoiceRoute;
 }
 
 interface WorkerSnapshot {
@@ -73,6 +77,13 @@ export interface VoiceWorkManagerOptions {
   recoverRequest?: typeof recoverVoiceRequest;
   now?: () => number;
   rpcTimeoutMs?: number;
+  routeRequest?: typeof routeVoiceRequest;
+  ensureInboxFolder?: (owner: string, existingChoice: string | null) => string;
+  selectInboxFolder?: (owner: string, folderPath: string) => string;
+  onInboxFolderChanged?: (owner: string, previousPath: string, nextPath: string) => void;
+  onTranscript?: (job: VoiceJob) => void | Promise<void>;
+  onDispatched?: (job: VoiceJob, event: { threadId: string; turnId: string }) => void | Promise<void>;
+  onDeliveryWake?: () => void;
 }
 
 const DEFAULT_SETTINGS: VoiceWorkSettings = { enabled: false, workspacePath: null };
@@ -132,10 +143,12 @@ export class VoiceWorkManager extends EventEmitter {
     if (!nextOwner) { this.publish(); return; }
     try {
       this.snapshot = this.load(nextOwner);
+      if (this.snapshot.lastTask && codexTaskUrl(this.snapshot.lastTask.threadId)) this.snapshot.lastTask.canOpen = true;
       this.state = {
         settings: { ...this.snapshot.settings }, status: 'disabled',
         codex: { available: false, signedIn: null }, lastTask: this.snapshot.lastTask,
       };
+      this.refreshInboxFolder();
       this.publish();
       if (this.snapshot.pendingDisable) await this.finishDisable();
       await this.refreshStatus();
@@ -166,7 +179,8 @@ export class VoiceWorkManager extends EventEmitter {
         throw new Error('Pause voice requests before changing the folder.');
       }
       if (changes.workspacePath !== null) this.validateWorkspace(changes.workspacePath);
-      this.snapshot.settings.workspacePath = changes.workspacePath;
+      this.snapshot.settings.workspacePath = changes.workspacePath !== null && this.options.selectInboxFolder
+        ? this.options.selectInboxFolder(this.owner!, changes.workspacePath) : changes.workspacePath;
       this.persist();
     }
     if (changes.enabled === false) {
@@ -224,6 +238,17 @@ export class VoiceWorkManager extends EventEmitter {
 
   stop(): void { this.disconnect(); }
 
+  refreshInboxFolder(): void {
+    if (!this.current() || !this.snapshot || !this.options.ensureInboxFolder) return;
+    const folderPath = this.options.ensureInboxFolder(this.owner!, this.snapshot.settings.workspacePath);
+    if (folderPath !== this.snapshot.settings.workspacePath) {
+      const previousPath = this.snapshot.settings.workspacePath;
+      this.snapshot.settings.workspacePath = folderPath;
+      this.persist();
+      if (previousPath) this.options.onInboxFolderChanged?.(this.owner!, previousPath, folderPath);
+    }
+  }
+
   canOpenTask(threadId: string): boolean {
     return this.current() && this.state.lastTask?.threadId === threadId
       && this.state.lastTask.canOpen === true;
@@ -233,6 +258,7 @@ export class VoiceWorkManager extends EventEmitter {
     if (!this.current() || !this.snapshot) return this.getState();
     const epoch = this.epoch;
     try {
+      this.refreshInboxFolder();
       const runtime = await (this.options.inspectRuntime ?? inspectVoiceCodexRuntime)();
       if (!this.current(epoch)) return this.getState();
       this.state.codex = {
@@ -242,7 +268,7 @@ export class VoiceWorkManager extends EventEmitter {
       if (runtime.status !== 'ready') {
         this.setStatus('needs_setup', runtime.message);
       } else if (!this.snapshot.settings.workspacePath) {
-        this.setStatus('needs_setup', 'Choose the folder Codex may read and edit.');
+        this.setStatus('needs_setup', 'Choose the Library folder for your voice transcripts.');
       } else {
         this.validateWorkspace(this.snapshot.settings.workspacePath);
         if (this.snapshot.settings.enabled) {
@@ -278,6 +304,7 @@ export class VoiceWorkManager extends EventEmitter {
       .on('broadcast', { event: 'voice_jobs_changed' }, () => {
         if (!this.current(epoch) || connectionVersion !== this.connectionVersion || !this.snapshot?.settings.enabled) return;
         this.state.lastEventAt = this.now();
+        this.options.onDeliveryWake?.();
         void this.checkDeliveryState(epoch).then((enabled) => { if (enabled) this.wake(); })
           .catch(() => this.handleDeliveryFailure(epoch));
       })
@@ -361,9 +388,10 @@ export class VoiceWorkManager extends EventEmitter {
 
   private async execute(job: VoiceJob, epoch: number): Promise<void> {
     this.ensureCurrent(epoch);
+    this.refreshInboxFolder();
     const snapshot = this.snapshot!;
-    const workspacePath = snapshot.settings.workspacePath;
-    this.validateWorkspace(workspacePath);
+    const inboxPath = snapshot.settings.workspacePath;
+    this.validateWorkspace(inboxPath);
     const saved = snapshot.attempts[job.job_id];
     const attempt = saved ?? { leaseToken: job.lease_token };
     attempt.leaseToken = job.lease_token;
@@ -374,9 +402,24 @@ export class VoiceWorkManager extends EventEmitter {
     const controller = this.controller;
     this.scheduleRenew(job, epoch, controller);
     try {
+      await this.options.onTranscript?.(job);
+      this.ensureCurrent(epoch);
+      if (!attempt.route && !attempt.outcome) {
+        attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
+          text: job.text, inboxPath: inboxPath!,
+          previousThreadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
+          signal: controller.signal,
+        });
+        this.ensureCurrent(epoch);
+        this.persist();
+      }
+      const route = attempt.route;
+      const workspacePath = route?.workspacePath ?? inboxPath!;
       let outcome: VoiceCodexOutcome;
       if (attempt.outcome) {
         outcome = attempt.outcome;
+      } else if (route?.decision === 'context') {
+        outcome = { status: 'context', summary: 'Saved as a note.', finalResponse: '' };
       } else if (attempt.dispatchStarted || job.dispatch_started_at) {
         const threadId = attempt.threadId ?? job.thread_id;
         if (!threadId) throw new Error('A previous dispatch needs reconciliation.');
@@ -387,9 +430,11 @@ export class VoiceWorkManager extends EventEmitter {
       } else {
         outcome = await (this.options.runRequest ?? runVoiceRequest)({
           text: job.text, previousText: job.previous_text ?? undefined,
-          workspacePath: workspacePath!, threadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
-          dispatchKey: job.dispatch_key, title: 'Field Theory - Voice request',
-          signal: controller.signal, sandboxMode: 'workspace-write',
+          workspacePath, threadId: attempt.threadId ?? job.thread_id ?? route?.threadId ?? job.previous_thread_id ?? undefined,
+          projectId: route?.projectId,
+          dispatchKey: job.dispatch_key, title: route?.title ?? 'Field Theory - Voice request',
+          routingQuestion: route?.decision === 'ask' ? route.question : undefined,
+          signal: controller.signal, sandboxMode: route?.decision === 'ask' ? 'read-only' : 'workspace-write',
           onThreadStarted: async (threadId) => {
             this.ensureCurrent(epoch);
             attempt.threadId = threadId;
@@ -411,8 +456,10 @@ export class VoiceWorkManager extends EventEmitter {
           onStarted: async ({ threadId, turnId }) => {
             this.ensureCurrent(epoch);
             attempt.threadId = threadId; attempt.turnId = turnId;
-            snapshot.lastTask = { threadId, title: 'Field Theory - Voice request', status: 'working', summary: 'Codex is working.', canOpen: false };
+            snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'working', summary: 'Codex is working.', canOpen: !!codexTaskUrl(threadId) };
             this.persist();
+            await this.options.onDispatched?.(job, { threadId, turnId });
+            this.ensureCurrent(epoch);
             this.setStatus('working', 'Codex is working on your voice request.');
           },
         });
@@ -422,7 +469,7 @@ export class VoiceWorkManager extends EventEmitter {
       const threadId = outcome.threadId ?? attempt.threadId;
       if (threadId) snapshot.lastTask = {
         threadId, title: outcome.title ?? 'Field Theory - Voice request', status: outcome.recoveryUncertain ? 'needs_user' : outcome.status,
-        summary: outcome.summary, finalResponse: outcome.finalResponse, question: outcome.question, canOpen: false,
+        summary: outcome.summary, finalResponse: outcome.finalResponse, question: outcome.question, canOpen: !!codexTaskUrl(threadId),
       };
       this.persist();
       await this.publishOutcome(job.job_id, attempt, epoch);

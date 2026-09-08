@@ -96,6 +96,13 @@ describe('shellIpc', () => {
     expect(isAllowedExternalShellUrl('http://localhost:5173')).toBe(true);
     expect(isAllowedExternalShellUrl('mailto:support@fieldtheory.dev')).toBe(true);
     expect(isAllowedExternalShellUrl('x-apple.systempreferences:com.apple.preference.security')).toBe(true);
+    expect(isAllowedExternalShellUrl('codex://threads/01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3')).toBe(true);
+    expect(isAllowedExternalShellUrl('codex://threads/01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3?prompt=run')).toBe(false);
+    expect(isAllowedExternalShellUrl('codex://new?prompt=run')).toBe(false);
+    expect(isAllowedExternalShellUrl('codex://threads/../../settings')).toBe(false);
+    expect(isAllowedExternalShellUrl('codex://threads/extra/../01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3')).toBe(false);
+    expect(isAllowedExternalShellUrl('codex://threads/01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3?')).toBe(false);
+    expect(isAllowedExternalShellUrl('codex://threads/01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3#')).toBe(false);
 
     expect(isAllowedExternalShellUrl('file:///tmp/test.md')).toBe(false);
     expect(isAllowedExternalShellUrl('fieldtheory://wiki/open?path=Plan')).toBe(false);

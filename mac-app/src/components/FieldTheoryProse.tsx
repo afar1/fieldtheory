@@ -6,6 +6,7 @@ import InlineHtmlBlock from './InlineHtmlBlock';
 import BookmarkCard from './BookmarkCard';
 import { getBookmarks, onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
+import { isCodexTaskUrl } from '../../electron/shared/taskLinks';
 import '../prose.css';
 
 type FieldTheoryProseSize = 'reader' | 'compact' | 'preview';
@@ -91,6 +92,7 @@ function fieldTheoryUrlTransform(url: string, key: string, documentPath?: string
     if (localImageUrl) return localImageUrl;
   }
   if (key === 'href' && /^(wiki|artifact|command):/i.test(url)) return url;
+  if (key === 'href' && isCodexTaskUrl(url)) return url;
   return defaultUrlTransform(url);
 }
 
@@ -151,6 +153,14 @@ function createFieldTheoryProseComponents(
   surface: 'light' | 'dark',
 ): Components {
   return {
+    a: ({ href, children, ...props }) => (
+      <a {...props} href={href} onClick={(event) => {
+        if (href && isCodexTaskUrl(href) && window.shellAPI?.openExternal) {
+          event.preventDefault();
+          void window.shellAPI.openExternal(href);
+        }
+      }}>{children}</a>
+    ),
     p: ({ children, ...props }) => {
       const childNodes = Children.toArray(children);
       const onlyChild = childNodes[0];

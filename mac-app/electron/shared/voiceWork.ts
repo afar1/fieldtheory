@@ -26,7 +26,7 @@ export interface VoiceWorkState {
 export interface VoiceWorkAPI {
   getState(): Promise<VoiceWorkState>;
   updateSettings(settings: Partial<VoiceWorkSettings>): Promise<VoiceWorkState>;
-  chooseWorkspace(): Promise<string | null>;
+  listFolders(): Promise<Array<{ path: string; label: string }>>;
   refreshStatus(): Promise<VoiceWorkState>;
   openTask(threadId: string): Promise<{ opened: boolean; error?: string }>;
   onStateChanged(callback: (state: VoiceWorkState) => void): () => void;
@@ -35,7 +35,7 @@ export interface VoiceWorkAPI {
 export const VOICE_WORK_CHANNELS = {
   getState: 'voiceWork:getState',
   updateSettings: 'voiceWork:updateSettings',
-  chooseWorkspace: 'voiceWork:chooseWorkspace',
+  listFolders: 'voiceWork:listFolders',
   refreshStatus: 'voiceWork:refreshStatus',
   openTask: 'voiceWork:openTask',
   stateChanged: 'voiceWork:stateChanged',
