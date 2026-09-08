@@ -277,7 +277,8 @@
       "output": "release"
     },
     "asarUnpack": [
-      "node_modules/{fieldtheory,commander,dotenv,sql.js,sql.js-fts5,undici}/**/*"
+      "node_modules/{fieldtheory,commander,dotenv,sql.js,sql.js-fts5,undici}/**/*",
+      "node_modules/{better-sqlite3,node-pty}/**/*"
     ],
     "afterPack": "scripts/verify-packaged-archive.cjs"
   }
