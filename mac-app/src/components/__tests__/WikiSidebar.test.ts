@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
+import type { VoiceInboxPresentation } from '../../../electron/shared/voiceInboxPresentation';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   BOOKMARKS_SHORTCUT_FOLDER_ID,
@@ -172,6 +173,7 @@ function renderSidebarForTest(options: {
   onSearchQueryChange?: (query: string) => void;
   creationControllerRef?: { current: WikiCreationController | null };
   archiveControllerRef?: { current: WikiArchiveController | null };
+  voiceInboxPresentation?: VoiceInboxPresentation | null;
 } = {}) {
   mockSidebarNativeApis(options.tree ?? [], options.roots);
   const flatItemsRef = { current: [] as UnifiedItem[] };
@@ -186,6 +188,7 @@ function renderSidebarForTest(options: {
     onSearchQueryChange: options.onSearchQueryChange ?? vi.fn(),
     creationControllerRef: options.creationControllerRef,
     archiveControllerRef: options.archiveControllerRef,
+    voiceInboxPresentation: options.voiceInboxPresentation,
   }));
 }
 
@@ -233,6 +236,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete (window as Partial<Window>).wikiAPI;
   delete (window as Partial<Window>).libraryAPI;
+  delete (window as Partial<Window>).voiceWorkAPI;
   delete (window as Partial<Window>).librarianAPI;
   delete (window as Partial<Window>).recentAPI;
   delete (window as Partial<Window>).taggedDocsAPI;
@@ -254,6 +258,96 @@ function dirNode(name: string, children: TestSidebarNode[] = [fileNode(`wiki:${n
     children,
   };
 }
+
+describe('WikiSidebar Voice Inbox rows', () => {
+  const folderPath = `${libraryRootPath}/Captures`;
+  const notePath = `${folderPath}/voice.md`;
+  const originalTitle = 'Voice 2026-09-07 16:05:59';
+  const presentation: VoiceInboxPresentation = {
+    folderPath,
+    truncated: false,
+    notes: [{ notePath, transcriptId: 'transcript-1', createdAtMs: new Date(2026, 8, 7, 16, 5, 59).getTime(),
+      threadId: 'confirmed-task', title: 'Please draw a mountain … an extraordinary sunset view', wordCount: 23 }],
+  };
+  const tree = (folder = 'Captures'): LibraryRoot['tree'] => [{
+    kind: 'dir', name: folder, relPath: folder,
+    children: [{ kind: 'file', relPath: `${folder}/voice`, absPath: `${libraryRootPath}/${folder}/voice.md`,
+      name: 'voice', title: originalTitle, lastUpdated: 1 }],
+  }];
+
+  it('shows transcript excerpts, local minute time, and word count in the designated folder', async () => {
+    renderSidebarForTest({ tree: tree(), voiceInboxPresentation: presentation });
+    fireEvent.click(await screen.findByText('Captures'));
+    const title = await screen.findByTitle(presentation.notes[0].title);
+    const row = title.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    expect(within(row).queryByText(originalTitle)).toBeNull();
+    expect(within(row).getByText('Please draw a mountain')).toBeTruthy();
+    expect(within(row).getByText('an extraordinary sunset view')).toBeTruthy();
+    expect(within(row).getByText('…')).toBeTruthy();
+    expect(row.querySelector('time')?.textContent).toBe('4:05 p.m.');
+    expect(within(row).getByLabelText('23 words').textContent).toBe('23w');
+    expect(within(row).getByRole('button', { name: 'Open task' })).toBeTruthy();
+    // Both parts can shrink, while the ending remains visible at the trailing edge.
+    expect((within(row).getByText('an extraordinary sunset view') as HTMLElement).style.direction).toBe('rtl');
+    expect(row.style.maxHeight).toBe('');
+  });
+
+  it('opens only the confirmed task without selecting or renaming the note', async () => {
+    const openTask = vi.fn(async () => ({ opened: true }));
+    Object.defineProperty(window, 'voiceWorkAPI', { configurable: true, value: { openTask } });
+    const onSelectItem = vi.fn();
+    renderSidebarForTest({ tree: tree(), voiceInboxPresentation: presentation, onSelectItem });
+    fireEvent.click(await screen.findByText('Captures'));
+    const button = await screen.findByRole('button', { name: 'Open task' });
+    fireEvent.mouseDown(button);
+    fireEvent.click(button);
+    fireEvent.doubleClick(button);
+    fireEvent.keyDown(button, { key: 'Enter' });
+    await waitFor(() => expect(openTask).toHaveBeenCalledExactlyOnceWith('confirmed-task'));
+    expect(onSelectItem).not.toHaveBeenCalled();
+    expect(window.wikiAPI?.rename).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue(originalTitle)).toBeNull();
+    fireEvent.click(screen.getByTitle(presentation.notes[0].title));
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ absPath: notePath }));
+  });
+
+  it('keeps short titles intact and omits unknown time or an unconfirmed task action', async () => {
+    renderSidebarForTest({ tree: tree(), voiceInboxPresentation: { ...presentation, notes: [{ ...presentation.notes[0],
+      title: 'Save this context', createdAtMs: null, threadId: undefined, wordCount: 3 }] } });
+    fireEvent.click(await screen.findByText('Captures'));
+    const title = await screen.findByTitle('Save this context');
+    const row = title.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    expect(row.querySelector('time')).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(within(row).getByLabelText('3 words').textContent).toBe('3w');
+    expect(within(row).queryByText('…')).toBeNull();
+    expect(within(row).getByText('context')).toBeTruthy();
+  });
+
+  it('does not enhance another folder merely named Inbox or use stale out-of-folder metadata', async () => {
+    renderSidebarForTest({ tree: tree('Inbox'), voiceInboxPresentation: { ...presentation, notes: [{ ...presentation.notes[0],
+      notePath: `${libraryRootPath}/Inbox/voice.md` }] } });
+    fireEvent.click(await screen.findByText('Inbox'));
+    const row = (await screen.findByText(originalTitle)).closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    expect(row.querySelector('time')).toBeNull();
+    expect(within(row).queryByLabelText('23 words')).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(row.style.maxHeight).toBe('40px');
+  });
+
+  it('removes presentation when the designated folder or account changes', async () => {
+    const rendered = renderSidebarForTest({ tree: tree(), voiceInboxPresentation: presentation });
+    fireEvent.click(await screen.findByText('Captures'));
+    await screen.findByTitle(presentation.notes[0].title);
+    rendered.rerender(createElement(WikiSidebar, {
+      onSelectItem: vi.fn(), selectedId: null, onCreateFile: vi.fn(), onCreateDir: vi.fn(), searchQuery: '', onSearchQueryChange: vi.fn(),
+      voiceInboxPresentation: null,
+    }));
+    expect(await screen.findByText(originalTitle)).toBeTruthy();
+    expect(screen.queryByTitle(presentation.notes[0].title)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull();
+  });
+});
 
 describe('WikiSidebar River root helpers', () => {
   it('adds a newly created directory to the matching library root', () => {

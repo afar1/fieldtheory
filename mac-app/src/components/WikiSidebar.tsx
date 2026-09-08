@@ -16,6 +16,8 @@ import {
   SidebarRiverIcon,
 } from './SidebarIcons';
 import { setMarkdownArchivedState, setMarkdownTodoState } from '../../electron/shared/markdownFrontmatter';
+import { formatVoiceInboxTime, type VoiceInboxNotePresentation, type VoiceInboxPresentation } from '../../electron/shared/voiceInboxPresentation';
+import { OpenVoiceTaskButton } from './OpenVoiceTaskButton';
 
 type SortMode = 'alpha' | 'time';
 type SidebarTodoState = 'open' | 'done';
@@ -546,6 +548,7 @@ interface WikiSidebarProps {
   active?: boolean;
   canHideSidebarDefaultFolders?: boolean;
   persistPreferences?: boolean;
+  voiceInboxPresentation?: VoiceInboxPresentation | null;
   onSelectItem: (item: UnifiedItem) => void;
   onOpenItemInNewWindow?: (item: UnifiedItem, options?: { sidebarCollapsed?: boolean }) => void;
   selectedId: string | null;
@@ -1817,6 +1820,7 @@ function WikiSidebar({
   active = true,
   canHideSidebarDefaultFolders = true,
   persistPreferences = true,
+  voiceInboxPresentation = null,
   onSelectItem,
   onOpenItemInNewWindow,
   selectedId,
@@ -1836,6 +1840,15 @@ function WikiSidebar({
   onKeyboardScopeActive,
 }: WikiSidebarProps) {
   const { theme } = useTheme();
+  const voiceInboxNotes = useMemo(() => {
+    const notes = new Map<string, VoiceInboxNotePresentation>();
+    if (!voiceInboxPresentation?.folderPath) return notes;
+    const folderPath = voiceInboxPresentation.folderPath.replace(/\/+$/, '');
+    for (const note of voiceInboxPresentation.notes) {
+      if (note.notePath.slice(0, note.notePath.lastIndexOf('/')) === folderPath) notes.set(note.notePath, note);
+    }
+    return notes;
+  }, [voiceInboxPresentation]);
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
@@ -3755,6 +3768,7 @@ function WikiSidebar({
             <TreeNode
               key={child.id}
               node={child}
+              voiceInboxNotes={voiceInboxNotes}
               depth={1}
               isSearching={isSearching}
               expandedFolders={expandedFolders}
@@ -3811,6 +3825,7 @@ function WikiSidebar({
         <TreeNode
           key={node.id}
           node={node}
+          voiceInboxNotes={voiceInboxNotes}
           depth={0}
           isSearching={isSearching}
           expandedFolders={expandedFolders}
@@ -4068,6 +4083,7 @@ function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, dep
 
 function TreeNode({
   node,
+  voiceInboxNotes,
   depth,
   isSearching,
   expandedFolders,
@@ -4107,6 +4123,7 @@ function TreeNode({
   inheritedIconColorIndex,
 }: {
   node: SidebarNode;
+  voiceInboxNotes: ReadonlyMap<string, VoiceInboxNotePresentation>;
   depth: number;
   isSearching: boolean;
   expandedFolders: Set<string>;
@@ -4155,6 +4172,7 @@ function TreeNode({
     return (
       <FileItem
         item={node.item}
+        voiceNote={voiceInboxNotes.get(node.item.absPath)}
         depth={depth}
         isPinned={pinnedItemIds.has(node.id)}
         isSelected={isSel || explicitlySelected}
@@ -4402,6 +4420,7 @@ function TreeNode({
         <TreeNode
           key={child.id}
           node={child}
+          voiceInboxNotes={voiceInboxNotes}
           depth={depth + 1}
           isSearching={isSearching}
           expandedFolders={expandedFolders}
@@ -4484,6 +4503,7 @@ function TreeNode({
         <TreeNode
           key={child.id}
           node={child}
+          voiceInboxNotes={voiceInboxNotes}
           depth={depth + 1}
           isSearching={isSearching}
           expandedFolders={expandedFolders}
@@ -4860,6 +4880,7 @@ function LibraryContextMenu({
 
 function FileItem({
   item,
+  voiceNote,
   depth = 0,
   isPinned,
   iconColor,
@@ -4881,6 +4902,7 @@ function FileItem({
   refProp,
 }: {
   item: UnifiedItem;
+  voiceNote?: VoiceInboxNotePresentation;
   depth?: number;
   isPinned: boolean;
   iconColor: string;
@@ -4914,6 +4936,8 @@ function FileItem({
   }, [renaming]);
 
   const canRename = item.type === 'wiki' && !!item.relPath;
+  const displayTitle = voiceNote?.title ?? item.title;
+  const captureTime = voiceNote ? formatVoiceInboxTime(voiceNote.createdAtMs) : '';
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const icon = item.type === 'bookmarks'
@@ -4979,7 +5003,7 @@ function FileItem({
       : selectedInDocument
         ? selectedDocumentBg
         : undefined;
-  const horizontalPadding = canShowInFinder ? 28 : LIBRARY_SIDEBAR_EDGE_PADDING;
+  const horizontalPadding = voiceNote ? LIBRARY_SIDEBAR_EDGE_PADDING : canShowInFinder ? 28 : LIBRARY_SIDEBAR_EDGE_PADDING;
   const leftPadding = LIBRARY_SIDEBAR_EDGE_PADDING + depth * LIBRARY_SIDEBAR_DEPTH_INDENT;
   const rowPadding = isCollapsing
     ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
@@ -5030,7 +5054,7 @@ function FileItem({
       style={{
         position: 'relative',
         minHeight: isCollapsing ? 0 : LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-        maxHeight: isCollapsing ? 0 : '40px',
+        maxHeight: isCollapsing ? 0 : voiceNote ? undefined : '40px',
         boxSizing: 'border-box',
         padding: rowPadding,
         cursor: 'pointer',
@@ -5097,7 +5121,7 @@ function FileItem({
             {showSelectionMarker ? (
               <button
                 type="button"
-                aria-label={`${explicitlySelected ? 'Deselect' : 'Select'} ${item.title}`}
+                aria-label={`${explicitlySelected ? 'Deselect' : 'Select'} ${displayTitle}`}
                 aria-pressed={explicitlySelected}
                 onMouseDown={(event) => {
                   event.stopPropagation();
@@ -5138,7 +5162,7 @@ function FileItem({
                 ) : icon}
               </button>
             ) : (
-              <SidebarIconButton label={`Change color for ${item.title}`} onClick={onOpenIconColorPicker}>
+              <SidebarIconButton label={`Change color for ${displayTitle}`} onClick={onOpenIconColorPicker}>
                 {icon}
               </SidebarIconButton>
             )}
@@ -5147,7 +5171,9 @@ function FileItem({
               fontWeight: 400,
               color: sidebarTextColor,
               lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-              ...(hasInlineFileMeta
+              ...(voiceNote
+                ? { flex: '1 1 auto', minWidth: 0, paddingRight: canShowInFinder ? '12px' : undefined }
+                : hasInlineFileMeta
                 ? {
                   flex: '0 1 auto',
                   minWidth: 0,
@@ -5157,7 +5183,7 @@ function FileItem({
                 }
                 : librarySidebarFadeTextStyle(canShowInFinder ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH)),
             }}>
-              {item.title}
+              {voiceNote ? <VoiceInboxSidebarTitle title={displayTitle} /> : item.title}
             </div>
             {sharedAuthorLabel && sharedAuthorTitle && (
               <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
@@ -5220,7 +5246,7 @@ function FileItem({
             }}
             style={{
               position: 'absolute',
-              top: '50%',
+              top: voiceNote ? '14px' : '50%',
               right: '8px',
               transform: 'translateY(-50%)',
               padding: '0',
@@ -5247,7 +5273,52 @@ function FileItem({
           </button>
         )}
       </div>
+      {voiceNote && !renaming && (
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px', marginTop: '3px', minWidth: 0, color: theme.textSecondary, fontSize: '10px', lineHeight: '16px' }}>
+          {captureTime && <time dateTime={new Date(voiceNote.createdAtMs!).toISOString()} style={{ flexShrink: 0 }}>{captureTime}</time>}
+          <span
+            aria-label={`${voiceNote.wordCount} words`}
+            title={`${voiceNote.wordCount} words`}
+            style={{ flexShrink: 0, padding: '0 4px', borderRadius: '4px', backgroundColor: theme.hoverBg, fontSize: '9px', lineHeight: '15px', fontVariantNumeric: 'tabular-nums' }}
+          >
+            {voiceNote.wordCount.toLocaleString()}w
+          </span>
+          {voiceNote.threadId && (
+            <span
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}
+              style={{ display: 'inline-flex', marginLeft: 'auto', flexShrink: 0 }}
+            >
+              <OpenVoiceTaskButton threadId={voiceNote.threadId} compact />
+            </span>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function VoiceInboxSidebarTitle({ title }: { title: string }) {
+  const separator = title.indexOf(' … ');
+  if (separator < 0) {
+    const lastWord = title.lastIndexOf(' ');
+    if (lastWord < 0) return <span title={title} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>;
+    return (
+      <span title={title} aria-label={title} style={{ display: 'flex', gap: '3px', minWidth: 0, whiteSpace: 'nowrap' }}>
+        <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title.slice(0, lastWord)}</span>
+        <span style={{ flexShrink: 0, maxWidth: '48%', overflow: 'hidden', direction: 'rtl', textAlign: 'right' }}>{title.slice(lastWord + 1)}</span>
+      </span>
+    );
+  }
+  return (
+    <span title={title} aria-label={title} style={{ display: 'flex', minWidth: 0, whiteSpace: 'nowrap' }}>
+      <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden' }}>{title.slice(0, separator)}</span>
+      <span style={{ flexShrink: 0, padding: '0 2px' }}>…</span>
+      <span style={{ flex: '0 1 auto', maxWidth: '48%', minWidth: 0, overflow: 'hidden', direction: 'rtl', textAlign: 'right' }}>{title.slice(separator + 3)}</span>
+    </span>
   );
 }
 
