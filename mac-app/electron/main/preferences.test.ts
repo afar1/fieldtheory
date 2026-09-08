@@ -104,8 +104,168 @@ describe('PreferencesManager', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.clearAllMocks();
+  });
+
+  function accountPreferences(initialOwner = 'user-a') {
+    let owner: string | null = initialOwner;
+    const userPath = (id: string) => path.join(tempDir, 'users', id, 'preferences.json');
+    const manager = new PreferencesManager();
+    manager.setUserDataManager({
+      isLoggedIn: () => owner !== null,
+      getCurrentCallsign: () => owner,
+      getUserDataPath: (subpath?: string) => path.join(tempDir, 'users', owner!, subpath ?? ''),
+    } as any);
+    return { manager, userPath, setOwner: (next: string | null) => { owner = next; } };
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  async function writeUserPreferences(filePath: string, value: Record<string, unknown>) {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(value), 'utf-8');
+  }
+
+  it('initializes missing launcher sections for the current account without enabling other sections', async () => {
+    const { manager, userPath } = accountPreferences();
+    await manager.load();
+    const sections = ['folder:Inbox', 'recents', 'clipboard', 'river'];
+    expect(await manager.updateLauncherSectionsForUser('user-a', (current) => current ?? sections)).toBe(true);
+    expect(JSON.parse(await fs.readFile(userPath('user-a'), 'utf-8'))).toEqual({ launcherSections: sections });
+    expect(manager.getPreference('launcherSections')).toEqual(sections);
+  });
+
+  it.each([
+    ['folder:Inbox', 'recents', 'clipboard', 'river'],
+    [],
+  ])('preserves explicitly configured launcher sections %j during initialization', async (...configured) => {
+    const { manager, userPath } = accountPreferences();
+    const saved = { launcherSections: configured, liveTypingEnabled: true };
+    await writeUserPreferences(userPath('user-a'), saved);
+    await manager.load();
+    const before = await fs.readFile(userPath('user-a'), 'utf-8');
+    const transform = vi.fn((current: readonly string[] | undefined) => current ?? ['folder:Inbox', 'recents']);
+    expect(await manager.updateLauncherSectionsForUser('user-a', transform)).toBe(false);
+    expect(transform).toHaveBeenCalledWith(configured);
+    expect(await fs.readFile(userPath('user-a'), 'utf-8')).toBe(before);
+  });
+
+  it('renames a section against the latest file while preserving order and every unrelated saved value', async () => {
+    const { manager, userPath } = accountPreferences();
+    await writeUserPreferences(userPath('user-a'), { launcherSections: ['recents'] });
+    await manager.load();
+    const latest = {
+      launcherSections: ['clipboard', 'folder:Inbox', 'river', 'recents'],
+      liveTypingEnabled: true,
+      unknownFuturePreference: { nested: ['keep', 42] },
+    };
+    await writeUserPreferences(userPath('user-a'), latest);
+    expect(await manager.updateLauncherSectionsForUser('user-a', (sections) => sections?.map((section) =>
+      section === 'folder:Inbox' ? 'folder:Renamed Inbox' : section))).toBe(true);
+    const expectedSections = ['clipboard', 'folder:Renamed Inbox', 'river', 'recents'];
+    expect(JSON.parse(await fs.readFile(userPath('user-a'), 'utf-8'))).toEqual({ ...latest, launcherSections: expectedSections });
+    expect(manager.getPreference('launcherSections')).toEqual(expectedSections);
+  });
+
+  it('lets a rename leave missing sections unchanged without creating preferences', async () => {
+    const { manager, userPath } = accountPreferences();
+    expect(await manager.updateLauncherSectionsForUser('user-a', (sections) => sections?.map((section) => section))).toBe(false);
+    await expect(fs.readFile(userPath('user-a'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('shares the ordinary save queue so a later save retains the launcher update', async () => {
+    const { manager, userPath } = accountPreferences();
+    await writeUserPreferences(userPath('user-a'), { launcherSections: ['recents'], liveTypingEnabled: false });
+    await manager.load();
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const originalWrite = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
+      await originalWrite(...args);
+      if (String(args[0]).endsWith('.tmp')) { writing.resolve(); await release.promise; }
+    });
+    const update = manager.updateLauncherSectionsForUser('user-a', () => ['folder:Inbox', 'recents']);
+    await writing.promise;
+    const save = manager.save({ liveTypingEnabled: true });
+    release.resolve();
+    expect(await update).toBe(true);
+    await save;
+    const saved = JSON.parse(await fs.readFile(userPath('user-a'), 'utf-8'));
+    expect(saved.launcherSections).toEqual(['folder:Inbox', 'recents']);
+    expect(saved.liveTypingEnabled).toBe(true);
+  });
+
+  it('drops old-account updates both before commit and while waiting in the save queue', async () => {
+    const { manager, userPath, setOwner } = accountPreferences();
+    const first = { launcherSections: ['recents'] };
+    const second = { launcherSections: ['river'] };
+    await writeUserPreferences(userPath('user-a'), first);
+    await writeUserPreferences(userPath('user-b'), second);
+    await manager.load();
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const originalWrite = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
+      await originalWrite(...args);
+      if (String(args[0]).endsWith('.tmp')) { writing.resolve(); await release.promise; }
+    });
+    const active = manager.updateLauncherSectionsForUser('user-a', () => ['folder:Inbox']);
+    await writing.promise;
+    const queuedTransform = vi.fn(() => ['clipboard']);
+    const queued = manager.updateLauncherSectionsForUser('user-a', queuedTransform);
+    setOwner('user-b');
+    await manager.load();
+    release.resolve();
+    expect(await active).toBe(false);
+    expect(await queued).toBe(false);
+    expect(queuedTransform).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(userPath('user-a'), 'utf-8'))).toEqual(first);
+    expect(JSON.parse(await fs.readFile(userPath('user-b'), 'utf-8'))).toEqual(second);
+    expect(manager.getPreference('launcherSections')).toEqual(second.launcherSections);
+    expect(await fs.readdir(path.dirname(userPath('user-a')))).toEqual(['preferences.json']);
+  });
+
+  it('drops an old-account update after a delayed read without changing the new account in memory', async () => {
+    const { manager, userPath, setOwner } = accountPreferences();
+    const first = { launcherSections: ['recents'] };
+    const second = { launcherSections: ['clipboard'] };
+    await writeUserPreferences(userPath('user-a'), first);
+    await writeUserPreferences(userPath('user-b'), second);
+    await manager.load();
+    const reading = deferred<void>();
+    const release = deferred<void>();
+    const originalRead = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const value = await originalRead(...args);
+      if (String(args[0]) === userPath('user-a')) { reading.resolve(); await release.promise; }
+      return value;
+    });
+    const transform = vi.fn(() => ['folder:Inbox']);
+    const update = manager.updateLauncherSectionsForUser('user-a', transform);
+    await reading.promise;
+    setOwner('user-b');
+    await manager.load();
+    release.resolve();
+    expect(await update).toBe(false);
+    expect(transform).not.toHaveBeenCalled();
+    expect(manager.getPreference('launcherSections')).toEqual(second.launcherSections);
+    expect(JSON.parse(await fs.readFile(userPath('user-a'), 'utf-8'))).toEqual(first);
+    expect(JSON.parse(await fs.readFile(userPath('user-b'), 'utf-8'))).toEqual(second);
+  });
+
+  it('rejects stale or signed-out owners before calling the transform', async () => {
+    const { manager, setOwner } = accountPreferences();
+    const transform = vi.fn(() => ['folder:Inbox']);
+    expect(await manager.updateLauncherSectionsForUser('user-b', transform)).toBe(false);
+    setOwner(null);
+    expect(await manager.updateLauncherSectionsForUser('user-a', transform)).toBe(false);
+    expect(transform).not.toHaveBeenCalled();
   });
 
   it('preserves stored hotkeys when saving unrelated preference changes', async () => {

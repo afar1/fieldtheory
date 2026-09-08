@@ -1,5 +1,7 @@
 import { app } from 'electron';
 import fs from 'fs/promises';
+import { renameSync } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { createLogger } from './logger';
@@ -692,6 +694,58 @@ export class PreferencesManager {
       await this.saveInternal(prefs);
     } finally {
       releaseLock!();
+    }
+  }
+
+  /** Update only the captured account's launcher sections, using its latest saved order. */
+  async updateLauncherSectionsForUser(
+    userId: string,
+    transform: (current: readonly string[] | undefined) => readonly string[] | undefined,
+  ): Promise<boolean> {
+    const userData = this.userDataManager;
+    if (!userData?.isLoggedIn() || userData.getCurrentCallsign() !== userId) return false;
+    const targetPath = userData.getUserDataPath('preferences.json');
+    const isCurrent = () => this.userDataManager === userData && userData.isLoggedIn()
+      && userData.getCurrentCallsign() === userId && userData.getUserDataPath('preferences.json') === targetPath;
+    const previousLock = this.saveLock;
+    let releaseLock!: () => void;
+    this.saveLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    let temporary: string | undefined;
+    try {
+      await previousLock;
+      if (!isCurrent()) return false;
+      let stored: Record<string, unknown>;
+      try {
+        stored = JSON.parse(await fs.readFile(targetPath, 'utf-8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        stored = {};
+      }
+      if (!isCurrent()) return false;
+      if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid saved preferences.');
+      const current = Array.isArray(stored.launcherSections) ? [...stored.launcherSections] as string[] : undefined;
+      const sections = transform(current);
+      if (!isCurrent() || sections === undefined) return false;
+      if (!Array.isArray(sections) || sections.some((section) => typeof section !== 'string')) throw new Error('Invalid launcher sections.');
+      if (JSON.stringify(stored.launcherSections) === JSON.stringify(sections)) return false;
+      const next = [...sections];
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      if (!isCurrent()) return false;
+      temporary = `${targetPath}.${randomUUID()}.tmp`;
+      await fs.writeFile(temporary, JSON.stringify({ ...stored, launcherSections: next }, null, 2), {
+        encoding: 'utf-8', mode: 0o600, flag: 'wx',
+      });
+      if (!isCurrent()) return false;
+      // Keep the final owner check and atomic commit in one event-loop turn.
+      renameSync(temporary, targetPath);
+      temporary = undefined;
+      if (isCurrent() && this.prefsPath === targetPath) {
+        this.preferences = { ...this.preferences, launcherSections: next };
+      }
+      return true;
+    } finally {
+      if (temporary) await fs.unlink(temporary).catch(() => {});
+      releaseLock();
     }
   }
 
