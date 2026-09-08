@@ -12,6 +12,11 @@ export function readDrawingDraft(): DrawingDraft | null {
   } catch { /* Never delete an unreadable draft. */ }
   return null;
 }
+// Upstream generates positive IDs from a process-local counter. Restored IDs
+// occupy a separate namespace so the first new stroke cannot reuse a React key.
+export function restoreStrokeIds(strokes: Stroke[]): Stroke[] {
+  return strokes.map((stroke, index) => ({ ...stroke, id: -index - 1 }));
+}
 export function placeImage(image: DrawingImage, board: Board): PlacedImage {
   const scale = Math.min(board.w * .5 / image.width, board.h * .5 / image.height, 1);
   const width = image.width * scale, height = image.height * scale;

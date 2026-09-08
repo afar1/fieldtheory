@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { useDrawing, type Stroke } from '../vendor/drawesome';
-import { DRAWING_DRAFT_KEY, placeImage, readDrawingDraft } from './drawing';
+import { useDrawing, nextId, type Stroke } from '../vendor/drawesome';
+import { DRAWING_DRAFT_KEY, placeImage, readDrawingDraft, restoreStrokeIds } from './drawing';
 const stroke: Stroke = { id: 1, pen: 'pen', color: '#123456', size: 10, opacity: 1, points: [[10, 20, .5], [90, 60, .5]] };
 beforeEach(() => localStorage.clear());
 describe('drawing integration contracts', () => {
@@ -35,4 +35,13 @@ describe('drawing integration contracts', () => {
     act(() => result.current.undo());
     expect(result.current.strokes).toEqual([edited, erase]);
   });
+});
+
+it('restored stroke IDs cannot collide with newly generated upstream IDs', () => {
+  const restored = restoreStrokeIds([stroke, { ...stroke, id: 2 }]);
+  const added = nextId();
+  expect(restored.map(s => s.id)).toEqual([-1, -2]);
+  expect(restored.some(s => s.id === added)).toBe(false);
+  expect(restored[0].points).toEqual(stroke.points);
+  expect(stroke.id).toBe(1);
 });

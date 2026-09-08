@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef, lazy, Suspense } from 'react';
 import { Draw, type DrawHandle, type Board, type Stroke } from '../vendor/drawesome';
-import { DRAWING_DRAFT_KEY, readDrawingDraft, placeImage, exportDrawing, type DrawingDraft } from '../utils/drawing';
+import { DRAWING_DRAFT_KEY, readDrawingDraft, restoreStrokeIds, placeImage, exportDrawing, type DrawingDraft } from '../utils/drawing';
 import { useTheme } from '../contexts/ThemeContext';
 
 type TranscriptItem = {
@@ -57,6 +57,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     return () => { window.removeEventListener('beforeunload', flushDraft); flushDraft(); };
   }, [flushDraft]);
   const [draft] = useState(() => !backgroundImage && !existingSketch ? readDrawingDraft() : null);
+  const initialStrokes = useMemo(() => draft ? restoreStrokeIds(draft.strokes) : undefined, [draft]);
   const [board, setBoard] = useState<Board | null>(draft?.board ?? null);
   const [paper] = useState(() => draft?.paper ?? (theme.isDark ? '#202124' : '#ffffff'));
   const [existingImage, setExistingImage] = useState(() => existingSketch ? {
@@ -259,7 +260,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           <svg width="100%" height="100%" viewBox={`0 0 ${board.w} ${board.h}`} style={{ position: 'absolute', inset: 0, background: paper, pointerEvents: 'none' }}>
             {image && <image href={image.dataUrl} x={image.x} y={image.y} width={image.width} height={image.height} />}
           </svg>
-          <Draw ref={drawRef} board={board} initialStrokes={draft?.strokes} onChange={handleChange}
+          <Draw ref={drawRef} board={board} initialStrokes={initialStrokes} onChange={handleChange}
             shortcuts={!isSaving} style={{ pointerEvents: isSaving ? 'none' : undefined }}
             background="transparent" theme={theme.isDark ? 'dark' : 'light'} look="studio" motion="none" />
         </>}

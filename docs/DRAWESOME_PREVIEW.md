@@ -8,7 +8,7 @@ The default Mac drawing surface uses Benji Taylor's Drawesome 0.1.1, pinned to u
 - Drawesome offers seven freehand pens and an eraser, undo/redo, colour, size and opacity. It does not offer Excalidraw's shapes, text, selection, resizing or object manipulation.
 - Saved PNGs reopen as raster backgrounds. The eraser affects new ink, not the background. Ink and image share a fixed board coordinate system and letterbox together on resize.
 - Export preserves highlighter blending and eraser masks, crops actual alpha bounds, adds 48 logical pixels of paper on each edge, and exports at device pixel ratio.
-- New drafts use `pendingSketch.drawesome.v1`, retain image/board/paper/strokes, debounce storage and flush on exit. Eraser-only activity is not treated as new content. Saving failures keep the live drawing and do not intentionally remove its draft.
+- New drafts use `pendingSketch.drawesome.v1`, retain image/board/paper/strokes, debounce storage and flush on exit. Restored stroke IDs use a separate namespace from new upstream IDs to avoid key collisions after reload. Eraser-only activity is not treated as new content. Saving failures keep the live drawing and do not intentionally remove its draft.
 - An existing `pendingSketch` is kept. “Recover previous drawing” lazy-loads the old editor to recover it, regardless of age. It is removed only by an explicit discard or successful recovery save. New drawing saves do not delete it.
 
 ## Validation
