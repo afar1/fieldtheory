@@ -6,12 +6,24 @@ import { resetBookmarksCacheForTests } from '../../services/bookmarksCache';
 
 const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
+const CODEX_TASK_URL = 'codex://threads/01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3';
+
+function mockNativeShell() {
+  const openExternal = vi.fn(async () => {});
+  window.shellAPI = {
+    openExternal,
+    showItemInFolder: vi.fn(async () => {}),
+    setRepresentedFilename: vi.fn(async () => {}),
+  };
+  return openExternal;
+}
 
 describe('FieldTheoryProse', () => {
   afterEach(() => {
     delete window.fieldTheoryLocalImageAPI;
     delete window.fieldTheoryBookmarkMediaAPI;
     delete window.bookmarksAPI;
+    delete window.shellAPI;
     resetBookmarksCacheForTests();
   });
 
@@ -57,6 +69,65 @@ describe('FieldTheoryProse', () => {
     expect(screen.getByRole('link', { name: 'Launch Work' }).getAttribute('href')).toBe('wiki://scratchpad/launch-work');
     expect(screen.getByRole('link', { name: 'Artifact' }).getAttribute('href')).toBe('artifact://%2Ftmp%2Fartifact.md');
     expect(screen.getByRole('link', { name: 'Command' }).getAttribute('href')).toBe('command://%2Ftmp%2Frefactor.md');
+  });
+
+  it('renders a Codex task receipt link and opens it through the native shell', () => {
+    const openExternal = mockNativeShell();
+    render(<FieldTheoryProse>{`[Open voice task](${CODEX_TASK_URL})`}</FieldTheoryProse>);
+
+    const link = screen.getByRole('link', { name: 'Open voice task' });
+    expect(link.getAttribute('href')).toBe(CODEX_TASK_URL);
+    expect(fireEvent.click(link)).toBe(false);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith(CODEX_TASK_URL);
+  });
+
+  it.each([
+    'codex://new?prompt=run',
+    `${CODEX_TASK_URL}?prompt=run`,
+    `${CODEX_TASK_URL}#instructions`,
+    `${CODEX_TASK_URL}/extra`,
+    'codex://threads/not-a-task',
+    CODEX_TASK_URL.replace('threads/', 'user@threads/'),
+    CODEX_TASK_URL.replace('threads/', 'threads:123/'),
+    'codex://threads/../../settings',
+    'javascript:alert(1)',
+  ])('strips unsupported task or unsafe link %s without invoking the native shell', (url) => {
+    const openExternal = mockNativeShell();
+    render(<FieldTheoryProse>{`[Blocked link](<${url}>)`}</FieldTheoryProse>);
+
+    const link = screen.getByText('Blocked link').closest('a')!;
+    expect(link.getAttribute('href')).toBe('');
+    fireEvent.click(link);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('does not route ordinary web links through the Codex task handler', () => {
+    const openExternal = mockNativeShell();
+    render(<FieldTheoryProse>{'[Website](https://fieldtheory.ai)'}</FieldTheoryProse>);
+
+    const link = screen.getByRole('link', { name: 'Website' });
+    expect(link.getAttribute('href')).toBe('https://fieldtheory.ai');
+    fireEvent.click(link);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('preserves a caller-provided task link handler', () => {
+    const openExternal = mockNativeShell();
+    const handleTask = vi.fn((event: React.MouseEvent) => event.preventDefault());
+    render(
+      <FieldTheoryProse components={{ a: ({ href, children }) => <a href={href} onClick={handleTask}>{children}</a> }}>
+        {`[Voice task](${CODEX_TASK_URL})`}
+      </FieldTheoryProse>
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: 'Voice task' }));
+    expect(handleTask).toHaveBeenCalledOnce();
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('does not allow Codex task URLs as image sources', () => {
+    render(<FieldTheoryProse>{`![Task image](${CODEX_TASK_URL})`}</FieldTheoryProse>);
+    expect(screen.getByRole('img', { name: 'Task image' }).getAttribute('src')).toBe('');
   });
 
   it('renders with the Field Theory prose class', () => {

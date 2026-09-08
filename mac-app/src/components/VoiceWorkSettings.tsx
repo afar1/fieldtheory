@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { VoiceWorkState } from '../../electron/shared/voiceWork';
 import { useTheme } from '../contexts/ThemeContext';
 import { SettingsCard, SettingsRow, SettingsSectionHeading } from './settings/SettingsPrimitives';
@@ -8,7 +8,7 @@ function readinessMessage(state: VoiceWorkState): string {
   if (!state.codex.available) return 'Install Codex on this Mac and sign in, then check again.';
   if (state.codex.signedIn !== true) return 'Sign in to Codex on this Mac, then check again.';
   if (state.status === 'signed_out') return 'Sign in to Field Theory, then check again.';
-  if (!state.settings.workspacePath) return 'Choose the project folder where Codex may read and edit files.';
+  if (!state.settings.workspacePath) return 'Choose a Library folder for your voice transcripts.';
   if (state.status === 'connecting') return 'Checking your connection…';
   if (state.status === 'needs_setup' || state.status === 'error') return 'Check again to see what needs attention.';
   if (state.status === 'working') return 'Codex is working on a voice request.';
@@ -54,11 +54,24 @@ export default function VoiceWorkSettings() {
   const [saving, setSaving] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [folders, setFolders] = useState<Array<{ path: string; label: string }>>([]);
+  const [folderChoice, setFolderChoice] = useState('');
+  const folderRevision = useRef<number | null>(null);
+  const folderRequest = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(false);
   const revision = useRef(0);
   const mutationPending = useRef(false);
   const api = window.voiceWorkAPI;
+
+  const cancelFolder = useCallback(() => {
+    folderRequest.current++;
+    folderRevision.current = null;
+    mutationPending.current = false;
+    setChoosing(false);
+    setFolders([]);
+    setFolderChoice('');
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -73,6 +86,10 @@ export default function VoiceWorkSettings() {
     const unsubscribe = api.onStateChanged((next) => {
       if (!active) return;
       revision.current++;
+      if (folderRevision.current !== null) {
+        cancelFolder();
+        setError('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
+      }
       setState(next);
     });
     void (async () => {
@@ -95,9 +112,10 @@ export default function VoiceWorkSettings() {
       active = false;
       mounted.current = false;
       revision.current++;
+      folderRequest.current++;
       unsubscribe();
     };
-  }, [api]);
+  }, [api, cancelFolder]);
 
   const refresh = async () => {
     if (!api || checking) return;
@@ -138,24 +156,54 @@ export default function VoiceWorkSettings() {
     if (!api || !state || mutationPending.current) return;
     mutationPending.current = true;
     const requestRevision = ++revision.current;
+    const request = ++folderRequest.current;
+    folderRevision.current = requestRevision;
     setChoosing(true);
+    setFolders([]);
+    setFolderChoice('');
     setError(null);
     try {
-      const workspacePath = await api.chooseWorkspace();
-      // A cancelled picker never changes settings. A newer account/status event
-      // also invalidates the choice so it cannot be applied to another account.
-      if (!workspacePath || !mounted.current) return;
+      const available = await api.listFolders();
+      if (!mounted.current || request !== folderRequest.current) return;
       if (requestRevision !== revision.current) {
+        cancelFolder();
         setError('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
         return;
       }
-      const next = await api.updateSettings({ workspacePath });
-      if (mounted.current && requestRevision === revision.current) setState(next);
+      setFolders(available);
+      setFolderChoice(available.some((folder) => folder.path === state.settings.workspacePath)
+        ? state.settings.workspacePath! : available[0]?.path ?? '');
     } catch {
-      if (mounted.current) setError('Could not save the project folder. Choose the folder again to retry.');
+      if (mounted.current && request === folderRequest.current) {
+        cancelFolder();
+        setError('Could not load Library folders. Check again and retry.');
+      }
+    }
+  };
+
+  const saveFolder = async () => {
+    if (!api || !choosing || saving || !folders.some((folder) => folder.path === folderChoice)) return;
+    if (folderRevision.current !== revision.current) {
+      cancelFolder();
+      setError('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
+      return;
+    }
+    const requestRevision = ++revision.current;
+    const request = folderRequest.current;
+    // Saving emits state changes too; the response remains fenced by revision.
+    folderRevision.current = null;
+    setSaving(true);
+    try {
+      const next = await api.updateSettings({ workspacePath: folderChoice });
+      if (mounted.current && requestRevision === revision.current) setState(next);
+      if (mounted.current && request === folderRequest.current) cancelFolder();
+    } catch {
+      if (mounted.current && request === folderRequest.current) {
+        cancelFolder();
+        setError('Could not save the Library folder. Choose the folder again to retry.');
+      }
     } finally {
-      mutationPending.current = false;
-      if (mounted.current) setChoosing(false);
+      if (mounted.current) setSaving(false);
     }
   };
 
@@ -191,12 +239,12 @@ export default function VoiceWorkSettings() {
         <SettingsSectionHeading
           theme={theme}
           title="Voice requests"
-          description="Let Codex work on requests in your synced voice recordings. Keep Field Theory running in the background and this Mac awake and online."
+          description="Save synced voice transcripts in Library and let Codex handle new requests. Keep Field Theory running and this Mac awake and online."
         />
         <SettingsRow
           theme={theme}
           label="Enable voice requests"
-          hint="Turning this on allows Codex to read and edit files in the selected folder when you ask. Its existing permissions still apply."
+          hint="Send new synced requests to Codex. Codex chooses the appropriate project or task, using its existing permissions."
           control={(
             <button
               type="button"
@@ -220,10 +268,10 @@ export default function VoiceWorkSettings() {
         />
         <SettingsRow
           theme={theme}
-          label="Allowed project folder"
+          label="Library folder"
           hint={(
             <>
-              <span style={{ overflowWrap: 'anywhere' }}>{state?.settings.workspacePath || 'Choose a folder before enabling.'}</span>
+              <span style={{ overflowWrap: 'anywhere' }}>{state?.settings.workspacePath || 'Preparing your Inbox…'}</span>
               {enabled && <span style={{ display: 'block' }}>Pause Voice requests to change this folder.</span>}
             </>
           )}
@@ -238,6 +286,20 @@ export default function VoiceWorkSettings() {
             </button>
           )}
         />
+        {choosing && (
+          <div role="group" aria-label="Choose a Library folder" style={{ margin: '12px 0', display: 'grid', gap: 10 }}>
+            <label htmlFor="voice-library-folder" style={{ fontSize: 12 }}>Library folder</label>
+            <select id="voice-library-folder" value={folderChoice} disabled={saving || !folders.length}
+              onChange={(event) => setFolderChoice(event.target.value)} style={buttonStyle}>
+              {!folders.length && <option value="">Loading Library folders…</option>}
+              {folders.map((folder) => <option key={folder.path} value={folder.path}>{folder.label}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" disabled={saving || !folders.some((folder) => folder.path === folderChoice)} onClick={() => void saveFolder()} style={buttonStyle}>Use folder</button>
+              <button type="button" disabled={saving} onClick={cancelFolder} style={buttonStyle}>Cancel</button>
+            </div>
+          </div>
+        )}
         <SettingsRow
           theme={theme}
           label={(
@@ -259,7 +321,7 @@ export default function VoiceWorkSettings() {
           last
         />
         <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
-          “Just context” and “hold off” remain notes. Recordings kept local on your phone stay there.
+          Inbox contains your transcript and a link after it is sent to a task. Earlier synced recordings, “just context,” and “hold off” remain notes. Recordings kept local on your phone stay there.
         </p>
         {state?.lastTask && (
           <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 18, paddingTop: 16 }}>

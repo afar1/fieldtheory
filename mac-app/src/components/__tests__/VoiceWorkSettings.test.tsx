@@ -15,7 +15,18 @@ vi.mock('../../contexts/ThemeContext', () => ({
   }),
 }));
 
-const projectFolder = '/Users/andrew/Projects/Field Theory';
+const projectFolder = '/Users/andrew/.fieldtheory/library/Inbox';
+const journalFolder = '/Users/andrew/.fieldtheory/library/Journal';
+const libraryFolders = [
+  { path: journalFolder, label: 'Journal' },
+  { path: projectFolder, label: 'Inbox' },
+];
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 function readyState(): VoiceWorkState {
   return {
     settings: { enabled: false, workspacePath: projectFolder },
@@ -45,7 +56,7 @@ describe('VoiceWorkSettings', () => {
         current = { ...current, settings: { ...current.settings, ...settings } };
         return current;
       }),
-      chooseWorkspace: vi.fn(async () => projectFolder),
+      listFolders: vi.fn(async () => libraryFolders),
       openTask: vi.fn(async () => ({ opened: true })),
       onStateChanged: vi.fn((listener) => { publish = listener; return unsubscribe; }),
     };
@@ -92,21 +103,122 @@ describe('VoiceWorkSettings', () => {
     expect(api.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('canceling folder selection changes nothing, and selecting a folder does not enable work', async () => {
-    current.settings.workspacePath = null;
-    vi.mocked(api.chooseWorkspace).mockResolvedValueOnce(null);
+  it('preselects the configured Library folder and applies a different folder only after Use folder', async () => {
+    vi.mocked(api.updateSettings).mockImplementation(async (settings) => {
+      current = { ...current, settings: { ...current.settings, ...settings } };
+      publish(current);
+      return current;
+    });
     render(<VoiceWorkSettings />);
     await waitForReadiness();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }));
-    await screen.findByRole('button', { name: 'Choose folder…' });
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    const picker = screen.getByRole('combobox', { name: 'Library folder' }) as HTMLSelectElement;
+    expect(picker.value).toBe(projectFolder);
+    expect(api.listFolders).toHaveBeenCalledOnce();
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
     expect(api.updateSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }));
-    await screen.findByText(projectFolder);
-    expect(api.updateSettings).toHaveBeenCalledWith({ workspacePath: projectFolder });
+    fireEvent.change(picker, { target: { value: journalFolder } });
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    await screen.findByText(journalFolder);
+    expect(api.updateSettings).toHaveBeenCalledExactlyOnceWith({ workspacePath: journalFolder });
+    expect(screen.queryByRole('group', { name: 'Choose a Library folder' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
     expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('cancels without saving and discards the canceled choice when reopened', async () => {
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: journalFolder } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(screen.getByText(projectFolder)).toBeTruthy();
+    expect(screen.queryByRole('combobox')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(projectFolder);
+    expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('requires a current loaded option before applying a folder, including after reopening', async () => {
+    const reload = deferred<typeof libraryFolders>();
+    vi.mocked(api.listFolders).mockResolvedValueOnce(libraryFolders).mockReturnValueOnce(reload.promise);
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+
+    expect((screen.getByRole('button', { name: 'Use folder' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    await act(async () => reload.resolve([{ path: journalFolder, label: 'Journal' }]));
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(journalFolder);
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    await screen.findByText(journalFolder);
+    expect(api.updateSettings).toHaveBeenCalledExactlyOnceWith({ workspacePath: journalFolder });
+  });
+
+  it('cannot apply a selection that is absent from the returned Library folders', async () => {
+    vi.mocked(api.listFolders).mockResolvedValueOnce([]);
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await act(async () => {});
+    expect((screen.getByRole('button', { name: 'Use folder' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('closes a failed folder save and allows reopening with the unchanged configured folder', async () => {
+    vi.mocked(api.updateSettings).mockRejectedValueOnce(new Error('private service error'));
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: journalFolder } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Could not save the Library folder. Choose the folder again to retry.');
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.getByText(projectFolder)).toBeTruthy();
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(projectFolder);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['resolve', 'reject'] as const)('ignores a canceled folder load that later %ss while a new picker is open', async (outcome) => {
+    const oldLoad = deferred<typeof libraryFolders>();
+    vi.mocked(api.listFolders).mockReturnValueOnce(oldLoad.promise).mockResolvedValueOnce(libraryFolders);
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: journalFolder } });
+
+    await act(async () => {
+      if (outcome === 'resolve') oldLoad.resolve([{ path: '/stale/Inbox', label: 'Stale Inbox' }]);
+      else oldLoad.reject(new Error('old account request failed'));
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(journalFolder);
+    expect(screen.queryByRole('option', { name: 'Stale Inbox' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use folder' }));
+    await screen.findByText(journalFolder);
+    expect(api.updateSettings).toHaveBeenCalledExactlyOnceWith({ workspacePath: journalFolder });
   });
 
   it('keeps the switch off when saving fails and makes the retry actionable', async () => {
@@ -187,16 +299,32 @@ describe('VoiceWorkSettings', () => {
     expect(screen.getByText('Which folder should contain the report?')).toBeTruthy();
   });
 
-  it('drops a folder choice if the signed-in state changes while the picker is open', async () => {
-    let resolvePicker!: (path: string) => void;
-    vi.mocked(api.chooseWorkspace).mockReturnValue(new Promise((resolve) => { resolvePicker = resolve; }));
+  it('drops a folder load if the signed-in state changes before it finishes', async () => {
+    const load = deferred<typeof libraryFolders>();
+    vi.mocked(api.listFolders).mockReturnValue(load.promise);
     render(<VoiceWorkSettings />);
     await waitForReadiness();
     fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
     act(() => publish({ ...readyState(), status: 'signed_out' }));
-    await act(async () => resolvePicker('/Users/andrew/Projects/Another project'));
+    await act(async () => load.resolve([{ path: '/old-account/Inbox', label: 'Old account Inbox' }]));
     expect(api.updateSettings).not.toHaveBeenCalled();
-    expect(screen.queryByText('/Users/andrew/Projects/Another project')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Choose a Library folder' })).toBeNull();
+    expect(screen.queryByText('Old account Inbox')).toBeNull();
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toBe('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
+  });
+
+  it('prevents applying an already loaded choice after an account change', async () => {
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder…' }));
+    await screen.findByRole('option', { name: 'Inbox' });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: journalFolder } });
+    const apply = screen.getByRole('button', { name: 'Use folder' });
+    act(() => publish({ ...readyState(), status: 'signed_out' }));
+    fireEvent.click(apply);
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Choose a Library folder' })).toBeNull();
     expect(screen.getByRole('alert').textContent).toBe('Voice requests changed while the folder picker was open. Check again, then choose the folder.');
   });
 });
