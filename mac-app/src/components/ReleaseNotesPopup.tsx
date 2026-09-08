@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.51': [
+    'Create and join multiple teams from Settings, with owner, admin, and member roles',
+    'Invite people by email before or after signup; accept invitations to access the team’s full River history',
+    'Manage members, transfer ownership, and leave teams; removal revokes team access while preserving personal copies',
+  ],
   '0.3.50': [
     'Draw rectangles, straight lines, and circles from the new Shapes picker',
     'Use R, L, and O shortcuts; hold Shift for squares or 45-degree lines',
@@ -582,6 +587,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.51': 'September 7, 2026',
   '0.3.50': 'September 7, 2026',
   '0.3.49': 'September 7, 2026',
   '0.3.48': 'September 7, 2026',

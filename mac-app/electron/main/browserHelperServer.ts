@@ -1,3 +1,4 @@
+import type { RiverTeamResult, RiverTeamsState } from '../shared/riverTeams';
 import type { LinkRelationSnapshot } from '../shared/libraryLinkRelations';
 import type { BookmarkSyncState } from './bookmarkSyncController';
 import http from 'http';
@@ -208,6 +209,8 @@ export type BrowserHelperNativeBridge = {
   getPinnedItemIds?: () => string[] | Promise<string[]>;
   setPinned?: (filePath: string, pinned: boolean) => unknown | Promise<unknown>;
   getTeamEntitlement?: () => unknown | Promise<unknown>;
+  listRiverTeams?: () => Promise<RiverTeamsState>;
+  mutateRiverTeam?: (action: unknown) => Promise<RiverTeamResult>;
   initializeCommands?: () => void | Promise<void>;
   getWatchedCommandDirs?: () => unknown[] | Promise<unknown[]>;
   addWatchedCommandDir?: (dirPath: string) => unknown | Promise<unknown>;
@@ -1406,6 +1409,18 @@ export class BrowserHelperServer {
         const filePath = typeof body.filePath === 'string' ? body.filePath : '';
         const pinned = body.pinned === true;
         const result = filePath ? await this.nativeBridge.setPinned?.(filePath, pinned) : { ok: false, reason: 'missing_path' };
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/team/list') {
+        const state = await this.nativeBridge.listRiverTeams?.() ?? { teams: [], incomingInvites: [], error: 'Team settings are unavailable' };
+        writeJson(res, 200, { ok: true, state }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/team/mutate') {
+        const result = await this.nativeBridge.mutateRiverTeam?.(await readJsonBody(req)) ?? { ok: false, error: 'Team settings are unavailable' };
         writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }

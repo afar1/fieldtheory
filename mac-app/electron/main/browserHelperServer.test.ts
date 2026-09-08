@@ -7,6 +7,8 @@ import { BrowserHelperDocumentService } from './browserHelperDocumentService';
 import { BrowserHelperServer } from './browserHelperServer';
 import { getLocalImageCacheHeaders } from './localImageProtocol';
 
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/fieldtheory-test' } }));
+
 const tempDirs: string[] = [];
 const servers: BrowserHelperServer[] = [];
 
@@ -123,6 +125,30 @@ describe('BrowserHelperServer', () => {
     expect(response.status).toBe(200);
     expect(response.body.result).toEqual(snapshot);
     expect(getLinkRelationChanges).toHaveBeenCalledWith(body);
+  });
+
+  it('protects team management routes with native token and origin checks', async () => {
+    const root = makeTempDir();
+    const state = { teams: [], incomingInvites: [] };
+    const listRiverTeams = vi.fn(async () => state);
+    const mutateRiverTeam = vi.fn(async () => ({ ok: true, teamId: 'new-team' }));
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([root]), token: 'test-token',
+      nativeBridge: { listRiverTeams, mutateRiverTeam },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const base = `http://${address.host}:${address.port}/native/team`;
+    const action = { kind: 'create', name: 'Design' };
+    expect((await request(`${base}/list`)).status).toBe(401);
+    expect((await request(`${base}/mutate?token=test-token`, {
+      method: 'POST', body: action, headers: { Origin: 'https://example.com' },
+    })).status).toBe(403);
+    expect(mutateRiverTeam).not.toHaveBeenCalled();
+    const headers = { 'X-FieldTheory-Browser-Token': 'test-token' };
+    expect((await request(`${base}/list`, { headers })).body.state).toEqual(state);
+    expect((await request(`${base}/mutate`, { method: 'POST', body: action, headers })).body.result.ok).toBe(true);
+    expect(mutateRiverTeam).toHaveBeenCalledWith(action);
   });
 
   it('marks link repairs incomplete when the native bridge is unavailable', async () => {

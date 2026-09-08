@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RiverReader from '../RiverReader';
 
@@ -65,6 +65,8 @@ const targets = [{
 
 afterEach(() => {
   delete (window as Partial<Window>).sharedFilesAPI;
+  delete (window as Partial<Window>).teamAPI;
+  delete (window as Partial<Window>).authAPI;
 });
 
 describe('RiverReader', () => {
@@ -152,6 +154,70 @@ describe('RiverReader', () => {
     expect(screen.getByText(/The complete launch plan lives here/)).toBeTruthy();
   });
 
+  it('keeps Public River unavailable to a member without beta access', async () => {
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getTimeline: vi.fn(async () => timelineItems),
+        getTargets: vi.fn(async () => targets),
+        getAvailability: vi.fn(async () => ({ available: true, publicAllowed: false })),
+      },
+    });
+    render(<RiverReader />);
+    await screen.findByText('Launch Brief');
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Public' })).toBeNull());
+    expect(screen.getByRole('tab', { name: 'Private' })).toBeTruthy();
+  });
+
+  it('clears the prior account immediately and ignores an older timeline response after sign-out', async () => {
+    let authChanged!: (session: unknown | null) => void;
+    let finishOld!: (items: typeof timelineItems) => void;
+    const getTimeline = vi.fn().mockResolvedValueOnce(timelineItems)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValue([]);
+    const unsubscribe = vi.fn();
+    Object.defineProperty(window, 'authAPI', { configurable: true, value: { onSessionChanged: (callback: typeof authChanged) => { authChanged = callback; return unsubscribe; } } });
+    Object.defineProperty(window, 'sharedFilesAPI', { configurable: true, value: {
+      getTimeline, getTargets: async () => targets,
+      getAvailability: vi.fn().mockResolvedValueOnce({ available: true, publicAllowed: true }).mockResolvedValue({ available: false, publicAllowed: false, reason: 'not_authenticated' }),
+    } });
+    const { unmount } = render(<RiverReader />);
+    await screen.findByText('Launch Brief');
+    fireEvent.click(screen.getByRole('tab', { name: 'Public' }));
+    await waitFor(() => expect(getTimeline).toHaveBeenCalledTimes(2));
+    act(() => { authChanged(null); finishOld(timelineItems); });
+    expect(screen.queryByText('Launch Brief')).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Public' })).toBeNull();
+    await screen.findByText('Sign in to sync River');
+    expect(screen.queryByText('Launch Brief')).toBeNull();
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets obsolete source selections and discards in-flight results on membership changes', async () => {
+    let teamChanged!: () => void;
+    let finishOld!: (items: typeof timelineItems) => void;
+    let finishNew!: (items: typeof timelineItems) => void;
+    const getTimeline = vi.fn().mockResolvedValueOnce(timelineItems)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishNew = resolve; }));
+    Object.defineProperty(window, 'teamAPI', { configurable: true, value: { onTeamChanged: (callback: () => void) => { teamChanged = callback; return () => {}; } } });
+    Object.defineProperty(window, 'sharedFilesAPI', { configurable: true, value: {
+      getTimeline, getTargets: vi.fn().mockResolvedValueOnce(targets).mockResolvedValue([targets[0]]),
+      getAvailability: async () => ({ available: true, publicAllowed: false }),
+    } });
+    render(<RiverReader />);
+    await screen.findByText('Launch Brief');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit River sources' }));
+    fireEvent.click(screen.getByRole('button', { name: /Design/ }));
+    await waitFor(() => expect(getTimeline).toHaveBeenCalledTimes(2));
+    act(() => { teamChanged(); finishOld(timelineItems); });
+    expect(screen.queryByText('Launch Brief')).toBeNull();
+    await waitFor(() => expect(getTimeline).toHaveBeenLastCalledWith({ scope: 'private', sourceIds: [], limit: 50 }));
+    await act(async () => { finishNew([]); });
+    expect(screen.queryByText('Launch Brief')).toBeNull();
+  });
+
   it('switches public tab and sends private source filters', async () => {
     const getTimeline = vi.fn(async () => timelineItems);
     Object.defineProperty(window, 'sharedFilesAPI', {
@@ -159,6 +225,7 @@ describe('RiverReader', () => {
       value: {
         getTimeline,
         getTargets: vi.fn(async () => targets),
+        getAvailability: vi.fn(async () => ({ available: true, publicAllowed: true })),
       },
     });
 

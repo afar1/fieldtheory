@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AuthManager } from './authManager';
 import { RiverTargetService } from './riverTargetService';
 
@@ -7,6 +10,7 @@ interface MockOptions {
   groups?: unknown[];
   defaults?: unknown[];
   preferences?: unknown[];
+  betaEnabled?: boolean;
 }
 
 function makeAuthManager(options: MockOptions = {}) {
@@ -26,6 +30,7 @@ function makeAuthManager(options: MockOptions = {}) {
       eq(...args: unknown[]) { calls.push({ table, method: 'eq', args }); return query; },
       or(...args: unknown[]) { calls.push({ table, method: 'or', args }); return query; },
       is(...args: unknown[]) { calls.push({ table, method: 'is', args }); return query; },
+      maybeSingle: async () => ({ data: { enabled: options.betaEnabled !== false }, error: null }),
       order: async (...args: unknown[]) => {
         calls.push({ table, method: 'order', args });
         return { data: dataFor(table), error: null };
@@ -35,6 +40,7 @@ function makeAuthManager(options: MockOptions = {}) {
   }
 
   const supabase = {
+    rpc: async () => ({ data: true, error: null }),
     from(table: string) {
       calls.push({ table, method: 'from', args: [] });
       return {
@@ -66,6 +72,18 @@ function makeAuthManager(options: MockOptions = {}) {
 }
 
 describe('RiverTargetService', () => {
+  let tempRoot: string;
+  let originalCachePath: string | undefined;
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'river-targets-test-'));
+    originalCachePath = process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH;
+    process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH = path.join(tempRoot, 'entitlement.json');
+  });
+  afterEach(() => {
+    if (originalCachePath === undefined) delete process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH;
+    else process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH = originalCachePath;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
   it('lists accepted, pending, legacy team, and public targets with defaults separate', async () => {
     const { authManager } = makeAuthManager({
       contacts: [
@@ -157,6 +175,30 @@ describe('RiverTargetService', () => {
       'public:public',
     ]);
     expect(targets.every((target) => target.id !== 'ambiguous_team_scope')).toBe(true);
+  });
+
+  it('lists multiple joined groups, includes the owner as a recipient, and deduplicates migrated legacy teams', async () => {
+    const { authManager } = makeAuthManager({
+      betaEnabled: false,
+      contacts: [{ id: 'c', owner_user_id: 'user-1', contact_user_id: 'user-2', contact_email: 'member@example.com', status: 'accepted' }],
+      groups: [
+        { id: 'group-1', owner_user_id: 'user-1', legacy_owner_user_id: 'user-1', name: 'Design', river_share_group_members: [{ member_user_id: 'user-2', status: 'accepted' }] },
+        { id: 'group-2', owner_user_id: 'owner-2', name: 'Research', river_share_group_members: [{ member_user_id: 'user-1', status: 'accepted' }, { member_user_id: 'pending', status: 'pending' }] },
+      ],
+    });
+    const service = new RiverTargetService(authManager);
+    const targets = await service.listTargets();
+    expect(targets.map((target) => target.id)).toEqual(['group:group-1', 'group:group-2', 'person:user-2']);
+    expect(targets[1]).toMatchObject({ committable: true, recipientUserIds: ['owner-2'], memberCount: 2 });
+    await expect(service.resolveShareTargets([{ kind: 'public', id: 'public:public' }]))
+      .resolves.toMatchObject({ targets: [], recipients: [], error: 'Choose an approved River destination' });
+  });
+
+  it('lets an owner post to a new team before anyone accepts an invitation', async () => {
+    const { authManager } = makeAuthManager({ betaEnabled: false, groups: [{ id: 'new', owner_user_id: 'user-1', name: 'New team', river_share_group_members: [] }] });
+    expect(await new RiverTargetService(authManager).listTargets()).toMatchObject([
+      { id: 'group:new', committable: true, memberCount: 1, recipientUserIds: [] },
+    ]);
   });
 
   it('drops stale defaults that do not match a current target', async () => {

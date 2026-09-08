@@ -8,6 +8,8 @@ import { SharedTeamEntitlementService } from './sharedTeamEntitlementService';
 interface MockEntitlementOptions {
   userId?: string | null;
   enabled?: boolean | null;
+  teamAccess?: boolean;
+  teamError?: { message: string; code?: string };
   error?: { message: string; code?: string } | null;
   throws?: Error | null;
   supabaseMissing?: boolean;
@@ -17,6 +19,10 @@ function makeAuthManager(options: MockEntitlementOptions = {}) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
   const userId = options.userId === undefined ? 'user-1' : options.userId;
   const supabase = options.supabaseMissing ? null : {
+    rpc: vi.fn(async () => {
+      if (options.throws) throw options.throws;
+      return { data: options.teamAccess ?? false, error: options.teamError ?? null };
+    }),
     from(table: string) {
       calls.push({ table, method: 'from', args: [] });
       return {
@@ -65,10 +71,41 @@ describe('SharedTeamEntitlementService', () => {
 
     await expect(new SharedTeamEntitlementService(authManager, { cachePath }).getState()).resolves.toMatchObject({
       allowed: true,
+      publicAllowed: true,
       stale: false,
       userId: 'user-1',
     });
     expect(calls).toContainEqual({ table: 'shared_team_beta_users', method: 'eq', args: ['user_id', 'user-1'] });
+  });
+
+  it('allows private River for a team member without granting Public River, including offline recovery', async () => {
+    const service = new SharedTeamEntitlementService(makeAuthManager({ teamAccess: true }).authManager, { cachePath });
+    await expect(service.getState()).resolves.toMatchObject({ allowed: true, publicAllowed: false, stale: false });
+    const offline = new SharedTeamEntitlementService(makeAuthManager({ throws: new Error('network offline') }).authManager, { cachePath });
+    await expect(offline.getState()).resolves.toMatchObject({ allowed: true, publicAllowed: false, stale: true });
+  });
+
+  it('clears private membership entitlement after verified removal from the last team', async () => {
+    await new SharedTeamEntitlementService(makeAuthManager({ teamAccess: true }).authManager, { cachePath }).getState();
+    await expect(new SharedTeamEntitlementService(makeAuthManager().authManager, { cachePath }).getState())
+      .resolves.toMatchObject({ allowed: false, publicAllowed: false, reason: 'not_entitled' });
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('ignores a result completed after an account change', async () => {
+    let userId = 'user-1';
+    let finish!: (value: { data: boolean; error: null }) => void;
+    const { authManager } = makeAuthManager({ enabled: true });
+    const supabase = authManager.getSupabaseClient()!;
+    vi.spyOn(supabase, 'rpc').mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+    vi.spyOn(authManager, 'getSession').mockImplementation(() => ({ user: { id: userId } }) as never);
+    const service = new SharedTeamEntitlementService(authManager, { cachePath });
+    const pending = service.getState();
+    await Promise.resolve();
+    userId = 'user-2';
+    finish({ data: true, error: null });
+    await expect(pending).resolves.toMatchObject({ allowed: false, publicAllowed: false, userId: 'user-2' });
+    expect(fs.existsSync(cachePath)).toBe(false);
   });
 
   it('returns not entitled for disabled or missing beta rows', async () => {

@@ -13,6 +13,7 @@ export type SharedTeamEntitlementReason =
 
 export interface SharedTeamEntitlementState {
   allowed: boolean;
+  publicAllowed?: boolean;
   reason?: SharedTeamEntitlementReason;
   stale: boolean;
   userId: string | null;
@@ -22,6 +23,7 @@ export interface SharedTeamEntitlementState {
 interface SharedTeamEntitlementCache {
   userId: string;
   allowed: true;
+  publicAllowed: boolean;
   checkedAt: string;
 }
 
@@ -38,6 +40,7 @@ function defaultCachePath(): string {
 function notAuthenticated(): SharedTeamEntitlementState {
   return {
     allowed: false,
+    publicAllowed: false,
     reason: 'not_authenticated',
     stale: false,
     userId: null,
@@ -48,6 +51,7 @@ function notAuthenticated(): SharedTeamEntitlementState {
 function notEntitled(userId: string | null): SharedTeamEntitlementState {
   return {
     allowed: false,
+    publicAllowed: false,
     reason: 'not_entitled',
     stale: false,
     userId,
@@ -58,6 +62,7 @@ function notEntitled(userId: string | null): SharedTeamEntitlementState {
 function lookupFailed(userId: string | null): SharedTeamEntitlementState {
   return {
     allowed: false,
+    publicAllowed: false,
     reason: 'lookup_failed',
     stale: false,
     userId,
@@ -65,9 +70,10 @@ function lookupFailed(userId: string | null): SharedTeamEntitlementState {
   };
 }
 
-function allowedState(userId: string, checkedAt: string, stale: boolean): SharedTeamEntitlementState {
+function allowedState(userId: string, checkedAt: string, stale: boolean, publicAllowed: boolean): SharedTeamEntitlementState {
   return {
     allowed: true,
+    publicAllowed,
     stale,
     userId,
     checkedAt,
@@ -115,6 +121,7 @@ function isContractDeniedError(error: unknown): boolean {
 
 export class SharedTeamEntitlementService {
   private readonly cachePath: string;
+  private generation = 0;
   private cachedState: SharedTeamEntitlementState | null = null;
 
   constructor(
@@ -141,33 +148,48 @@ export class SharedTeamEntitlementService {
       return this.cachedState;
     }
 
-    try {
-      const { data, error } = await supabase
-        .from('shared_team_beta_users')
-        .select('enabled')
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (error) {
-        return this.handleLookupError(userId, error);
-      }
-
-      if ((data as { enabled?: unknown } | null)?.enabled === true) {
-        const checkedAt = new Date().toISOString();
-        this.writeAllowedCache({ userId, allowed: true, checkedAt });
-        this.cachedState = allowedState(userId, checkedAt, false);
-        return this.cachedState;
-      }
-
-      this.clearAllowedCache(userId);
-      this.cachedState = notEntitled(userId);
+    const generation = ++this.generation;
+    const current = () => generation === this.generation
+      && this.authManager.getSession()?.user.id === userId
+      && this.authManager.getSession()?.access_token === session?.access_token;
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => supabase.from('shared_team_beta_users').select('enabled').eq('user_id', userId).maybeSingle()),
+      Promise.resolve().then(() => supabase.rpc('river_team_access')),
+    ]);
+    if (!current()) return this.getCachedState();
+    const beta = results[0].status === 'fulfilled' ? results[0].value : { data: null, error: results[0].reason };
+    const team = results[1].status === 'fulfilled' ? results[1].value : { data: null, error: results[1].reason };
+    const publicAllowed = !beta.error && beta.data?.enabled === true;
+    if (publicAllowed || (!team.error && team.data === true)) {
+      const checkedAt = new Date().toISOString();
+      this.writeAllowedCache({ userId, allowed: true, publicAllowed, checkedAt });
+      this.cachedState = allowedState(userId, checkedAt, false, publicAllowed);
       return this.cachedState;
-    } catch (error) {
-      return this.handleLookupError(userId, error);
     }
+    const errors = [beta.error, team.error].filter(Boolean);
+    if (errors.length) {
+      const error = errors.find(isContractDeniedError) ?? errors[0];
+      let state = this.handleLookupError(userId, error);
+      // Persist an online beta denial so a later offline lookup cannot revive it.
+      if (!beta.error && state.publicAllowed) {
+        state = { ...state, publicAllowed: false };
+        if (state.checkedAt) this.writeAllowedCache({ userId, allowed: true, publicAllowed: false, checkedAt: state.checkedAt });
+      }
+      // A verified membership removal also overrides a membership-only offline grant.
+      if (state.allowed && !team.error && team.data !== true && !state.publicAllowed) {
+        this.clearAllowedCache(userId);
+        state = notEntitled(userId);
+      }
+      this.cachedState = state;
+      return state;
+    }
+    this.clearAllowedCache(userId);
+    this.cachedState = notEntitled(userId);
+    return this.cachedState;
   }
 
   clear(): void {
+    this.generation++;
     this.cachedState = null;
   }
 
@@ -175,7 +197,7 @@ export class SharedTeamEntitlementService {
     if (isOfflineError(error)) {
       const cached = this.readAllowedCache(userId);
       if (cached) {
-        this.cachedState = allowedState(userId, cached.checkedAt, true);
+        this.cachedState = allowedState(userId, cached.checkedAt, true, cached.publicAllowed);
         return this.cachedState;
       }
       this.cachedState = lookupFailed(userId);
@@ -198,7 +220,7 @@ export class SharedTeamEntitlementService {
       if (!fs.existsSync(this.cachePath)) return null;
       const parsed = JSON.parse(fs.readFileSync(this.cachePath, 'utf-8')) as Partial<SharedTeamEntitlementCache>;
       if (parsed.userId === userId && parsed.allowed === true && typeof parsed.checkedAt === 'string') {
-        return { userId, allowed: true, checkedAt: parsed.checkedAt };
+        return { userId, allowed: true, publicAllowed: parsed.publicAllowed === true, checkedAt: parsed.checkedAt };
       }
     } catch (error) {
       log.warn('Failed to read shared team entitlement cache:', error);

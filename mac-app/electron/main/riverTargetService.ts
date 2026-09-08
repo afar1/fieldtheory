@@ -1,3 +1,4 @@
+import { SharedTeamEntitlementService } from './sharedTeamEntitlementService';
 import type { AuthManager } from './authManager';
 import { createLogger } from './logger';
 
@@ -29,6 +30,7 @@ export interface RiverTarget {
   recipientUserIds: string[];
   memberCount?: number;
   legacyTeam?: boolean;
+  legacyOwnerUserId?: string;
 }
 
 export interface RiverResolvedAudience {
@@ -74,6 +76,7 @@ interface GroupRow {
   id: string;
   owner_user_id: string;
   name: string | null;
+  legacy_owner_user_id?: string | null;
   deleted_at?: string | null;
   river_share_group_members?: GroupMemberRow[] | null;
 }
@@ -108,24 +111,31 @@ function isMissingContactUserIdError(error: unknown): boolean {
 }
 
 export class RiverTargetService {
-  constructor(private readonly authManager: AuthManager) {}
+  constructor(
+    private readonly authManager: AuthManager,
+    private readonly entitlement = new SharedTeamEntitlementService(authManager),
+  ) {}
 
   async listTargets(query = ''): Promise<RiverTarget[]> {
     const session = this.authManager.getSession();
     const userId = session?.user?.id;
     if (!userId) return [];
 
-    const [contactTargets, groupTargets, defaults, preferences] = await Promise.all([
+    const [contactTargets, groupTargets, defaults, preferences, entitlement] = await Promise.all([
       this.contactTargets(),
       this.groupTargets(),
       this.defaultDestinationKeys(),
       this.sourcePreferenceMap(),
+      this.entitlement.getState(),
     ]);
+    if (this.authManager.getSession()?.user.id !== userId) return [];
+    const migratedOwners = new Set(groupTargets.map((target) => target.legacyOwnerUserId).filter(Boolean));
+    const groupIds = new Set(groupTargets.map((target) => target.id));
 
     const targets = [
       ...groupTargets,
-      ...contactTargets,
-      this.publicTarget(),
+      ...contactTargets.filter((target) => !target.legacyTeam || (!migratedOwners.has(target.targetId) && !groupIds.has(target.id))),
+      ...(entitlement.publicAllowed === true ? [this.publicTarget()] : []),
     ].map((target) => ({
       ...target,
       isDefault: defaults.has(targetKey(target.kind, target.targetId)),
@@ -329,16 +339,17 @@ export class RiverTargetService {
       const groupQuery = supabase.from('river_share_groups');
       if (!groupQuery?.select) return [];
       const selectedGroups = groupQuery
-        .select('id, owner_user_id, name, deleted_at, river_share_group_members(member_user_id, status)');
+        .select('id, owner_user_id, name, legacy_owner_user_id, deleted_at, river_share_group_members(member_user_id, status)');
       if (!selectedGroups?.is) return [];
       const { data, error } = await selectedGroups
         .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (error) return [];
       return ((data ?? []) as GroupRow[]).map((group) => {
-        const acceptedMembers = (group.river_share_group_members ?? [])
+        const acceptedMembers = [...new Set([group.owner_user_id, ...(group.river_share_group_members ?? [])
           .filter((member) => member.status === 'accepted' && member.member_user_id)
-          .map((member) => member.member_user_id as string);
+          .map((member) => member.member_user_id as string)])];
+        const isMember = acceptedMembers.includes(userId);
         const recipients = acceptedMembers.filter((memberUserId) => memberUserId !== userId);
         return {
           id: targetKey('group', group.id),
@@ -346,8 +357,9 @@ export class RiverTargetService {
           targetId: group.id,
           label: group.name?.trim() || 'Group',
           detail: `${acceptedMembers.length} ${acceptedMembers.length === 1 ? 'member' : 'members'}`,
-          status: recipients.length > 0 || group.owner_user_id === userId ? 'accepted' : 'unavailable',
-          committable: recipients.length > 0,
+          status: isMember ? 'accepted' : 'unavailable',
+          committable: isMember,
+          legacyOwnerUserId: group.legacy_owner_user_id ?? undefined,
           recipientUserIds: recipients,
           memberCount: acceptedMembers.length,
         };

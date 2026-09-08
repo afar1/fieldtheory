@@ -1,3 +1,4 @@
+import type { RiverTeamAction, RiverTeamResult, RiverTeamsState } from '../../electron/shared/riverTeams';
 // =============================================================================
 // Window Type Declarations - Extend the Window interface with our APIs.
 // =============================================================================
@@ -2126,6 +2127,7 @@ interface SharedFilePresenceUser {
 
 interface SharedFilesAvailability {
   available: boolean;
+  publicAllowed?: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
   reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
@@ -2172,6 +2174,7 @@ type SharedTeamUnavailableReason =
 
 interface SharedTeamEntitlementState {
   allowed: boolean;
+  publicAllowed?: boolean;
   reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
   stale: boolean;
   userId: string | null;
@@ -2211,6 +2214,8 @@ interface SharedTeamMutationResult {
 }
 
 interface TeamAPI {
+  listTeams: () => Promise<RiverTeamsState>;
+  mutateTeam: (action: RiverTeamAction) => Promise<RiverTeamResult>;
   getEntitlement: () => Promise<SharedTeamEntitlementState>;
   getState: () => Promise<SharedTeamState>;
   inviteMember: (email: string) => Promise<SharedTeamMutationResult>;

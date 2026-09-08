@@ -419,6 +419,7 @@ export default function RiverReader({
 }: RiverReaderProps) {
   const { theme } = useTheme();
   const [scope, setScope] = useState<RiverTimelineScope>('private');
+  const [membershipRevision, setMembershipRevision] = useState(0);
   const [items, setItems] = useState<RiverTimelineItem[]>([]);
   const [targets, setTargets] = useState<RiverTarget[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
@@ -428,6 +429,7 @@ export default function RiverReader({
   const [error, setError] = useState<string | null>(null);
   const [availability, setAvailability] = useState<SharedFilesAvailability | null>(null);
   const hasLoadedRef = useRef(false);
+  const requestSequence = useRef(0);
 
   const sourceTargets = useMemo(() => (
     targets.filter((target) => target.status === 'accepted' && target.kind !== 'public')
@@ -483,8 +485,36 @@ export default function RiverReader({
     };
 
   useEffect(() => {
+    const invalidate = () => {
+      // Invalidate before React renders again, so a response already queued on
+      // the old account or membership cannot restore its cards.
+      requestSequence.current += 1;
+      hasLoadedRef.current = false;
+      setItems([]);
+      setTargets([]);
+      setAvailability(null);
+      setSelectedSourceIds([]);
+      setExpandedItemIds([]);
+      setError(null);
+      setMembershipRevision((revision) => revision + 1);
+    };
+    const unsubscribeTeam = window.teamAPI?.onTeamChanged?.(invalidate);
+    const unsubscribeAuth = window.authAPI?.onSessionChanged?.(invalidate);
+    return () => {
+      requestSequence.current += 1;
+      unsubscribeTeam?.();
+      unsubscribeAuth?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (availability?.publicAllowed !== true && scope === 'public') setScope('private');
+  }, [availability?.publicAllowed, scope]);
+
+  useEffect(() => {
     if (!active) return;
     let cancelled = false;
+    const sequence = ++requestSequence.current;
     setLoading(!hasLoadedRef.current);
     setError(null);
     void Promise.all([
@@ -493,7 +523,7 @@ export default function RiverReader({
       window.sharedFilesAPI?.getAvailability?.() ?? Promise.resolve(null),
     ])
       .then(([nextItems, nextTargets, nextAvailability]) => {
-        if (cancelled) return;
+        if (cancelled || sequence !== requestSequence.current) return;
         setItems(nextItems ?? []);
         setTargets(nextTargets ?? []);
         setAvailability(nextAvailability);
@@ -501,18 +531,18 @@ export default function RiverReader({
       })
       .catch((err) => {
         console.warn('[RiverReader] timeline load failed:', err);
-        if (!cancelled) {
+        if (!cancelled && sequence === requestSequence.current) {
           if (!hasLoadedRef.current) setItems([]);
           setError('River timeline could not load. Cached River files remain available in the sidebar.');
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && sequence === requestSequence.current) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [active, scope, timelineSourceIds]);
+  }, [active, scope, timelineSourceIds, membershipRevision]);
 
   const toggleSource = (targetId: string) => {
     const allSourceIds = filterTargets.map((target) => target.id);
@@ -723,7 +753,7 @@ export default function RiverReader({
             {([
               ['private', 'Private'],
               ['public', 'Public'],
-            ] as const).map(([id, label]) => {
+            ] as const).filter(([id]) => id !== 'public' || availability?.publicAllowed === true).map(([id, label]) => {
               const selected = scope === id;
               return (
                 <button

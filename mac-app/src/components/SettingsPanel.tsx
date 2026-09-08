@@ -18,14 +18,13 @@ import LauncherSettings from './LauncherSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
 import LocalModelSettings from './LocalModelSettings';
-import TeamSettings from './TeamSettings';
+import RiverTeamsSettings from './RiverTeamsSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, themeStylePresets, AccentPreset, ThemeStylePreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
-import { buildTeamSettingsState } from '../utils/teamSettingsState';
 import { SETTINGS_CARD_GAP, getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
@@ -62,10 +61,9 @@ type SettingsSection =
 
 type FieldTheoryWindowMode = 'panel' | 'app';
 type SettingsStyles = Record<string, CSSProperties>;
-type TeamServiceState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getState']>>;
+const teamsUnavailable = async () => ({ teams: [], incomingInvites: [], error: 'Team settings are unavailable in this window.' });
+const teamMutationUnavailable = async () => ({ ok: false, error: 'Team settings are unavailable in this window.' });
 type TeamEntitlementState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getEntitlement']>>;
-type TeamMutationResult = Awaited<ReturnType<NonNullable<Window['teamAPI']>['inviteMember']>>;
-const TEAM_SETTINGS_BACKGROUND_REFRESH_MS = 30000;
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -98,7 +96,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
-  'team': 'Team',
+  'team': 'Teams',
   'voice-requests': 'Voice requests',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
@@ -138,7 +136,7 @@ const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
   'commands': 'Markdown command files Field Theory loads from disk.',
   'sounds': 'Sound cues for recording and app events.',
   'stats': 'Usage metrics from this installation.',
-  'team': 'Invite teammates and manage River membership.',
+  'team': 'Create teams, accept invitations, and manage River membership.',
   'voice-requests': 'Connect synced voice requests to Codex on this Mac.',
   'terminal-commands': 'Terminal command allowlist rules.',
   'hot-mic': 'Always-listening voice controls and hotkey behavior.',
@@ -316,10 +314,7 @@ export default function SettingsPanel({
   const [scratchpadHotkey, setScratchpadHotkey] = useState('Control+Option+Command+Space');
   const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
   const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
-  const [teamServiceState, setTeamServiceState] = useState<TeamServiceState | null>(null);
   const [teamEntitlementState, setTeamEntitlementState] = useState<TeamEntitlementState | null>(null);
-  const [teamLoading, setTeamLoading] = useState(false);
-  const [teamError, setTeamError] = useState<string | null>(null);
 
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
@@ -344,21 +339,6 @@ export default function SettingsPanel({
     setTeamEntitlementState(entitlement ?? null);
   }, []);
 
-  const loadTeamState = useCallback(async (options: { showLoading?: boolean } = {}) => {
-    if (!window.teamAPI?.getState) return;
-    const showLoading = options.showLoading ?? true;
-    if (showLoading) setTeamLoading(true);
-    try {
-      const nextState = await window.teamAPI.getState();
-      setTeamServiceState(nextState);
-      setTeamError(null);
-    } catch {
-      setTeamError('Could not load team settings.');
-    } finally {
-      if (showLoading) setTeamLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     void loadSharedFilesAvailability().catch(() => {
@@ -370,13 +350,12 @@ export default function SettingsPanel({
     const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
       void loadSharedFilesAvailability();
       void loadTeamEntitlement();
-      void loadTeamState();
     });
     return () => {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
+  }, [loadSharedFilesAvailability, loadTeamEntitlement]);
 
   const {
     session,
@@ -772,26 +751,11 @@ export default function SettingsPanel({
 
   useEffect(() => {
     if (!session?.user?.id) {
-      setTeamServiceState(null);
       setTeamEntitlementState(null);
-      setTeamError(null);
       return;
     }
     void loadTeamEntitlement();
-    void loadTeamState();
-  }, [loadTeamEntitlement, loadTeamState, session?.user?.id]);
-
-  useEffect(() => {
-    if (selectedSection !== 'team' || !session?.user?.id) return;
-    void loadTeamState();
-    void loadTeamEntitlement();
-    const interval = window.setInterval(() => {
-      void loadTeamState({ showLoading: false });
-      void loadTeamEntitlement();
-      void loadSharedFilesAvailability();
-    }, TEAM_SETTINGS_BACKGROUND_REFRESH_MS);
-    return () => window.clearInterval(interval);
-  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState, selectedSection, session?.user?.id]);
+  }, [loadTeamEntitlement, session?.user?.id]);
 
   // Fetch callsign when session changes
   useEffect(() => {
@@ -1306,45 +1270,16 @@ export default function SettingsPanel({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetSharedFileToggleHotkey, handleSetHotMicHotkey]);
 
-  const handleTeamMutation = useCallback(async (mutation: () => Promise<TeamMutationResult | undefined> | undefined): Promise<boolean> => {
-    setTeamError(null);
-    const result = await mutation();
-    if (!result) {
-      setTeamError('Team settings are unavailable in this window.');
-      return false;
-    }
-    if (result && !result.ok) {
-      setTeamError(result.error ?? 'Team update failed.');
-      return false;
-    }
-    await loadTeamState();
-    await loadTeamEntitlement();
-    await loadSharedFilesAvailability();
-    return true;
-  }, [loadSharedFilesAvailability, loadTeamEntitlement, loadTeamState]);
-
-  const teamSettingsState = buildTeamSettingsState({
-    loading: teamLoading,
-    error: teamError,
-    teamState: teamServiceState,
-    currentUser: {
-      id: session?.user?.id,
-      email: session?.user?.email,
-      displayName: session?.user?.user_metadata?.full_name as string | undefined,
-      initials: callsign,
-    },
-  });
-
   const teamFeaturesVisible = teamEntitlementState?.allowed === true;
-  const visibleSections = teamFeaturesVisible
+  const visibleSections = session?.user?.id
     ? SECTIONS_ORDER
     : SECTIONS_ORDER.filter((section) => section !== 'team');
 
   useEffect(() => {
-    if (selectedSection === 'team' && teamEntitlementState && !teamFeaturesVisible) {
+    if (selectedSection === 'team' && !session?.user?.id) {
       setSelectedSection('account');
     }
-  }, [selectedSection, teamEntitlementState, teamFeaturesVisible]);
+  }, [selectedSection, session?.user?.id]);
 
   return (
     <div style={styles.settingsLayout}>
@@ -2237,14 +2172,15 @@ export default function SettingsPanel({
       )}
 
       {/* Team Section */}
-      {selectedSection === 'team' && teamFeaturesVisible && (
+      {selectedSection === 'team' && session?.user?.id && (
       <div style={styles.sectionStack}>
-        <TeamSettings
-          state={teamSettingsState}
-          onInviteMember={(email) => handleTeamMutation(() => window.teamAPI?.inviteMember(email))}
-          onRespondToInvite={(contactId, accept) => handleTeamMutation(() => window.teamAPI?.respondToInvite(contactId, accept))}
-          onRemoveMember={(contactId) => handleTeamMutation(() => window.teamAPI?.removeMember(contactId))}
-          onLeaveTeam={() => handleTeamMutation(() => window.teamAPI?.leaveTeam())}
+        <RiverTeamsSettings
+          key={session.user.id}
+          currentUserId={session.user.id}
+          loadTeams={window.teamAPI?.listTeams ?? teamsUnavailable}
+          mutateTeam={window.teamAPI?.mutateTeam ?? teamMutationUnavailable}
+          subscribe={window.teamAPI?.onTeamChanged}
+          onChanged={loadTeamEntitlement}
         />
       </div>
       )}

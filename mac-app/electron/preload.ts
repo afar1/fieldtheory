@@ -1,3 +1,4 @@
+import type { RiverTeamAction, RiverTeamResult, RiverTeamsState } from './shared/riverTeams';
 import type { LinkRelationRequest, LinkRelationSnapshot } from './shared/libraryLinkRelations';
 import type { VoiceWorkAPI, VoiceWorkState } from './shared/voiceWork';
 import { contextBridge, ipcRenderer } from 'electron';
@@ -4482,6 +4483,7 @@ type SharedFilePresenceUser = {
 
 type SharedFilesAvailability = {
   available: boolean;
+  publicAllowed?: boolean;
   canWrite: boolean;
   hasTeamMembers: boolean;
   reason?: 'not_authenticated' | 'not_entitled' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
@@ -4555,6 +4557,7 @@ type SharedTeamUnavailableReason =
 
 interface SharedTeamEntitlementState {
   allowed: boolean;
+  publicAllowed?: boolean;
   reason?: 'not_authenticated' | 'not_entitled' | 'lookup_failed';
   stale: boolean;
   userId: string | null;
@@ -4594,6 +4597,8 @@ interface SharedTeamMutationResult {
 }
 
 const teamAPI = {
+  listTeams: (): Promise<RiverTeamsState> => ipcRenderer.invoke('team:listTeams'),
+  mutateTeam: (action: RiverTeamAction): Promise<RiverTeamResult> => ipcRenderer.invoke('team:mutateTeam', action),
   getEntitlement: (): Promise<SharedTeamEntitlementState> =>
     ipcRenderer.invoke('team:getEntitlement'),
   getState: (): Promise<SharedTeamState> =>

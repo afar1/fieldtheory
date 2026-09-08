@@ -63,8 +63,13 @@ function writeCachedRiverFile(root: string, fileName: string, sharedId: string, 
 function makeTimelineSupabase(dataByTable: Record<string, unknown[]>) {
   const operations: Array<{ table: string; op: string; args: unknown[] }> = [];
   const supabase = {
+    rpc: async (name: string) => {
+      operations.push({ table: name, op: 'rpc', args: [] });
+      return { data: (dataByTable.river_private_document_ids ?? dataByTable.river_document_audience?.map((row) => (row as { document_id: string }).document_id) ?? []), error: null };
+    },
     from(table: string) {
       const builder = {
+        maybeSingle: async () => ({ data: { enabled: true }, error: null }),
         select(...args: unknown[]) {
           operations.push({ table, op: 'select', args });
           return this;
@@ -108,9 +113,12 @@ describe('SharedSyncService cache behavior', () => {
   let originalLibraryDir: string | undefined;
   let originalSharedFilesCacheDir: string | undefined;
   let originalSharedFilesDir: string | undefined;
+  let originalEntitlementCachePath: string | undefined;
 
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-sync-service-test-'));
+    originalEntitlementCachePath = process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH;
+    process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH = path.join(tempRoot, 'entitlement.json');
     originalLibraryDir = process.env.FT_LIBRARY_DIR;
     originalSharedFilesCacheDir = process.env.FT_SHARED_FILES_CACHE_DIR;
     originalSharedFilesDir = process.env.FT_SHARED_FILES_DIR;
@@ -120,6 +128,8 @@ describe('SharedSyncService cache behavior', () => {
   });
 
   afterEach(() => {
+    if (originalEntitlementCachePath === undefined) delete process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH;
+    else process.env.FT_SHARED_TEAM_ENTITLEMENT_CACHE_PATH = originalEntitlementCachePath;
     if (originalLibraryDir === undefined) delete process.env.FT_LIBRARY_DIR;
     else process.env.FT_LIBRARY_DIR = originalLibraryDir;
     if (originalSharedFilesCacheDir === undefined) delete process.env.FT_SHARED_FILES_CACHE_DIR;
@@ -791,6 +801,34 @@ describe('SharedSyncService cache behavior', () => {
     });
     expect(fs.existsSync(returnedCachePath)).toBe(true);
     expect(fs.existsSync(omittedCachePath)).toBe(true);
+  });
+
+  it('revokes only managed cache and prevents an older inventory from restoring removed access', async () => {
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const cached = writeCachedRiverFile(root, 'Team AF.md', 'team-doc');
+    const privateCopy = path.join(process.env.FT_LIBRARY_DIR!, 'My copy.md');
+    fs.copyFileSync(cached, privateCopy);
+    let finishOld!: (result: { data: unknown[]; count: number; error: null }) => void;
+    let calls = 0;
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        is() {
+          calls++;
+          return calls === 1 ? new Promise((resolve) => { finishOld = resolve; }) : Promise.resolve({ data: [], count: 0, error: null });
+        },
+      }),
+    };
+    const authManager = { getSupabaseClient: () => supabase, getSession: () => ({ user: { id: 'member' } }) } as unknown as AuthManager;
+    const teamService = { getTeamState: async () => ({ available: false, currentTeamScopeUserId: null, reason: 'no_team_members', members: [], pendingIncoming: [], pendingOutgoing: [] }) };
+    const service = new SharedSyncService(authManager, teamService as never);
+    const oldSync = service.syncOnce();
+    await expect(service.syncOnce()).resolves.toMatchObject({ removed: 1, errors: [] });
+    finishOld({ data: [{ ...makeTimelineRow('team-doc', 'owner'), kind: 'document', path: 'Docs/Team.md' }], count: 1, error: null });
+    await expect(oldSync).resolves.toMatchObject({ written: 0 });
+    expect(fs.existsSync(cached)).toBe(false);
+    expect(fs.readFileSync(privateCopy, 'utf-8')).toContain('Cached body');
   });
 
   it('preserves cache files when a successful inventory response has no row array', async () => {
@@ -2038,9 +2076,9 @@ describe('SharedSyncService cache behavior', () => {
     })).resolves.toHaveLength(2);
 
     expect(operations).toContainEqual({
-      table: 'river_document_audience',
-      op: 'eq',
-      args: ['recipient_user_id', 'user-1'],
+      table: 'river_private_document_ids',
+      op: 'rpc',
+      args: [],
     });
     expect(operations).toContainEqual({
       table: 'river_documents',
@@ -2048,6 +2086,31 @@ describe('SharedSyncService cache behavior', () => {
       args: ['created_by.eq.user-1,id.in.(shared-granted)'],
     });
     expect(operations.some((operation) => operation.table === 'river_document_targets')).toBe(false);
+  });
+
+  it('includes historical team posts without a snapshot grant to the new member', async () => {
+    const { supabase, operations } = makeTimelineSupabase({
+      river_private_document_ids: ['before-join'],
+      river_document_audience: [],
+      river_documents: [makeTimelineRow('before-join', 'owner')],
+    });
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'new-member' } }),
+    } as unknown as AuthManager;
+    await expect(new SharedSyncService(authManager, {} as SharedTeamService).getTimeline({ scope: 'private', sourceIds: [], limit: 10 }))
+      .resolves.toMatchObject([{ documentId: 'before-join' }]);
+    expect(operations).toContainEqual({ table: 'river_documents', op: 'or', args: ['created_by.eq.new-member,id.in.(before-join)'] });
+    expect(operations.some((operation) => operation.table === 'river_document_audience')).toBe(false);
+  });
+
+  it('does not fetch or fall back to Public River for a membership-only account', async () => {
+    const { supabase, operations } = makeTimelineSupabase({ river_documents: [makeTimelineRow('public')] });
+    const authManager = { getSupabaseClient: () => supabase, getSession: () => ({ user: { id: 'member' } }) } as unknown as AuthManager;
+    const entitlement = { getState: async () => ({ allowed: true, publicAllowed: false }) };
+    const service = new SharedSyncService(authManager, {} as SharedTeamService, undefined, entitlement as never);
+    await expect(service.getTimeline({ scope: 'public', sourceIds: [], limit: 10 })).resolves.toEqual([]);
+    expect(operations).toEqual([]);
   });
 
   it('includes Old River documents in the default private timeline', async () => {

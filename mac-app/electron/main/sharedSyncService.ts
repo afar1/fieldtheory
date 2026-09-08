@@ -1,3 +1,4 @@
+import { SharedTeamEntitlementService } from './sharedTeamEntitlementService';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -307,11 +308,13 @@ export class SharedSyncService extends EventEmitter {
   private remoteSyncInFlight = false;
   private remoteSyncQueued = false;
   private disposed = false;
+  private syncGeneration = 0;
 
   constructor(
     authManager: AuthManager,
     sharedTeamService = new SharedTeamService(authManager),
     riverTargetService = new RiverTargetService(authManager),
+    private readonly entitlement = new SharedTeamEntitlementService(authManager),
   ) {
     super();
     this.authManager = authManager;
@@ -512,6 +515,7 @@ export class SharedSyncService extends EventEmitter {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.syncGeneration++;
     await this.clearPresence();
     await this.stopRemoteChangeSync();
   }
@@ -1030,6 +1034,7 @@ export class SharedSyncService extends EventEmitter {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!session?.user?.id) return [];
+    if (query.scope === 'public' && (await this.entitlement.getState()).publicAllowed !== true) return [];
     const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 50)));
 
     if (supabase) {
@@ -1044,12 +1049,14 @@ export class SharedSyncService extends EventEmitter {
           ? await this.canonicalTimelineItems(supabase, session.user.id, query.scope, requestedTargets, limit)
           : [];
         const legacyItems = includeLegacy ? await this.legacyTimelineItems(limit) : [];
+        if (this.authManager.getSession()?.user.id !== session.user.id) return [];
         return this.mergeTimelineItems(canonicalItems, legacyItems, limit);
       } catch {
         // Fall through to local cache while offline or while the remote schema is unavailable.
       }
     }
 
+    if (this.authManager.getSession()?.user.id !== session.user.id) return [];
     return this.timelineItemsFromCache(limit, query.scope);
   }
 
@@ -1087,6 +1094,10 @@ export class SharedSyncService extends EventEmitter {
     const session = this.authManager.getSession();
     const result = { written: 0, removed: 0, created: 0, errors: [] as string[] };
     if (!supabase || !session?.user?.id) return result;
+    const generation = ++this.syncGeneration;
+    const current = () => generation === this.syncGeneration
+      && this.authManager.getSession()?.user.id === session.user.id
+      && this.authManager.getSession()?.access_token === session.access_token;
     const root = sharedFilesRoot();
     const createdRoot = !fs.existsSync(root);
     ensureDir(root);
@@ -1111,6 +1122,7 @@ export class SharedSyncService extends EventEmitter {
       result.errors.push(err instanceof Error ? err.message : String(err));
     }
 
+    if (!current()) return result;
     const activeIds = new Set<string>();
     let currentUserCallsign: Promise<string | null> | null = null;
     for (const row of data as RiverDocumentRow[]) {
@@ -1121,6 +1133,7 @@ export class SharedSyncService extends EventEmitter {
           const callsign = await currentUserCallsign;
           if (callsign) cacheRow = { ...row, author_callsign: callsign };
         }
+        if (!current()) return result;
         this.writeRowToCache(cacheRow);
         activeIds.add(row.id);
         result.written++;
@@ -1130,7 +1143,8 @@ export class SharedSyncService extends EventEmitter {
       }
     }
 
-    const legacyInventoryComplete = await this.syncLegacyRows(result, activeIds);
+    const legacyInventoryComplete = await this.syncLegacyRows(result, activeIds, current);
+    if (!current()) return result;
     if (canonicalInventoryComplete && legacyInventoryComplete) {
       result.removed = this.removeStaleCacheFiles(activeIds);
     }
@@ -1193,6 +1207,7 @@ export class SharedSyncService extends EventEmitter {
   private async syncLegacyRows(
     result: { written: number; removed: number; created: number; errors: string[] },
     activeIds: Set<string>,
+    current: () => boolean,
   ): Promise<boolean> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
@@ -1218,6 +1233,7 @@ export class SharedSyncService extends EventEmitter {
       return false;
     }
 
+    if (!current()) return false;
     const hasRows = Array.isArray(response.data);
     const rows = Array.isArray(response.data) ? response.data : [];
     let inventoryComplete = false;
@@ -1393,15 +1409,13 @@ export class SharedSyncService extends EventEmitter {
     supabase: SupabaseClient,
     userId: string,
   ): Promise<Set<string>> {
-    const { data, error } = await supabase
-      .from('river_document_audience')
-      .select('document_id')
-      .eq('recipient_user_id', userId)
-      .is('revoked_at', null);
+    const { data, error } = await supabase.rpc('river_private_document_ids');
     if (error) throw error;
-    return new Set(((data ?? []) as RiverDocumentAudienceRow[])
-      .map((row) => row.document_id)
-      .filter(Boolean));
+    if (!Array.isArray(data) || !data.every((id) => typeof id === 'string')) {
+      throw new Error('Private River inventory was invalid');
+    }
+    if (this.authManager.getSession()?.user.id !== userId) throw new Error('Account changed');
+    return new Set(data);
   }
 
   private async documentIdsForTargetRows(

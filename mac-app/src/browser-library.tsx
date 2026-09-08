@@ -1,3 +1,4 @@
+import type { RiverTeamAction, RiverTeamResult, RiverTeamsState } from '../electron/shared/riverTeams';
 import type { LinkRelationRequest, LinkRelationSnapshot } from '../electron/shared/libraryLinkRelations';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -1410,6 +1411,12 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
   });
 
   window.teamAPI = {
+    listTeams: async (): Promise<RiverTeamsState> => (
+      await request<{ state: RiverTeamsState }>('/native/team/list')
+    ).state,
+    mutateTeam: async (action: RiverTeamAction): Promise<RiverTeamResult> => (
+      await request<{ result: RiverTeamResult }>('/native/team/mutate', { method: 'POST', json: action })
+    ).result,
     getEntitlement: async () => (
       await request<{ entitlement: unknown }>('/native/team/entitlement')
     ).entitlement,

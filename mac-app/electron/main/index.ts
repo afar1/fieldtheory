@@ -153,6 +153,9 @@ import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type RiverTimelineQuery, type SharedFileAudienceUpdateInput, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { parseSharedFileFrontmatter } from './sharedFiles';
 import { isMoveIntoRiver, moveLibraryFileIntoRiver } from './sharedMoveToRiver';
+import { RiverTeamService } from './riverTeamService';
+import { RiverTargetService } from './riverTargetService';
+import type { RiverTeamResult, RiverTeamsState } from '../shared/riverTeams';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { SharedTeamEntitlementService, type SharedTeamEntitlementState } from './sharedTeamEntitlementService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
@@ -3553,6 +3556,8 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
         return sharedSyncService.setPinned(filePath, pinned);
       },
       getTeamEntitlement: async () => getSharedFeatureEntitlement(),
+      listRiverTeams,
+      mutateRiverTeam,
       initializeCommands: async () => {
         await commandsManager?.initialize();
       },
@@ -4027,6 +4032,9 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
 let librarySyncService: LibrarySyncService | null = null;
 let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
+let riverTeamService: RiverTeamService | null = null;
+let riverTeamUserId: string | null = null;
+let stopRiverTeamEvents: (() => void) | null = null;
 let sharedSyncService: SharedSyncService | null = null;
 let sharedTeamEntitlementService: SharedTeamEntitlementService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
@@ -4923,12 +4931,15 @@ function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
   availability: T,
   entitlement: SharedTeamEntitlementState,
 ): T {
-  return entitlement.stale && availability.stale !== true
-    ? { ...availability, stale: true }
-    : availability;
+  return {
+    ...availability,
+    publicAllowed: entitlement.publicAllowed === true,
+    ...(entitlement.stale ? { stale: true } : {}),
+  };
 }
 
 function refreshFieldTheorySyncServices(): void {
+  getRiverTeamService();
   if (!canUseSharedFeatures()) {
     clearPendingSharedFilesSync();
     void sharedSyncService?.dispose();
@@ -4939,7 +4950,8 @@ function refreshFieldTheorySyncServices(): void {
       sharedTeamService = new SharedTeamService(authManager);
     }
     if (!sharedSyncService && authManager) {
-      sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
+      const entitlement = getSharedTeamEntitlementService() ?? undefined;
+      sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined, new RiverTargetService(authManager, entitlement), entitlement);
       sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
       sharedSyncService.on('pinsChanged', broadcastSharedFilePinsChanged);
       sharedSyncService.on('cacheChanged', () => {
@@ -5028,6 +5040,50 @@ function broadcastSharedFilePinsChanged(): void {
       window.webContents.send('sharedFiles:pinsChanged');
     }
   });
+}
+
+function getRiverTeamService(): RiverTeamService | null {
+  const userId = authManager?.getSession()?.user?.id ?? null;
+  if (riverTeamUserId !== userId) {
+    stopRiverTeamEvents?.();
+    stopRiverTeamEvents = null;
+    riverTeamService = null;
+    riverTeamUserId = userId;
+  }
+  if (!riverTeamService && authManager && userId) {
+    riverTeamService = new RiverTeamService(authManager);
+    stopRiverTeamEvents = riverTeamService.subscribe(() => {
+      void refreshRiverMembership(userId).catch((error) => log.warn('Team refresh failed:', error));
+    });
+  }
+  return riverTeamService;
+}
+
+async function refreshRiverMembership(userId: string): Promise<void> {
+  if (authManager?.getSession()?.user?.id !== userId) return;
+  // Purge revoked managed River files before the last membership disables sync.
+  await sharedSyncService?.syncOnce();
+  if (authManager?.getSession()?.user?.id !== userId) return;
+  await getSharedFeatureEntitlement();
+  if (authManager?.getSession()?.user?.id !== userId) return;
+  refreshFieldTheorySyncServices();
+  broadcastTeamChanged();
+  librarianManager?.emit('library:changed');
+  void syncSharedFilesAndBroadcastChanges();
+}
+
+async function listRiverTeams(): Promise<RiverTeamsState> {
+  return getRiverTeamService()?.listTeams() ?? { teams: [], incomingInvites: [], error: 'Sign in to manage teams' };
+}
+
+async function mutateRiverTeam(action: unknown): Promise<RiverTeamResult> {
+  if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+  const userId = authManager?.getSession()?.user?.id;
+  const service = getRiverTeamService();
+  if (!service || !userId) return { ok: false, error: 'Sign in to manage teams' };
+  const result = await service.mutateTeam(action);
+  if (result.ok) await refreshRiverMembership(userId);
+  return result;
 }
 
 function broadcastTeamChanged(): void {
@@ -9425,6 +9481,19 @@ function setupLibrarianIPCHandlers(): void {
   // ===========================================================================
 
   ipcMain.handle('team:getEntitlement', async () => getSharedFeatureEntitlement());
+  const requireTeamSettingsSender = (event: Electron.IpcMainInvokeEvent) => {
+    assertVoiceWorkSender(event, clipboardHistoryWindow?.getWindow() ?? null, {
+      appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL,
+    });
+  };
+  ipcMain.handle('team:listTeams', async (event) => {
+    requireTeamSettingsSender(event);
+    return listRiverTeams();
+  });
+  ipcMain.handle('team:mutateTeam', async (event, action: unknown) => {
+    requireTeamSettingsSender(event);
+    return mutateRiverTeam(action);
+  });
 
   ipcMain.handle('team:getState', async () => {
     const entitlement = await getSharedFeatureEntitlement();

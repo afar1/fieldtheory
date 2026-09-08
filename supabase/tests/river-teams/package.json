@@ -1,0 +1,7 @@
+{
+  "name": "field-theory-river-team-backend-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test river_multiple_teams.test.mjs" },
+  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
+}
