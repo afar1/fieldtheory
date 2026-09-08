@@ -1,5 +1,7 @@
 # Voice Settings readiness repair
 
+This is the historical `0.3.47-voice.2` repair/delivery receipt. The user later installed it and authorized [production activation](VOICE_PRODUCTION_ACTIVATION.md), where the repaired Settings behavior was observed. The next [combined Inbox candidate](VOICE_COMBINED_PREVIEW_SCOPE.md) has separate source and acceptance requirements; this artifact does not verify those changes.
+
 Version `0.3.47-voice.2` fixes the local readiness failure in `0.3.47-voice.1`. It does not activate the hosted Voice delivery migration.
 
 ## Observed failure and cause
@@ -18,7 +20,7 @@ The fix consistently uses `clipboardHistoryWindow.getWindow()` for authorization
 - The packaged main process, guard, and shared development URL helper match their compiled source bytes. Package and both bundle version fields are `0.3.47-voice.2`.
 - Independent review found no remaining host, frame, or wiring mismatch.
 
-The requested deliverable is a local signed/notarized DMG. No candidate installation, mounting, runtime launch, public distribution, or cloud activation is authorized. Visible post-fix behavior must be checked after the user installs the replacement; source and package checks do not substitute for that observation.
+At the repair delivery stage, the requested deliverable was a local signed/notarized DMG. No agent installation, mounting, runtime launch, public distribution, or cloud activation was authorized at that stage. Visible post-fix behavior still required the user's installation at that stage; the later activation receipt records that observation. Source and package checks alone did not substitute for it.
 
 ## Delivered replacement
 

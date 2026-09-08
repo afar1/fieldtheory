@@ -1,12 +1,14 @@
 # Local Voice package verification
 
+The `.voice.1` and `.voice.2` artifacts below are historical previews. The user later installed `.voice.2` and authorized the separate [production activation](VOICE_PRODUCTION_ACTIVATION.md). The next [combined Inbox candidate](VOICE_COMBINED_PREVIEW_SCOPE.md) needs a fresh signed/notarized artifact and byte verification against its final integration SHA. Its package, installed UI, locked-screen, and sleep/reconnect acceptance are pending. No new package or runtime launch was performed for this documentation update.
+
 **Final local artifact, September 7, 2026:** `mac-app/release/Field-Theory-0.3.47-voice.1-arm64-local.dmg` is signed, notarized, stapled, Gatekeeper accepted, and checksum verified. No DMG mounting, installation, or candidate app launch was performed, following the user's final DMG-file-only instruction. See [the final artifact receipt and scope](VOICE_LOCAL_INSTALL.md). The earlier development-runtime failure below is retained as evidence; it is not a failure of the completed DMG signature checks.
 
 This records the Voice event-delivery candidate audit and bounded harness work
 based on `mac-app/package.json` version `0.3.45`. No production profile, installed
 app, authentication state, release, or cloud resources were changed by this work.
 
-## Current result: runtime verification blocked
+## Historical developer-harness result: runtime verification blocked
 
 The user reported repeated macOS malware-blocked notifications while this work
 was in progress. The causal link to these attempts is unconfirmed. All direct
@@ -48,8 +50,8 @@ packaged Field Theory app. Before any launch it verifies the bundle identity,
 contained executable path, full signature, stapled notarization ticket, and
 Gatekeeper's `Notarized Developer ID` result. It cannot use `node_modules`
 Electron and has no repair/download fallback. This revised harness has not been
-executed. Root is following the user's newly authorized Field Theory local
-install command; its release-note approval requirement precedes build work.
+executed. The later preview delivery followed the authorized Field Theory local-install
+command; its release-note approval requirement preceded build work.
 
 ## Safe scope
 
@@ -93,20 +95,22 @@ New Voice source files must be explicitly staged before packaging. The existing
 `guard:tracked-sources` and `beforeBuild` hook correctly reject untracked source
 and symlinked `node_modules`; do not disable those guards.
 
-First run the focused tests and compilation after all changes are ready:
+For a newly authorized combined package, first run the focused tests and compilation after all changes are ready:
 
 ```sh
-npm test -- electron/main/voiceWorkManager.test.ts electron/main/voiceCodexRunner.test.ts src/components/__tests__/VoiceWorkSettings.test.tsx
+npm test -- electron/main/voiceWorkManager.test.ts electron/main/voiceCodexRunner.test.ts electron/main/voiceCodexRouter.test.ts electron/main/voiceInboxService.test.ts electron/main/voiceInboxSync.test.ts electron/main/voiceWorkIpcTrust.test.ts electron/main/shellIpc.test.ts src/components/__tests__/VoiceWorkSettings.test.tsx src/components/__tests__/FieldTheoryProse.test.tsx
 npm run typecheck
 ```
 
-Use the local/test Supabase URL and publishable key supplied by the backend
-verification run as explicit environment values for the build. The generator
+For an isolated test build, use the local/test Supabase URL and publishable key
+supplied by its backend verification run as explicit build values. For an
+authorized production-connected local preview, explicitly verify the approved
+public target against the installed configuration and activation receipt. The generator
 otherwise reads this checkout's `.env.local`. It writes only public auth
 configuration to `electron-dist/main/public-runtime-config.json`, and the
 production package guard requires both fields. Do not create an apparently
 working candidate by silently embedding production configuration or dummy
-credentials. Vite and the main-process config must point at the same test backend.
+credentials. Vite and the main-process config must point at the same approved backend.
 
 The package script invokes channel/package/source/auth guards, rebuilds both
 Swift tools, compiles Electron and Vite, checks emitted imports, then packages
@@ -137,10 +141,13 @@ JavaScript. Additionally require these actual archive entries:
 
 - `electron-dist/main/voiceWorkManager.js`
 - `electron-dist/main/voiceCodexRunner.js`
+- `electron-dist/main/voiceCodexRouter.js`
+- `electron-dist/main/voiceInboxService.js` and `voiceInboxSync.js`
+- `electron-dist/shared/taskLinks.js`
 - `electron-dist/shared/voiceWork.js`
 - `electron-dist/preload.js`, including `voiceWorkAPI`
 - The renderer asset containing the Voice requests settings component
-- The intended local/test `public-runtime-config.json`
+- The explicitly approved `public-runtime-config.json`
 
 The revised harness requires an explicitly selected notarized packaged app;
 it performs signature/notarization checks before invoking the executable:

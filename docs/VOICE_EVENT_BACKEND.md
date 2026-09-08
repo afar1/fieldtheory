@@ -14,6 +14,23 @@ Migration `supabase/migrations/20260907233700_voice_event_delivery.sql` prepares
 
 Enabling baselines existing transcript IDs. A newly inserted ID is eligible only when its `client_created_at_ms` is strictly after the server enable cutoff and at most five minutes ahead of the server. Edits or deletion/reinsertion of baselined IDs do not execute old material. This is a **transcript creation clock**, not a proven microphone-start clock: the current phone does not persist microphone-start time in this column. A recording started before enable but transcribed afterward may therefore qualify. Do not describe this as physical capture-time exclusion.
 
+## Candidate Library history, separate from execution
+
+The approved [combined preview](VOICE_COMBINED_PREVIEW_SCOPE.md) adds authenticated transcript history materialization in the Mac app. It requires no new Voice migration or changes to the deployed execution cutoff, baseline, deduplication, leases, or private Broadcast contract. The backend already remains active for the installed `0.3.47-voice.2`; the new Mac source is a separate candidate awaiting package/install acceptance.
+
+`voiceInboxSync` subscribes to owner-filtered `postgres_changes` on `public.transcripts` before fetching history, using the existing signed-in Supabase session and transcript RLS. Its `voice-inbox:<owner>` channel does not send or consume client Broadcast messages. Production read-only inspection for this iteration confirmed `public.transcripts` already belongs to `supabase_realtime`; no publication mutation was required. For another deployment, verify rather than assume that prerequisite:
+
+```sql
+select pubname, schemaname, tablename
+from pg_publication_tables
+where pubname = 'supabase_realtime'
+  and schemaname = 'public' and tablename = 'transcripts';
+```
+
+Initial subscription and reconnect fully reconcile bounded transcript/job pages. A transaction can commit later with an older `updated_at`, so a timestamp-only incremental cursor is insufficient for offline recovery. Ordinary wakes use persisted owner-specific cursors ordered by `updated_at` and primary ID, rereading the timestamp boundary to cover ties. The live transcript event is also applied directly. Account changes invalidate pending reads before local writes. The existing private Voice job wake triggers an additional receipt refresh; no `voice_jobs` publication or polling loop is added.
+
+History reads never call claim/configure/dispatch RPCs. Older and context-only synced recordings may become notes without executing. A task link is imported only from a valid actual `voice_jobs.thread_id` plus nonempty `result.turn_id` or `completed` status. `dispatch_started_at` alone is not confirmation. The live manager callback adds a sent link only after actual `turn/started`. Queries project only the turn identifier from `result`; final answers and artifacts are not copied into Inbox. Existing confirmed work, including the mountain request, can receive its actual link without replay.
+
 ## What the wake check guarantees
 
 `realtime.send()` catches insertion errors and can return after emitting a warning. `_voice_jobs_wake` verifies that its exact `wake_id` was inserted into `realtime.messages`. A missing row raises SQLSTATE `55000`, rolling back the transcript/job or configuration transaction together so the caller can retry. The Mac must successfully join its private channel before first enable: Realtime may not create daily message partitions until a WebSocket client connects. See [Supabase's warning guidance](https://supabase.com/docs/guides/troubleshooting/realtime-warn-sending-broadcast-message).
