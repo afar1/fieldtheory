@@ -1,3 +1,10 @@
+## 0.3.47 — local production build
+
+- Fix startup and normal sign-in by bundling the Electron-compatible native database module.
+- Retain the complete Voice/Inbox, ordered Launcher, readable Codex routing and Drawesome improvements listed below.
+
+This replaces the defective 0.3.47-preview.1 candidate. The app keeps the production identity and existing user data; no session reset is part of this repair. Distribution is a local user-install DMG, not a public release.
+
 ## 0.3.47-preview.1 — local combined preview
 
 - Keep synced Voice transcripts in Library with direct links to their Codex tasks, preserving folder choices, user edits and folder renames.
