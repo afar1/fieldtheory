@@ -5,7 +5,9 @@ import {
   discoverVoiceCodexBinary,
   inspectVoiceCodexRuntime,
   recoverVoiceRequest,
+  runVoiceInternalTurn,
   runVoiceRequest,
+  withVoiceCodexClient,
   type VoiceCodexRequest,
   type VoiceCodexRunnerOptions,
 } from './voiceCodexRunner';
@@ -19,12 +21,17 @@ class FakeProcess extends EventEmitter {
   stderr = new EventEmitter();
   messages: Message[] = [];
   config: Message = {};
+  classifierResponse: Message = RESPONSE;
+  internalHandler: (message: Message, process: FakeProcess) => void = internal;
   kill = vi.fn(() => { queueMicrotask(() => this.emit('close', 0)); return true; });
   stdin = { write: (line: string, callback?: (error?: Error | null) => void) => {
     const message = JSON.parse(line) as Message;
     this.messages.push(message);
     callback?.(null);
-    queueMicrotask(() => this.handler(message, this));
+    queueMicrotask(() => {
+      if (message.params?.ephemeral === true || message.params?.threadId === 'internal-thread') this.internalHandler(message, this);
+      else this.handler(message, this);
+    });
     return true;
   } };
   constructor(public handler: (message: Message, process: FakeProcess) => void = standard) { super(); }
@@ -38,9 +45,23 @@ class FakeProcess extends EventEmitter {
     this.reply(message, { turn: { id: 'turn-1', status: 'inProgress', items: [] } });
   }
   complete(response: Message = RESPONSE, status = 'completed'): void {
-    this.send({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'result-1', phase: 'final_answer', text: JSON.stringify(response) } } });
+    this.classifierResponse = response;
+    this.send({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'result-1', phase: 'final_answer', text: response.finalResponse ?? JSON.stringify(response) } } });
     this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status, items: [] } } });
   }
+}
+
+function internal(message: Message, process: FakeProcess): void {
+  if (message.method === 'thread/start') process.reply(message, { ...threadResult(process), thread: { id: 'internal-thread', ephemeral: true, status: { type: 'idle' } } });
+  if (message.method === 'turn/start') {
+    process.send({ method: 'turn/started', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'inProgress' } } });
+    process.reply(message, { turn: { id: 'internal-turn', status: 'inProgress' } });
+    const { finalResponse: _finalResponse, ...metadata } = process.classifierResponse;
+    process.send({ method: 'turn/completed', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'completed', items: [
+      { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify(metadata) },
+    ] } } });
+  }
+  if (message.method === 'turn/interrupt') process.reply(message, {});
 }
 
 function threadResult(process: FakeProcess, thread = { id: 'thread-1', status: { type: 'idle' } }): Message {
@@ -180,7 +201,100 @@ describe('Voice Codex execution', () => {
     expect(process.messages.find(m => m.method === 'thread/start')?.params).toMatchObject({ approvalsReviewer: 'user', ephemeral: false });
     expect(process.messages.find(m => m.method === 'thread/start')?.params.sandbox).toBeUndefined();
     expect(process.messages.find(m => m.method === 'turn/start')?.params).toMatchObject({ sandboxPolicy: { type: 'readOnly', networkAccess: false }, approvalsReviewer: 'user', clientUserMessageId: 'receipt-1' });
-    expect(process.messages.find(m => m.method === 'turn/start')?.params.outputSchema.required).toContain('status');
+    expect(process.messages.find(m => m.method === 'turn/start')?.params.outputSchema).toBeUndefined();
+    expect(process.messages.find(m => m.method === 'turn/start' && m.params.threadId === 'internal-thread')?.params.outputSchema.required).toContain('status');
+  });
+
+  it('keeps the visible request and answer readable while classifying privately', async () => {
+    const answer = 'Here is the result.\n\n![Mountain](/tmp/mountain.png)';
+    const { input, options, process } = setup((message, p) => {
+      if (message.method === 'turn/start') { p.start(message); p.complete({ ...RESPONSE, finalResponse: answer }); }
+      else standard(message, p);
+    });
+    const onStarted = vi.fn();
+    const onThreadStarted = vi.fn();
+    const result = await runVoiceRequest({ ...input, text: 'Draw a mountain.', previousText: 'Draw a fountain.', onStarted, onThreadStarted }, options);
+    expect(result.finalResponse).toBe(answer);
+    expect(result.status).toBe('completed');
+    const main = process.messages.find(m => m.method === 'turn/start' && m.params.threadId === 'thread-1')!.params;
+    expect(main.input).toEqual([{ type: 'text', text: 'Draw a mountain.' }]);
+    expect(main.outputSchema).toBeUndefined();
+    expect(main.clientUserMessageId).toBe('receipt-1');
+    expect(onStarted).toHaveBeenCalledExactlyOnceWith({ threadId: 'thread-1', turnId: 'turn-1' });
+    expect(onThreadStarted).toHaveBeenCalledExactlyOnceWith('thread-1');
+    const privateStart = process.messages.find(m => m.method === 'thread/start' && m.params.ephemeral)!.params;
+    expect(privateStart).toMatchObject({ ephemeral: true, dynamicTools: [], selectedCapabilityRoots: [], environments: [] });
+    const privateTurn = process.messages.find(m => m.method === 'turn/start' && m.params.threadId === 'internal-thread')!.params;
+    expect(privateTurn.clientUserMessageId).toBeUndefined();
+    expect(JSON.parse(privateTurn.input[0].text)).toMatchObject({ recording: 'Draw a mountain.', response: answer });
+    expect(privateTurn.outputSchema.properties.finalResponse).toBeUndefined();
+  });
+
+  it('assigns a registered project only when creating the durable task', async () => {
+    const created = setup();
+    await runVoiceRequest({ ...created.input, projectId: 'registered-project' }, created.options);
+    expect(created.process.messages.find(m => m.method === 'thread/start' && !m.params.ephemeral)?.params.projectId).toBe('registered-project');
+    expect(created.process.messages.find(m => m.method === 'thread/start' && m.params.ephemeral)?.params.projectId).toBeUndefined();
+    const resumed = setup();
+    await runVoiceRequest({ ...resumed.input, projectId: 'registered-project', threadId: 'thread-1' }, resumed.options);
+    expect(resumed.process.messages.find(m => m.method === 'thread/resume')?.params.projectId).toBeUndefined();
+  });
+
+  it('keeps a required routing question in developer guidance and reports the completed clarification', async () => {
+    const { input, options, process } = setup((message, p) => {
+      if (message.method === 'turn/start') { p.start(message); p.complete({ ...RESPONSE, status: 'needs_user', question: 'Which project?', finalResponse: 'Which project?' }); }
+      else standard(message, p);
+    });
+    const result = await runVoiceRequest({ ...input, routingQuestion: 'Which project?' }, options);
+    expect(result).toMatchObject({ status: 'needs_user', question: 'Which project?', finalResponse: 'Which project?' });
+    expect(result.recoveryUncertain).toBeUndefined();
+    expect(process.messages.find(m => m.method === 'thread/start')?.params.developerInstructions).toContain('Do no work or tool calls yet');
+    expect(process.messages.find(m => m.method === 'turn/start')?.params.input).toEqual([{ type: 'text', text: input.text }]);
+  });
+
+  it('classifies native image completion without copying image bytes or tool payloads', async () => {
+    const { input, options, process } = setup((message, p) => {
+      if (message.method === 'turn/start') {
+        p.start(message);
+        p.send({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'imageGeneration', id: 'image-1', status: 'completed', savedPath: '/tmp/image.png', result: 'private-image-bytes' } } });
+        p.complete({ ...RESPONSE, finalResponse: '' });
+      } else standard(message, p);
+    });
+    expect(await runVoiceRequest(input, options)).toMatchObject({ status: 'completed', finalResponse: '' });
+    const evidence = JSON.parse(process.messages.find(m => m.method === 'turn/start' && m.params.threadId === 'internal-thread')?.params.input[0].text);
+    expect(evidence.activity).toEqual([{ type: 'imageGeneration', id: 'image-1', status: 'completed', savedPath: '/tmp/image.png' }]);
+    expect(JSON.stringify(process.messages)).not.toContain('private-image-bytes');
+  });
+
+  it('rejects an empty claimed completion without losing the original task identity', async () => {
+    const { input, options } = setup((message, p) => {
+      if (message.method === 'turn/start') { p.start(message); p.complete({ ...RESPONSE, finalResponse: '' }); }
+      else standard(message, p);
+    });
+    expect(await runVoiceRequest(input, options)).toMatchObject({ status: 'failed', errorCode: 'invalid_outcome', threadId: 'thread-1', turnId: 'turn-1' });
+  });
+
+  it('preserves the readable answer when metadata is malformed, without retrying the work', async () => {
+    const { input, options, process } = setup();
+    process.internalHandler = (message, p) => {
+      if (message.method === 'turn/start') p.classifierResponse = { status: 'completed', summary: 'Pretend success' };
+      internal(message, p);
+    };
+    const result = await runVoiceRequest(input, options);
+    expect(result).toMatchObject({ status: 'failed', errorCode: 'invalid_outcome', finalResponse: RESPONSE.finalResponse, threadId: 'thread-1', turnId: 'turn-1' });
+    expect(result.recoveryUncertain).toBeUndefined();
+    expect(process.messages.filter(m => m.method === 'turn/start' && m.params.threadId === 'thread-1')).toHaveLength(1);
+  });
+
+  it('distinguishes a finished turn from finished work', async () => {
+    const answer = 'I could not read the unavailable project, so the review is incomplete.';
+    const { input, options } = setup((message, p) => {
+      if (message.method === 'turn/start') { p.start(message); p.complete({ ...RESPONSE, status: 'failed', summary: 'The project was unavailable.', finalResponse: answer }); }
+      else standard(message, p);
+    });
+    const result = await runVoiceRequest(input, options);
+    expect(result).toMatchObject({ status: 'failed', finalResponse: answer, summary: 'The project was unavailable.' });
+    expect(result.recoveryUncertain).toBeUndefined();
   });
 
   it('preserves inherited read-only and untrusted settings despite an edit grant', async () => {
@@ -234,9 +348,10 @@ describe('Voice Codex execution', () => {
   it('continues an explicitly identified task and marks the previous transcript as superseded', async () => {
     const { input, options, process } = setup();
     await runVoiceRequest({ ...input, threadId: 'thread-1', previousText: 'Earlier wording.' }, options);
-    expect(process.messages.filter(m => m.method === 'thread/start')).toHaveLength(0);
+    expect(process.messages.filter(m => m.method === 'thread/start' && !m.params.ephemeral)).toHaveLength(0);
     expect(process.messages.find(m => m.method === 'thread/resume')?.params).toMatchObject({ threadId: 'thread-1', excludeTurns: true });
-    expect(JSON.parse(process.messages.find(m => m.method === 'turn/start')?.params.input[0].text)).toEqual({ currentRecording: input.text, supersededTranscriptRevision: 'Earlier wording.' });
+    expect(process.messages.find(m => m.method === 'turn/start')?.params.input).toEqual([{ type: 'text', text: input.text }]);
+    expect(process.messages.find(m => m.method === 'thread/resume')?.params.developerInstructions).toContain('Earlier wording.');
   });
 
   it('refuses to steer a task that is already active', async () => {
@@ -362,7 +477,7 @@ describe('Voice Codex execution', () => {
     const { input, options } = setup((message, p) => {
       if (message.method !== 'turn/start') return standard(message, p);
       p.start(message);
-      const packet = Buffer.from(`${JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify(response) } } })}\n`);
+      const packet = Buffer.from(`${JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', phase: 'final_answer', text: response.finalResponse } } })}\n`);
       const split = packet.indexOf(Buffer.from('☕')) + 1;
       p.stdout.emit('data', packet.subarray(0, split));
       p.stdout.emit('data', packet.subarray(split));
@@ -429,6 +544,87 @@ describe('Voice Codex execution', () => {
   });
 });
 
+describe('private Voice decisions', () => {
+  const decision = { workspacePath: os.tmpdir(), instructions: 'Classify only; do not use tools.', input: 'Supplied evidence', outputSchema: { type: 'object' } };
+
+  it('uses the signed-in account and restores client handlers after a private decision', async () => {
+    const { options, process } = setup();
+    const previousNotification = vi.fn();
+    const result = await withVoiceCodexClient(os.tmpdir(), async client => {
+      client.onNotification = previousNotification;
+      const value = await runVoiceInternalTurn(client, decision);
+      expect(client.onNotification).toBe(previousNotification);
+      return value;
+    }, options);
+    expect(result).toMatchObject({ status: 'completed' });
+    expect(process.messages.findIndex(m => m.method === 'account/read')).toBeLessThan(process.messages.findIndex(m => m.method === 'thread/start'));
+    expect(process.kill).toHaveBeenCalledOnce();
+    expect(process.messages.every(m => m.method !== 'thread/resume')).toBe(true);
+  });
+
+  it('disables work capabilities and configured MCP servers while retaining stricter permissions', async () => {
+    const { options, process } = setup((message, p) => message.method === 'config/read'
+      ? p.reply(message, { config: { sandbox_mode: 'read-only', approval_policy: 'untrusted', mcp_servers: { 'server.with.dot': { url: 'private-endpoint', token: 'private-token' }, ordinary: { command: '/some/tool' } } } }) : standard(message, p));
+    await withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, decision), options);
+    const params = process.messages.find(m => m.method === 'thread/start')!.params;
+    expect(params.config).toMatchObject({ web_search: 'disabled', features: { shell_tool: false, unified_exec: false, image_generation: false, plugins: false, apps: false, code_mode: false },
+      mcp_servers: { 'server.with.dot': { enabled: false }, ordinary: { enabled: false } } });
+    expect(Object.values(params.config.features).every(value => value === false)).toBe(true);
+    expect(JSON.stringify(process.messages)).not.toContain('private-token');
+    expect(JSON.stringify(process.messages)).not.toContain('private-endpoint');
+    expect(process.messages.find(m => m.method === 'turn/start')?.params).toMatchObject({ sandboxPolicy: { type: 'readOnly', networkAccess: false }, approvalPolicy: 'untrusted', environments: [] });
+  });
+
+  it.each([false, undefined])('does not send structured input unless the task is confirmed ephemeral: %s', async ephemeral => {
+    const { options, process } = setup();
+    process.internalHandler = (message, p) => message.method === 'thread/start'
+      ? p.reply(message, { ...threadResult(p), thread: { id: 'internal-thread', ephemeral, status: { type: 'idle' } } }) : internal(message, p);
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, decision), options)).rejects.toMatchObject({ code: 'protocol_error' });
+    expect(process.messages.some(m => m.method === 'turn/start')).toBe(false);
+  });
+
+  it.each(['item/tool/call', 'item/permissions/requestApproval'])('denies internal %s without granting access', async method => {
+    const { options, process } = setup();
+    process.internalHandler = (message, p) => {
+      if (message.method === 'turn/start') {
+        p.send({ method: 'turn/started', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'inProgress' } } });
+        p.reply(message, { turn: { id: 'internal-turn', status: 'inProgress' } });
+        p.send({ id: 'internal-request', method, params: { threadId: 'internal-thread', turnId: 'internal-turn' } });
+      } else internal(message, p);
+    };
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, decision), options)).rejects.toMatchObject({ code: 'internal_tool_request' });
+    const reply = process.messages.find(m => m.id === 'internal-request');
+    expect(reply?.result ?? reply?.error).toBeDefined();
+    expect(JSON.stringify(reply)).not.toContain('accept');
+    expect(process.messages.find(m => m.method === 'turn/interrupt')?.params).toEqual({ threadId: 'internal-thread', turnId: 'internal-turn' });
+  });
+
+  it('rejects unexpected tool activity in a completed internal turn', async () => {
+    const { options, process } = setup();
+    process.internalHandler = (message, p) => {
+      if (message.method === 'turn/start') {
+        p.send({ method: 'turn/started', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'inProgress' } } });
+        p.reply(message, { turn: { id: 'internal-turn', status: 'inProgress' } });
+        p.send({ method: 'turn/completed', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'completed', items: [{ type: 'commandExecution', status: 'completed' }] } } });
+      } else internal(message, p);
+    };
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, decision), options)).rejects.toMatchObject({ code: 'internal_tool_request' });
+  });
+
+  it('times out a private turn without dispatching again', async () => {
+    const { options, process } = setup();
+    process.internalHandler = (message, p) => {
+      if (message.method === 'turn/start') {
+        p.send({ method: 'turn/started', params: { threadId: 'internal-thread', turn: { id: 'internal-turn', status: 'inProgress' } } });
+        p.reply(message, { turn: { id: 'internal-turn', status: 'inProgress' } });
+      } else internal(message, p);
+    };
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, { ...decision, timeoutMs: 20 }), options)).rejects.toMatchObject({ code: 'classification_timeout' });
+    expect(process.messages.filter(m => m.method === 'turn/start')).toHaveLength(1);
+    expect(process.kill).toHaveBeenCalledOnce();
+  });
+});
+
 describe('Voice recovery never dispatches again', () => {
   const recordedTurn = { id: 'turn-1', status: 'completed', items: [
     { type: 'userMessage', clientId: 'receipt-1' },
@@ -468,5 +664,20 @@ describe('Voice recovery never dispatches again', () => {
     const result = await recoverVoiceRequest({ ...input, threadId: 'thread-1', turnId: 'turn-1' }, options);
     expect(result).toMatchObject({ status: 'needs_user', question: 'Which project?' });
     expect(result.recoveryUncertain).toBeUndefined();
+  });
+
+  it('classifies a recovered readable turn privately without appending to the original task', async () => {
+    const readable = { ...recordedTurn, items: [
+      { type: 'userMessage', clientId: 'receipt-1', content: [{ type: 'text', text: 'What is 2 + 2?' }] },
+      { type: 'agentMessage', phase: 'final_answer', text: RESPONSE.finalResponse },
+    ] };
+    const { input, options, process } = setup((message, p) => message.method === 'thread/read'
+      ? p.reply(message, { thread: { id: 'thread-1', turns: [readable] } }) : standard(message, p));
+    const result = await recoverVoiceRequest({ ...input, threadId: 'thread-1', turnId: 'turn-1' }, options);
+    expect(result).toMatchObject({ status: 'completed', finalResponse: RESPONSE.finalResponse, threadId: 'thread-1', turnId: 'turn-1' });
+    expect(result.recoveryUncertain).toBeUndefined();
+    expect(process.messages.filter(m => m.method === 'turn/start').map(m => m.params.threadId)).toEqual(['internal-thread']);
+    expect(process.messages.some(m => m.method === 'thread/resume')).toBe(false);
+    expect(process.messages.filter(m => m.method === 'thread/start').every(m => m.params.ephemeral === true)).toBe(true);
   });
 });
