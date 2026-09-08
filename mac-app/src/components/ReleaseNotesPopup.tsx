@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.48': [
+    'Open the Library sidebar reliably while keeping automatic collapse when the window narrows',
+    'Scan Voice transcripts in your Inbox with the beginning and end, local capture time, and word count',
+    'Open the matching Codex task from an Inbox row or the transcript',
+    'Removed internal sync markers from Voice notes while preserving your edits',
+  ],
   '0.3.47': [
     'Fixed startup and normal sign-in; Library keeps synced Voice transcripts with Codex task links and your chosen Inbox folder',
     'Move through enabled Launcher sections in saved order with Tab and Shift-Tab',
@@ -566,6 +572,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.48': 'September 7, 2026',
   '0.3.47': 'September 7, 2026',
   '0.3.47-voice.2': 'September 7, 2026',
   '0.3.47-voice.1': 'September 7, 2026',

@@ -1,3 +1,5 @@
+import type { VoiceInboxPresentation } from './voiceInboxPresentation';
+
 /** User-visible contract for the bundled Voice requests worker. */
 export interface VoiceWorkSettings {
   enabled: boolean;
@@ -27,6 +29,8 @@ export interface VoiceWorkAPI {
   getState(): Promise<VoiceWorkState>;
   updateSettings(settings: Partial<VoiceWorkSettings>): Promise<VoiceWorkState>;
   listFolders(): Promise<Array<{ path: string; label: string }>>;
+  getInboxPresentation(): Promise<VoiceInboxPresentation>;
+  onInboxChanged(callback: () => void): () => void;
   refreshStatus(): Promise<VoiceWorkState>;
   openTask(threadId: string): Promise<{ opened: boolean; error?: string }>;
   onStateChanged(callback: (state: VoiceWorkState) => void): () => void;
@@ -36,6 +40,8 @@ export const VOICE_WORK_CHANNELS = {
   getState: 'voiceWork:getState',
   updateSettings: 'voiceWork:updateSettings',
   listFolders: 'voiceWork:listFolders',
+  getInboxPresentation: 'voiceWork:getInboxPresentation',
+  inboxChanged: 'voiceWork:inboxChanged',
   refreshStatus: 'voiceWork:refreshStatus',
   openTask: 'voiceWork:openTask',
   stateChanged: 'voiceWork:stateChanged',

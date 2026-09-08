@@ -1325,6 +1325,7 @@ describe('LibrarianView render', () => {
 
   afterEach(() => {
     toggleLineNumbersFromLauncher = null;
+    delete window.voiceWorkAPI;
     resetBookmarksCacheForTests();
     vi.useRealTimers();
     cleanup();
@@ -1337,6 +1338,38 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+  });
+
+  it.each(['rendered', 'markdown'] as const)('shows the Inbox title, local capture time and task after the %s transcript', async (mode) => {
+    const notePath = '/tmp/library/example.md';
+    const transcript = 'Please inspect the left sidebar and tell me what you find.';
+    const threadId = '01a07e53-e774-78a0-9ba3-6d326a6b4db6';
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: notePath, title: 'Voice 2026-09-08 01.46.37', context: null, readingTime: null,
+      modelSignature: null, createdAt: 0, mtime: 0, content: transcript,
+      documentVersion: { mtimeMs: 1, size: transcript.length, sha256: 'transcript' },
+    }));
+    const openTask = vi.fn(async () => ({ opened: true }));
+    window.voiceWorkAPI = {
+      getInboxPresentation: vi.fn(async () => ({ folderPath: '/tmp/library', truncated: false, notes: [{
+        notePath, transcriptId: 'recording', createdAtMs: Date.UTC(2026, 8, 8, 1, 46, 37),
+        title: 'Please inspect the left … me what you find.', wordCount: 13, threadId,
+      }] })),
+      openTask, onStateChanged: vi.fn(() => () => {}), onInboxChanged: vi.fn(() => () => {}),
+    } as unknown as NonNullable<Window['voiceWorkAPI']>;
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()}
+      initialOpenTarget={{ kind: 'artifact', path: notePath, contentMode: mode }} />);
+    const heading = await screen.findByRole('heading', { name: 'Please inspect the left … me what you find.' });
+    const documentPanel = heading.parentElement!;
+    const button = await within(documentPanel).findByRole('button', { name: 'Open task' });
+    const editor = documentPanel.querySelector('.cm-content')!;
+    expect(editor.textContent).toBe(transcript);
+    expect(editor.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(documentPanel.textContent).toMatch(/\d{1,2}:46 [ap]\.m\./);
+    expect(documentPanel.textContent).not.toContain(':37');
+    expect(container.querySelector('input[aria-label="File title"]')).toBeNull();
+    fireEvent.click(button);
+    await waitFor(() => expect(openTask).toHaveBeenCalledExactlyOnceWith(threadId));
   });
 
   it('handles launcher line-number toggles while mounted inactive behind Commands', async () => {
@@ -6153,6 +6186,93 @@ describe('LibrarianView render', () => {
 
     fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
+  });
+
+  it.each([
+    { width: 800, sidebarCollapsed: false },
+    { width: 1600, sidebarCollapsed: true },
+  ])('keeps the reopened sidebar visible through frames and unchanged resize notifications at $width px', async ({ width, sidebarCollapsed }) => {
+    let panelWidth = width;
+    let panelHeight = 900;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      x: 0, y: 0, top: 0, left: 0, right: panelWidth, bottom: panelHeight,
+      width: panelWidth, height: panelHeight, toJSON: () => ({}),
+    }));
+    const observers = new Set<SidebarResizeObserver>();
+    class SidebarResizeObserver implements ResizeObserver {
+      readonly targets = new Set<Element>();
+      constructor(private readonly callback: ResizeObserverCallback) { observers.add(this); }
+      observe(target: Element) { this.targets.add(target); }
+      unobserve(target: Element) { this.targets.delete(target); }
+      disconnect() { this.targets.clear(); observers.delete(this); }
+      notify(target: Element) {
+        if (this.targets.has(target)) this.callback([{ target } as ResizeObserverEntry], this);
+      }
+    }
+    vi.stubGlobal('ResizeObserver', SidebarResizeObserver);
+    const waitForFrames = async () => {
+      for (let frame = 0; frame < 3; frame++) {
+        await act(async () => { await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())); });
+      }
+    };
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/example.md', title: 'example.md', context: null,
+      readingTime: null, modelSignature: null, createdAt: 0, mtime: 0, content: '# Example\n',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'example' },
+    }));
+    const onSwitchToClipboard = vi.fn();
+    const view = render(<LibrarianView sidebarCollapsed={sidebarCollapsed} onSwitchToClipboard={onSwitchToClipboard} />);
+    try {
+      fireEvent.click(await screen.findByText('example.md'));
+      await waitFor(() => expect(window.librarianAPI?.getReading).toHaveBeenCalled());
+      await waitForFrames();
+      const root = view.container.firstElementChild as HTMLElement;
+      const sidebar = () => root.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement;
+      const strip = () => root.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]') as HTMLElement | null;
+      const notifyResize = () => act(() => {
+        const watching = [...observers].filter((observer) => observer.targets.has(root));
+        expect(watching.length).toBeGreaterThan(0);
+        for (const observer of watching) observer.notify(root);
+      });
+      expect(sidebar().style.width).toBe('0px');
+      fireEvent.click(strip()!);
+      expect(sidebar().style.width).toBe('220px');
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('220px');
+      expect(strip()).toBeNull();
+
+      notifyResize();
+      await waitForFrames();
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 100)); });
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('220px');
+
+      // A callback change restarts the observer even though the container has not resized.
+      view.rerender(<LibrarianView sidebarCollapsed={sidebarCollapsed} onSwitchToClipboard={onSwitchToClipboard}
+        onFocusChromeContentCenterChange={vi.fn()} />);
+      await waitForFrames();
+      notifyResize();
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('220px');
+
+      panelWidth -= 40;
+      notifyResize();
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('0px');
+      expect(strip()).toBeTruthy();
+
+      fireEvent.click(strip()!);
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('220px');
+      panelHeight -= 40;
+      notifyResize();
+      await waitForFrames();
+      expect(sidebar().style.width).toBe('0px');
+      expect(strip()).toBeTruthy();
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('hides a popped-out collapsed sidebar while the sidebar resize handle is dragging', async () => {

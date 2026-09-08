@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import type { VoiceWorkState } from '../../electron/shared/voiceWork';
 import { useTheme } from '../contexts/ThemeContext';
 import { SettingsCard, SettingsRow, SettingsSectionHeading } from './settings/SettingsPrimitives';
+import { OpenVoiceTaskButton } from './OpenVoiceTaskButton';
+import { formatVoiceInboxTime } from '../../electron/shared/voiceInboxPresentation';
 
 function readinessMessage(state: VoiceWorkState): string {
   if (state.message) return state.message;
@@ -53,7 +55,6 @@ export default function VoiceWorkSettings() {
   const [checking, setChecking] = useState(true);
   const [saving, setSaving] = useState(false);
   const [choosing, setChoosing] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [folders, setFolders] = useState<Array<{ path: string; label: string }>>([]);
   const [folderChoice, setFolderChoice] = useState('');
   const folderRevision = useRef<number | null>(null);
@@ -207,22 +208,6 @@ export default function VoiceWorkSettings() {
     }
   };
 
-  const openTask = async () => {
-    if (!api || !state?.lastTask?.canOpen || opening) return;
-    setOpening(true);
-    setError(null);
-    try {
-      const result = await api.openTask(state.lastTask.threadId);
-      if (mounted.current && !result.opened) {
-        setError(result.error || 'Could not open the task. Open Codex to find it.');
-      }
-    } catch {
-      if (mounted.current) setError('Could not open the task. Open Codex to find it.');
-    } finally {
-      if (mounted.current) setOpening(false);
-    }
-  };
-
   const enabled = state?.settings.enabled === true;
   const canEnable = Boolean(state?.settings.workspacePath && state.codex.available && state.codex.signedIn === true
     && !['signed_out', 'connecting', 'needs_setup', 'error'].includes(state.status));
@@ -338,15 +323,13 @@ export default function VoiceWorkSettings() {
               </details>
             )}
             {state.lastTask.canOpen && (
-              <button type="button" disabled={opening} onClick={() => void openTask()} style={{ ...buttonStyle, marginTop: 8 }}>
-                {opening ? 'Opening…' : 'Open task'}
-              </button>
+              <OpenVoiceTaskButton threadId={state.lastTask.threadId} style={{ marginTop: 8 }} />
             )}
           </div>
         )}
         {state?.lastEventAt && Number.isFinite(state.lastEventAt) ? (
           <p style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 0 }}>
-            Last update: {new Date(state.lastEventAt).toLocaleString()}
+            Last update: {new Date(state.lastEventAt).toLocaleDateString()} · {formatVoiceInboxTime(state.lastEventAt)}
           </p>
         ) : null}
         {error && <p role="alert" style={{ color: theme.error, fontSize: 12, lineHeight: 1.5, marginBottom: 0 }}>{error}</p>}

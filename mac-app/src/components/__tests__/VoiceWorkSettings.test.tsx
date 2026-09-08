@@ -57,6 +57,8 @@ describe('VoiceWorkSettings', () => {
         return current;
       }),
       listFolders: vi.fn(async () => libraryFolders),
+      getInboxPresentation: vi.fn(async () => ({ folderPath: null, notes: [], truncated: false })),
+      onInboxChanged: vi.fn(() => () => {}),
       openTask: vi.fn(async () => ({ opened: true })),
       onStateChanged: vi.fn((listener) => { publish = listener; return unsubscribe; }),
     };

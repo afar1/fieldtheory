@@ -18,6 +18,9 @@ import LibrarianSetupWizard from './LibrarianSetupWizard';
 import RiverPicker, { type RiverPickerTarget } from './RiverPicker';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
+import { useVoiceInboxPresentation } from '../hooks/useVoiceInboxPresentation';
+import { OpenVoiceTaskButton } from './OpenVoiceTaskButton';
+import { formatVoiceInboxTime } from '../../electron/shared/voiceInboxPresentation';
 import { formatRelativeTime } from '../utils/formatUtils';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
@@ -3612,6 +3615,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
   const [responsivePanelSize, setResponsivePanelSize] = useState({ width: 0, height: 0 });
+  const measuredPanelSizeRef = useRef<{ width: number; height: number } | null>(null);
   const responsivePanelStateRef = useRef<ResponsivePanelState | undefined>(undefined);
   const [suppressAutoCollapseSidebar, setSuppressAutoCollapseSidebar] = useState(false);
   const [suppressAutoHideTerminal, setSuppressAutoHideTerminal] = useState(false);
@@ -4822,8 +4826,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useLayoutEffect(() => {
     recordResizeDiagnostic('reader-observer-attach');
-    let measuredWidth = -1;
-    let measuredHeight = -1;
     let frame: number | null = null;
     let settleTimer: number | null = null;
     const refreshEditorLayout = () => {
@@ -4837,11 +4839,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!containerRect) return;
       const width = Math.round(containerRect.width);
       const height = Math.round(containerRect.height);
-      const containerSizeChanged = measuredWidth !== width || measuredHeight !== height;
+      const previousSize = measuredPanelSizeRef.current;
+      const containerSizeChanged = previousSize !== null
+        && (previousSize.width !== width || previousSize.height !== height);
       recordResizeDiagnostic('reader-size', { width, height, changed: containerSizeChanged });
-      measuredWidth = width;
-      measuredHeight = height;
-      if (containerSizeChanged && sidebarHoverExpanded) {
+      measuredPanelSizeRef.current = { width, height };
+      if (containerSizeChanged) {
         setSidebarHoverExpanded(false);
       }
       setResponsivePanelSize((previous) => {
@@ -4910,7 +4913,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       resizeObserver.disconnect();
       window.removeEventListener('resize', scheduleResizeUpdate);
     };
-  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, sidebarHoverExpanded, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
+  }, [active, effectiveCodexTerminalDockSide, effectiveCodexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -5038,6 +5041,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'ember';
   const effectiveFullScreen = isFullScreen || focusImmersive;
   const activeReadingPath = activeReading?.path ?? null;
+  const voiceInboxPresentation = useVoiceInboxPresentation(active && !browserLibrarySurface);
+  const activeVoiceNote = useMemo(() => voiceInboxPresentation?.notes.find((note) => note.notePath === activeReadingPath),
+    [voiceInboxPresentation, activeReadingPath]);
   useEffect(() => {
     if (!riverSharePickerOpen) return;
     let cancelled = false;
@@ -11593,6 +11599,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         >
           <WikiSidebar
             active={active}
+            voiceInboxPresentation={voiceInboxPresentation}
             canHideSidebarDefaultFolders={!browserLibrarySurface}
             persistPreferences={!hadInitialOpenTargetRef.current}
             selectedId={selectedItemId}
@@ -11910,7 +11917,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             fontWeight: 600,
                           }}
                         >
-                          {activeReading.title}
+                          {activeVoiceNote?.title ?? activeReading.title}
                         </span>
                         {activeReadingBreadcrumbLabel && (
                           <span style={{ color: theme.textSecondary }}>
@@ -12223,7 +12230,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               position: 'relative',
             }}
           >
-            {activeTitlePath && activeReading && (
+            {activeVoiceNote && (
+              <h1 data-ft-voice-transcript-title="true" style={{
+                flex: '0 0 auto', margin: contentMode === 'markdown' ? '0 0 18px' : '0 0 22px',
+                color: theme.text, fontSize: getLibrarianTitleFontSize(activeVoiceNote.title, contentMode),
+                lineHeight: 1.18, fontWeight: 650, overflowWrap: 'anywhere',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}>{activeVoiceNote.title}</h1>
+            )}
+            {!activeVoiceNote && activeTitlePath && activeReading && (
               <input
                 ref={titleInputRef}
                 value={editingTitlePath === activeTitlePath ? titleDraft : activeReading.title}
@@ -12270,7 +12285,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             )}
             {activeReading && (
               <div
-                title={getReadingUpdatedTitle(activeReading)}
+                title={activeVoiceNote?.createdAtMs != null ? new Date(activeVoiceNote.createdAtMs).toLocaleDateString() : getReadingUpdatedTitle(activeReading)}
                 style={{
                   flex: '0 0 auto',
                   margin: contentMode === 'markdown' ? '-12px 0 14px 0' : '-16px 0 18px 0',
@@ -12282,11 +12297,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   userSelect: 'none',
                 }}
               >
-                {getReadingUpdatedByline(activeReading)}
+                {activeVoiceNote ? (
+                  activeVoiceNote.createdAtMs == null ? null
+                    : `${new Date(activeVoiceNote.createdAtMs).toLocaleDateString()} · ${formatVoiceInboxTime(activeVoiceNote.createdAtMs)}`
+                ) : getReadingUpdatedByline(activeReading)}
               </div>
             )}
             {contentMode === 'markdown' || activeIsSourceOnlyDocument ? (
               /* Markdown edit mode */
+              <>
               <div
                 style={{
                   position: 'relative',
@@ -12424,6 +12443,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   </div>
                 )}
               </div>
+              {activeVoiceNote?.threadId && (
+                <OpenVoiceTaskButton threadId={activeVoiceNote.threadId} style={{ marginTop: 12, marginBottom: 8, flexShrink: 0 }} />
+              )}
+              </>
             ) : (
               /* Rendered mode - editor-owned markdown presentation */
               <>
@@ -12551,7 +12574,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       'data-ft-agent-title': activeReading.title,
                     }}
                     spellCheck
-                    bottomRoomPx={contentBottomScrollSpace}
+                    bottomRoomPx={activeVoiceNote ? 0 : contentBottomScrollSpace}
                     style={{
                       width: '100%',
                       minHeight: '160px',
@@ -12563,7 +12586,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   {renderMarkdownEmojiSuggestionMenu(applyRenderedEmojiSuggestion)}
                   {renderMarkdownSlashCommandMenu(applyRenderedSlashCommandSuggestion)}
                   {inlineDrawInsertion?.mode === 'rendered' ? inlineDrawSurface : null}
-                  <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
+                  {activeVoiceNote?.threadId && (
+                    <OpenVoiceTaskButton threadId={activeVoiceNote.threadId} style={{ marginTop: 16, marginBottom: 8 }} />
+                  )}
+                  {!activeVoiceNote && <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />}
                 </>
               )}
               {contentBottomScrollSpace > 0 && (

@@ -5209,6 +5209,12 @@ const voiceWorkAPI: VoiceWorkAPI = {
   getState: () => ipcRenderer.invoke('voiceWork:getState'),
   updateSettings: (settings) => ipcRenderer.invoke('voiceWork:updateSettings', settings),
   listFolders: () => ipcRenderer.invoke('voiceWork:listFolders'),
+  getInboxPresentation: () => ipcRenderer.invoke('voiceWork:getInboxPresentation'),
+  onInboxChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('voiceWork:inboxChanged', handler);
+    return () => ipcRenderer.removeListener('voiceWork:inboxChanged', handler);
+  },
   refreshStatus: () => ipcRenderer.invoke('voiceWork:refreshStatus'),
   openTask: (threadId) => ipcRenderer.invoke('voiceWork:openTask', threadId),
   onStateChanged: (callback) => {

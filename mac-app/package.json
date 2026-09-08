@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.3.47",
+  "version": "0.3.48",
   "description": "Field Theory local-first macOS app.",
   "private": true,
   "license": "AGPL-3.0-or-later",

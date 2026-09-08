@@ -7658,6 +7658,13 @@ let voiceInboxStore: VoiceInboxService | null = null;
 let voiceInboxSync: VoiceInboxSync | null = null;
 let voicePreferencesReady: Promise<unknown> = Promise.resolve();
 
+function notifyVoiceInboxChanged(): void {
+  const window = clipboardHistoryWindow?.getWindow() ?? null;
+  if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
+    window.webContents.send(VOICE_WORK_CHANNELS.inboxChanged);
+  }
+}
+
 function setupVoiceWorkIPCHandlers(): void {
   const requireSender = (event: Electron.IpcMainInvokeEvent): BrowserWindow => {
     const window = clipboardHistoryWindow?.getWindow() ?? null;
@@ -7710,9 +7717,18 @@ function setupVoiceWorkIPCHandlers(): void {
     if (!owner || owner !== authManager?.getSession()?.user.id) throw new Error('Voice request session changed.');
     return folders;
   });
+  ipcMain.handle(VOICE_WORK_CHANNELS.getInboxPresentation, (event) => {
+    requireSender(event);
+    const owner = authManager?.getSession()?.user.id;
+    return owner && voiceInboxStore
+      ? voiceInboxStore.getPresentation(owner)
+      : { folderPath: null, notes: [], truncated: false };
+  });
   ipcMain.handle(VOICE_WORK_CHANNELS.openTask, async (event, threadId: unknown) => {
     requireSender(event);
-    if (typeof threadId !== 'string' || !worker().canOpenTask(threadId)) {
+    const owner = authManager?.getSession()?.user.id;
+    if (!owner || typeof threadId !== 'string'
+      || !(worker().canOpenTask(threadId) || voiceInboxStore?.canOpenTask(owner, threadId))) {
       return { opened: false, error: 'This task is not available to open from Field Theory yet.' };
     }
     try {
@@ -15390,6 +15406,7 @@ async function initTranscriberSystem(): Promise<void> {
     stateDirectory: path.join(app.getPath('userData'), 'voice-inbox'),
     libraryRoot: librarianManager!.getWikiRoot(),
     getLibraryRoots: () => librarianManager?.getLibraryRootPaths() ?? [],
+    onChanged: notifyVoiceInboxChanged,
   });
   voiceInboxSync = new VoiceInboxSync({
     auth: authManager, store: voiceInboxStore,
@@ -15422,10 +15439,15 @@ async function initTranscriberSystem(): Promise<void> {
   });
   const refreshVoiceAccount = () => {
     const requestedOwner = authManager?.getSession()?.user.id;
+    notifyVoiceInboxChanged();
     void voiceWorkManager!.authChanged().then(async () => {
       await voicePreferencesReady;
       if (requestedOwner !== authManager?.getSession()?.user.id) return;
       if (requestedOwner) {
+        while (voiceInboxStore!.migrateLegacyNotes(requestedOwner).remaining > 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          if (requestedOwner !== authManager?.getSession()?.user.id) return;
+        }
         const folderPath = voiceWorkManager!.getState().settings.workspacePath;
         if (folderPath) await preferencesManager?.updateLauncherSectionsForUser(requestedOwner, (configured) => configured ?? [
           launcherFolderSection({ path: folderPath, label: path.basename(folderPath) }), ...normalizeLauncherSections(undefined),
@@ -15433,6 +15455,7 @@ async function initTranscriberSystem(): Promise<void> {
       }
       if (requestedOwner !== authManager?.getSession()?.user.id) return;
       await voiceInboxSync!.authChanged();
+      notifyVoiceInboxChanged();
     }).catch(() => log.warn('[Voice Inbox] Could not initialize transcript storage.'));
   };
   authManager.on('sessionChanged', refreshVoiceAccount);
