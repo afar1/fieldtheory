@@ -617,3 +617,29 @@
     transform: rotate(-90deg) translateY(26px);
   }
 }
+
+.round[aria-pressed="true"],
+.shapeOption[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--sunk);
+}
+
+.shapeOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.shapeOption:hover {
+  color: var(--ink);
+  background: var(--sunk);
+}
+
+@container (max-width: 480px) {
+  .shapeOption { padding: 9px; }
+  .shapeOption span { display: none; }
+}

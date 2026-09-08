@@ -12,8 +12,10 @@ export type PenId =
   | "brush"
   | "fountain";
 
+export type ShapeId = "rectangle" | "line" | "circle";
+export type InkToolId = PenId | ShapeId;
 /** Anything the toolbar can be holding. */
-export type ToolId = PenId | "eraser";
+export type ToolId = InkToolId | "eraser";
 
 /**
  * A broad-nib pen: a flat edge held at a fixed angle. Width comes from the
@@ -42,6 +44,7 @@ export type Pen = {
 
 /** Per-stroke overrides of the pen's shape. Absent fields fall back to it. */
 export type StrokeShape = {
+  primitive?: ShapeId;
   /** nib angle in degrees; only meaningful on a broad-nib pen */
   nibAngle?: number;
   /** how far the stroke tapers in at each end */

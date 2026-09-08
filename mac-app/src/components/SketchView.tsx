@@ -260,7 +260,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           <svg width="100%" height="100%" viewBox={`0 0 ${board.w} ${board.h}`} style={{ position: 'absolute', inset: 0, background: paper, pointerEvents: 'none' }}>
             {image && <image href={image.dataUrl} x={image.x} y={image.y} width={image.width} height={image.height} />}
           </svg>
-          <Draw ref={drawRef} board={board} initialStrokes={initialStrokes} onChange={handleChange}
+          <Draw shapes ref={drawRef} board={board} initialStrokes={initialStrokes} onChange={handleChange}
             shortcuts={!isSaving} style={{ pointerEvents: isSaving ? 'none' : undefined }}
             background="transparent" theme={theme.isDark ? 'dark' : 'light'} look="studio" motion="none" />
         </>}
@@ -459,8 +459,8 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           marginLeft: '4px',
         }}>esc</kbd></span>
         <span style={{ margin: '0 4px', color: theme.isDark ? theme.border : '#bbb' }}>|</span>
-        <span>Drawesome · freehand pens, highlighter & eraser · ⌘Z undo · ⇧⌘Z redo</span>
-        <span>Saved images reopen as a background; shapes and text are unavailable.</span>
+        <span>Rectangle R · Line L · Circle O · Shift: square or angled line · ⌘Z undo · ⇧⌘Z redo</span>
+        <span>Saved images reopen as a background.</span>
       </div>
     </div>
   );

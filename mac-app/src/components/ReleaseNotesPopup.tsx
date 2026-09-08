@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.50': [
+    'Draw rectangles, straight lines, and circles from the new Shapes picker',
+    'Use R, L, and O shortcuts; hold Shift for squares or 45-degree lines',
+    'Shapes work with ink and width controls, erasing, undo/redo, draft recovery, and PNG export',
+  ],
   '0.3.49': [
     'Scan Voice Inbox transcripts on one line, with word count followed by local capture time',
     'Narrow sidebars use compact word counts and clock faces showing the capture time',
@@ -577,6 +582,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.50': 'September 7, 2026',
   '0.3.49': 'September 7, 2026',
   '0.3.48': 'September 7, 2026',
   '0.3.47': 'September 7, 2026',

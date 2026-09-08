@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PENS } from "../engine/pens";
+import { isShape, SHAPES } from "../engine/shapes";
+import { ShapeIcon } from "./ShapeIcon";
 import type { Pen, PenId, ToolId } from "../engine/types";
 import { resolveSwatches } from "../palette";
 import { MorphBar } from "./MorphBar";
@@ -27,7 +29,7 @@ export type ToolState = {
   eraserSize: number;
 };
 
-type Mode = "tools" | "ink" | "brush" | "spectrum";
+type Mode = "tools" | "ink" | "brush" | "spectrum" | "shapes";
 
 /** Rough perceptual lightness, to pick a legible tick colour on a swatch. */
 function isLight(hex: string) {
@@ -48,6 +50,7 @@ export function Toolbar({
   tooltips = true,
   pens = PENS,
   eraser = true,
+  shapes = false,
   controls,
   settings = "bar",
   theme,
@@ -80,6 +83,7 @@ export function Toolbar({
   pens?: Pen[];
   /** Whether the eraser is offered. */
   eraser?: boolean;
+  shapes?: boolean;
   /** Where size and opacity live. */
   settings?: "bar" | "tool";
   theme?: "light" | "dark" | "auto";
@@ -219,6 +223,18 @@ export function Toolbar({
         collapsedContent={<span className={css.peek}>{icon}</span>}
         panels={[
           {
+            id: "shapes",
+            content: <div className={css.row}>
+              {back}
+              {SHAPES.map(shape => <button key={shape.id} type="button" className={css.shapeOption}
+                aria-label={shape.name} aria-pressed={tool.active === shape.id}
+                onClick={() => { onSelect(shape.id); setMode("tools"); }}
+                {...tip.bindControl(shape.name, shortcuts ? shape.key.toUpperCase() : undefined)}>
+                <ShapeIcon kind={shape.id} /><span>{shape.name}</span>
+              </button>)}
+            </div>,
+          },
+          {
             id: "tools",
             content: (
               <>
@@ -274,6 +290,14 @@ export function Toolbar({
                 )}
 
                 {(show.undo || show.clear) && <span className={css.divider} />}
+
+                {shapes && <span className={css.seated}>
+                  <button type="button" className={css.round} aria-label="Shapes"
+                    aria-pressed={isShape(tool.active)} onClick={() => { if (openTool) closeMenu(); setMode("shapes"); }}
+                    {...tip.bindControl("Shapes")}>
+                    <ShapeIcon kind={isShape(tool.active) ? tool.active : "rectangle"} />
+                  </button>
+                </span>}
 
                 {pens.map((pen) => (
                   <button

@@ -19,6 +19,8 @@ export {
 } from "./palette";
 export type {
   Board,
+  ShapeId,
+  InkToolId,
   Pen,
   PenId,
   Point,

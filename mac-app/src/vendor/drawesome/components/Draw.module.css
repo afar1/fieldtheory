@@ -1,5 +1,6 @@
 /* Self-contained: nothing this component paints falls outside its own box. */
 .root {
+  container-type: inline-size;
   position: relative;
   width: 100%;
   height: 100%;

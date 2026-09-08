@@ -13,6 +13,7 @@ import {
   strokePath,
 } from "../engine/geometry";
 import { PEN_BY_ID } from "../engine/pens";
+import { shapeEndpoint, shapePath } from "../engine/shapes";
 import type { Board, Point } from "../engine/types";
 import type { DrawingController } from "../hooks/use-drawing";
 
@@ -116,8 +117,9 @@ export function DrawSurface({
     [board.w, board.h],
   );
 
-  const state = useRef({ tool, drawing });
-  state.current = { tool, drawing };
+  const gestureTool = useRef(tool);
+  const liveTool = drawingNow.current ? gestureTool.current : tool;
+  const primitive = liveTool.kind === "pen" ? liveTool.shape?.primitive : undefined;
 
   const ignore = (e: React.PointerEvent) => {
     if (disabled) return true;
@@ -126,7 +128,7 @@ export function DrawSurface({
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (ignore(e)) return;
+    if (ignore(e) || e.button !== 0) return;
     // One pointer at a time: a second finger is a pan/zoom gesture, not a
     // second stroke.
     if (activePointer.current !== null) return;
@@ -140,6 +142,7 @@ export function DrawSurface({
 
     const { x, y } = toBoard(e.clientX, e.clientY);
     drawingNow.current = true;
+    gestureTool.current = tool;
     straight.current = null;
 
     // An eraser pass is recorded exactly like a mark — it just subtracts.
@@ -155,6 +158,14 @@ export function DrawSurface({
     if (e.pointerType !== "touch") setHover({ x, y });
 
     if (!drawingNow.current || e.pointerId !== activePointer.current) return;
+
+    const active = gestureTool.current;
+    if (active.kind === "pen" && active.shape?.primitive) {
+      const start = pointsRef.current[0];
+      pointsRef.current = [start, shapeEndpoint(active.shape.primitive, start, [x, y, .5], e.shiftKey)];
+      setCurrent(pointsRef.current);
+      return;
+    }
 
     // Anything other than the flat default means the hardware is really
     // measuring it. Pens that report a constant 0.5 are treated as pressureless.
@@ -239,31 +250,38 @@ export function DrawSurface({
     drawingNow.current = false;
     straight.current = null;
 
+    const active = gestureTool.current;
+    const kind = active.kind === "pen" ? active.shape?.primitive : undefined;
+    if (kind && e?.type === "pointerup") {
+      const start = pointsRef.current[0];
+      const { x, y } = toBoard(e.clientX, e.clientY);
+      pointsRef.current = [start, shapeEndpoint(kind, start, [x, y, .5], e.shiftKey)];
+    }
     const pts = pointsRef.current;
     pointsRef.current = [];
     setCurrent([]);
-    if (!pts.length) return;
+    if (!pts.length || (kind && (e?.type === "pointercancel" || !shapePath(kind, pts)))) return;
 
     drawing.commit([
       ...drawing.strokes,
-      tool.kind === "eraser"
+      active.kind === "eraser"
         ? {
             id: nextId(),
             pen: "pen" as const,
             color: "#000",
-            size: tool.size,
+            size: active.size,
             opacity: 1,
             points: pts,
             erase: true,
           }
         : {
             id: nextId(),
-            pen: tool.pen,
-            color: tool.color,
-            size: tool.size,
-            opacity: tool.opacity,
+            pen: active.pen,
+            color: active.color,
+            size: active.size,
+            opacity: active.opacity,
             points: pts,
-            shape: { ...tool.shape, simulatePressure: !realPressure.current },
+            shape: { ...active.shape, simulatePressure: !realPressure.current },
           },
     ]);
   };
@@ -281,11 +299,14 @@ export function DrawSurface({
         const st = all[i];
         return {
           id: st.id,
-          d: strokePath(st.pen, st.size, st.points, true, st.shape),
+          d: st.shape?.primitive ? shapePath(st.shape.primitive, st.points)
+            : strokePath(st.pen, st.size, st.points, true, st.shape),
+          primitive: st.shape?.primitive,
+          size: st.size,
           color: st.color,
           opacity: st.opacity,
           blend: PEN_BY_ID[st.pen].blend === "multiply",
-          dot: st.points.length
+          dot: !st.shape?.primitive && st.points.length
             ? { x: st.points[0][0], y: st.points[0][1], r: dotRadius(st.size) }
             : null,
         };
@@ -329,7 +350,7 @@ export function DrawSurface({
         WebkitUserSelect: disabled ? "auto" : "none",
         userSelect: disabled ? "auto" : "none",
         WebkitTapHighlightColor: "transparent",
-        cursor: disabled ? "default" : showBrushCursor ? "none" : "crosshair",
+        cursor: disabled ? "default" : primitive ? "crosshair" : showBrushCursor ? "none" : "crosshair",
         ...style,
       }}
       onPointerDown={onPointerDown}
@@ -378,10 +399,10 @@ export function DrawSurface({
             // The pass in progress subtracts too, so erasing is visible under
             // the nub as it happens rather than only on release.
             const live =
-              tool.kind === "eraser" &&
+              liveTool.kind === "eraser" &&
               current.length > 0 &&
               li === layers.length - 1
-                ? [{ d: polylinePath(current), width: tool.size }]
+                ? [{ d: polylinePath(current), width: liveTool.size }]
                 : [];
             const cuts = [...layer.erasers, ...live];
             const maskId = `e-${uid}-${li}`;
@@ -427,8 +448,13 @@ export function DrawSurface({
                     <path
                       key={s.id}
                       d={s.d}
-                      fill={s.color}
+                      fill={s.primitive ? "none" : s.color}
                       fillOpacity={s.opacity}
+                      stroke={s.primitive ? s.color : undefined}
+                      strokeWidth={s.primitive ? s.size : undefined}
+                      strokeOpacity={s.primitive ? s.opacity : undefined}
+                      strokeLinecap={s.primitive ? "round" : undefined}
+                      strokeLinejoin={s.primitive ? "round" : undefined}
                       style={s.blend ? { mixBlendMode: "multiply" } : undefined}
                     />
                   ) : s.dot ? (
@@ -447,16 +473,21 @@ export function DrawSurface({
             );
           })}
 
-          {tool.kind === "pen" && current.length > 0 && (
+          {liveTool.kind === "pen" && current.length > 0 && (
             <path
-              d={strokePath(tool.pen, tool.size, current, false, {
-                ...tool.shape,
+              d={primitive ? shapePath(primitive, current) : strokePath(liveTool.pen, liveTool.size, current, false, {
+                ...liveTool.shape,
                 simulatePressure: !realPressure.current,
               })}
-              fill={tool.color}
-              fillOpacity={tool.opacity}
+              fill={primitive ? "none" : liveTool.color}
+              fillOpacity={liveTool.opacity}
+              stroke={primitive ? liveTool.color : undefined}
+              strokeWidth={primitive ? liveTool.size : undefined}
+              strokeOpacity={primitive ? liveTool.opacity : undefined}
+              strokeLinecap={primitive ? "round" : undefined}
+              strokeLinejoin={primitive ? "round" : undefined}
               style={
-                PEN_BY_ID[tool.pen].blend === "multiply"
+                PEN_BY_ID[liveTool.pen].blend === "multiply"
                   ? { mixBlendMode: "multiply" }
                   : undefined
               }
@@ -466,14 +497,14 @@ export function DrawSurface({
 
         {/* Kept mounted and faded, so crossing onto the toolbar is a soft
             hand-off to the system cursor rather than a blink. */}
-        {showBrushCursor && lastHover.current && (
+        {showBrushCursor && !primitive && lastHover.current && (
           <g
             opacity={overBoard ? 1 : 0}
             style={{ transition: "opacity 120ms ease" }}
             pointerEvents="none"
           >
             <BrushCursor
-              tool={tool}
+              tool={liveTool}
               at={lastHover.current}
               scale={1}
               background={background}

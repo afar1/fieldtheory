@@ -31,5 +31,22 @@ export async function checkDrawingPixels(): Promise<string> {
   let emptyRejected=false;
   try {await exportDrawing(strokes,{w:100,h:100},'#fff',null,1);} catch {emptyRejected=true;}
   if (!emptyRejected) throw new Error('Fully erased drawing must be rejected');
-  return 'PASS: 1×/2× PNG dimensions, 48px padding, background survives erasing, paper pixels, highlighter blending, empty export rejection';
+  for (const primitive of ['rectangle', 'line', 'circle'] as const) {
+    const shape: Stroke = { id: 1, pen: 'pen', color: '#000000', size: 4, opacity: 1,
+      points: [[20, 20, .5], [80, 80, .5]], shape: { primitive } };
+    const exported = await exportDrawing([shape], { w: 100, h: 100 }, '#fff', null, 2);
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = exported.dataUrl; });
+    const canvas = document.createElement('canvas'); canvas.width = exported.width; canvas.height = exported.height;
+    const ctx = canvas.getContext('2d')!; ctx.drawImage(img, 0, 0);
+    const center = Array.from(ctx.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data);
+    const expected = primitive === 'line' ? '0,0,0,255' : '255,255,255,255';
+    if (center.join() !== expected) throw new Error(`${primitive} PNG center: ${center}`);
+    if (canvas.width < 300 || canvas.height < 300) throw new Error(`${primitive} crop clipped the shape`);
+    let erasedRejected = false;
+    try { await exportDrawing([shape, { ...strokes[1], size: 200 }], { w: 100, h: 100 }, '#fff', null, 1); }
+    catch { erasedRejected = true; }
+    if (!erasedRejected) throw new Error(`${primitive} cannot be fully erased`);
+  }
+  return 'PASS: 1×/2× PNG dimensions, 48px padding, background survives erasing, paper pixels, highlighter blending, empty export rejection; rectangle, line, and circle PNG centers, bounds, and erasing';
 }

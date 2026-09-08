@@ -1,5 +1,6 @@
 import { dotRadius, eraseLayers, polylinePath, strokePath } from "./geometry";
 import { PEN_BY_ID } from "./pens";
+import { shapePath } from "./shapes";
 import type { Stroke } from "./types";
 
 /** Escape a value destined for an XML attribute. */
@@ -16,6 +17,10 @@ export function esc(value: string): string {
  * stroke was too short to produce one (a tap).
  */
 function strokeMarkup(stroke: Stroke): string {
+  if (stroke.shape?.primitive) {
+    const d = shapePath(stroke.shape.primitive, stroke.points);
+    return d ? `<path d="${d}" fill="none" stroke="${esc(stroke.color)}" stroke-width="${stroke.size}" stroke-opacity="${stroke.opacity}" stroke-linecap="round" stroke-linejoin="round"/>` : "";
+  }
   const style =
     PEN_BY_ID[stroke.pen].blend === "multiply"
       ? ` style="mix-blend-mode:multiply"`

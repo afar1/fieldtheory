@@ -8,9 +8,11 @@ import {
   useState,
 } from "react";
 import { PENS, PEN_BY_ID } from "../engine/pens";
+import { isShape, SHAPES } from "../engine/shapes";
+import { ShapeIcon } from "./ShapeIcon";
 import { toPng, toSvg } from "../engine/serialize";
 import type { TooltipOptions } from "./Tooltip";
-import type { Board, PenId, Stroke, ToolId } from "../engine/types";
+import type { Board, InkToolId, PenId, Stroke, ToolId } from "../engine/types";
 import { useDrawing } from "../hooks/use-drawing";
 import { DrawSurface, type Tool } from "./DrawSurface";
 import { Toolbar, type ToolState } from "./Toolbar";
@@ -128,6 +130,7 @@ export type DrawProps = {
   tools?: PenId[];
   /** Whether the eraser is offered. */
   eraser?: boolean;
+  shapes?: boolean;
   /** Which of the built-in controls to show. All of them by default. */
   controls?: DrawControls;
   /** Where size and opacity live. */
@@ -166,6 +169,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
     tooltips = true,
     tools,
     eraser = true,
+    shapes = false,
     controls,
     settings = "bar",
     look = "classic",
@@ -231,7 +235,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
   }, [drawing.strokes]);
 
   /** The ink each pen was last used in. */
-  const [inks, setInks] = useState<Partial<Record<PenId, string>>>({});
+  const [inks, setInks] = useState<Partial<Record<InkToolId, string>>>({});
   /**
    * What each pen was last set to, for pens that have been adjusted.
    *
@@ -239,7 +243,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
    * when a tool is picked up again. A pen that's never been touched isn't in
    * here at all, so it still opens at its own default.
    */
-  const tuned = useRef<Partial<Record<PenId, { size: number; opacity: number }>>>(
+  const tuned = useRef<Partial<Record<InkToolId, { size: number; opacity: number }>>>(
     {},
   );
   /** The colour shared by every pen that doesn't keep one of its own. */
@@ -262,11 +266,11 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
   }, [theme]);
 
   const inkFor = useCallback(
-    (id: PenId) =>
+    (id: InkToolId) =>
       inkMode === "shared"
         ? ink
         : (inks[id] ??
-          (inkMode === "auto" ? PEN_BY_ID[id].defaultColor : undefined) ??
+          (inkMode === "auto" && !isShape(id) ? PEN_BY_ID[id].defaultColor : undefined) ??
           ink),
     [inks, ink, inkMode],
   );
@@ -274,7 +278,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
   const select = useCallback(
     (id: ToolId) => {
       if (id === "eraser") return setTool((t) => ({ ...t, active: "eraser" }));
-      const preset = PEN_BY_ID[id];
+      const preset = isShape(id) ? { defaultSize: 3, defaultOpacity: 1 } : PEN_BY_ID[id];
       // Whatever you last set this pen to, or its default if you never have.
       // Sizes belong to the tool, not to the toolbar: a highlighter set broad
       // and a fineliner set fine are two different decisions, and resetting
@@ -302,13 +306,13 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
           // applies to all of them.
           const own =
             inkMode === "per-tool" ||
-            (inkMode === "auto" && Boolean(PEN_BY_ID[t.active].defaultColor));
+            (inkMode === "auto" && !isShape(t.active) && Boolean(PEN_BY_ID[t.active].defaultColor));
           if (own)
-            setInks((m) => ({ ...m, [t.active as PenId]: p.color as string }));
+            setInks((m) => ({ ...m, [t.active]: p.color as string }));
           else setInk(p.color);
         }
         if ((p.size !== undefined || p.opacity !== undefined) && t.active !== "eraser") {
-          const id = t.active as PenId;
+          const id = t.active;
           tuned.current[id] = {
             size: p.size ?? t.size,
             opacity: p.opacity ?? t.opacity,
@@ -384,7 +388,8 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
         ? { kind: "eraser", size: tool.eraserSize }
         : {
             kind: "pen",
-            pen: tool.active,
+            pen: isShape(tool.active) ? "pen" : tool.active,
+            shape: isShape(tool.active) ? { primitive: tool.active } : undefined,
             color: tool.color,
             size: tool.size,
             opacity: tool.opacity,
@@ -414,7 +419,9 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
         e.preventDefault();
         return drawing.redo();
       }
-      if (meta) return;
+      if (meta || e.altKey || (e.target instanceof HTMLElement && (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)))) return;
+      const shape = shapes && SHAPES.find((shape) => shape.key === k);
+      if (shape) { e.preventDefault(); return select(shape.id); }
       if (k === "e" && eraser) return select("eraser");
       if (k === "[") return nudgeSize(-1);
       if (k === "]") return nudgeSize(1);
@@ -423,7 +430,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawing, select, pens, eraser, shortcuts, nudgeSize]);
+  }, [drawing, select, pens, eraser, shapes, shortcuts, nudgeSize]);
 
   /*
     Dragging the toolbar.
@@ -719,7 +726,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
             /* Half the bar's length, less half the disc it closes into, less
                the margin it keeps from the corner. The disc ends up 56 across
                whichever way the bar is laid, so this is the same either way. */
-            icon={
+            icon={isShape(tool.active) ? <ShapeIcon kind={tool.active} size={42} /> :
               <ToolIcon
                 id={tool.active === "eraser" ? "eraser" : tool.active}
                 color={tool.color}
@@ -738,6 +745,7 @@ export const Draw = forwardRef<DrawHandle, DrawProps>(function Draw(
             tooltips={tooltips}
             pens={pens}
             eraser={eraser}
+            shapes={shapes}
             controls={controls}
             settings={settings}
             look={look}

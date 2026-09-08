@@ -8,3 +8,5 @@ MIT copyright notice is retained in LICENSE. Field Theory integration lives outs
 Compatibility patch: Tooltip.tsx timer parameter uses MutableRefObject for React 18 type definitions (no runtime change).
 
 Formatting-only patch: removed trailing whitespace on one DrawSurface.tsx blank line.
+
+Field Theory shape extension: optional Rectangle, Line, and Circle picker and shortcuts; drag previews use two board-coordinate endpoints, with shared ink/width controls, eraser masks, history, drafts, and SVG/PNG serialization.
