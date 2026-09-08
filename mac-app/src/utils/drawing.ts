@@ -1,4 +1,5 @@
-import { toSvg, type Stroke, type Board } from '../vendor/drawesome';
+import { toSvg, esc } from '../vendor/drawesome/engine/serialize';
+import type { Stroke, Board } from '../vendor/drawesome/engine/types';
 export const SKETCH_EXPORT_PADDING = 48;
 export const DRAWING_DRAFT_KEY = 'pendingSketch.drawesome.v1';
 export type DrawingImage = { dataUrl: string; width: number; height: number };
@@ -21,14 +22,19 @@ async function loadImage(url: string): Promise<HTMLImageElement> {
   await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('Cannot load drawing image')); image.src = url; });
   return image;
 }
-/** Rasterize ink separately: eraser masks must never cut the underlying photo. */
+/** Place the image outside ink masks, but inside the SVG so highlighter blending matches the canvas. */
 export async function exportDrawing(strokes: Stroke[], board: Board, paper: string, image: PlacedImage | null, scale: number) {
-  const ink = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(toSvg(strokes, board.w, board.h, null))}`);
+  let svg = toSvg(strokes, board.w, board.h, null);
+  if (image) {
+    await loadImage(image.dataUrl);
+    const underlay = `<image href="${esc(image.dataUrl)}" x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}"/>`;
+    svg = svg.replace('>', `>${underlay}`);
+  }
+  const ink = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
   const layer = document.createElement('canvas');
   layer.width = Math.ceil(board.w * scale); layer.height = Math.ceil(board.h * scale);
   const ctx = layer.getContext('2d');
   if (!ctx) throw new Error('Cannot create drawing canvas');
-  if (image) ctx.drawImage(await loadImage(image.dataUrl), image.x * scale, image.y * scale, image.width * scale, image.height * scale);
   ctx.drawImage(ink, 0, 0, layer.width, layer.height);
   // Alpha bounds reflect actual erasing, pressure outlines and transparent images.
   const pixels = ctx.getImageData(0, 0, layer.width, layer.height).data;

@@ -7989,7 +7989,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleInlineDrawSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
     const insertion = inlineDrawInsertion;
-    if (!insertion || inlineDrawSaving) return;
+    if (!insertion || inlineDrawSaving) return false;
     setInlineDrawSaving(true);
     try {
       const copied = await window.markdownImagesAPI?.copyImageDataUrlForDocument(
@@ -8000,7 +8000,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!copied?.markdown) {
         alert('Failed to save drawing. Please try again.');
         setInlineDrawSaving(false);
-        return;
+        return false;
       }
 
       if (insertion.mode === 'rendered') {
@@ -8037,9 +8037,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
       setInlineDrawInsertion(null);
       setInlineDrawSaving(false);
+      return true;
     } catch {
       alert('Failed to save drawing. Please try again.');
       setInlineDrawSaving(false);
+      return false;
     }
   }, [
     applyMarkdownCodeEditorTextEdit,

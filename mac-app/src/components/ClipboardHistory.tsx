@@ -1929,7 +1929,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     // Legacy drafts are retained until explicitly recovered or discarded in their editor.
 
     const api = window.clipboardAPI;
-    if (!api?.restoreItem) return;
+    if (!api?.restoreItem) throw new Error('Drawing storage is unavailable');
 
     const base64Data = imageData.dataUrl.replace(/^data:image\/\w+;base64,/, '');
     const createdAt = Date.now();
@@ -1950,6 +1950,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       source: 'mac',
     } as any);
     
+    if (!newId) throw new Error('Drawing could not be stored');
+
     // If recording is active, add drawing to the transcription stack (like screenshots).
     if (newId && transcriptionStatus === 'recording') {
       await window.transcribeAPI?.addToStack(newId);

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef, lazy, Suspense } from 'react';
 import { Draw, type DrawHandle, type Board, type Stroke } from '../vendor/drawesome';
-import { DRAWING_DRAFT_KEY, readDrawingDraft, placeImage, exportDrawing } from '../utils/drawing';
+import { DRAWING_DRAFT_KEY, readDrawingDraft, placeImage, exportDrawing, type DrawingDraft } from '../utils/drawing';
 import { useTheme } from '../contexts/ThemeContext';
 
 type TranscriptItem = {
@@ -10,7 +10,7 @@ type TranscriptItem = {
 };
 
 interface SketchViewProps {
-  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void | Promise<void>;
+  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void | boolean | Promise<void | boolean>;
   onClose: () => void;
   existingSketch?: {
     id: number;
@@ -44,10 +44,35 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
   const drawRef = useRef<DrawHandle>(null);
   const exiting = useRef(false);
+  const pendingDraft = useRef<DrawingDraft | null>(null);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushDraft = useCallback(() => {
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    if (exiting.current || pendingDraft.current === null) return;
+    try { localStorage.setItem(DRAWING_DRAFT_KEY, JSON.stringify(pendingDraft.current)); }
+    catch { /* The live drawing remains usable if storage is full. */ }
+  }, []);
+  useEffect(() => {
+    window.addEventListener('beforeunload', flushDraft);
+    return () => { window.removeEventListener('beforeunload', flushDraft); flushDraft(); };
+  }, [flushDraft]);
   const [draft] = useState(() => !backgroundImage && !existingSketch ? readDrawingDraft() : null);
   const [board, setBoard] = useState<Board | null>(draft?.board ?? null);
   const [paper] = useState(() => draft?.paper ?? (theme.isDark ? '#202124' : '#ffffff'));
-  const source = backgroundImage ?? (existingSketch ? { dataUrl: existingSketch.imageData, width: existingSketch.width || 1200, height: existingSketch.height || 800 } : null) ?? draft?.image ?? null;
+  const [existingImage, setExistingImage] = useState(() => existingSketch ? {
+    dataUrl: existingSketch.imageData.startsWith('data:') ? existingSketch.imageData : `data:image/png;base64,${existingSketch.imageData}`,
+    width: existingSketch.width || 1200,
+    height: existingSketch.height || 800,
+  } : null);
+  useEffect(() => {
+    if (!existingImage || (existingSketch?.width && existingSketch?.height)) return;
+    let active = true;
+    const img = new Image();
+    img.onload = () => { if (active) setExistingImage(old => old && ({ ...old, width: img.naturalWidth, height: img.naturalHeight })); };
+    img.src = existingImage.dataUrl;
+    return () => { active = false; };
+  }, [existingImage?.dataUrl, existingSketch?.width, existingSketch?.height]);
+  const source = backgroundImage ?? existingImage ?? draft?.image ?? null;
   const image = useMemo(() => source && board ? placeImage(source, board) : null, [source, board]);
   const [transcriptPanelExpanded, setTranscriptPanelExpanded] = useState(false);
   const [transcriptPanelVisible, setTranscriptPanelVisible] = useState(false);
@@ -65,37 +90,43 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     return () => { observer.disconnect(); if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current); };
   }, []);
   const handleChange = useCallback((strokes: Stroke[]) => {
-    const dirty = strokes.length > 0;
+    const dirty = strokes.some(stroke => !stroke.erase && stroke.points.length > 0);
     setHasChanges(dirty);
     onHasChangesChange?.(dirty);
     if (!board || exiting.current) return;
-    try {
-      if (dirty) localStorage.setItem(DRAWING_DRAFT_KEY, JSON.stringify({ version: 1, engine: 'drawesome', strokes, board, paper, image: source, timestamp: Date.now() }));
-      else localStorage.removeItem(DRAWING_DRAFT_KEY);
-    } catch { /* Keep drawing usable if local storage is full. */ }
-  }, [board, paper, source, onHasChangesChange]);
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    if (dirty) {
+      pendingDraft.current = { version: 1, engine: 'drawesome', strokes, board, paper, image: source ?? undefined, timestamp: Date.now() };
+      persistTimer.current = setTimeout(flushDraft, 150);
+    } else {
+      pendingDraft.current = null;
+      localStorage.removeItem(DRAWING_DRAFT_KEY);
+    }
+  }, [board, paper, source, onHasChangesChange, flushDraft]);
   const handleSave = useCallback(async (andCopy = false) => {
     if (!drawRef.current || !board || isSaving) return;
     const strokes = drawRef.current.getStrokes();
     if (!strokes.some(s => !s.erase)) { alert('Please draw something before saving.'); return; }
+    flushDraft();
     setIsSaving(true);
     try {
       const result = await exportDrawing(strokes, board, paper, image, window.devicePixelRatio || 2);
-      await onSave(result, andCopy);
+      if (await onSave(result, andCopy) === false) return;
       exiting.current = true;
       localStorage.removeItem(DRAWING_DRAFT_KEY);
     } catch (error) {
       console.error('Failed to save drawing:', error);
-      alert('Failed to save drawing. Your draft is still available.');
+      alert('Failed to save drawing. Please try again.');
     } finally { setIsSaving(false); }
-  }, [board, paper, image, isSaving, onSave]);
+  }, [board, paper, image, isSaving, onSave, flushDraft]);
   useImperativeHandle(ref, () => ({ save: handleSave }), [handleSave]);
   const handleClose = useCallback(() => {
+    if (isSaving) return;
     if (hasChanges && !confirm('You have unsaved changes. Discard drawing?')) return;
     exiting.current = true;
     localStorage.removeItem(DRAWING_DRAFT_KEY);
     onClose();
-  }, [hasChanges, onClose]);
+  }, [hasChanges, isSaving, onClose]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void handleSave(); }
@@ -229,6 +260,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
             {image && <image href={image.dataUrl} x={image.x} y={image.y} width={image.width} height={image.height} />}
           </svg>
           <Draw ref={drawRef} board={board} initialStrokes={draft?.strokes} onChange={handleChange}
+            shortcuts={!isSaving} style={{ pointerEvents: isSaving ? 'none' : undefined }}
             background="transparent" theme={theme.isDark ? 'dark' : 'light'} look="studio" motion="none" />
         </>}
 
@@ -441,7 +473,7 @@ const DrawingEntry = forwardRef<SketchViewHandle, SketchViewProps>((props, ref) 
   const [hasLegacy] = useState(() => Boolean(localStorage.getItem('pendingSketch')));
   if (legacy) return <Suspense fallback={<div>Recovering previous drawing…</div>}><LegacySketchView {...props} ref={ref} /></Suspense>;
   return <>
-    {hasLegacy && !props.backgroundImage && !props.existingSketch && <div style={{ padding: 8, zIndex: 101 }}>
+    {hasLegacy && !props.backgroundImage && !props.existingSketch && <div style={{ position: 'absolute', top: props.hideHeader ? 8 : 52, left: 20, padding: 8, zIndex: 101, background: '#fff', color: '#333', borderRadius: 6 }}>
       An earlier Excalidraw draft is preserved. <button onClick={() => setLegacy(true)}>Recover previous drawing</button>
     </div>}
     <SketchView {...props} ref={ref} />

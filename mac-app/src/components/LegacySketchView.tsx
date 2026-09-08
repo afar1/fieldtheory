@@ -9,7 +9,7 @@ type TranscriptItem = {
 };
 
 interface SketchViewProps {
-  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void;
+  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void | boolean | Promise<void | boolean>;
   onClose: () => void;
   existingSketch?: {
     id: number;
@@ -94,8 +94,8 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       const pending = localStorage.getItem('pendingSketch');
       if (pending && !backgroundImage && !existingSketch) {
         const restored = JSON.parse(pending);
-        // Only restore if less than 24 hours old
-        if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
+        // Recovery is explicit; retain drafts regardless of age.
+        if (restored.elements?.length > 0) {
           return {
             elements: restored.elements,
             appState: restored.appState || baseData.appState,
@@ -186,9 +186,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       return;
     }
 
-    isExitingRef.current = true;
-    localStorage.removeItem('pendingSketch');
-
     setIsSaving(true);
 
     try {
@@ -212,12 +209,17 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       try {
         const dataUrl = await readBlobAsDataUrl(blob);
         const dimensions = await getImageDataUrlDimensions(dataUrl);
-        // pendingSketch already cleared synchronously at start of handleSave
-        onSave({
+        // Preserve recovery data until the host confirms storage succeeded.
+        const saved = await onSave({
           dataUrl,
           width: dimensions.width,
           height: dimensions.height,
         }, andCopy);
+        if (saved !== false) {
+          isExitingRef.current = true;
+          localStorage.removeItem('pendingSketch');
+        }
+        setIsSaving(false);
       } catch (error) {
         console.error('Failed to read exported sketch:', error);
         alert('Failed to save sketch. Please try again.');
@@ -249,17 +251,10 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   }, [hasChanges, onClose]);
 
   const prevElementCountRef = useRef(0);
-  const initialElementCountRef = useRef<number | null>(null);
-  
   const handleChange = useCallback((elements: readonly any[], appState: any) => {
     const activeElements = elements.filter((el: any) => !el.isDeleted);
-
-    // Track initial element count (e.g., 1 if background image, 0 if blank).
-    // User has made changes if element count differs from initial.
-    if (initialElementCountRef.current === null) {
-      initialElementCountRef.current = activeElements.length;
-    }
-    const newHasChanges = activeElements.length !== initialElementCountRef.current;
+    // Every recovered scene is unsaved in Field Theory, including same-count edits.
+    const newHasChanges = activeElements.length > 0;
     setHasChanges(newHasChanges);
     onHasChangesChange?.(newHasChanges);
 

@@ -221,6 +221,10 @@
         {
           "from": "electron/diarization/.build/checkouts/FluidAudio/LICENSE",
           "to": "licenses/FluidAudio-LICENSE.txt"
+        },
+        {
+          "from": "src/vendor/drawesome/LICENSE",
+          "to": "licenses/Drawesome-LICENSE.txt"
         }
       ]
     },
