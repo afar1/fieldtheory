@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as saveGuard from './documentSaveGuard';
 import { VoiceInboxService } from './voiceInboxService';
 import type { VoiceInboxTranscript } from './voiceInboxTypes';
+import { formatVoiceInboxTime, summarizeVoiceInboxTranscript } from '../shared/voiceInboxPresentation';
 
 const owner = '11111111-1111-4111-8111-111111111111';
 const other = '22222222-2222-4222-8222-222222222222';
@@ -17,6 +19,25 @@ const row = (overrides: Partial<VoiceInboxTranscript> = {}): VoiceInboxTranscrip
   createdAtMs: Date.parse('2026-01-02T03:04:05Z'), updatedAtMs: 1000, ...overrides,
 });
 const options = () => ({ stateDirectory: path.join(root, 'state'), libraryRoot: library });
+const sha = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+
+function legacyFixture(input: { editedText?: string; prefix?: string; suffix?: string; footer?: string; filename?: string } = {}) {
+  const folder = store.ensureFolder(owner);
+  const key = sha(JSON.stringify([owner, row().transcriptId]));
+  const notePath = path.join(folder, input.filename ?? 'Voice 2026-01-02 03.04.05.md');
+  const receipt = `\nSent to [Codex conversation](codex://threads/${thread}).\n`;
+  const content = `${input.prefix ?? ''}<!-- field-theory-voice:${key} -->\n\n${input.editedText ?? row().text}\n\n<!-- field-theory-voice-sent:${key} -->${input.footer ?? receipt}<!-- /field-theory-voice-sent:${key} -->\n${input.suffix ?? ''}`;
+  fs.writeFileSync(notePath, content);
+  const stat = fs.statSync(notePath);
+  const ledgerPath = path.join(root, 'state', `${sha(owner)}.json`);
+  const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+  ledger.entries[key] = { transcriptId: row().transcriptId, notePath, identity: { dev: stat.dev, ino: stat.ino },
+    textHash: sha(`\n\n${row().text}\n\n`), receiptHash: sha(receipt), updatedAtMs: row().updatedAtMs,
+    dispatch: { transcriptId: row().transcriptId, threadId: thread, turnId: 'confirmed-legacy-turn' } };
+  fs.writeFileSync(ledgerPath, JSON.stringify(ledger));
+  store = new VoiceInboxService(options());
+  return { notePath, ledgerPath, key, content, receipt };
+}
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'voice-inbox-service-')));
@@ -110,9 +131,10 @@ describe('Voice Inbox Library records', () => {
     expect(() => store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread })).toThrow(/confirmed/);
     expect(() => store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: 'https://evil', turnId: 'real-turn' })).toThrow(/actual/);
     const sent = store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread, turnId: 'real-turn' });
-    expect(sent.status).toBe('updated');
+    expect(sent.status).toBe('unchanged');
     const content = fs.readFileSync(note.notePath!, 'utf8');
-    expect(content).toContain(`Sent to [Codex conversation](codex://threads/${thread}).`);
+    expect(content).toBe(row().text);
+    expect(store.getPresentation(owner).notes[0].threadId).toBe(thread);
     expect(content).not.toContain('real-turn');
     expect(content).toContain(row().text);
     expect(store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread, turnId: 'real-turn' }).status).toBe('unchanged');
@@ -123,7 +145,8 @@ describe('Voice Inbox Library records', () => {
     expect(fs.existsSync(library)).toBe(false);
     const restarted = new VoiceInboxService(options());
     const note = restarted.materialize(owner, [row()])[0];
-    expect(fs.readFileSync(note.notePath!, 'utf8')).toContain(`codex://threads/${thread}`);
+    expect(fs.readFileSync(note.notePath!, 'utf8')).toBe(row().text);
+    expect(restarted.getPresentation(owner).notes[0].threadId).toBe(thread);
   });
 
   it('preserves user edits and additions while adding the truthful sent receipt', () => {
@@ -138,7 +161,8 @@ describe('Voice Inbox Library records', () => {
     expect(updated).toContain('My hand-edited transcript.');
     expect(updated).toContain('My notes.');
     expect(updated).not.toContain('A later synced correction.');
-    expect(updated).toContain(`codex://threads/${thread}`);
+    expect(updated).not.toContain('codex://');
+    expect(store.getPresentation(owner).notes[0].threadId).toBe(thread);
   });
 
   it('does not overwrite a note changed between the read and guarded save', () => {
@@ -148,7 +172,7 @@ describe('Voice Inbox Library records', () => {
       fs.writeFileSync(file, 'A newer edit from the editor.');
       return original(file, content, version);
     });
-    expect(store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread, turnId: 'real-turn' }).status).toBe('preserved');
+    expect(store.materialize(owner, [row({ text: 'A synced correction.', updatedAtMs: 2000 })])[0].status).toBe('preserved');
     expect(fs.readFileSync(note.notePath!, 'utf8')).toBe('A newer edit from the editor.');
   });
 
@@ -177,5 +201,168 @@ describe('Voice Inbox Library records', () => {
     expect(restarted.getCursor(owner, 'transcripts')).toEqual(cursor);
     expect(restarted.getCursor(owner, 'jobs')).toBeNull();
     expect(restarted.getCursor(other, 'transcripts')).toBeNull();
+  });
+
+  it('writes only exact transcript text and changes confirmed metadata without touching note bytes', () => {
+    const onChanged = vi.fn(); store = new VoiceInboxService({ ...options(), onChanged });
+    const note = store.materialize(owner, [row()])[0];
+    expect(fs.readFileSync(note.notePath!, 'utf8')).toBe(row().text);
+    const before = fs.statSync(note.notePath!); onChanged.mockClear();
+    store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread, turnId: 'real-turn' });
+    expect(fs.statSync(note.notePath!).mtimeMs).toBe(before.mtimeMs);
+    expect(onChanged).toHaveBeenCalledWith(note.notePath);
+    const presentation = store.getPresentation(owner);
+    expect(presentation.notes[0]).toMatchObject({ notePath: note.notePath, transcriptId: row().transcriptId,
+      createdAtMs: row().createdAtMs, threadId: thread, wordCount: 7 });
+    expect(Object.keys(presentation.notes[0]).sort()).toEqual(['createdAtMs', 'notePath', 'threadId', 'title', 'transcriptId', 'wordCount']);
+    expect(store.canOpenTask(owner, thread)).toBe(true);
+    expect(store.canOpenTask(other, thread)).toBe(false);
+    expect(store.canOpenTask(owner, 'file:///secret')).toBe(false);
+  });
+
+  it('reads legacy presentation without writes and migrates its wrappers while keeping identity and confirmation', () => {
+    const legacy = legacyFixture();
+    const ledgerBefore = fs.readFileSync(legacy.ledgerPath, 'utf8');
+    expect(store.getPresentation(owner).notes[0]).toMatchObject({ createdAtMs: row().createdAtMs, threadId: thread });
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe(legacy.content);
+    expect(fs.readFileSync(legacy.ledgerPath, 'utf8')).toBe(ledgerBefore);
+    expect(store.migrateLegacyNotes(owner)).toEqual({ migrated: 1, preserved: 0, remaining: 0 });
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe(row().text);
+    const restarted = new VoiceInboxService(options());
+    expect(restarted.canOpenTask(owner, thread)).toBe(true);
+    expect(restarted.materialize(owner, [row()])[0].notePath).toBe(legacy.notePath);
+    expect(restarted.materialize(owner, [row({ text: 'A genuine newer correction.', updatedAtMs: 2000 })])[0].status).toBe('updated');
+    expect(fs.readdirSync(path.dirname(legacy.notePath))).toHaveLength(1);
+  });
+
+  it('preserves edited legacy transcript, additions, and footer notes while removing generated wrappers', () => {
+    const legacy = legacyFixture({ editedText: 'My edited transcript.', prefix: 'My introduction.\n\n',
+      suffix: '\nMy appended note.', footer: `\nSent to [Codex conversation](codex://threads/${thread}).\nMy footer note.` });
+    store.migrateLegacyNotes(owner);
+    const content = fs.readFileSync(legacy.notePath, 'utf8');
+    for (const text of ['My edited transcript.', 'My introduction.', 'My appended note.', 'My footer note.']) expect(content).toContain(text);
+    expect(content).not.toContain('<!--'); expect(content).not.toContain('codex://');
+    expect(store.materialize(owner, [row({ text: 'Remote correction.', updatedAtMs: 2000 })])[0].status).toBe('preserved');
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe(content);
+  });
+
+  it('does not strip a legacy note changed during migration and retries safely later', () => {
+    const legacy = legacyFixture();
+    const guarded = saveGuard.writeTextFileWithConflictGuard;
+    const raced = legacy.content.replace(row().text, 'A just-saved user correction.');
+    vi.spyOn(saveGuard, 'writeTextFileWithConflictGuard').mockImplementationOnce((file, content, version) => {
+      fs.writeFileSync(file, raced); return guarded(file, content, version);
+    });
+    expect(store.migrateLegacyNotes(owner)).toMatchObject({ migrated: 0, preserved: 1 });
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe(raced);
+    expect(store.migrateLegacyNotes(owner)).toMatchObject({ migrated: 1 });
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe('A just-saved user correction.');
+  });
+
+  it('infers only valid legacy UTC filenames and never fabricates an unknown creation time', () => {
+    legacyFixture({ filename: 'My renamed transcript.md' });
+    expect(store.getPresentation(owner).notes[0].createdAtMs).toBeNull();
+    store.migrateLegacyNotes(owner);
+    expect(store.getPresentation(owner).notes[0].createdAtMs).toBeNull();
+    store.materialize(owner, [row()]);
+    expect(store.getPresentation(owner).notes[0].createdAtMs).toBe(row().createdAtMs);
+  });
+
+  it('restricts presentation to the selected folder, tracks file renames read-only, and bounds lists', () => {
+    const note = store.materialize(owner, [row()])[0];
+    const renamed = path.join(path.dirname(note.notePath!), 'My transcript.md'); fs.renameSync(note.notePath!, renamed);
+    const ledgerBefore = fs.readFileSync(path.join(root, 'state', `${sha(owner)}.json`), 'utf8');
+    expect(store.getPresentation(owner).notes[0].notePath).toBe(renamed);
+    expect(fs.readFileSync(path.join(root, 'state', `${sha(owner)}.json`), 'utf8')).toBe(ledgerBefore);
+    store.materialize(owner, [row({ transcriptId: 'second', createdAtMs: row().createdAtMs + 1000 })]);
+    expect(store.getPresentation(owner, 1)).toMatchObject({ notes: [expect.objectContaining({ transcriptId: 'second' })], truncated: true });
+    const alternate = path.join(library, 'Other'); fs.mkdirSync(alternate); store.selectFolder(owner, alternate);
+    expect(store.getPresentation(owner)).toEqual({ folderPath: alternate, notes: [], truncated: false });
+    expect(store.getPresentation(other)).toEqual({ folderPath: null, notes: [], truncated: false });
+  });
+
+  it('preserves a plain note published just before a crash without creating a duplicate on restart', () => {
+    const link = fs.linkSync;
+    vi.spyOn(fs, 'linkSync').mockImplementationOnce((source, target) => {
+      link(source, target); throw new Error('Simulated crash after publication.');
+    });
+    expect(() => store.materialize(owner, [row()])).toThrow(/Simulated crash/);
+    const restarted = new VoiceInboxService(options());
+    const note = restarted.materialize(owner, [row()])[0];
+    expect(fs.readFileSync(note.notePath!, 'utf8')).toBe(row().text);
+    expect(fs.readdirSync(path.dirname(note.notePath!))).toHaveLength(1);
+    expect(restarted.materialize(owner, [row()])[0].status).toBe('unchanged');
+  });
+
+  it('summarizes edited text with bounded first/last words and formats local-style capture times without seconds', () => {
+    expect(summarizeVoiceInboxTranscript('one two three four five six seven eight nine ten'))
+      .toEqual({ title: 'one two three four … seven eight nine ten', wordCount: 10 });
+    expect(summarizeVoiceInboxTranscript('  first\n second\tthird  ')).toEqual({ title: 'first second third', wordCount: 3 });
+    expect(Array.from(summarizeVoiceInboxTranscript('😀'.repeat(300)).title).length).toBeLessThanOrEqual(180);
+    expect(formatVoiceInboxTime(Date.parse('2026-01-02T00:04:59Z'), 'UTC')).toBe('12:04 a.m.');
+    expect(formatVoiceInboxTime(Date.parse('2026-01-02T13:05:59Z'), 'UTC')).toBe('1:05 p.m.');
+    expect(formatVoiceInboxTime(null, 'UTC')).toBe('');
+    const note = store.materialize(owner, [row()])[0]; fs.writeFileSync(note.notePath!, 'An edited voice transcript with four more words today.');
+    expect(store.getPresentation(owner).notes[0]).toMatchObject({ title: 'An edited voice transcript … four more words today.', wordCount: 9 });
+  });
+
+  it('recovers migration after the plain write but before its ledger save without replay or lost edits', () => {
+    const legacy = legacyFixture();
+    const guarded = saveGuard.writeTextFileWithConflictGuard;
+    vi.spyOn(saveGuard, 'writeTextFileWithConflictGuard').mockImplementationOnce((file, content, version) => {
+      guarded(file, content, version); throw new Error('Simulated migration crash.');
+    });
+    store.migrateLegacyNotes(owner);
+    expect(fs.readFileSync(legacy.notePath, 'utf8')).toBe(row().text);
+    const restarted = new VoiceInboxService(options());
+    expect(restarted.migrateLegacyNotes(owner)).toMatchObject({ migrated: 1 });
+    expect(restarted.materialize(owner, [row({ text: 'A later correction.', updatedAtMs: 2000 })])[0].status).toBe('updated');
+    expect(restarted.canOpenTask(owner, thread)).toBe(true);
+    expect(fs.readdirSync(path.dirname(legacy.notePath))).toHaveLength(1);
+  });
+
+  it('skips oversized notes and symlink redirects without exposing or changing their contents', () => {
+    const note = store.materialize(owner, [row()])[0];
+    fs.writeFileSync(note.notePath!, 'x'.repeat(1024 * 1024 + 1));
+    expect(store.getPresentation(owner)).toMatchObject({ notes: [], truncated: true });
+    fs.unlinkSync(note.notePath!);
+    const outside = path.join(root, 'private.md'); fs.writeFileSync(outside, 'Private unrelated note.');
+    fs.symlinkSync(outside, note.notePath!);
+    expect(store.getPresentation(owner).notes).toEqual([]);
+    expect(() => store.materialize(owner, [row({ text: 'A correction.', updatedAtMs: 2000 })])).toThrow(/regular file/);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('Private unrelated note.');
+  });
+
+  it('rejects a parent symlink redirect during bulk legacy migration', () => {
+    const legacy = legacyFixture();
+    const child = path.join(path.dirname(legacy.notePath), 'Nested'); fs.mkdirSync(child);
+    const nested = path.join(child, path.basename(legacy.notePath)); fs.renameSync(legacy.notePath, nested);
+    const ledger = JSON.parse(fs.readFileSync(legacy.ledgerPath, 'utf8'));
+    ledger.entries[legacy.key].notePath = nested; fs.writeFileSync(legacy.ledgerPath, JSON.stringify(ledger));
+    const outside = path.join(root, 'Outside'); fs.renameSync(child, outside); fs.symlinkSync(outside, child);
+    store = new VoiceInboxService(options());
+    expect(store.migrateLegacyNotes(owner)).toEqual({ migrated: 0, preserved: 1, remaining: 0 });
+    expect(fs.readFileSync(path.join(outside, path.basename(nested)), 'utf8')).toBe(legacy.content);
+    expect(store.getPresentation(owner).notes).toEqual([]);
+  });
+
+  it('continues bounded local migration batches past preserved notes without looping on them', () => {
+    const first = legacyFixture();
+    const ledger = JSON.parse(fs.readFileSync(first.ledgerPath, 'utf8'));
+    fs.writeFileSync(first.notePath, 'A user replaced this legacy body completely.');
+    for (let i = 1; i <= 3; i++) {
+      const key = sha(JSON.stringify([owner, `legacy-${i}`]));
+      const file = path.join(path.dirname(first.notePath), `Legacy ${i}.md`);
+      fs.writeFileSync(file, first.content.replaceAll(first.key, key));
+      const stat = fs.statSync(file);
+      ledger.entries[key] = { ...ledger.entries[first.key], transcriptId: `legacy-${i}`, notePath: file,
+        identity: { dev: stat.dev, ino: stat.ino } };
+    }
+    fs.writeFileSync(first.ledgerPath, JSON.stringify(ledger)); store = new VoiceInboxService(options());
+    expect(store.migrateLegacyNotes(owner, 1)).toEqual({ migrated: 0, preserved: 1, remaining: 3 });
+    expect(store.migrateLegacyNotes(owner, 1)).toEqual({ migrated: 1, preserved: 0, remaining: 2 });
+    expect(store.migrateLegacyNotes(owner, 1)).toEqual({ migrated: 1, preserved: 0, remaining: 1 });
+    expect(store.migrateLegacyNotes(owner, 1)).toEqual({ migrated: 1, preserved: 0, remaining: 0 });
+    expect(fs.readFileSync(first.notePath, 'utf8')).toBe('A user replaced this legacy body completely.');
   });
 });

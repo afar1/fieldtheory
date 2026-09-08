@@ -118,7 +118,8 @@ describe('Voice Inbox authenticated history and push sync', () => {
     h.channels[0].status!('SUBSCRIBED'); await pending;
     expect(notes()).toHaveLength(3);
     expect(notes().find((body) => body.includes('transcript 1.'))).not.toContain('Sent to');
-    expect(notes().filter((body) => body.includes(`codex://threads/${thread}`))).toHaveLength(2);
+    expect(store.getPresentation(owner).notes.filter((note) => note.threadId === thread)).toHaveLength(2);
+    expect(notes().some((body) => body.includes('codex://') || body.includes('<!--'))).toBe(false);
     for (const request of h.requests) {
       expect(request.owner).toBe(owner); expect(request.limit).toBe(2);
       expect(request.fields).not.toContain('final_response');
@@ -150,7 +151,7 @@ describe('Voice Inbox authenticated history and push sync', () => {
     h.requests.length = 0;
     h.channels[0].status!('SUBSCRIBED'); await sync.refresh();
     expect(h.requests[0].lower).toBeUndefined();
-    expect(notes().find((body) => body.includes('transcript 1.'))).toContain(`codex://threads/${thread}`);
+    expect(store.getPresentation(owner).notes.find((note) => note.transcriptId === 'phone-1')?.threadId).toBe(thread);
     sync.stop();
     h.data.transcripts.push(transcript(2, { updated_at: earlier }));
     store = new VoiceInboxService({ stateDirectory: path.join(root, 'state'), libraryRoot: path.join(root, 'Library') });
