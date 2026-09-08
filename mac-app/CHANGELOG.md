@@ -1,3 +1,12 @@
+## 0.3.47-preview.1 — local combined preview
+
+- Keep synced Voice transcripts in Library with direct links to their Codex tasks, preserving folder choices, user edits and folder renames.
+- Cycle through enabled Launcher sections in saved order with Tab and Shift-Tab.
+- Use readable Codex conversations and bounded project/task routing, with safer reconnect, interruption and account-change handling.
+- Replace the default drawing surface with Benji Taylor’s Drawesome freehand tools; preserve PNG annotations and explicit recovery of older Excalidraw drafts.
+
+This is a local user-test candidate. Native UI, physical phone, locked-screen and sleep acceptance remain pending installation. See `docs/VOICE_COMBINED_PREVIEW_SCOPE.md` and `docs/DRAWESOME_PREVIEW.md` for exact scope and evidence limits.
+
 # Changelog
 
 All notable changes to Field Theory will be documented in this file.

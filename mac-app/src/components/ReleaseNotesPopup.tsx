@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.47-preview.1': [
+    'Keep synced Voice transcripts in Library with direct links to their Codex tasks; choose or rename the Inbox folder',
+    'Move through enabled Launcher sections in saved order with Tab and Shift-Tab',
+    'Read Voice requests and replies naturally in Codex, with project/task routing and safer reconnect, interruption, and account-change recovery',
+    'Draw with Benji Taylor’s Drawesome: freehand pens, erasing, undo/redo and image annotations; recover existing Excalidraw drafts',
+  ],
   '0.3.47-voice.2': [
     'Fixed Voice requests setup in Library Settings, including readiness checks and the folder picker',
     'Automatic requests remain disabled until the voice delivery service is activated',
@@ -560,6 +566,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.47-preview.1': 'September 7, 2026',
   '0.3.47-voice.2': 'September 7, 2026',
   '0.3.47-voice.1': 'September 7, 2026',
   '0.3.46': 'September 7, 2026',
