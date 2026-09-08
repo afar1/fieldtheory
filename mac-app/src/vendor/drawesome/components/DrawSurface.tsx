@@ -316,7 +316,7 @@ export function DrawSurface({
         display: "block",
         /*
           A disabled surface gets out of the way completely.
-          
+
           Gating the handler isn't enough when the surface is laid over a page:
           it still swallows every scroll, selection and click underneath it, so
           "drawing is off" reads to the user as "the page is broken". Off means

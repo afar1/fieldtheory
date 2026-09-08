@@ -61,10 +61,10 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
   // Track when user explicitly exits (back, save, save copy) to prevent re-saving pendingSketch
   const isExitingRef = useRef(false);
-  
+
   // Track container dimensions for responsive canvas sizing.
   const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
-  
+
   // Update container size on mount and resize.
   useEffect(() => {
     const updateSize = () => {
@@ -73,12 +73,12 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         setContainerSize({ width: rect.width || 1200, height: rect.height || 800 });
       }
     };
-    
+
     updateSize();
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
   }, []);
-  
+
   // Floating transcript panel state.
   const [transcriptPanelExpanded, setTranscriptPanelExpanded] = useState(false);
   const [transcriptPanelVisible, setTranscriptPanelVisible] = useState(false);
@@ -114,7 +114,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const maxScale = 0.5;
     const maxWidth = containerWidth * maxScale;
     const maxHeight = containerHeight * maxScale;
-    
+
     const scale = Math.min(maxWidth / backgroundImage.width, maxHeight / backgroundImage.height, 1);
     const finalWidth = backgroundImage.width * scale;
     const finalHeight = backgroundImage.height * scale;
@@ -124,7 +124,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const fileId = `bg-${backgroundImage.dataUrl.length}-${backgroundImage.width}x${backgroundImage.height}`;
     const dataUrl = backgroundImage.dataUrl;
     const mime = dataUrl.split(',')[0].match(/:(.*?);/)?.[1] || 'image/png';
-    
+
     return {
       ...baseData,
       elements: [{
@@ -272,12 +272,12 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     }
 
     if (!excalidrawAPI) return;
-    
+
     const currentTool = appState?.activeTool?.type;
     const elementCount = activeElements.length;
     const prevCount = prevElementCountRef.current;
     prevElementCountRef.current = elementCount;
-    
+
     // When user selects a drawing tool, lock it so it stays active after drawing.
     // Excalidraw's locked: true prevents auto-switch to selection after each stroke.
     if (currentTool && currentTool !== 'selection' && currentTool !== 'hand') {
@@ -311,7 +311,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           }
         }
       });
-      
+
       // Hide Library button and diamond tool.
       const buttons = document.querySelectorAll('.excalidraw button');
       buttons.forEach((btn) => {
@@ -319,7 +319,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         const ariaLabel = btn.getAttribute('aria-label') || '';
         const title = btn.getAttribute('title') || '';
         if (
-          text === 'Library' || 
+          text === 'Library' ||
           text.includes('Library') ||
           ariaLabel.toLowerCase().includes('library') ||
           title.toLowerCase().includes('library') ||
@@ -329,7 +329,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           (btn as HTMLElement).style.display = 'none';
         }
       });
-      
+
       // Also hide any aside elements (Library sidebar).
       const asides = document.querySelectorAll('.excalidraw aside');
       asides.forEach((aside) => {
@@ -471,7 +471,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         </div>
       )}
 
-      <div 
+      <div
         ref={containerRef}
         style={{
           flex: 1,
@@ -629,7 +629,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
               Aa
             </button>
           )}
-          
+
           {transcriptPanelExpanded && (
             <div
               style={{
@@ -700,7 +700,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
               </div>
             </div>
           )}
-          
+
           {transcriptPanelVisible && !transcriptPanelExpanded && (
             <div
               style={{

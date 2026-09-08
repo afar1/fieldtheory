@@ -1,6 +1,6 @@
 # Drawesome drawing preview
 
-The default Mac drawing surface uses Benji Taylor's Drawesome 0.1.1, pinned to upstream commit `8fb08e93433e2cda32e265280371a0551b3c13a7`. Source and MIT notice are in `mac-app/src/vendor/drawesome`; the only upstream change is a React 18 tooltip ref type compatibility patch. The package includes the MIT notice in `Contents/Resources/licenses/Drawesome-LICENSE.txt`.
+The default Mac drawing surface uses Benji Taylor's Drawesome 0.1.1, pinned to upstream commit `8fb08e93433e2cda32e265280371a0551b3c13a7`. Source and MIT notice are in `mac-app/src/vendor/drawesome`; upstream changes are a React 18 tooltip ref type compatibility patch and one whitespace cleanup. The package includes the MIT notice in `Contents/Resources/licenses/Drawesome-LICENSE.txt`.
 
 ## Behavior
 
