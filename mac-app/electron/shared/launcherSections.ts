@@ -21,7 +21,9 @@ export function normalizeLauncherSections(value: unknown): LauncherSection[] {
   return sections.length ? sections : ['recents'];
 }
 
-export function nextLauncherSection(current: LauncherSection, sections: LauncherSection[]): LauncherSection {
+export function nextLauncherSection(current: LauncherSection, sections: LauncherSection[], direction: 1 | -1 = 1): LauncherSection {
   const enabled = normalizeLauncherSections(sections);
-  return enabled[(enabled.indexOf(current) + 1) % enabled.length];
+  const index = enabled.indexOf(current);
+  if (index < 0) return direction === 1 ? enabled[0] : enabled[enabled.length - 1];
+  return enabled[(index + direction + enabled.length) % enabled.length];
 }

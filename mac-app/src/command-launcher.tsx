@@ -70,9 +70,7 @@ import {
   normalizeLauncherRootSearchEnabledKinds,
   resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
-  resolveLauncherBookmarkFacetNamespace,
   resolveLauncherCommandOpenTarget,
-  resolveLauncherDirectoryNamespace,
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherLibraryMarkdownItem,
@@ -82,7 +80,6 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
-  shouldSwitchLauncherDefaultPanelOnTab,
   shouldTraceLauncherRendererEvent,
   warmLauncherSearchableItemCache,
   scoreLauncherSearchableItem,
@@ -388,23 +385,7 @@ function writeLauncherUsageMap(next: LauncherUsageMap): void {
 
 const NAMESPACE_PREFIXES = ['wiki', 'artifact', 'actions', 'river', 'recent'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
-const LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY = 'fieldTheory.launcher.defaultPanelSource.v1';
 const LAUNCHER_DEFAULT_PANEL_EXPANDED_STORAGE_KEY = 'fieldTheory.launcher.defaultPanelExpanded.v1';
-
-function readLauncherDefaultPanelSource(): LauncherDefaultPanelSource {
-  try {
-    const stored = localStorage.getItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY);
-    return normalizeLauncherSections([stored])[0];
-  } catch {
-    return 'recents';
-  }
-}
-
-function writeLauncherDefaultPanelSource(source: LauncherDefaultPanelSource): void {
-  try {
-    localStorage.setItem(LAUNCHER_DEFAULT_PANEL_SOURCE_STORAGE_KEY, source);
-  } catch {}
-}
 
 function readLauncherDefaultPanelExpanded(): boolean {
   try {
@@ -966,7 +947,10 @@ export function CommandLauncher() {
   const [riverShareSource, setRiverShareSource] = useState<LauncherLibraryMoveSource | null>(null);
   const [clipboardSearchActive, setClipboardSearchActive] = useState(false);
   const [launcherSections, setLauncherSections] = useState<LauncherSection[]>(() => normalizeLauncherSections(undefined));
-  const [launcherDefaultPanelSource, setLauncherDefaultPanelSource] = useState<LauncherDefaultPanelSource>(() => readLauncherDefaultPanelSource());
+  const launcherSectionsRef = useRef(launcherSections);
+  const launcherSettingsRequestRef = useRef(0);
+  const launcherSectionNavigationRef = useRef(0);
+  const [launcherDefaultPanelSource, setLauncherDefaultPanelSource] = useState<LauncherDefaultPanelSource>(launcherSections[0]);
   const [launcherDefaultPanelExpanded, setLauncherDefaultPanelExpanded] = useState<boolean>(() => readLauncherDefaultPanelExpanded());
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
@@ -1224,17 +1208,21 @@ export function CommandLauncher() {
 
   const loadLauncherSettings = useCallback(async () => {
     const startedAt = performance.now();
+    const requestId = ++launcherSettingsRequestRef.current;
     try {
       const settings = await commandsAPI.getLauncherSettings();
+      if (requestId !== launcherSettingsRequestRef.current) return;
       const sections = normalizeLauncherSections(settings?.sections);
+      launcherSectionsRef.current = sections;
       setLauncherSections(sections);
-      setLauncherDefaultPanelSource(current => sections.includes(current) ? current : sections[0]);
+      setLauncherDefaultPanelSource(current => launcherSectionNavigationRef.current > 0 && sections.includes(current) ? current : sections[0]);
       const normalized = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds as LauncherRootSearchEnabledKinds);
       setLauncherRootSearchEnabledKinds(prev => (
         areLauncherRootSearchEnabledKindsEqual(prev, normalized) ? prev : normalized
       ));
       traceLauncherLoad('load-launcher-settings', startedAt);
     } catch (err) {
+      if (requestId !== launcherSettingsRequestRef.current) return;
       traceLauncherLoad('load-launcher-settings', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to load launcher settings:', err);
       setLauncherRootSearchEnabledKinds(prev => (
@@ -1711,6 +1699,8 @@ export function CommandLauncher() {
   }, []);
 
   const clearLauncherSessionState = useCallback(() => {
+    launcherSectionNavigationRef.current = 0;
+    setLauncherDefaultPanelSource(launcherSectionsRef.current[0]);
     authorNamespaceRef.current = null;
     bookmarkNamespaceRef.current = null;
     authorBookmarkRequestRef.current += 1;
@@ -1736,6 +1726,7 @@ export function CommandLauncher() {
     setAuthorBookmarkItems([]);
     setBookmarkNamespaceBookmarks([]);
     setBookmarkNamespaceItems([]);
+    filteredRef.current = [];
     setFiltered([]);
     setHasExplicitSelection(false);
     setCommittedItemId(null);
@@ -2278,7 +2269,7 @@ export function CommandLauncher() {
   const getDefaultPanelItemsForSource = useCallback((source: LauncherDefaultPanelSource, expanded: boolean): LauncherItem[] => (
     getLauncherDefaultPanelItems({
       expanded,
-      isRootIdle: isRootIdleLauncher,
+      isRootIdle: true,
       source,
       recentItems: recentFileItems,
       clipboardItems: clipboardLauncherItems,
@@ -2286,7 +2277,7 @@ export function CommandLauncher() {
       riverItems: riverPanelItems,
       folderItems: getFolderPanelItems(source),
     })
-  ), [getFolderPanelItems, riverPanelItems, bookmarkPostItems, clipboardLauncherItems, isRootIdleLauncher, recentFileItems]);
+  ), [getFolderPanelItems, riverPanelItems, bookmarkPostItems, clipboardLauncherItems, recentFileItems]);
 
   const nextDefaultPanelSource = nextLauncherSection(launcherDefaultPanelSource, launcherSections);
   const defaultPanelSourceLabel = getLauncherDefaultPanelSourceLabel(launcherDefaultPanelSource);
@@ -2314,20 +2305,23 @@ export function CommandLauncher() {
     resizeLauncherForDefaultPanel,
   ]);
 
-  const switchDefaultPanelSource = useCallback(() => {
-    writeLauncherDefaultPanelSource(nextDefaultPanelSource);
+  const switchDefaultPanelSource = useCallback((direction: 1 | -1 = 1) => {
+    const nextSource = nextLauncherSection(launcherDefaultPanelSource, launcherSectionsRef.current, direction);
+    clearLauncherSessionState();
+    launcherSectionNavigationRef.current++;
     writeLauncherDefaultPanelExpanded(true);
-    setLauncherDefaultPanelSource(nextDefaultPanelSource);
+    setLauncherDefaultPanelSource(nextSource);
     setLauncherDefaultPanelExpanded(true);
-    applyFilteredResults(getDefaultPanelItemsForSource(nextDefaultPanelSource, true));
+    applyFilteredResults(getDefaultPanelItemsForSource(nextSource, true));
     resetSoftSelection();
     resizeLauncherForDefaultPanel(true);
     focusLauncherInput();
   }, [
     applyFilteredResults,
+    clearLauncherSessionState,
     focusLauncherInput,
     getDefaultPanelItemsForSource,
-    nextDefaultPanelSource,
+    launcherDefaultPanelSource,
     resetSoftSelection,
     resizeLauncherForDefaultPanel,
   ]);
@@ -3011,6 +3005,15 @@ export function CommandLauncher() {
       return;
     }
 
+    // Source browsing uses an explicit result and Enter, leaving Tab exclusively
+    // for the configured section carousel. An exact portable command still wins.
+    const namedSource = allItems.find(item => item.type === 'source' && item.name === q);
+    if (namedSource && !commandItems.some(item => item.name.toLowerCase() === q)) {
+      showResults([namedSource]);
+      resizeForResults(1);
+      return;
+    }
+
     const areaActionId = getLauncherAreaActionIdForQuery(q);
     if (areaActionId) {
       const areaAction = allItems.find((item) => item.type === 'action' && item.actionId === areaActionId);
@@ -3323,6 +3326,7 @@ export function CommandLauncher() {
   }, [refreshClipboardLauncherResults]);
 
   const enterLauncherSource = useCallback((sourceId: LauncherSourceId) => {
+    setClipboardSearchActive(false);
     setDirectoryNamespace(null);
     setAuthorNamespace(null);
     setBookmarkNamespace(null);
@@ -3337,8 +3341,8 @@ export function CommandLauncher() {
       setNamespacePrefix(sourceId);
     }
     setQuery('');
-    selectIndex(0);
-  }, [selectIndex]);
+    resetSoftSelection();
+  }, [resetSoftSelection]);
 
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -3427,127 +3431,10 @@ export function CommandLauncher() {
           item: describeLauncherItem(filtered[nextIndex]),
         });
       }
-    } else if (e.key === 'Tab') {
+    } else if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      const rawQuery = query.trim();
-      const q = rawQuery.toLowerCase();
-      const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
-
-      if (clipboardSearchQuery !== null) {
-        return;
-      }
-
-      if (shouldSwitchLauncherDefaultPanelOnTab({
-        isRootIdleLauncher,
-        hasExplicitSelection: hasExplicitSelectionRef.current,
-      })) {
-        switchDefaultPanelSource();
-        return;
-      }
-
-      if (moveSource) return;
-
-      const selectedForTab = filtered[currentIndex];
-      const selectedSource = selectedForTab?.type === 'source' ? selectedForTab : null;
-      const typedSource = !hasExplicitSelectionRef.current && selectedForTab?.type !== 'command'
-        ? sourceItems.find(item => item.name === q || (q.length > 0 && item.name.startsWith(q)))
-        : null;
-      const sourceTarget = selectedSource ?? typedSource;
-      if (sourceTarget?.sourceId) {
-        enterLauncherSource(sourceTarget.sourceId);
-        return;
-      }
-
-      if (hasExplicitSelectionRef.current && selectedForTab?.type === 'directory' && selectedForTab.directoryPath) {
-        setDirectoryNamespace({
-          label: selectedForTab.displayName,
-          directoryPath: selectedForTab.directoryPath,
-          directoryRelPath: selectedForTab.directoryRelPath,
-        });
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
-      if (hasExplicitSelectionRef.current && selectedForTab?.type === 'file' && selectedForTab.isDirectory && selectedForTab.filePath) {
-        setDirectoryNamespace({
-          label: selectedForTab.displayName,
-          directoryPath: selectedForTab.filePath,
-        });
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
-      if (fileSearchQuery !== null) return;
-
-      const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
-      if (directory?.directoryPath) {
-        setDirectoryNamespace({
-          label: directory.displayName,
-          directoryPath: directory.directoryPath,
-          directoryRelPath: directory.directoryRelPath,
-        });
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
-      if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) {
-        const directory = namespacePrefix === 'wiki'
-          ? resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery)
-          : null;
-        if (directory?.directoryPath) {
-          setDirectoryNamespace({
-            label: directory.displayName,
-            directoryPath: directory.directoryPath,
-            directoryRelPath: directory.directoryRelPath,
-          });
-          setNamespacePrefix(null);
-          setBookmarkNamespace(null);
-          setAuthorNamespace(null);
-          setQuery('');
-          selectIndex(0);
-          return;
-        }
-
-        const bookmarkFacet = bookmarkNamespace
-          ? resolveLauncherBookmarkFacetNamespace(filtered, bookmarkFacetItems, currentIndex, rawQuery)
-          : null;
-        if (bookmarkFacet?.facetPaths?.length) {
-          setBookmarkNamespace({ kind: 'facet', label: bookmarkFacet.displayName, paths: bookmarkFacet.facetPaths });
-          setQuery('');
-          selectIndex(0);
-          return;
-        }
-
-        const authorHandle = bookmarkNamespace
-          ? resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, rawQuery)
-          : null;
-        if (authorHandle) {
-          setNamespacePrefix(null);
-          setDirectoryNamespace(null);
-          setBookmarkNamespace(null);
-          setAuthorNamespace(authorHandle);
-          setQuery('');
-          selectIndex(0);
-        }
-        return;
-      }
-
-      for (const prefix of NAMESPACE_PREFIXES) {
-        if (prefix.startsWith(q) && q.length > 0) {
-          if (prefix === 'wiki' || prefix === 'artifact' || prefix === 'actions') {
-            enterLauncherSource(prefix);
-          } else {
-            setNamespacePrefix(prefix);
-            setQuery('');
-            selectIndex(0);
-          }
-          return;
-        }
-      }
-
+      e.stopPropagation();
+      switchDefaultPanelSource(e.shiftKey ? -1 : 1);
     } else if (shouldHandleLauncherPreviewShortcut(e, hasExplicitSelectionRef.current, previewOpen)) {
       const currentIndex = selectedIndexRef.current;
       const selectedItem = filtered[currentIndex];
@@ -3704,6 +3591,30 @@ export function CommandLauncher() {
       traceLauncher('invoke-source-scope', { sourceId: item.sourceId });
       setCommittedItemId(null);
       enterLauncherSource(item.sourceId);
+      return;
+    }
+    if (!moveSource && (item.type === 'directory' || (item.type === 'file' && item.isDirectory))) {
+      const directoryPath = item.type === 'directory' ? item.directoryPath : item.filePath;
+      if (!directoryPath) return;
+      dismissPreview();
+      setCommittedItemId(null);
+      setClipboardSearchActive(false);
+      setNamespacePrefix(null);
+      setAuthorNamespace(null);
+      setBookmarkNamespace(null);
+      setDirectoryNamespace({ label: item.displayName, directoryPath, directoryRelPath: item.directoryRelPath });
+      setQuery('');
+      resetSoftSelection();
+      return;
+    }
+    if (item.type === 'bookmark-author' && item.authorHandle && !options.openFieldTheoryTarget) {
+      dismissPreview();
+      setNamespacePrefix(null);
+      setDirectoryNamespace(null);
+      setBookmarkNamespace(null);
+      setAuthorNamespace(item.authorHandle);
+      setQuery('');
+      resetSoftSelection();
       return;
     }
     launcherInvocationInFlightRef.current = true;
@@ -4161,7 +4072,7 @@ export function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, bookmarkForItem, clipboardPreviewContentForItem, defaultBookmarksPanelActive, dismissPreview, enterLauncherSource, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadBookmarkPosts, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, bookmarkForItem, clipboardPreviewContentForItem, defaultBookmarksPanelActive, dismissPreview, enterLauncherSource, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadBookmarkPosts, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resetSoftSelection, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   const openMainFieldTheoryWindow = useCallback(async () => {
     dismissPreview();
@@ -4349,7 +4260,7 @@ export function CommandLauncher() {
           <span style={styles.defaultPanelControls}>
             <button
               type="button"
-              aria-label={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${launcherDefaultPanelSource}`}
+              aria-label={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${defaultPanelSourceLabel}`}
               title={`${launcherDefaultPanelExpanded ? 'Collapse' : 'Expand'} ${defaultPanelSourceLabel}`}
               style={styles.defaultPanelToggle}
               onMouseDown={(event) => event.preventDefault()}
@@ -4360,10 +4271,10 @@ export function CommandLauncher() {
             <button
               type="button"
               aria-label={`Switch to ${nextDefaultPanelSourceLabel}`}
-              title={`Tab switches to ${nextDefaultPanelSourceLabel}`}
+              title={`Tab switches to ${nextDefaultPanelSourceLabel}; Shift-Tab goes back`}
               style={styles.defaultPanelTabButton}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={switchDefaultPanelSource}
+              onClick={() => switchDefaultPanelSource()}
             >
               Tab
             </button>

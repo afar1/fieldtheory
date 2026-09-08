@@ -124,13 +124,6 @@ export function getLauncherDefaultPanelSourceLabel(source: LauncherSection): str
   return 'Recents';
 }
 
-export function shouldSwitchLauncherDefaultPanelOnTab(input: {
-  isRootIdleLauncher: boolean;
-  hasExplicitSelection: boolean;
-}): boolean {
-  return input.isRootIdleLauncher;
-}
-
 export type LauncherDefaultBookmarkEnterAction =
   | { kind: 'insert-bookmark-embed'; markdown: string }
   | { kind: 'paste-bookmark-text' }

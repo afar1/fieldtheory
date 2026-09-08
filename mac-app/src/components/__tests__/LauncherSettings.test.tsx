@@ -12,6 +12,18 @@ it('normalizes saved sections and cycles in the configured order', () => {
   expect(normalizeLauncherSections([])).toEqual(['recents']);
   expect(nextLauncherSection('bookmarks', ['river', 'bookmarks'])).toBe('river');
   expect(nextLauncherSection('river', ['river'])).toBe('river');
+  expect(nextLauncherSection('river', ['river'], -1)).toBe('river');
+});
+
+it('wraps in both directions through the enabled folder order and skips disabled sections', () => {
+  const inbox = launcherFolderSection({ path: '/library/Inbox', label: 'Inbox' });
+  const sections = [inbox, 'recents', 'clipboard', 'river'] as const;
+  for (let index = 0; index < sections.length; index++) {
+    expect(nextLauncherSection(sections[index], [...sections])).toBe(sections[(index + 1) % sections.length]);
+    expect(nextLauncherSection(sections[index], [...sections], -1)).toBe(sections[(index + sections.length - 1) % sections.length]);
+  }
+  expect(nextLauncherSection('bookmarks', [...sections])).toBe(inbox);
+  expect(nextLauncherSection('bookmarks', [...sections], -1)).toBe('river');
 });
 
 it('persists enabling, disabling and reordering sections while keeping one enabled', async () => {

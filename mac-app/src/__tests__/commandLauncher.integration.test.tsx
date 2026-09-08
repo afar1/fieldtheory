@@ -18,6 +18,8 @@ const commands = {
   getLauncherContext: vi.fn(async () => ({ fieldTheoryActive: true, hasActiveLibraryFileContext: true })),
   getActiveLibraryFileContext: vi.fn(async () => ({ filePath: '/library/active.md' })),
   warmLauncherFileIndex: vi.fn(async () => ({ started: false })),
+  searchLauncherFiles: vi.fn(async () => ({ files: [{ name: 'Library', displayName: 'Library folder', filePath: '/library', isDirectory: true, lastModified: 1 }], indexing: false, indexedAt: 1 })),
+  openLauncherFile: vi.fn(async () => ({ success: true })),
   launcherResize: vi.fn(), launcherClose: vi.fn(),
   onLauncherReset: vi.fn((callback) => { reset = callback; return () => {}; }),
   getLauncherFileIcon: vi.fn(async () => ({ success: false })),
@@ -43,11 +45,13 @@ beforeAll(async () => {
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key), clear: () => storage.clear() });
   ({ CommandLauncher } = await import('../command-launcher'));
 });
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); commands.getLauncherSettings.mockResolvedValue({}); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 afterAll(() => vi.unstubAllGlobals());
 
 async function mount(source: string) {
+  const settings = await commands.getLauncherSettings() as { sections?: string[] };
+  commands.getLauncherSettings.mockResolvedValue({ ...settings, sections: settings.sections ?? [source] });
   localStorage.setItem('fieldTheory.launcher.defaultPanelSource.v1', source);
   const result = render(<CommandLauncher />);
   await act(async () => reset({ generation: 1 }));
@@ -56,6 +60,146 @@ async function mount(source: string) {
 }
 
 describe('launcher source navigation', () => {
+  it('opens on the first enabled folder, wraps both ways, and ignores the highlighted row and saved last section', async () => {
+    const inbox = launcherFolderSection({ path: '/library', label: 'Inbox' });
+    commands.getLauncherSettings.mockResolvedValue({ sections: [inbox, 'recents', 'clipboard', 'river'] });
+    const { input } = await mount('bookmarks');
+    expect(screen.getByRole('button', { name: 'Collapse Inbox' })).toBeTruthy();
+    for (const label of ['Recents', 'Clipboard', 'River', 'Inbox']) {
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Tab' });
+      await screen.findByRole('button', { name: `Collapse ${label}` });
+    }
+    for (const label of ['River', 'Clipboard', 'Recents', 'Inbox']) {
+      fireEvent.keyDown(input, { key: 'Tab', shiftKey: true });
+      await screen.findByRole('button', { name: `Collapse ${label}` });
+    }
+    expect(screen.queryByRole('button', { name: /Bookmarks/ })).toBeNull();
+    expect(commands.openFieldTheoryMarkdown).not.toHaveBeenCalled();
+    expect(commands.insertMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('reopens at the first enabled section and applies a newly configured first section', async () => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['clipboard', 'recents', 'river'] });
+    const { input } = await mount('river');
+    expect(screen.getByRole('button', { name: 'Collapse Clipboard' })).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Tab' });
+    await screen.findByRole('button', { name: 'Collapse Recents' });
+    await act(async () => reset({ generation: 2 }));
+    await screen.findByRole('button', { name: 'Collapse Clipboard' });
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard'] });
+    await act(async () => reset({ generation: 3 }));
+    await screen.findByRole('button', { name: 'Collapse Recents' });
+  });
+
+  it('ignores settings from an older open after the current open has loaded its order', async () => {
+    const pending: Array<(settings: { sections: string[] }) => void> = [];
+    commands.getLauncherSettings.mockImplementation(() => new Promise(resolve => { pending.push(resolve); }));
+    render(<CommandLauncher />);
+    await waitFor(() => expect(pending.length).toBe(1));
+    await act(async () => reset({ generation: 2 }));
+    await waitFor(() => expect(pending.length).toBe(2));
+    await act(async () => pending[1]({ sections: ['clipboard', 'recents'] }));
+    await screen.findByRole('button', { name: 'Collapse Clipboard' });
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab' });
+    await screen.findByRole('button', { name: 'Collapse Recents' });
+    await act(async () => pending[0]({ sections: ['bookmarks', 'river'] }));
+    expect(screen.getByRole('button', { name: 'Collapse Recents' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Switch to Clipboard' })).toBeTruthy();
+  });
+
+  it.each([
+    ['Markdown note 12', false, 'Clipboard'],
+    ['Markdown note 12', true, 'River'],
+    ['Clipboard example', false, 'Clipboard'],
+    ['Clipboard example', true, 'River'],
+    ['. Clipboard example', false, 'Clipboard'],
+    ['. Clipboard example', true, 'River'],
+  ])('cycles from search %s with reverse=%s', async (query, shiftKey, expected) => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard', 'river'] });
+    const { container, input } = await mount('recents');
+    fireEvent.change(input, { target: { value: query } });
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain(String(query).replace(/^\. /, '')));
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey });
+    await screen.findByRole('button', { name: `Collapse ${expected}` });
+    expect((input as HTMLInputElement).value).toBe('');
+    expect(input.getAttribute('aria-label')).toBe('Command search');
+  });
+
+  it.each([false, true])('cycles from a selected filesystem directory without entering it, reverse=%s', async shiftKey => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard', 'river'] });
+    const { container, input } = await mount('recents');
+    fireEvent.change(input, { target: { value: "'Library" } });
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Library folder'));
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey });
+    await screen.findByRole('button', { name: `Collapse ${shiftKey ? 'River' : 'Clipboard'}` });
+    expect(commands.openLauncherFile).not.toHaveBeenCalled();
+    expect(input.getAttribute('aria-label')).toBe('Command search');
+  });
+
+  it('enters a filesystem directory with Enter', async () => {
+    const { container, input } = await mount('recents');
+    fireEvent.change(input, { target: { value: "'Library" } });
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Library folder'));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByRole('textbox', { name: 'Library folder search' });
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Markdown note'));
+    expect(commands.openLauncherFile).not.toHaveBeenCalled();
+    expect(commands.launcherClose).not.toHaveBeenCalled();
+  });
+
+  it('lets Enter enter a Library folder, then Tab leaves its nested search for the next section', async () => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard', 'river'] });
+    const originalRoots = window.libraryAPI!.getRoots;
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/library', label: 'Library', builtin: true,
+      tree: [...files, { kind: 'dir', name: 'Projects', relPath: 'Projects', absPath: '/library/Projects', children: [
+        { kind: 'file', name: 'nested', relPath: 'Projects/nested', absPath: '/library/Projects/nested.md', title: 'Nested project note', lastUpdated: 2000 },
+      ] }],
+    }]) as typeof originalRoots;
+    try {
+      const { container, input } = await mount('recents');
+      fireEvent.change(input, { target: { value: 'Projects' } });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Projects'));
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await screen.findByRole('textbox', { name: 'Projects search' });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Nested project note'));
+      fireEvent.change(input, { target: { value: 'Nested' } });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Tab' });
+      await screen.findByRole('button', { name: 'Collapse Clipboard' });
+      expect(input.getAttribute('aria-label')).toBe('Command search');
+      expect(commands.launcherClose).not.toHaveBeenCalled();
+    } finally { window.libraryAPI!.getRoots = originalRoots; }
+  });
+
+  it('lets Enter enter a source and Shift-Tab leave it for the previous configured section', async () => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard', 'river'] });
+    const { container, input } = await mount('recents');
+    fireEvent.change(input, { target: { value: 'wiki' } });
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Wiki'));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByRole('textbox', { name: 'wiki search' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true });
+    await screen.findByRole('button', { name: 'Collapse River' });
+    expect(input.getAttribute('aria-label')).toBe('Command search');
+    expect(commands.launcherClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps a single enabled section populated when Tab wraps to itself', async () => {
+    const { container, input } = await mount('clipboard');
+    for (const shiftKey of [false, true]) {
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Tab', shiftKey });
+      await waitFor(() => expect(container.querySelectorAll('[data-item-index]')).toHaveLength(20));
+      expect(screen.getByRole('button', { name: 'Collapse Clipboard' })).toBeTruthy();
+    }
+  });
+
   it('cycles configured sections including River and keeps the full panel size', async () => {
     commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'river'] });
     const originalRoots = window.libraryAPI!.getRoots;

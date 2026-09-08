@@ -103,7 +103,7 @@ export default function LauncherSettings() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <SettingsCard theme={theme}>
-        <SettingsSectionHeading theme={theme} title="Launcher sections" description="Choose the sections Tab cycles through and their order. Keep at least one enabled." />
+        <SettingsSectionHeading theme={theme} title="Launcher sections" description="The launcher opens on the first enabled section. Tab moves forward and Shift-Tab moves back in this order. Keep at least one enabled." />
         {[...sections, ...LAUNCHER_SECTIONS.filter(section => !sections.includes(section))].map(section => {
           const index = sections.indexOf(section);
           const enabled = index >= 0;
