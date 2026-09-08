@@ -63,6 +63,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
   const recoverRequest = vi.fn(async () => outcome);
   const inspectRuntime = vi.fn(async () => ({ status: 'ready' as const, message: 'Codex is ready.' }));
   const routeRequest = vi.fn(async (input: VoiceRouteRequest): Promise<VoiceRoute> => ({ decision: 'new', workspacePath: input.inboxPath }));
+  const writeInboxReceipt = vi.fn(async () => {});
   const onTranscript = vi.fn();
   const onDispatched = vi.fn();
   const manager = new VoiceWorkManager({
@@ -70,7 +71,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
       getSession: () => owner ? { user: { id: owner } } : null,
       getSupabaseClient: () => client as unknown as SupabaseClient,
     },
-    stateDirectory: directory, runRequest, recoverRequest, inspectRuntime, routeRequest, onTranscript, onDispatched,
+    stateDirectory: directory, runRequest, recoverRequest, inspectRuntime, routeRequest, writeInboxReceipt, onTranscript, onDispatched,
     ...folderOptions,
   });
   managers.push(manager);
@@ -80,7 +81,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
     lease_token: 'lease-1', lease_expires_at: new Date(Date.now() + 90_000).toISOString(),
   });
   return {
-    manager, directory, client, rpc, jobs, runRequest, recoverRequest, inspectRuntime, routeRequest, onTranscript, onDispatched, job,
+    manager, directory, client, rpc, jobs, runRequest, recoverRequest, inspectRuntime, routeRequest, writeInboxReceipt, onTranscript, onDispatched, job,
     push: () => push?.(), subscribed: () => subscription?.('SUBSCRIBED'), connectionError: () => subscription?.('CHANNEL_ERROR'),
     setOwner: (next: string | null) => { owner = next; },
     setServer: (value: boolean, nextGeneration: number) => { enabled = value; generation = nextGeneration; },
@@ -403,5 +404,53 @@ describe('bundled Voice push worker', () => {
     expect(h.runRequest).toHaveBeenCalledTimes(1);
     expect(h.manager.getState()).toMatchObject({ status: 'needs_setup', codex: { signedIn: false } });
     expect(h.jobs).toHaveLength(1);
+  });
+});
+
+describe('persistent inbox delivery receipts', () => {
+  it('saves one inbox identity and retries receipts without repeating work', async () => {
+    const h = harness();
+    h.routeRequest.mockImplementation(async input => {
+      await input.inbox?.onThread('inbox-thread');
+      return { decision: 'new', workspacePath: input.inboxPath };
+    });
+    h.writeInboxReceipt.mockRejectedValueOnce(new Error('Inbox unavailable'));
+    await h.enable();
+    h.jobs.push(h.job()); h.push(); await settle();
+    const snapshot = JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8'));
+    expect(snapshot.inboxThreadId).toBe('inbox-thread');
+    expect(snapshot.attempts['job-1'].outcome.status).toBe('completed');
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ inboxThreadId: 'inbox-thread', status: 'working' }));
+    expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    h.jobs.push(h.job('job-2')); h.push(); await settle();
+    expect(h.routeRequest.mock.calls[1][0].inbox?.threadId).toBe('inbox-thread');
+  });
+});
+
+describe('inbox account boundaries', () => {
+  it('cancels an outstanding receipt and hides inbox access on sign-out', async () => {
+    const h = harness();
+    const inboxId = '01a0795a-a845-7ef2-a60b-91a2ff036a45';
+    h.routeRequest.mockImplementation(async input => {
+      await input.inbox?.onThread(inboxId);
+      return { decision: 'new', workspacePath: input.inboxPath };
+    });
+    let signal: AbortSignal | undefined;
+    let release!: () => void;
+    h.writeInboxReceipt.mockImplementationOnce((...args: unknown[]) => {
+      signal = (args[0] as { signal: AbortSignal }).signal;
+      return new Promise<void>(resolve => { release = resolve; });
+    });
+    await h.enable(); h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.manager.canOpenTask(inboxId)).toBe(true);
+    h.setOwner(null); await h.manager.authChanged();
+    expect(signal?.aborted).toBe(true);
+    expect(h.manager.canOpenTask(inboxId)).toBe(false);
+    expect(h.manager.getState().inboxThreadId).toBeUndefined();
+    release(); await settle();
+    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(0);
   });
 });

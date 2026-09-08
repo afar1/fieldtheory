@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 /** Shared by Settings, the Inbox list, and the transcript footer. */
-export function OpenVoiceTaskButton({ threadId, compact = false, style }: {
+export function OpenVoiceTaskButton({ threadId, compact = false, style, label }: {
   threadId: string;
+  label?: string;
   compact?: boolean;
   style?: CSSProperties;
 }) {
@@ -60,7 +61,7 @@ export function OpenVoiceTaskButton({ threadId, compact = false, style }: {
           whiteSpace: 'nowrap', cursor: opening ? 'wait' : 'pointer', opacity: opening ? 0.6 : 1,
         }}
       >
-        {opening && !compact ? 'Opening…' : 'Codex'}
+        {opening && !compact ? 'Opening…' : label ?? 'Codex'}
       </button>
       {error && <span role="alert" style={compact
         ? { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }

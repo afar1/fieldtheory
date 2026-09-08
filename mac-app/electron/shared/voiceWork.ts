@@ -21,6 +21,8 @@ export interface VoiceWorkState {
   status: 'disabled' | 'signed_out' | 'connecting' | 'ready' | 'working' | 'needs_setup' | 'error';
   message?: string;
   codex: { available: boolean; signedIn: boolean | null };
+  /** The durable account-scoped Codex routing conversation, once created. */
+  inboxThreadId?: string;
   lastEventAt?: number;
   lastTask?: VoiceWorkTask;
 }

@@ -76,6 +76,15 @@ describe('VoiceWorkSettings', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement).disabled).toBe(false));
   }
 
+  it('opens the persistent inbox independently of the latest work task', async () => {
+    current.inboxThreadId = '01a0795a-a845-7ef2-a60b-91a2ff036a45';
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    fireEvent.click(screen.getByRole('button', { name: 'Open voice inbox' }));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith(current.inboxThreadId));
+    expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
   it('opens from Settings and enables only after an explicit toggle', async () => {
     render(<SettingsPanel initialSection="account" />);
     fireEvent.click(screen.getByRole('button', { name: /Voice requests/ }));

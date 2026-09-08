@@ -12,6 +12,10 @@ The task's inherited permission response is inspected before turn permissions ar
 
 `recoverVoiceRequest` reads the recorded task without resuming its writer or appending another work turn. Exactly one user-message dispatch key must match, and any saved turn id must agree. Existing structured receipts remain readable. A recovered plaintext completion may use a separate internal ephemeral classification turn; it never repeats the original request in the user task. `recoveryUncertain: true` tells the caller to hold newer revisions while a turn is active, the receipt cannot be matched, recovery failed, or interruption was not confirmed. A completed clarification has no uncertainty flag and may receive a user reply. Authentication failures report `sign_in_required` so the worker can pause.
 
+## Persistent inbox update
+
+The next source candidate adds a persistent pinned routing inbox, bounded conversation search, and replay-safe visible receipts. See [implementation and verification](VOICE_PERSISTENT_INBOX.md) for the new behavior and activation boundary. The internal-only description below records the prior iteration.
+
 ## Bounded internal decisions
 
 `voiceCodexRouter` reads at most three pages of 50 projects and three pages of 50 recent unarchived tasks. It excludes ephemeral and ambient-suggestion tasks and unavailable local folders. Catalog names are untrusted labels. Returned IDs must match the supplied catalog; paths come from verified catalog entries, never model output. A prior transcript task is read directly by its recorded ID. An unresolved destination asks a question; context or hold-off remains a note without creating a primary work task.

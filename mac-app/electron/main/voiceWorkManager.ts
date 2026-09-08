@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type { VoiceWorkSettings, VoiceWorkState } from '../shared/voiceWork';
 import { codexTaskUrl } from '../shared/taskLinks';
-import { routeVoiceRequest, type VoiceRoute } from './voiceCodexRouter';
+import { routeVoiceRequest, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
 import {
   inspectVoiceCodexRuntime, runVoiceRequest, recoverVoiceRequest,
   type VoiceCodexOutcome,
@@ -56,6 +56,7 @@ interface LocalAttempt {
   published?: boolean;
   needsReconciliation?: boolean;
   route?: VoiceRoute;
+  inboxReceipts?: Array<{ input: VoiceInboxReceipt; delivered?: boolean }>;
 }
 
 interface WorkerSnapshot {
@@ -63,6 +64,7 @@ interface WorkerSnapshot {
   owner: string;
   workerId: string;
   settings: VoiceWorkSettings;
+  inboxThreadId?: string;
   pendingDisable?: boolean;
   configureSequence?: number;
   lastTask?: VoiceWorkState['lastTask'];
@@ -78,6 +80,7 @@ export interface VoiceWorkManagerOptions {
   now?: () => number;
   rpcTimeoutMs?: number;
   routeRequest?: typeof routeVoiceRequest;
+  writeInboxReceipt?: typeof writeVoiceInboxReceipt;
   ensureInboxFolder?: (owner: string, existingChoice: string | null) => string;
   selectInboxFolder?: (owner: string, folderPath: string) => string;
   onInboxFolderChanged?: (owner: string, previousPath: string, nextPath: string) => void;
@@ -146,7 +149,7 @@ export class VoiceWorkManager extends EventEmitter {
       if (this.snapshot.lastTask && codexTaskUrl(this.snapshot.lastTask.threadId)) this.snapshot.lastTask.canOpen = true;
       this.state = {
         settings: { ...this.snapshot.settings }, status: 'disabled',
-        codex: { available: false, signedIn: null }, lastTask: this.snapshot.lastTask,
+        codex: { available: false, signedIn: null }, lastTask: this.snapshot.lastTask, inboxThreadId: this.snapshot.inboxThreadId,
       };
       this.refreshInboxFolder();
       this.publish();
@@ -250,8 +253,8 @@ export class VoiceWorkManager extends EventEmitter {
   }
 
   canOpenTask(threadId: string): boolean {
-    return this.current() && this.state.lastTask?.threadId === threadId
-      && this.state.lastTask.canOpen === true;
+    return this.current() && !!codexTaskUrl(threadId) && (this.snapshot?.inboxThreadId === threadId
+      || this.state.lastTask?.threadId === threadId && this.state.lastTask.canOpen === true);
   }
 
   private async inspectAndConnect(): Promise<VoiceWorkState> {
@@ -407,6 +410,12 @@ export class VoiceWorkManager extends EventEmitter {
       if (!attempt.route && !attempt.outcome) {
         attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
           text: job.text, inboxPath: inboxPath!,
+          inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
+            this.ensureCurrent(epoch);
+            if (snapshot.inboxThreadId && snapshot.inboxThreadId !== id) throw new Error('Voice inbox identity changed.');
+            snapshot.inboxThreadId = id;
+            this.persist();
+          } },
           previousThreadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
           signal: controller.signal,
         });
@@ -461,6 +470,10 @@ export class VoiceWorkManager extends EventEmitter {
             await this.options.onDispatched?.(job, { threadId, turnId });
             this.ensureCurrent(epoch);
             this.setStatus('working', 'Codex is working on your voice request.');
+            this.queueInboxReceipt(attempt, `${job.dispatch_key}:started`, { title: route?.title ?? 'Voice request',
+              status: 'working', summary: 'Codex confirmed that the task started.', threadId });
+            await this.flushInboxReceipts(attempt, epoch);
+
           },
         });
       }
@@ -472,7 +485,10 @@ export class VoiceWorkManager extends EventEmitter {
         summary: outcome.summary, finalResponse: outcome.finalResponse, question: outcome.question, canOpen: !!codexTaskUrl(threadId),
       };
       this.persist();
+      this.queueInboxReceipt(attempt, `${job.dispatch_key}:outcome`, { title: outcome.title ?? route?.title ?? 'Voice request',
+        status: outcome.recoveryUncertain ? 'needs_user' : outcome.status, summary: outcome.summary, threadId });
       await this.publishOutcome(job.job_id, attempt, epoch);
+      await this.flushInboxReceipts(attempt, epoch);
       if (outcome.errorCode === 'sign_in_required') {
         this.disconnect();
         this.state.codex.signedIn = false;
@@ -482,6 +498,39 @@ export class VoiceWorkManager extends EventEmitter {
       if (this.controller === controller) this.controller = null;
       if (this.renewTimer) clearTimeout(this.renewTimer);
       this.renewTimer = null;
+    }
+  }
+
+  private queueInboxReceipt(attempt: LocalAttempt, receiptKey: string, event: Pick<VoiceInboxReceipt, 'title' | 'status' | 'summary' | 'threadId'>): void {
+    const snapshot = this.snapshot;
+    if (!snapshot?.inboxThreadId || !snapshot.settings.workspacePath) return;
+    const receipts = attempt.inboxReceipts ??= [];
+    if (receipts.some(receipt => receipt.input.receiptKey === receiptKey)) return;
+    receipts.push({ input: { ...event, receiptKey, inboxThreadId: snapshot.inboxThreadId, inboxPath: snapshot.settings.workspacePath } });
+    this.persist();
+  }
+
+  private async flushInboxReceipts(attempt: LocalAttempt, epoch: number): Promise<void> {
+    const ownedController = this.controller ? undefined : new AbortController();
+    const controller = this.controller ?? ownedController!;
+    if (ownedController) this.controller = ownedController;
+    try {
+      for (const receipt of attempt.inboxReceipts ?? []) {
+        this.ensureCurrent(epoch);
+        if (receipt.delivered) continue;
+        try {
+          await (this.options.writeInboxReceipt ?? writeVoiceInboxReceipt)({ ...receipt.input, signal: controller.signal });
+          this.ensureCurrent(epoch);
+          receipt.delivered = true;
+          this.persist();
+        } catch {
+          // Receipt retries use the same key and cannot replay substantive work.
+          if (this.current(epoch)) this.scheduleWake(30_000, epoch);
+          return;
+        }
+      }
+    } finally {
+      if (ownedController && this.controller === ownedController) this.controller = null;
     }
   }
 
@@ -510,6 +559,7 @@ export class VoiceWorkManager extends EventEmitter {
     if (!this.snapshot) return;
     for (const [jobId, attempt] of Object.entries(this.snapshot.attempts)) {
       if (attempt.outcome && !attempt.published && !attempt.needsReconciliation) await this.publishOutcome(jobId, attempt, epoch);
+      await this.flushInboxReceipts(attempt, epoch);
     }
   }
 
@@ -670,6 +720,7 @@ export class VoiceWorkManager extends EventEmitter {
     fs.renameSync(temporary, file);
     this.state.settings = { ...this.snapshot.settings };
     this.state.lastTask = this.snapshot.lastTask;
+    this.state.inboxThreadId = this.snapshot.inboxThreadId;
     this.publish();
   }
 

@@ -681,3 +681,54 @@ describe('Voice recovery never dispatches again', () => {
     expect(process.messages.filter(m => m.method === 'thread/start').every(m => m.params.ephemeral === true)).toBe(true);
   });
 });
+
+describe('persistent Voice inbox turns', () => {
+  function inboxSetup(history: Message[] = []) {
+    return setup((message, process) => {
+      if (message.method === 'thread/start' || message.method === 'thread/resume') {
+        process.reply(message, { ...threadResult(process), thread: { id: 'thread-1', ephemeral: false, status: { type: 'idle' }, section: history.length ? { id: 'pinned-section', name: 'Pinned' } : null } });
+      } else if (message.method === 'threadSection/list') process.reply(message, { data: [{ id: 'pinned-section', name: 'Pinned' }] });
+      else if (message.method === 'thread/section/move') process.reply(message, {});
+      else if (message.method === 'thread/read') process.reply(message, { thread: { id: 'thread-1', turns: history } });
+      else standard(message, process);
+    });
+  }
+  const receipt = { workspacePath: os.tmpdir(), input: 'Just context: I prefer watercolor penguins.', instructions: 'Acknowledge context only.' };
+
+  it('creates one visible pinned inbox with a plain answer and no execution capabilities', async () => {
+    const { process, options } = inboxSetup();
+    const onThread = vi.fn();
+    const result = await withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, {
+      ...receipt, inbox: { onThread, receiptKey: 'receipt-intake' },
+    }), options);
+    expect(result).toEqual({ threadId: 'thread-1', text: 'The answer is 4.' });
+    expect(onThread).toHaveBeenCalledWith('thread-1');
+    expect(process.messages.find(m => m.method === 'thread/start')?.params).toMatchObject({ ephemeral: false, threadSource: 'field-theory-voice-inbox', config: { features: { shell_tool: false, apps: false } } });
+    expect(process.messages.find(m => m.method === 'thread/section/move')?.params).toEqual({ threadId: 'thread-1', sectionId: 'pinned-section' });
+    const turn = process.messages.find(m => m.method === 'turn/start')?.params;
+    expect(turn.clientUserMessageId).toBe('receipt-intake');
+    expect(turn.outputSchema).toBeUndefined();
+    expect(turn.sandboxPolicy.type).toBe('readOnly');
+  });
+
+  it('resumes the saved inbox and recovers a completed receipt without a duplicate turn', async () => {
+    const { process, options } = inboxSetup([{ status: 'completed', items: [
+      { type: 'userMessage', clientId: 'receipt-intake' }, { type: 'agentMessage', phase: 'final_answer', text: 'Saved as context.' },
+    ] }]);
+    const result = await withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, {
+      ...receipt, inbox: { threadId: 'thread-1', onThread: () => {}, receiptKey: 'receipt-intake' },
+    }), options);
+    expect(result.text).toBe('Saved as context.');
+    expect(process.messages.some(m => m.method === 'thread/section/move')).toBe(false);
+    expect(process.messages.some(m => m.method === 'thread/resume')).toBe(true);
+    expect(process.messages.some(m => m.method === 'thread/start' || m.method === 'turn/start')).toBe(false);
+  });
+
+  it('preserves an interrupted receipt for review instead of replaying it', async () => {
+    const { process, options } = inboxSetup([{ status: 'interrupted', items: [{ type: 'userMessage', clientId: 'receipt-intake' }] }]);
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, {
+      ...receipt, inbox: { threadId: 'thread-1', onThread: () => {}, receiptKey: 'receipt-intake' },
+    }), options)).rejects.toThrow(/still needs review/);
+    expect(process.messages.some(m => m.method === 'turn/start')).toBe(false);
+  });
+});

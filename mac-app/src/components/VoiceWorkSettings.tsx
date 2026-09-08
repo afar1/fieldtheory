@@ -308,6 +308,11 @@ export default function VoiceWorkSettings() {
         <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
           Inbox contains your transcript and a link after it is sent to a task. Earlier synced recordings, “just context,” and “hold off” remain notes. Recordings kept local on your phone stay there.
         </p>
+        {state?.inboxThreadId && (
+          <SettingsRow theme={theme} label="Codex voice inbox"
+            hint="Your pinned intake conversation records arrivals, routing decisions, and task links."
+            control={<OpenVoiceTaskButton threadId={state.inboxThreadId} label="Open voice inbox" />} />
+        )}
         {state?.lastTask && (
           <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 18, paddingTop: 16 }}>
             <div style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 7 }}>Latest voice task · {taskStatusLabel(state.lastTask.status)}</div>

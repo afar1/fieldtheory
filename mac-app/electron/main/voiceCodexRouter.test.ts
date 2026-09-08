@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readVoiceRouteCatalog, validateVoiceRoute } from './voiceCodexRouter';
+import { readVoiceRouteCatalog, validateVoiceRoute, readVoiceThreadEvidence, inspectVoiceRouteCandidates } from './voiceCodexRouter';
 
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })));
@@ -49,5 +49,34 @@ describe('Codex-owned Voice routing', () => {
     expect(catalog.tasks.map((candidate) => candidate.id)).toEqual(['active', 'older']);
     expect(catalog.tasks[0].active).toBe(true);
     expect(request.mock.calls.filter(([method]) => method === 'thread/list')).toHaveLength(2);
+  });
+});
+
+describe('routing history evidence', () => {
+  it('keeps recent conversation text within budget and excludes tool and image payloads', async () => {
+    const request = vi.fn(async () => ({ nextCursor: 'older', data: [
+      { items: [{ type: 'userMessage', content: [{ type: 'text', text: 'Newest question' }, { type: 'image', url: 'secret-image' }] },
+        { type: 'commandExecution', aggregatedOutput: 'secret-output' }, { type: 'agentMessage', text: 'Newest answer' }] },
+      ...Array.from({ length: 5 }, () => ({ items: [{ type: 'agentMessage', text: 'old'.repeat(4000) }] })),
+    ] }));
+    const evidence = await readVoiceThreadEvidence({ request }, 'task');
+    expect(evidence.messages.slice(-2).map(message => message.text)).toEqual(['Newest question', 'Newest answer']);
+    expect(evidence.messages.reduce((sum, message) => sum + message.text.length, 0)).toBeLessThanOrEqual(12000);
+    expect(evidence.truncated).toBe(true);
+    expect(JSON.stringify(evidence)).not.toContain('secret');
+  });
+
+  it('finds older tasks and only reads verified bounded candidates', async () => {
+    const cwd = folder();
+    const request = vi.fn(async (method: string) => method === 'thread/search' ? { data: [
+      { thread: { id: 'found', name: 'Old penguin', cwd }, snippet: 'Old watercolor request' }, { thread: { id: 'ephemeral', cwd, ephemeral: true }, snippet: '' },
+      { thread: { id: 'inbox', cwd, threadSource: 'field-theory-voice-inbox' }, snippet: 'Inbox receipt' },
+    ] } : { data: [{ items: [{ type: 'agentMessage', text: 'A penguin drawing' }] }] });
+    const catalog = { projects: [], tasks: [] };
+    const evidence = await inspectVoiceRouteCandidates({ request }, { queries: ['penguin'], threadIds: [] }, catalog);
+    expect(evidence.map(item => item.threadId)).toEqual(['found']);
+    expect(request).toHaveBeenCalledWith('thread/search', expect.objectContaining({ searchTerm: 'penguin', limit: 10 }));
+    expect(evidence[0].matchedExcerpt).toBe('Old watercolor request');
+    await expect(inspectVoiceRouteCandidates({ request }, { threadIds: ['invented'] }, catalog)).rejects.toThrow(/unavailable/);
   });
 });
