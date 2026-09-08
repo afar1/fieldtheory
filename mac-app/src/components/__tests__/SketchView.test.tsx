@@ -62,3 +62,11 @@ it('honors a cancelled Escape discard without losing draft or closing', () => {
   expect(close).not.toHaveBeenCalled();
   expect(localStorage.getItem('pendingSketch.drawesome.v1')).not.toBeNull();
 });
+it('normalizes a history PNG payload before exporting annotations', async () => {
+  render(<SketchView existingSketch={{id:9,imageData:'aGlzdG9yeQ==',width:400,height:200}} onSave={vi.fn()} onClose={vi.fn()} />);
+  change([stroke]);
+  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Save'})));
+  expect(mocks.exportDrawing).toHaveBeenLastCalledWith([stroke],{w:1000,h:800},'#ffffff',{
+    dataUrl:'data:image/png;base64,aGlzdG9yeQ==',width:400,height:200,x:300,y:300,
+  },expect.any(Number));
+});
