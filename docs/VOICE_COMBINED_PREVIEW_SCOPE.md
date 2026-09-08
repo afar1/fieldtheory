@@ -50,6 +50,17 @@ Result: **22 passing tests** (14 service, 8 sync), plus successful Electron type
 
 Production read-only inspection confirmed `public.transcripts` is already in the `supabase_realtime` publication. No publication or other backend mutation was required for this candidate. The existing 20 backend PGlite tests and installed activation observations remain useful prior evidence; they are not a new combined-build canary.
 
+### Bounded live Codex canaries
+
+The coordinating implementation agents reported these additional observations for the candidate source:
+
+- Readable primary task `01a07e63-8b41-7071-996c-2f085656e3d4` completed in 4.575 seconds. Internal outcome classification then took 4.802 seconds after that completion. These are separate runner stages, not a phone-to-visible latency measurement. The primary conversation was not forced into a JSON receipt.
+- Routing read 25 actual projects and 150 tasks, with 24 projects and 124 tasks eligible after local-folder/internal-task filtering. A request explicitly naming an existing task and its ID selected that task correctly. Total reported routing time was 7.697 seconds: 2.695 seconds for catalog reads and 4.842 seconds for the internal decision. The routing probe created no durable work task or work turn.
+- The app-server catalog matched 23 of 25 desktop project roots. `robin` had a missing directory; `density-cli` was accessible on disk but absent from that catalog. Thus the route catalog is bounded and may omit a real desktop project. Only explicit title/ID continuation was tested; ambiguous natural-language routing accuracy is not established.
+- Inbox receipt tests confirmed the sent link is added after actual turn-start confirmation, without waiting for final outcome classification.
+
+These canaries verify the installed signed-in Codex runtime through the candidate adapters. They do not verify a new Field Theory package, Library UI, physical phone path, locked-screen operation, or sleep behavior. At the documentation handoff, the root agent also reported 26 manager tests, three router tests, and eight shell IPC tests passing; the exact final combined total and source SHA remain the root integration receipt's responsibility.
+
 **Final integration verification is pending.** Record its exact commit, focused-suite totals, typechecks, and any remaining failures here or in a linked completion receipt. Do not relabel previous runner arithmetic source hashes or `.voice.1`/`.voice.2` package checks as combined-candidate evidence.
 
 ## Release and physical acceptance still pending
