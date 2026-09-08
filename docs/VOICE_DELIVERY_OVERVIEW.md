@@ -6,7 +6,7 @@ Field Theory uses authenticated Supabase push and a worker bundled into the Mac 
 
 The installed `0.3.47-voice.2` preview and deployed Voice backend already delivered a synthetic arithmetic request and a real phone request to Codex. The real request produced the mountain illustration and a visible Settings summary, but no Library note. Those observations remain recorded in the [production activation receipt](VOICE_PRODUCTION_ACTIVATION.md).
 
-The user subsequently authorized the minimal Inbox iteration described below. Its source is implemented and undergoing combined verification; it is **not evidence of a newly packaged or installed preview**. The [combined scope audit](VOICE_COMBINED_PREVIEW_SCOPE.md) records source commits, verification boundaries, and pending acceptance. Locked-screen and sleep/reconnect behavior still need physical verification.
+The user subsequently authorized the minimal Inbox iteration described below. Its source passed combined verification; it is **not evidence of a newly packaged or installed preview**. The [combined scope audit](VOICE_COMBINED_PREVIEW_SCOPE.md) records source commits, verification boundaries, and pending acceptance. Locked-screen and sleep/reconnect behavior still need physical verification.
 
 ## Candidate flow
 
@@ -55,4 +55,4 @@ The private job wake carries identifiers only. Reconnection reconciles durable w
 
 The earlier installed preview has real hosted push and phone execution evidence. The candidate has focused source tests for Library persistence, account fencing, reconnect reconciliation, picker races, routing validation, readable primary turns, internal decisions, and task-link handling. Their exact evidence is tracked in the [combined scope audit](VOICE_COMBINED_PREVIEW_SCOPE.md).
 
-The new preview still needs its final integration commit, approved signed/notarized package verification, user installation, and visible Settings/Library acceptance. Locked-screen, sleep/offline recovery, crash-boundary recovery, and a full second-account runtime test remain pending. Historical test counts, package hashes, and live task receipts must not be represented as verification of the new combined source.
+The new preview still needs signed/notarized package verification, user installation, and visible Settings/Library acceptance. Locked-screen, sleep/offline recovery, crash-boundary recovery, and a full second-account runtime test remain pending. Historical test counts, package hashes, and live task receipts must not be represented as verification of the new combined source.
