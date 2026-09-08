@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
-import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
+import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef, lazy, Suspense } from 'react';
+import { Draw, type DrawHandle, type Board, type Stroke } from '../vendor/drawesome';
+import { DRAWING_DRAFT_KEY, readDrawingDraft, placeImage, exportDrawing } from '../utils/drawing';
 import { useTheme } from '../contexts/ThemeContext';
 
 type TranscriptItem = {
@@ -9,7 +10,7 @@ type TranscriptItem = {
 };
 
 interface SketchViewProps {
-  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void;
+  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void | Promise<void>;
   onClose: () => void;
   existingSketch?: {
     id: number;
@@ -32,340 +33,76 @@ export interface SketchViewHandle {
   save: (andCopy?: boolean) => Promise<void>;
 }
 
-export const SKETCH_EXPORT_PADDING = 48;
-
-function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
-
-function getImageDataUrlDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height });
-    image.onerror = reject;
-    image.src = dataUrl;
-  });
-}
+export { SKETCH_EXPORT_PADDING } from '../utils/drawing';
 
 const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange, associatedTranscripts, onUnstackTranscript }, ref) => {
   const { theme } = useTheme();
-  const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null);
+
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Track when user explicitly exits (back, save, save copy) to prevent re-saving pendingSketch
-  const isExitingRef = useRef(false);
-  
-  // Track container dimensions for responsive canvas sizing.
-  const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
-  
-  // Update container size on mount and resize.
-  useEffect(() => {
-    const updateSize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setContainerSize({ width: rect.width || 1200, height: rect.height || 800 });
-      }
-    };
-    
-    updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
-  }, []);
-  
-  // Floating transcript panel state.
+  const drawRef = useRef<DrawHandle>(null);
+  const exiting = useRef(false);
+  const [draft] = useState(() => !backgroundImage && !existingSketch ? readDrawingDraft() : null);
+  const [board, setBoard] = useState<Board | null>(draft?.board ?? null);
+  const [paper] = useState(() => draft?.paper ?? (theme.isDark ? '#202124' : '#ffffff'));
+  const source = backgroundImage ?? (existingSketch ? { dataUrl: existingSketch.imageData, width: existingSketch.width || 1200, height: existingSketch.height || 800 } : null) ?? draft?.image ?? null;
+  const image = useMemo(() => source && board ? placeImage(source, board) : null, [source, board]);
   const [transcriptPanelExpanded, setTranscriptPanelExpanded] = useState(false);
   const [transcriptPanelVisible, setTranscriptPanelVisible] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const initialData = useMemo(() => {
-    const baseData: any = {
-      appState: { viewBackgroundColor: '#ffffff' },
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width && rect.height) setBoard(old => old ?? { w: rect.width, h: rect.height });
     };
-
-    // Check for pending sketch to restore (from accidental close/blur)
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => { observer.disconnect(); if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current); };
+  }, []);
+  const handleChange = useCallback((strokes: Stroke[]) => {
+    const dirty = strokes.length > 0;
+    setHasChanges(dirty);
+    onHasChangesChange?.(dirty);
+    if (!board || exiting.current) return;
     try {
-      const pending = localStorage.getItem('pendingSketch');
-      if (pending && !backgroundImage && !existingSketch) {
-        const restored = JSON.parse(pending);
-        // Only restore if less than 24 hours old
-        if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
-          return {
-            elements: restored.elements,
-            appState: restored.appState || baseData.appState,
-          };
-        }
-      }
-    } catch (e) {
-      // Ignore parse errors
-    }
-
-    if (!backgroundImage) return baseData;
-
-    // Use actual container dimensions instead of hardcoded values.
-    const containerWidth = containerSize.width;
-    const containerHeight = containerSize.height;
-    const maxScale = 0.5;
-    const maxWidth = containerWidth * maxScale;
-    const maxHeight = containerHeight * maxScale;
-    
-    const scale = Math.min(maxWidth / backgroundImage.width, maxHeight / backgroundImage.height, 1);
-    const finalWidth = backgroundImage.width * scale;
-    const finalHeight = backgroundImage.height * scale;
-    const x = (containerWidth - finalWidth) / 2;
-    const y = (containerHeight - finalHeight) / 2;
-
-    const fileId = `bg-${backgroundImage.dataUrl.length}-${backgroundImage.width}x${backgroundImage.height}`;
-    const dataUrl = backgroundImage.dataUrl;
-    const mime = dataUrl.split(',')[0].match(/:(.*?);/)?.[1] || 'image/png';
-    
-    return {
-      ...baseData,
-      elements: [{
-        type: 'image',
-        id: `img-${fileId}`,
-        x,
-        y,
-        width: finalWidth,
-        height: finalHeight,
-        angle: 0,
-        strokeColor: '#000000',
-        backgroundColor: 'transparent',
-        fillStyle: 'solid',
-        strokeWidth: 1,
-        strokeStyle: 'solid',
-        roughness: 1,
-        opacity: 100,
-        groupIds: [],
-        frameId: null,
-        roundness: null,
-        seed: 12345,
-        version: 1,
-        versionNonce: 12345,
-        isDeleted: false,
-        boundElements: null,
-        updated: Date.now(),
-        link: null,
-        locked: false,
-        fileId: fileId,
-        scale: [1, 1],
-        status: 'saved',
-      }],
-      files: {
-        [fileId]: {
-          id: fileId,
-          dataURL: dataUrl,
-          mimeType: mime,
-          created: Date.now(),
-        },
-      },
-    };
-  }, [backgroundImage, containerSize]);
-
-  const handleSave = useCallback(async (andCopy: boolean = false) => {
-    if (!excalidrawAPI || isSaving) return;
-
-    const elements = excalidrawAPI.getSceneElements();
-    const activeElements = elements.filter((el: any) => !el.isDeleted);
-
-    // Require at least one element (drawing or image).
-    if (activeElements.length === 0) {
-      alert('Please draw something before saving.');
-      return;
-    }
-
-    // If only a background image exists with no drawings, warn user.
-    if (backgroundImage && activeElements.length === 1 && activeElements[0].type === 'image') {
-      alert('Please draw something on the image before saving.');
-      return;
-    }
-
-    isExitingRef.current = true;
-    localStorage.removeItem('pendingSketch');
-
+      if (dirty) localStorage.setItem(DRAWING_DRAFT_KEY, JSON.stringify({ version: 1, engine: 'drawesome', strokes, board, paper, image: source, timestamp: Date.now() }));
+      else localStorage.removeItem(DRAWING_DRAFT_KEY);
+    } catch { /* Keep drawing usable if local storage is full. */ }
+  }, [board, paper, source, onHasChangesChange]);
+  const handleSave = useCallback(async (andCopy = false) => {
+    if (!drawRef.current || !board || isSaving) return;
+    const strokes = drawRef.current.getStrokes();
+    if (!strokes.some(s => !s.erase)) { alert('Please draw something before saving.'); return; }
     setIsSaving(true);
-
     try {
-      // Use device pixel ratio for high-res export on Retina displays
-      const exportScale = window.devicePixelRatio || 2;
-
-      const blob = await exportToBlob({
-        elements: activeElements,
-        appState: {
-          ...excalidrawAPI.getAppState(),
-          exportWithDarkMode: theme.isDark,
-          exportBackground: true,
-          exportScale,
-        },
-        files: excalidrawAPI.getFiles(),
-        mimeType: 'image/png',
-        quality: 1,
-        exportPadding: SKETCH_EXPORT_PADDING,
-      });
-
-      try {
-        const dataUrl = await readBlobAsDataUrl(blob);
-        const dimensions = await getImageDataUrlDimensions(dataUrl);
-        // pendingSketch already cleared synchronously at start of handleSave
-        onSave({
-          dataUrl,
-          width: dimensions.width,
-          height: dimensions.height,
-        }, andCopy);
-      } catch (error) {
-        console.error('Failed to read exported sketch:', error);
-        alert('Failed to save sketch. Please try again.');
-        setIsSaving(false);
-      }
+      const result = await exportDrawing(strokes, board, paper, image, window.devicePixelRatio || 2);
+      await onSave(result, andCopy);
+      exiting.current = true;
+      localStorage.removeItem(DRAWING_DRAFT_KEY);
     } catch (error) {
-      console.error('Failed to export sketch:', error);
-      alert('Failed to save sketch. Please try again.');
-      setIsSaving(false);
-    }
-  }, [excalidrawAPI, isSaving, onSave, backgroundImage, theme.isDark]);
-
-  useImperativeHandle(ref, () => ({
-    save: handleSave,
-  }), [handleSave]);
-
+      console.error('Failed to save drawing:', error);
+      alert('Failed to save drawing. Your draft is still available.');
+    } finally { setIsSaving(false); }
+  }, [board, paper, image, isSaving, onSave]);
+  useImperativeHandle(ref, () => ({ save: handleSave }), [handleSave]);
   const handleClose = useCallback(() => {
-    if (hasChanges) {
-      if (confirm('You have unsaved changes. Discard drawing?')) {
-        isExitingRef.current = true;
-        localStorage.removeItem('pendingSketch');
-        onClose();
-      }
-    } else {
-      isExitingRef.current = true;
-      localStorage.removeItem('pendingSketch');
-      onClose();
-    }
+    if (hasChanges && !confirm('You have unsaved changes. Discard drawing?')) return;
+    exiting.current = true;
+    localStorage.removeItem(DRAWING_DRAFT_KEY);
+    onClose();
   }, [hasChanges, onClose]);
-
-  const prevElementCountRef = useRef(0);
-  const initialElementCountRef = useRef<number | null>(null);
-  
-  const handleChange = useCallback((elements: readonly any[], appState: any) => {
-    const activeElements = elements.filter((el: any) => !el.isDeleted);
-
-    // Track initial element count (e.g., 1 if background image, 0 if blank).
-    // User has made changes if element count differs from initial.
-    if (initialElementCountRef.current === null) {
-      initialElementCountRef.current = activeElements.length;
-    }
-    const newHasChanges = activeElements.length !== initialElementCountRef.current;
-    setHasChanges(newHasChanges);
-    onHasChangesChange?.(newHasChanges);
-
-    // Persist sketch to localStorage for recovery if window closes unexpectedly
-    if (newHasChanges && activeElements.length > 0 && !isExitingRef.current) {
-      try {
-        localStorage.setItem('pendingSketch', JSON.stringify({
-          elements: activeElements,
-          appState: { viewBackgroundColor: appState?.viewBackgroundColor },
-          timestamp: Date.now(),
-        }));
-      } catch (e) {
-        // Ignore storage errors
-      }
-    }
-
-    if (!excalidrawAPI) return;
-    
-    const currentTool = appState?.activeTool?.type;
-    const elementCount = activeElements.length;
-    const prevCount = prevElementCountRef.current;
-    prevElementCountRef.current = elementCount;
-    
-    // When user selects a drawing tool, lock it so it stays active after drawing.
-    // Excalidraw's locked: true prevents auto-switch to selection after each stroke.
-    if (currentTool && currentTool !== 'selection' && currentTool !== 'hand') {
-      const currentAppState = excalidrawAPI.getAppState();
-      if (!currentAppState?.activeTool?.locked) {
-        excalidrawAPI.setActiveTool({ type: currentTool, locked: true });
-      }
-    }
-  }, [excalidrawAPI, onHasChangesChange]);
-
   useEffect(() => {
-    const hideFooterLinks = () => {
-      const allLinks = document.querySelectorAll('.excalidraw a, .excalidraw [role="link"]');
-      allLinks.forEach((link) => {
-        const text = link.textContent?.toLowerCase() || '';
-        const href = link.getAttribute('href') || '';
-        if (
-          text.includes('github') ||
-          text.includes('discord') ||
-          text.includes('follow us') ||
-          text.includes('twitter') ||
-          href.includes('github') ||
-          href.includes('discord') ||
-          href.includes('twitter') ||
-          href.includes('x.com')
-        ) {
-          (link as HTMLElement).style.display = 'none';
-          const parent = link.parentElement;
-          if (parent && (parent.tagName === 'LI' || parent.classList.contains('links') || parent.textContent?.includes('Excalidraw links'))) {
-            parent.style.display = 'none';
-          }
-        }
-      });
-      
-      // Hide Library button and diamond tool.
-      const buttons = document.querySelectorAll('.excalidraw button');
-      buttons.forEach((btn) => {
-        const text = btn.textContent?.trim() || '';
-        const ariaLabel = btn.getAttribute('aria-label') || '';
-        const title = btn.getAttribute('title') || '';
-        if (
-          text === 'Library' || 
-          text.includes('Library') ||
-          ariaLabel.toLowerCase().includes('library') ||
-          title.toLowerCase().includes('library') ||
-          ariaLabel.toLowerCase().includes('diamond') ||
-          title.toLowerCase().includes('diamond')
-        ) {
-          (btn as HTMLElement).style.display = 'none';
-        }
-      });
-      
-      // Also hide any aside elements (Library sidebar).
-      const asides = document.querySelectorAll('.excalidraw aside');
-      asides.forEach((aside) => {
-        (aside as HTMLElement).style.display = 'none';
-      });
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void handleSave(); }
+      if (event.key === 'Escape') { event.preventDefault(); handleClose(); }
     };
-
-    hideFooterLinks();
-    const timer = setTimeout(hideFooterLinks, 500);
-    const timer2 = setTimeout(hideFooterLinks, 1000);
-
-    return () => {
-      clearTimeout(timer);
-      clearTimeout(timer2);
-    };
-  }, [excalidrawAPI]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-        e.preventDefault();
-        handleSave();
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handleClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [handleSave, handleClose]);
 
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
@@ -487,109 +224,14 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           height: '100%',
           ...noDragStyle,
         }}>
-        <style>{`
-          .excalidraw .App-menu__footer,
-          .excalidraw .App-menu__footer a,
-          [data-testid="excalidraw-footer"],
-          .excalidraw-footer,
-          .excalidraw footer,
-          .excalidraw [class*="footer"],
-          .excalidraw [class*="Footer"],
-          .excalidraw a[href*="github"],
-          .excalidraw a[href*="discord"],
-          .excalidraw a[href*="twitter"],
-          .excalidraw a[href*="x.com"],
-          .excalidraw .App-menu a,
-          .excalidraw .menu-container a,
-          .excalidraw [class*="links"],
-          .excalidraw [class*="Links"] {
-            display: none !important;
-            visibility: hidden !important;
-            opacity: 0 !important;
-            height: 0 !important;
-            overflow: hidden !important;
-          }
-          .excalidraw .library-menu,
-          .excalidraw .library-menu__header,
-          .excalidraw .library-menu__items,
-          [data-testid="library-menu"],
-          .excalidraw-library-menu,
-          .excalidraw [class*="library"],
-          .excalidraw [class*="Library"],
-          .excalidraw .App-toolbar-container button[aria-label*="Library" i],
-          .excalidraw .Island .ToolIcon__library,
-          .excalidraw button.ToolIcon_type_button[aria-label*="Library" i] {
-            display: none !important;
-          }
-          .excalidraw .ToolIcon_type_library,
-          .excalidraw button[aria-label*="library" i],
-          .excalidraw button[aria-label*="shapes" i],
-          .excalidraw .library-button,
-          .excalidraw [class*="libraryButton"],
-          .excalidraw .Island button[aria-label*="Library" i],
-          .excalidraw aside,
-          .excalidraw .layer-ui__wrapper aside,
-          .excalidraw button:has(.ToolIcon_type_library),
-          .excalidraw [class*="library-unit"],
-          .excalidraw .library-unit,
-          .excalidraw .App-toolbar button[title*="Library" i],
-          .excalidraw button[title*="Library" i],
-          .excalidraw button[aria-label*="diamond" i],
-          .excalidraw button[title*="diamond" i],
-          .excalidraw button[aria-label*="rhombus" i],
-          .excalidraw button[title*="rhombus" i],
-          .excalidraw button[data-testid="toolbar-diamond"],
-          .excalidraw .ToolIcon_type_diamond,
-          .excalidraw [class*="diamond"],
-          .excalidraw .layer-ui__wrapper__top-right,
-          .excalidraw [class*="top-right"],
-          .excalidraw .App-menu_top__right {
-            display: none !important;
-          }
-          /* Hide hamburger button, show menu content always */
-          .excalidraw .dropdown-menu-button,
-          .excalidraw button[aria-label="Menu"],
-          .excalidraw [class*="menu-button"] {
-            display: none !important;
-          }
-          .excalidraw .dropdown-menu-container {
-            display: block !important;
-            position: static !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-          }
-          /* Hide help dialog and shortcut hints */
-          .excalidraw .HelpDialog,
-          .excalidraw [class*="HelpDialog"],
-          .excalidraw [class*="help-dialog"],
-          .excalidraw [class*="ShortcutsDialog"],
-          .excalidraw [class*="shortcuts"],
-          .excalidraw .help-icon,
-          .excalidraw button[aria-label*="Help" i],
-          .excalidraw button[aria-label*="Keyboard" i] {
-            display: none !important;
-          }
-        `}</style>
-        <Excalidraw
-          key={backgroundImage ? `with-image-${backgroundImage.dataUrl.length}` : 'no-image'}
-          excalidrawAPI={(api) => setExcalidrawAPI(api)}
-          onChange={handleChange}
-          theme={theme.isDark ? "dark" : "light"}
-          UIOptions={{
-            canvasActions: {
-              changeViewBackgroundColor: true,
-              clearCanvas: true,
-              export: false,
-              loadScene: false,
-              saveToActiveFile: false,
-              toggleTheme: false,
-              saveAsImage: false,
-            },
-            welcomeScreen: false,
-            tools: { image: true },
-          }}
-          initialData={initialData}
-        />
+        {board && <>
+          <svg width="100%" height="100%" viewBox={`0 0 ${board.w} ${board.h}`} style={{ position: 'absolute', inset: 0, background: paper, pointerEvents: 'none' }}>
+            {image && <image href={image.dataUrl} x={image.x} y={image.y} width={image.width} height={image.height} />}
+          </svg>
+          <Draw ref={drawRef} board={board} initialStrokes={draft?.strokes} onChange={handleChange}
+            background="transparent" theme={theme.isDark ? 'dark' : 'light'} look="studio" motion="none" />
+        </>}
+
       </div>
 
       {/* Floating transcript panel - positioned over the canvas */}
@@ -784,86 +426,8 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           marginLeft: '4px',
         }}>esc</kbd></span>
         <span style={{ margin: '0 4px', color: theme.isDark ? theme.border : '#bbb' }}>|</span>
-        <span>select <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>v</kbd></span>
-        <span>rect <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>r</kbd></span>
-        <span>ellipse <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>o</kbd></span>
-        <span>arrow <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>a</kbd></span>
-        <span>line <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>l</kbd></span>
-        <span>pencil <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>p</kbd></span>
-        <span>text <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>t</kbd></span>
-        <span>eraser <kbd style={{
-          display: 'inline-block',
-          padding: '2px 5px',
-          fontSize: '10px',
-          fontWeight: 500,
-          color: theme.isDark ? theme.text : '#555',
-          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-          borderRadius: '3px',
-          marginLeft: '4px',
-        }}>e</kbd></span>
+        <span>Drawesome · freehand pens, highlighter & eraser · ⌘Z undo · ⇧⌘Z redo</span>
+        <span>Saved images reopen as a background; shapes and text are unavailable.</span>
       </div>
     </div>
   );
@@ -871,4 +435,17 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
 SketchView.displayName = 'SketchView';
 
-export default SketchView;
+const LegacySketchView = lazy(() => import('./LegacySketchView'));
+const DrawingEntry = forwardRef<SketchViewHandle, SketchViewProps>((props, ref) => {
+  const [legacy, setLegacy] = useState(false);
+  const [hasLegacy] = useState(() => Boolean(localStorage.getItem('pendingSketch')));
+  if (legacy) return <Suspense fallback={<div>Recovering previous drawing…</div>}><LegacySketchView {...props} ref={ref} /></Suspense>;
+  return <>
+    {hasLegacy && !props.backgroundImage && !props.existingSketch && <div style={{ padding: 8, zIndex: 101 }}>
+      An earlier Excalidraw draft is preserved. <button onClick={() => setLegacy(true)}>Recover previous drawing</button>
+    </div>}
+    <SketchView {...props} ref={ref} />
+  </>;
+});
+DrawingEntry.displayName = 'DrawingEntry';
+export default DrawingEntry;

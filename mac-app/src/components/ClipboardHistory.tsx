@@ -57,7 +57,7 @@ import {
   isClientPointOutsideBounds,
 } from '../utils/focusChrome';
 
-// Lazy load SketchView (Excalidraw) to reduce initial bundle size
+// Lazy load SketchView (Drawesome) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
@@ -1926,7 +1926,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   }, []);
 
   const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => {
-    localStorage.removeItem('pendingSketch');
+    // Legacy drafts are retained until explicitly recovered or discarded in their editor.
 
     const api = window.clipboardAPI;
     if (!api?.restoreItem) return;
@@ -1966,7 +1966,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   }, [loadItems, transcriptionStatus]);
 
   const handleSketchClose = useCallback(() => {
-    localStorage.removeItem('pendingSketch');
+    // Legacy drafts are retained until explicitly recovered or discarded in their editor.
     setEditingSketchItem(null);
     setSketchAssociatedTranscripts([]);
     if (!navigateAppHistory(-1)) {
@@ -2123,7 +2123,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     setIsMultiSelect(false);
 
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
-      const pendingSketch = localStorage.getItem('pendingSketch');
+      const pendingSketch = localStorage.getItem('pendingSketch.drawesome.v1') || localStorage.getItem('pendingSketch');
 
       setSearchQuery('');
       setDebouncedSearchQuery('');
@@ -2136,18 +2136,18 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       try {
         if (pendingSketch) {
           const restored = JSON.parse(pendingSketch);
-          if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
+          if ((restored.elements?.length > 0 || (restored.engine === 'drawesome' && restored.strokes?.length > 0))) {
             setShowSettings(false);
             setViewMode('sketch');
             setEditingSketchItem(null);
             setSketchBackgroundImage(null);
             return;
           } else {
-            localStorage.removeItem('pendingSketch');
+            // Legacy drafts are retained until explicitly recovered or discarded in their editor.
           }
         }
       } catch (e) {
-        localStorage.removeItem('pendingSketch');
+        // Legacy drafts are retained until explicitly recovered or discarded in their editor.
       }
 
       const restoreState = resolveClipboardRestoreState(localStorage);
