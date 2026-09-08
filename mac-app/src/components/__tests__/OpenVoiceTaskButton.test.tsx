@@ -18,7 +18,7 @@ it('opens the exact task once without selecting or renaming the surrounding row'
   render(<div onClick={rowClick} onMouseDown={rowMouseDown} onDoubleClick={rowDoubleClick}>
     <OpenVoiceTaskButton threadId="task-from-this-note" compact />
   </div>);
-  const button = screen.getByRole('button', { name: 'Open task' });
+  const button = screen.getByRole('button', { name: 'Codex' });
   fireEvent.mouseDown(button);
   fireEvent.click(button);
   fireEvent.click(button);
@@ -27,9 +27,9 @@ it('opens the exact task once without selecting or renaming the surrounding row'
   expect(rowClick).not.toHaveBeenCalled();
   expect(rowMouseDown).not.toHaveBeenCalled();
   expect(rowDoubleClick).not.toHaveBeenCalled();
-  expect(screen.getByRole('button', { name: 'Opening…' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'Codex' })).toHaveProperty('disabled', true);
   await act(async () => { finish({ opened: true }); });
-  expect(screen.getByRole('button', { name: 'Open task' })).toHaveProperty('disabled', false);
+  expect(screen.getByRole('button', { name: 'Codex' })).toHaveProperty('disabled', false);
 });
 
 it('does not show a stale failure after switching to another transcript', async () => {
@@ -40,5 +40,5 @@ it('does not show a stale failure after switching to another transcript', async 
   rerender(<OpenVoiceTaskButton threadId="second" />);
   await act(async () => { fail({ opened: false, error: 'Old task failed' }); });
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(screen.getByRole('button', { name: 'Open task' })).toHaveProperty('disabled', false);
+  expect(screen.getByRole('button', { name: 'Codex' })).toHaveProperty('disabled', false);
 });

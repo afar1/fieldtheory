@@ -16,8 +16,8 @@ import {
   SidebarRiverIcon,
 } from './SidebarIcons';
 import { setMarkdownArchivedState, setMarkdownTodoState } from '../../electron/shared/markdownFrontmatter';
-import { formatVoiceInboxTime, type VoiceInboxNotePresentation, type VoiceInboxPresentation } from '../../electron/shared/voiceInboxPresentation';
-import { OpenVoiceTaskButton } from './OpenVoiceTaskButton';
+import type { VoiceInboxNotePresentation, VoiceInboxPresentation } from '../../electron/shared/voiceInboxPresentation';
+import { VoiceInboxMetadata } from './VoiceInboxMetadata';
 
 type SortMode = 'alpha' | 'time';
 type SidebarTodoState = 'open' | 'done';
@@ -4937,7 +4937,6 @@ function FileItem({
 
   const canRename = item.type === 'wiki' && !!item.relPath;
   const displayTitle = voiceNote?.title ?? item.title;
-  const captureTime = voiceNote ? formatVoiceInboxTime(voiceNote.createdAtMs) : '';
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const icon = item.type === 'bookmarks'
@@ -5019,7 +5018,7 @@ function FileItem({
 
   return (
     <div
-      className={`bm-file-row${rowSelected ? ' bm-file-row-selected' : ''}${isContextActive ? ' bm-file-row-context' : ''}`}
+      className={`bm-file-row${voiceNote ? ' voice-inbox-row' : ''}${rowSelected ? ' bm-file-row-selected' : ''}${isContextActive ? ' bm-file-row-context' : ''}`}
       data-library-sidebar-row-id={item.id}
       ref={refProp}
       tabIndex={-1}
@@ -5054,7 +5053,7 @@ function FileItem({
       style={{
         position: 'relative',
         minHeight: isCollapsing ? 0 : LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-        maxHeight: isCollapsing ? 0 : voiceNote ? undefined : '40px',
+        maxHeight: isCollapsing ? 0 : '40px',
         boxSizing: 'border-box',
         padding: rowPadding,
         cursor: 'pointer',
@@ -5072,11 +5071,11 @@ function FileItem({
         outline: 'none',
       }}
     >
-      <div style={{
+      <div className={voiceNote ? 'voice-inbox-line' : undefined} style={{
         display: 'flex',
         alignItems: 'center',
         flexWrap: renaming ? 'wrap' : 'nowrap',
-        gap: SIDEBAR_ICON_TEXT_GAP,
+        gap: voiceNote ? undefined : SIDEBAR_ICON_TEXT_GAP,
         minHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
         width: '100%',
         minWidth: 0,
@@ -5172,7 +5171,7 @@ function FileItem({
               color: sidebarTextColor,
               lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
               ...(voiceNote
-                ? { flex: '1 1 auto', minWidth: 0, paddingRight: canShowInFinder ? '12px' : undefined }
+                ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
                 : hasInlineFileMeta
                 ? {
                   flex: '0 1 auto',
@@ -5183,7 +5182,7 @@ function FileItem({
                 }
                 : librarySidebarFadeTextStyle(canShowInFinder ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH)),
             }}>
-              {voiceNote ? <VoiceInboxSidebarTitle title={displayTitle} /> : item.title}
+              {voiceNote ? <span title={displayTitle}>{displayTitle}</span> : item.title}
             </div>
             {sharedAuthorLabel && sharedAuthorTitle && (
               <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
@@ -5237,7 +5236,8 @@ function FileItem({
             )}
           </>
         )}
-        {canShowInFinder && (
+        {voiceNote && !renaming && <VoiceInboxMetadata note={voiceNote} />}
+        {canShowInFinder && !voiceNote && (
           <button
             className="bm-show-finder-btn"
             onClick={(e) => {
@@ -5246,7 +5246,7 @@ function FileItem({
             }}
             style={{
               position: 'absolute',
-              top: voiceNote ? '14px' : '50%',
+              top: '50%',
               right: '8px',
               transform: 'translateY(-50%)',
               padding: '0',
@@ -5273,52 +5273,7 @@ function FileItem({
           </button>
         )}
       </div>
-      {voiceNote && !renaming && (
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px', marginTop: '3px', minWidth: 0, color: theme.textSecondary, fontSize: '10px', lineHeight: '16px' }}>
-          {captureTime && <time dateTime={new Date(voiceNote.createdAtMs!).toISOString()} style={{ flexShrink: 0 }}>{captureTime}</time>}
-          <span
-            aria-label={`${voiceNote.wordCount} words`}
-            title={`${voiceNote.wordCount} words`}
-            style={{ flexShrink: 0, padding: '0 4px', borderRadius: '4px', backgroundColor: theme.hoverBg, fontSize: '9px', lineHeight: '15px', fontVariantNumeric: 'tabular-nums' }}
-          >
-            {voiceNote.wordCount.toLocaleString()}w
-          </span>
-          {voiceNote.threadId && (
-            <span
-              onMouseDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-              onDoubleClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-              onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}
-              style={{ display: 'inline-flex', marginLeft: 'auto', flexShrink: 0 }}
-            >
-              <OpenVoiceTaskButton threadId={voiceNote.threadId} compact />
-            </span>
-          )}
-        </div>
-      )}
     </div>
-  );
-}
-
-function VoiceInboxSidebarTitle({ title }: { title: string }) {
-  const separator = title.indexOf(' … ');
-  if (separator < 0) {
-    const lastWord = title.lastIndexOf(' ');
-    if (lastWord < 0) return <span title={title} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>;
-    return (
-      <span title={title} aria-label={title} style={{ display: 'flex', gap: '3px', minWidth: 0, whiteSpace: 'nowrap' }}>
-        <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title.slice(0, lastWord)}</span>
-        <span style={{ flexShrink: 0, maxWidth: '48%', overflow: 'hidden', direction: 'rtl', textAlign: 'right' }}>{title.slice(lastWord + 1)}</span>
-      </span>
-    );
-  }
-  return (
-    <span title={title} aria-label={title} style={{ display: 'flex', minWidth: 0, whiteSpace: 'nowrap' }}>
-      <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden' }}>{title.slice(0, separator)}</span>
-      <span style={{ flexShrink: 0, padding: '0 2px' }}>…</span>
-      <span style={{ flex: '0 1 auto', maxWidth: '48%', minWidth: 0, overflow: 'hidden', direction: 'rtl', textAlign: 'right' }}>{title.slice(separator + 3)}</span>
-    </span>
   );
 }
 

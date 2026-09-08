@@ -294,16 +294,16 @@ describe('Voice Inbox Library records', () => {
     expect(restarted.materialize(owner, [row()])[0].status).toBe('unchanged');
   });
 
-  it('summarizes edited text with bounded first/last words and formats local-style capture times without seconds', () => {
+  it('summarizes edited text with a bounded beginning excerpt and formats local-style capture times without seconds', () => {
     expect(summarizeVoiceInboxTranscript('one two three four five six seven eight nine ten'))
-      .toEqual({ title: 'one two three four … seven eight nine ten', wordCount: 10 });
+      .toEqual({ title: 'one two three four five six seven eight nine ten', wordCount: 10 });
     expect(summarizeVoiceInboxTranscript('  first\n second\tthird  ')).toEqual({ title: 'first second third', wordCount: 3 });
     expect(Array.from(summarizeVoiceInboxTranscript('😀'.repeat(300)).title).length).toBeLessThanOrEqual(180);
     expect(formatVoiceInboxTime(Date.parse('2026-01-02T00:04:59Z'), 'UTC')).toBe('12:04 a.m.');
     expect(formatVoiceInboxTime(Date.parse('2026-01-02T13:05:59Z'), 'UTC')).toBe('1:05 p.m.');
     expect(formatVoiceInboxTime(null, 'UTC')).toBe('');
     const note = store.materialize(owner, [row()])[0]; fs.writeFileSync(note.notePath!, 'An edited voice transcript with four more words today.');
-    expect(store.getPresentation(owner).notes[0]).toMatchObject({ title: 'An edited voice transcript … four more words today.', wordCount: 9 });
+    expect(store.getPresentation(owner).notes[0]).toMatchObject({ title: 'An edited voice transcript with four more words today.', wordCount: 9 });
   });
 
   it('recovers migration after the plain write but before its ledger save without replay or lost edits', () => {

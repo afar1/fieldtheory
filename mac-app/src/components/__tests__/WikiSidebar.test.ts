@@ -267,7 +267,7 @@ describe('WikiSidebar Voice Inbox rows', () => {
     folderPath,
     truncated: false,
     notes: [{ notePath, transcriptId: 'transcript-1', createdAtMs: new Date(2026, 8, 7, 16, 5, 59).getTime(),
-      threadId: 'confirmed-task', title: 'Please draw a mountain … an extraordinary sunset view', wordCount: 23 }],
+      threadId: 'confirmed-task', title: 'Please draw a mountain with an extraordinary sunset view', wordCount: 23 }],
   };
   const tree = (folder = 'Captures'): LibraryRoot['tree'] => [{
     kind: 'dir', name: folder, relPath: folder,
@@ -281,15 +281,15 @@ describe('WikiSidebar Voice Inbox rows', () => {
     const title = await screen.findByTitle(presentation.notes[0].title);
     const row = title.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
     expect(within(row).queryByText(originalTitle)).toBeNull();
-    expect(within(row).getByText('Please draw a mountain')).toBeTruthy();
-    expect(within(row).getByText('an extraordinary sunset view')).toBeTruthy();
-    expect(within(row).getByText('…')).toBeTruthy();
-    expect(row.querySelector('time')?.textContent).toBe('4:05 p.m.');
-    expect(within(row).getByLabelText('23 words').textContent).toBe('23w');
-    expect(within(row).getByRole('button', { name: 'Open task' })).toBeTruthy();
-    // Both parts can shrink, while the ending remains visible at the trailing edge.
-    expect((within(row).getByText('an extraordinary sunset view') as HTMLElement).style.direction).toBe('rtl');
-    expect(row.style.maxHeight).toBe('');
+    expect(title.textContent).toBe(presentation.notes[0].title);
+    expect(row.querySelector('time')?.getAttribute('aria-label')).toBe('4:05 p.m.');
+    expect(Array.from(row.querySelectorAll('time svg path')).map((hand) => hand.getAttribute('transform')))
+      .toEqual(['rotate(122.5 10 10)', 'rotate(30 10 10)']);
+    expect(within(row).getByLabelText('23 words').compareDocumentPosition(row.querySelector('time')!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(within(row).getByLabelText('23 words')).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Codex' })).toBeTruthy();
+    expect(row.style.maxHeight).toBe('40px');
   });
 
   it('opens only the confirmed task without selecting or renaming the note', async () => {
@@ -298,7 +298,7 @@ describe('WikiSidebar Voice Inbox rows', () => {
     const onSelectItem = vi.fn();
     renderSidebarForTest({ tree: tree(), voiceInboxPresentation: presentation, onSelectItem });
     fireEvent.click(await screen.findByText('Captures'));
-    const button = await screen.findByRole('button', { name: 'Open task' });
+    const button = await screen.findByRole('button', { name: 'Codex' });
     fireEvent.mouseDown(button);
     fireEvent.click(button);
     fireEvent.doubleClick(button);
@@ -318,10 +318,10 @@ describe('WikiSidebar Voice Inbox rows', () => {
     const title = await screen.findByTitle('Save this context');
     const row = title.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
     expect(row.querySelector('time')).toBeNull();
-    expect(within(row).queryByRole('button', { name: 'Open task' })).toBeNull();
-    expect(within(row).getByLabelText('3 words').textContent).toBe('3w');
+    expect(within(row).queryByRole('button', { name: 'Codex' })).toBeNull();
+    expect(within(row).getByLabelText('3 words')).toBeTruthy();
     expect(within(row).queryByText('…')).toBeNull();
-    expect(within(row).getByText('context')).toBeTruthy();
+    expect(title.textContent).toBe('Save this context');
   });
 
   it('does not enhance another folder merely named Inbox or use stale out-of-folder metadata', async () => {
@@ -331,7 +331,7 @@ describe('WikiSidebar Voice Inbox rows', () => {
     const row = (await screen.findByText(originalTitle)).closest<HTMLElement>('[data-library-sidebar-row-id]')!;
     expect(row.querySelector('time')).toBeNull();
     expect(within(row).queryByLabelText('23 words')).toBeNull();
-    expect(within(row).queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Codex' })).toBeNull();
     expect(row.style.maxHeight).toBe('40px');
   });
 
@@ -345,7 +345,7 @@ describe('WikiSidebar Voice Inbox rows', () => {
     }));
     expect(await screen.findByText(originalTitle)).toBeTruthy();
     expect(screen.queryByTitle(presentation.notes[0].title)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Codex' })).toBeNull();
   });
 });
 

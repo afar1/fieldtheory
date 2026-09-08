@@ -1,0 +1,72 @@
+.voice-inbox-row {
+  container: voice-inbox-row / inline-size;
+}
+
+.voice-inbox-line {
+  gap: 8px;
+}
+
+.voice-inbox-details {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 20px;
+  gap: 7px;
+  font-size: 10px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.voice-inbox-details time {
+  display: inline-flex;
+  align-items: center;
+}
+
+.voice-inbox-narrow {
+  display: none;
+}
+
+.voice-inbox-task {
+  display: inline-flex;
+  width: 0;
+  margin-left: -7px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.voice-inbox-row:hover .voice-inbox-task,
+.voice-inbox-row:focus-within .voice-inbox-task,
+.voice-inbox-task:has([data-state="opening"], [data-state="error"]) {
+  width: auto;
+  margin-left: 0;
+  opacity: 1;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+@container voice-inbox-row (max-width: 320px) {
+  .voice-inbox-wide { display: none; }
+  .voice-inbox-narrow { display: inline; }
+  .voice-inbox-clock { display: block; }
+}
+
+@container voice-inbox-row (max-width: 200px) {
+  .voice-inbox-line,
+  .voice-inbox-details { gap: 4px; }
+  .voice-inbox-task { margin-left: -4px; }
+  .voice-inbox-row:hover .voice-inbox-task,
+  .voice-inbox-row:focus-within .voice-inbox-task,
+  .voice-inbox-task:has([data-state="opening"], [data-state="error"]) { margin-left: 0; }
+}
+
+@media (hover: none) {
+  .voice-inbox-task {
+    width: auto;
+    margin-left: 0;
+    opacity: 1;
+    overflow: visible;
+    pointer-events: auto;
+  }
+}

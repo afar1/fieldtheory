@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.49': [
+    'Scan Voice Inbox transcripts on one line, with word count followed by local capture time',
+    'Narrow sidebars use compact word counts and clock faces showing the capture time',
+    'Hover or focus an Inbox row to open its task with Codex; the transcript button is also labeled Codex',
+  ],
   '0.3.48': [
     'Open the Library sidebar reliably while keeping automatic collapse when the window narrows',
     'Scan Voice transcripts in your Inbox with the beginning and end, local capture time, and word count',
@@ -572,6 +577,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.49': 'September 7, 2026',
   '0.3.48': 'September 7, 2026',
   '0.3.47': 'September 7, 2026',
   '0.3.47-voice.2': 'September 7, 2026',

@@ -250,7 +250,7 @@ describe('VoiceWorkSettings', () => {
     current.lastTask = { threadId: 'thread-123', title: 'Field Theory - Investigate delay', status: 'running' };
     render(<VoiceWorkSettings />);
     await waitForReadiness();
-    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Codex' })).toBeNull();
 
     act(() => publish({
       ...current,
@@ -258,7 +258,7 @@ describe('VoiceWorkSettings', () => {
     }));
     expect(screen.getByText('Latest voice task · Done')).toBeTruthy();
     expect(screen.getByText('The delay occurs while loading the model.')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Open task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
     await waitFor(() => expect(api.openTask).toHaveBeenCalledWith('thread-123'));
   });
 
@@ -285,7 +285,7 @@ describe('VoiceWorkSettings', () => {
     };
     render(<VoiceWorkSettings />);
     await waitForReadiness();
-    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Codex' })).toBeNull();
     const summary = screen.getByText('Read full response');
     const details = summary.closest('details') as HTMLDetailsElement;
     expect(details.open).toBe(false);

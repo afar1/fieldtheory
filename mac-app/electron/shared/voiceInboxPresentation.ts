@@ -17,10 +17,9 @@ export interface VoiceInboxPresentation {
 
 export function summarizeVoiceInboxTranscript(text: string): { title: string; wordCount: number } {
   const words = text.trim().split(/\s+/u).filter(Boolean);
-  const title = words.length > 8 ? `${words.slice(0, 4).join(' ')} … ${words.slice(-4).join(' ')}` : words.join(' ');
-  const characters = Array.from(title);
-  return { title: characters.length > 180 ? `${characters.slice(0, 87).join('')} … ${characters.slice(-87).join('')}`
-    : title || 'Voice transcript', wordCount: words.length };
+  const characters = Array.from(words.join(' '));
+  return { title: characters.length > 180 ? `${characters.slice(0, 179).join('').trimEnd()}…`
+    : characters.join('') || 'Voice transcript', wordCount: words.length };
 }
 
 /** Local time by default; an explicit zone makes tests and previews deterministic. */

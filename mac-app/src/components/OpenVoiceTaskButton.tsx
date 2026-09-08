@@ -38,6 +38,7 @@ export function OpenVoiceTaskButton({ threadId, compact = false, style }: {
   };
   return (
     <span
+      data-state={error ? 'error' : opening ? 'opening' : 'idle'}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
@@ -45,12 +46,13 @@ export function OpenVoiceTaskButton({ threadId, compact = false, style }: {
     >
       <button
         type="button"
+        aria-busy={opening}
         disabled={opening || !window.voiceWorkAPI}
         onMouseDown={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
         onClick={(event) => { event.stopPropagation(); void open(); }}
-        title={error ?? 'Open task in Codex'}
+        title={error ?? (opening ? 'Opening task in Codex…' : 'Open task in Codex')}
         style={{
           padding: compact ? '2px 6px' : '7px 11px', borderRadius: 6,
           border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text,
@@ -58,9 +60,11 @@ export function OpenVoiceTaskButton({ threadId, compact = false, style }: {
           whiteSpace: 'nowrap', cursor: opening ? 'wait' : 'pointer', opacity: opening ? 0.6 : 1,
         }}
       >
-        {opening ? 'Opening…' : 'Open task'}
+        {opening && !compact ? 'Opening…' : 'Codex'}
       </button>
-      {error && <span role="alert" style={{ fontSize: 11, color: theme.error, marginTop: 4 }}>{error}</span>}
+      {error && <span role="alert" style={compact
+        ? { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }
+        : { fontSize: 11, color: theme.error, marginTop: 4 }}>{error}</span>}
     </span>
   );
 }
