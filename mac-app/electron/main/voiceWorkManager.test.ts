@@ -454,3 +454,20 @@ describe('inbox account boundaries', () => {
     expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(0);
   });
 });
+
+describe('local inbox upgrade adoption', () => {
+  it('adopts the verified existing inbox without changing delivery settings or saved attempts', async () => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const statePath = path.join(h.directory, 'account-a.json');
+    const before = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const threadId = '01a0795a-a845-7ef2-a60b-91a2ff036a45';
+    fs.writeFileSync(path.join(h.directory, 'account-a.inbox.json'), JSON.stringify({ owner: 'account-a', threadId }));
+    const next = harness(h.directory); next.setServer(true, 1); await next.manager.authChanged(); await settle();
+    expect(next.manager.getState().inboxThreadId).toBe(threadId);
+    expect(next.manager.canOpenTask(threadId)).toBe(true);
+    const after = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    expect(after.attempts).toEqual(before.attempts);
+    expect(after.settings).toEqual(before.settings);
+    expect(next.rpc.mock.calls.some(([name]) => name === 'voice_delivery_configure')).toBe(false);
+  });
+});

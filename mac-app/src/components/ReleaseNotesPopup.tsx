@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.52': [
+    'Voice requests arrive in one pinned Codex inbox, with routing updates and task links',
+    'Follow-ups use past conversations to find the right task; context-only recordings remain notes',
+  ],
   '0.3.51': [
     'Create and join multiple teams from Settings, with owner, admin, and member roles',
     'Invite people by email before or after signup; accept invitations to access the team’s full River history',
@@ -587,6 +591,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.52': 'September 8, 2026',
   '0.3.51': 'September 7, 2026',
   '0.3.50': 'September 7, 2026',
   '0.3.49': 'September 7, 2026',

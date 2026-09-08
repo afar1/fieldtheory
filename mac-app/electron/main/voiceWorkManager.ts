@@ -708,6 +708,15 @@ export class VoiceWorkManager extends EventEmitter {
       || typeof value.settings?.enabled !== 'boolean' || !value.attempts || Array.isArray(value.attempts)) {
       throw new Error('Invalid voice worker state.');
     }
+    // A local upgrade can adopt an existing inbox without editing a live snapshot.
+    const adoptionFile = path.join(this.options.stateDirectory, `${owner}.inbox.json`);
+    if (!value.inboxThreadId && fs.existsSync(adoptionFile)) {
+      const adoption = JSON.parse(fs.readFileSync(adoptionFile, 'utf8')) as { owner?: string; threadId?: string };
+      if (adoption.owner !== owner || typeof adoption.threadId !== 'string' || !codexTaskUrl(adoption.threadId)) {
+        throw new Error('Invalid Voice inbox adoption settings.');
+      }
+      value.inboxThreadId = adoption.threadId;
+    }
     return value;
   }
 
