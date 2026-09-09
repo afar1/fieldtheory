@@ -17,7 +17,7 @@ The existing Realtime wakeups, backend capture eligibility, leases, dispatch key
 ## Verification — September 8, 2026
 
 - Renderer and Electron: `npm run typecheck` passed.
-- 131 tests passed across Voice router, routing flow, runner, worker and Settings. Coverage includes history truncation, verified candidates, durable-owner preservation, hold-off revisions, persistent-thread reuse, receipt replay recovery, pin-order preservation, outbox retry without duplicate work, and sign-out cancellation.
+- 132 tests passed across Voice router, routing flow, runner, worker and Settings. Coverage includes history truncation, verified candidates, durable-owner preservation, hold-off revisions, persistent-thread reuse, receipt replay recovery, pin-order preservation, outbox retry without duplicate work, and sign-out cancellation.
 - Installed Codex accepted a setup turn in existing inbox `01a0795a-a845-7ef2-a60b-91a2ff036a45`. Repeating its receipt key returned the same completed response without another turn.
 - Live full-text search for penguin returned matching historical conversations and bounded actual messages through the installed Codex protocol.
 - Live routing of an explicit just-context/hold-off recording returned `context`; no substantive task was dispatched.
@@ -29,15 +29,26 @@ These are source and installed-Codex protocol checks. They do not claim a new Fi
 
 ## Local update handoff
 
-Source worktree: `/Users/afar/dev/fieldtheory-voice-orchestrator`, based on `f60001063`. The original checkout and other worktrees were preserved. Borrowed dependency symlinks were used for source checks, without dependency or lockfile edits.
+Source worktree: `/Users/afar/dev/fieldtheory-voice-orchestrator`, rebased onto the installed 0.3.51 source `767bc2bbe` for the approved 0.3.52 package. The original checkout and other worktrees were preserved. Source checks initially used borrowed dependencies. The local package uses its own `npm ci` installation; the lockfile change only bumps the app version to 0.3.52. The previous 0.3.51 River teams source is retained.
 
-Andrew's existing inbox is `Field Theory inbox`, `01a0795a-a845-7ef2-a60b-91a2ff036a45`; reuse it rather than creating a second primary inbox. When preparing the approved local update, with Field Theory stopped, back up the current owner's `voice-work/<owner>.json` under the app's userData directory and set only its optional top-level `inboxThreadId` to that verified ID. Preserve owner, worker ID, enabled state, attempts, and all capture/generation settings. Do not edit a snapshot while the app can overwrite it, and do not change another account's snapshot. Normal new-user setup saves its newly created inbox ID automatically.
+Andrew's existing inbox is `Field Theory inbox`, `01a0795a-a845-7ef2-a60b-91a2ff036a45`; reuse it rather than creating a second primary inbox. The approved 0.3.52 update accepts a separate, account-scoped `voice-work/<owner>.inbox.json` adoption file containing that owner and the verified thread ID. This is consumed only when the existing worker snapshot does not already have an inbox ID. It preserves owner, worker ID, enabled state, attempts, capture settings and generation. Preparing this companion file does not edit the running app's snapshot; the previous installed version ignores it. The next update can therefore resume the existing primary without creating another one. Normal new-user setup saves its newly created inbox ID automatically.
 
 The old `field-theory-voice-inbox` heartbeat was verified PAUSED and remains paused. Do not re-enable it alongside the push worker. The legacy cutoff `1788739104000` must never move backwards or permit historical backlog execution.
 
-No package/install is included in this source change. Follow the existing local-only package process after release-note approval; Andrew installs the delivered preview. Verify the actual installed mobile-to-inbox-to-task path before treating activation as complete.
+Release notes were approved on September 8. The signed/notarized local-only 0.3.52 DMG has been delivered; Andrew installs the preview. Verify the actual installed mobile-to-inbox-to-task path before treating activation as complete.
 
-## Draft update notes — awaiting approval
+## Approved update notes — September 8, 2026
 
 - Voice requests now arrive in one pinned Codex inbox, with routing updates and links to their tasks.
 - Follow-ups can use past conversation content to find the right task, while context-only recordings stay as notes.
+
+## Delivered local package — September 8, 2026
+
+- Artifact: `mac-app/release/Field-Theory-0.3.52-arm64-local.dmg` (159,869,514 bytes).
+- SHA-256: `413e3c3ffda3012337f2ac24185c263678c77eca592e66fc62b46869ba45eec0`.
+- Source build: `59c8ab33e`, retaining the installed 0.3.51 River teams changes.
+- App and DMG signatures, stapled notarization tickets, Gatekeeper assessment and DMG checksum verification passed. DMG notarization request: `304a5942-4aa4-4f40-963f-f6c8fe0ed12f` (Accepted).
+- Before signing: 9,354 file hashes and 179 JavaScript syntax checks passed. After signing: all 8,844 packed hashes and 433 compiled Electron/renderer files matched; unpacked resources are covered by the verified bundle signature. Signing intentionally changes unpacked Mach-O bytes, so the before-signing ASAR metadata checker is not an after-signing checksum for those binaries.
+- Packaged Electron 31.7.7, ABI 125: SQLite and terminal runtime checks passed. Production updater configuration is present. Full verification receipt: `mac-app/release/voice-package-verification-0.3.52.json`.
+- The current account's separate inbox-adoption file was staged for the verified primary inbox. The running worker snapshot was not edited. It takes effect in the new version on launch.
+- No GitHub upload, push or publishing; no DMG mounting, app replacement, or candidate UI launch. The installed app remained 0.3.51. Real mobile-to-inbox delivery in the newly installed build remains the final acceptance check.
