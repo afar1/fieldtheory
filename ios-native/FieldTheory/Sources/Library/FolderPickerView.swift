@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Choose which library folders live on the phone. The index knows about
 /// everything in the cloud; only checked folders are materialized.
@@ -47,9 +48,12 @@ struct FolderPickerView: View {
                                 Spacer()
                             }
                         }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(folder.displayName), \(folder.documentCount) documents")
+                        .accessibilityValue(isOn(folder.name) ? "Synced" : "Not synced")
                     }
                 } header: {
-                    Text("Folders on this phone")
+                    Text(UIDevice.current.userInterfaceIdiom == .pad ? "Folders on this iPad" : "Folders on this phone")
                 } footer: {
                     Text("Unchecked folders stay in the cloud and on your Mac — nothing is deleted. Check them anytime to pull them down.")
                 }
@@ -59,6 +63,7 @@ struct FolderPickerView: View {
                         model.settings.syncedFolders = nil
                         model.sync.scheduleDebounced(after: 0.5)
                     }
+                    .accessibilityHint("Downloads every library folder to this device")
                 }
             }
             .navigationTitle("Synced Folders")
@@ -66,6 +71,7 @@ struct FolderPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }

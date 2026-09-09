@@ -4,39 +4,124 @@ struct RiverView: View {
     @Binding var showSettings: Bool
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var openedItem: RiverItem?
+    @State private var selectedItemID: String?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var handledOpenDirective = false
+    @State private var showSafetyPolicy = false
 
     var body: some View {
+        GeometryReader { geometry in
+            let usesSplitLayout = shouldUseSplitLayout(width: geometry.size.width)
+
+            Group {
+                if usesSplitLayout {
+                    regularWidthView
+                } else {
+                    compactView
+                }
+            }
+            .task {
+                reconcileSelection(selectFirstIfMissing: true, usesSplitLayout: usesSplitLayout)
+                guard !handledOpenDirective,
+                      model.launchDirectives.contains("ft-open-river") else { return }
+                handledOpenDirective = true
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard let first = model.river.items.first else { return }
+                if usesSplitLayout {
+                    selectedItemID = first.id
+                } else {
+                    openCompact(first)
+                }
+            }
+            .onChange(of: model.river.items) { previous, _ in
+                reconcileSelection(
+                    selectFirstIfMissing: previous.isEmpty,
+                    usesSplitLayout: usesSplitLayout
+                )
+            }
+            .onChange(of: usesSplitLayout) { _, split in
+                transition(toSplitLayout: split)
+            }
+        }
+        .sheet(isPresented: $showSafetyPolicy) {
+            RiverSafetyPolicyView()
+        }
+    }
+
+    private var compactView: some View {
         NavigationStack {
             Group {
                 if model.river.items.isEmpty {
                     emptyState
                 } else {
-                    list
+                    compactList
                 }
             }
             .navigationTitle("River")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-            }
+            .toolbar { settingsToolbar }
         }
         .fullScreenCover(item: $openedItem) { item in
-            RiverReaderView(items: model.river.items, startAt: item)
-        }
-        .task {
-            if model.launchDirectives.contains("ft-open-river") {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                openedItem = model.river.items.first
-            }
+            RiverReaderView(
+                items: model.river.items,
+                startAt: item,
+                selection: $selectedItemID
+            )
         }
     }
 
-    private var list: some View {
+    @ViewBuilder
+    private var regularWidthView: some View {
+        if model.river.items.isEmpty {
+            NavigationStack {
+                emptyState
+                    .navigationTitle("River")
+                    .toolbar { settingsToolbar }
+            }
+        } else {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                regularList
+                    .navigationTitle("River")
+                    .toolbar { settingsToolbar }
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 420)
+            } detail: {
+                if let item = selectedItem {
+                    RiverReaderView(
+                        items: model.river.items,
+                        startAt: item,
+                        selection: $selectedItemID,
+                        presentation: .splitDetail
+                    )
+                } else {
+                    readerPlaceholder
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var settingsToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showSafetyPolicy = true } label: {
+                Image(systemName: "shield")
+            }
+            .help("River safety and support")
+            .accessibilityLabel("River safety and support")
+            .accessibilityIdentifier("RiverSafetyButton")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+            }
+            .keyboardShortcut(",", modifiers: .command)
+            .help("Settings")
+        }
+    }
+
+    private var compactList: some View {
         ScrollView {
             LazyVStack(spacing: 14) {
                 ForEach(model.river.items) { item in
@@ -46,7 +131,7 @@ struct RiverView: View {
                     ) {
                         RiverCardView(item: item, unread: model.river.isUnread(item))
                             .contentShape(Rectangle())
-                            .onTapGesture { openedItem = item }
+                            .onTapGesture { openCompact(item) }
                     }
                 }
             }
@@ -57,6 +142,117 @@ struct RiverView: View {
         .scrollIndicators(.hidden)
         .background(Theme.background(colorScheme))
         .refreshable { await model.sync.syncNow() }
+    }
+
+    private var regularList: some View {
+        List(selection: $selectedItemID) {
+            ForEach(model.river.items) { item in
+                RiverSidebarRow(
+                    item: item,
+                    unread: model.river.isUnread(item),
+                    selected: selectedItemID == item.id,
+                    onToggleRead: { toggleRead(item) }
+                )
+                .tag(item.id)
+                .contextMenu {
+                    Button { toggleRead(item) } label: {
+                        Label(
+                            model.river.isUnread(item) ? "Mark read" : "Mark unread",
+                            systemImage: model.river.isUnread(item) ? "envelope.open" : "envelope.badge"
+                        )
+                    }
+                    Button { copy(item) } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    Button {
+                        Task { await model.river.markRead(item) }
+                    } label: {
+                        Label("Read", systemImage: "envelope.open")
+                    }
+                    .tint(Theme.markRead)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button {
+                        Task { await model.river.markUnread(item) }
+                    } label: {
+                        Label("Unread", systemImage: "envelope.badge")
+                    }
+                    .tint(Theme.unread)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Theme.background(colorScheme))
+        .refreshable { await model.sync.syncNow() }
+    }
+
+    private var readerPlaceholder: some View {
+        ContentUnavailableView {
+            Label("Select a document", systemImage: "doc.text")
+        } description: {
+            Text("Choose something from River to read it here.")
+        }
+        .background(Theme.background(colorScheme))
+    }
+
+    private var selectedItem: RiverItem? {
+        guard let selectedItemID else { return nil }
+        return model.river.items.first { $0.id == selectedItemID }
+    }
+
+    private func shouldUseSplitLayout(width: CGFloat) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+            && horizontalSizeClass == .regular
+            && width >= 700
+    }
+
+    private func openCompact(_ item: RiverItem) {
+        selectedItemID = item.id
+        openedItem = item
+    }
+
+    private func transition(toSplitLayout split: Bool) {
+        if split {
+            if selectedItemID == nil, let openedItem {
+                selectedItemID = openedItem.id
+            }
+            openedItem = nil
+            reconcileSelection(selectFirstIfMissing: true, usesSplitLayout: true)
+        } else if let selectedItem {
+            openCompact(selectedItem)
+        }
+    }
+
+    private func reconcileSelection(selectFirstIfMissing: Bool, usesSplitLayout: Bool) {
+        guard usesSplitLayout else { return }
+        if let selectedItemID {
+            if model.river.items.contains(where: { $0.id == selectedItemID }) {
+                return
+            }
+            self.selectedItemID = nil
+            return
+        }
+        if selectFirstIfMissing {
+            selectedItemID = model.river.items.first?.id
+        }
+    }
+
+    private func toggleRead(_ item: RiverItem) {
+        Task {
+            if model.river.isUnread(item) {
+                await model.river.markRead(item)
+            } else {
+                await model.river.markUnread(item)
+            }
+        }
+    }
+
+    private func copy(_ item: RiverItem) {
+        UIPasteboard.general.string = item.clipboardText
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private var emptyState: some View {
@@ -77,6 +273,75 @@ struct RiverView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background(colorScheme))
         .refreshableScroll { await model.sync.refreshTeamScope() }
+    }
+}
+
+/// A denser River row for the bounded iPad list column. Selection only changes
+/// the persistent detail; read state changes through the dedicated control.
+private struct RiverSidebarRow: View {
+    let item: RiverItem
+    let unread: Bool
+    let selected: Bool
+    let onToggleRead: () -> Void
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var primaryText: Color {
+        selected ? Theme.background(colorScheme) : Theme.text(colorScheme)
+    }
+
+    private var secondaryText: Color {
+        selected ? Theme.background(colorScheme).opacity(0.85) : Theme.textMuted(colorScheme)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    CallsignBadge(
+                        callsign: item.authorCallsign ?? item.authorInitials ?? "FT",
+                        accent: selected ? primaryText : Theme.accent(model.settings.accentPreset, colorScheme)
+                    )
+                    if unread { UnreadDot() }
+                    Spacer(minLength: 4)
+                    Text(item.updatedAtMs.msToDate.relativeShort)
+                        .font(.system(size: 12))
+                        .foregroundStyle(secondaryText)
+                }
+
+                Text(item.title)
+                    .font(.custom("Source Serif 4", size: 18).weight(unread ? .semibold : .medium))
+                    .foregroundStyle(primaryText)
+                    .lineLimit(2)
+
+                Text(item.preview)
+                    .font(.custom("Source Sans 3", size: 14))
+                    .foregroundStyle(secondaryText)
+                    .lineLimit(3)
+                    .lineSpacing(2)
+
+                Text(item.fileName)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(secondaryText)
+                    .lineLimit(1)
+            }
+
+            Button(action: onToggleRead) {
+                Image(systemName: unread ? "envelope.open" : "envelope.badge")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 32, height: 32)
+                    .background(Theme.background(colorScheme), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(unread ? Theme.markRead : Theme.unread)
+            .hoverEffect(.lift)
+            .help(unread ? "Mark read" : "Mark unread")
+            .accessibilityLabel(unread ? "Mark read" : "Mark unread")
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .hoverEffect(.highlight)
     }
 }
 
@@ -128,7 +393,11 @@ struct SwipeToTriageRow<Content: View>: View {
 
     /// Drags born in the edge strips belong to tab navigation, not the card.
     private func startedAtScreenEdge(_ value: DragGesture.Value) -> Bool {
-        let width = UIScreen.main.bounds.width
+        let width = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .bounds.width ?? UIScreen.main.bounds.width
         return value.startLocation.x < EdgeSwipe.zoneWidth
             || value.startLocation.x > width - EdgeSwipe.zoneWidth
     }

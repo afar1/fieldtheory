@@ -1,7 +1,20 @@
 import SwiftUI
+import UIKit
+
+final class FieldTheoryAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        ParakeetBackgroundDownloader.shared.handleEvents(
+            for: identifier, completionHandler: completionHandler)
+    }
+}
 
 @main
 struct FieldTheoryApp: App {
+    @UIApplicationDelegateAdaptor(FieldTheoryAppDelegate.self) private var appDelegate
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 

@@ -1,16 +1,16 @@
-# Field Theory for iPhone
+# Field Theory for iPhone and iPad
 
-Fully native SwiftUI app (iOS 26). Three sections: **Library** (synced
-markdown with a rendered reader and a live-styled TextKit 2 editor), **River**
-(team-shared documents as cards with Mailbox-style read/unread swipes), and
-**Voice** (fully offline whisper.cpp transcription with stackable items).
+A native SwiftUI Voice app for iOS 26. Record thoughts, transcribe them on
+device with NVIDIA Parakeet through FluidAudio, and edit, stack, copy, or sync Voice transcripts.
+The same workspace adapts to iPhone and iPad.
+
+Library, River, and Goals implementation types remain in the source tree for
+future product work, but this iOS build has no public navigation or launch route
+to them.
 
 ## Build
 
 ```bash
-# one-time: build the whisper xcframework from the repo's whisper.cpp
-./ios-native/scripts/build-whisper-ios.sh   # run from repo root
-
 cd ios-native
 xcodegen generate
 xcodebuild -project FieldTheory.xcodeproj -scheme FieldTheory \
@@ -18,7 +18,7 @@ xcodebuild -project FieldTheory.xcodeproj -scheme FieldTheory \
   -allowProvisioningUpdates build
 ```
 
-Install on the phone (device id from `xcrun devicectl list devices`):
+Install on an iPhone or iPad (device id from `xcrun devicectl list devices`):
 
 ```bash
 xcrun devicectl device install app --device <UDID> \
@@ -27,21 +27,12 @@ xcrun devicectl device install app --device <UDID> \
 
 ## Sync
 
-Speaks the same Supabase dialects as the Mac app and the previous mobile app:
-
-- `library_documents` — private library; `client_id = "library-" + sha256(source_path)[0..<32]`,
-  sha256 content hashes, tombstones are emptied rows with `deleted_at`,
-  conflict copies as `*.sync-conflict-<ms>.md`. The phone holds a **selected
-  subset** of folders and never treats absence as deletion.
-- `team_documents` — River, scoped by `team_scope_user_id` resolved from team
-  `contacts`. Read state is local, keyed by `(id, revision)`.
-- `transcripts` — Voice items, last-write-wins on `client_updated_at_ms`,
-  stack segments in `metadata.stackSegments` (camelCase, matching the old app).
+The Voice-only sync cycle handles locally created or edited transcript rows and
+tombstones. It does not query, upload, or download Library or River documents,
+and it does not download transcripts created by another client into this app.
 
 ## Simulator preview
 
-`simctl launch <sim> com.afar1.fieldtheory ft-preview` seeds fixture data and
-skips auth (simulator builds only). Additional tokens: `ft-tab-river`,
-`ft-tab-voice`, `ft-open-doc`, `ft-edit-doc`, `ft-open-river`, and
-`ft-test-whisper` (transcribes /tmp/ft-test.wav from the host and prints the
-result).
+`simctl launch <sim> com.afar1.fieldtheory ft-preview` opens an isolated,
+fictional Voice workspace without authentication. It is compiled only for the
+simulator.

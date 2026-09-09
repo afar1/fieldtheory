@@ -1,0 +1,15 @@
+Parakeet TDT 0.6B v2
+
+Original model: NVIDIA Parakeet TDT 0.6B v2.
+https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+
+Core ML conversion: Fluid Inference.
+https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml
+Model revision: ee09c569f73759e6d44c9bd16766f477b2b36d39
+
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+https://creativecommons.org/licenses/by/4.0/
+
+Field Theory downloads the pinned converted model assets without modifying the
+model weights. Assets are prepared locally for offline inference using FluidAudio.
+FluidAudio is licensed under Apache License 2.0; see FluidAudio-LICENSE.txt.

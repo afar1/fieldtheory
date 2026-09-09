@@ -8,6 +8,7 @@ struct SignInView: View {
     @State private var code = ""
     @State private var awaitingCode = false
     @State private var busy = false
+    @State private var reviewerDemoBusy = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case email, code }
@@ -21,11 +22,16 @@ struct SignInView: View {
                 .foregroundStyle(Theme.accent(model.settings.accentPreset, colorScheme))
                 .padding(.bottom, 18)
 
-            Text("Field Theory")
+            Text("Ambition")
                 .font(.custom("Source Serif 4", size: 32).weight(.semibold))
                 .foregroundStyle(Theme.text(colorScheme))
 
-            Text(awaitingCode ? "Enter the code we emailed you" : "Sign in with your email")
+            Text("Made by Field Theory")
+                .font(.custom("Source Sans 3", size: 13))
+                .foregroundStyle(Theme.textMuted(colorScheme))
+                .padding(.top, 4)
+
+            Text(awaitingCode ? "Enter the code we emailed you" : "Sign in or create an account")
                 .font(.custom("Source Sans 3", size: 16))
                 .foregroundStyle(Theme.textMuted(colorScheme))
                 .padding(.top, 8)
@@ -86,12 +92,49 @@ struct SignInView: View {
                         .foregroundStyle(Theme.unread)
                         .multilineTextAlignment(.center)
                 }
+
+                HStack(spacing: 12) {
+                    Divider()
+                    Text("or")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textMuted(colorScheme))
+                    Divider()
+                }
+                .padding(.vertical, 4)
+
+                Button {
+                    enterReviewerDemo()
+                } label: {
+                    Group {
+                        if reviewerDemoBusy {
+                            ProgressView()
+                        } else {
+                            Text("Open Reviewer Demo")
+                                .font(.system(size: 17, weight: .semibold))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                }
+                .buttonStyle(.bordered)
+                .disabled(busy || reviewerDemoBusy)
+                .accessibilityIdentifier("ReviewerDemoButton")
+
+                Text("Uses isolated sample content stored only on this device. No account is created and production sync stays off.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textMuted(colorScheme))
+                    .multilineTextAlignment(.center)
             }
             .padding(.top, 36)
             .padding(.horizontal, 32)
             .frame(maxWidth: 420)
 
             Spacer()
+
+            Link("Privacy Policy", destination: AppLinks.privacyPolicy)
+                .accessibilityIdentifier("PrivacyPolicyLink")
+                .font(.footnote)
+                .padding(.bottom, 8)
 
 #if targetEnvironment(simulator)
             Button("Preview UI with sample data") {
@@ -105,7 +148,6 @@ struct SignInView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background(colorScheme))
-        .onAppear { focusedField = .email }
     }
 
     private func submit() {
@@ -120,6 +162,20 @@ struct SignInView: View {
                     awaitingCode = true
                     focusedField = .code
                 }
+            }
+        }
+    }
+
+    private func enterReviewerDemo() {
+        reviewerDemoBusy = true
+        model.auth.lastError = nil
+        Task {
+            defer { reviewerDemoBusy = false }
+            do {
+                try await model.enterReviewerDemo(seed: ReviewerDemoFixtures.seed)
+                model.auth.beginReviewerDemo()
+            } catch {
+                model.auth.lastError = "Reviewer Demo could not open its local sample workspace. Please try again."
             }
         }
     }

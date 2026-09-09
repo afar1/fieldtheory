@@ -11,6 +11,7 @@ final class RiverStore {
 
     private(set) var items: [RiverItem] = []
     private(set) var readState: [String: Int] = [:] // id -> read_revision
+    private(set) var blockedAuthors: [RiverBlockedAuthor] = []
     private(set) var available = true
 
     init(db: Database) {
@@ -29,7 +30,7 @@ final class RiverStore {
     func reload() async {
         do {
             let rows = try await db.query("SELECT * FROM river_items ORDER BY updated_at_ms DESC")
-            items = rows.map { row in
+            let loadedItems = rows.map { row in
                 let content = row["content"]?.stringValue ?? ""
                 return RiverItem(
                     id: row["id"]?.stringValue ?? "",
@@ -46,6 +47,29 @@ final class RiverStore {
                     preview: Self.makePreview(content)
                 )
             }
+            // A staged client may briefly open an existing database before
+            // the local schema migration that adds this table. Showing River
+            // normally is safer than treating that migration gap as an empty
+            // feed; blocking becomes available after the next reload.
+            let blockedRows = (try? await db.query("""
+                SELECT author_id, author_label, blocked_at_ms
+                FROM river_blocked_authors
+                ORDER BY blocked_at_ms DESC
+                """)) ?? []
+            blockedAuthors = blockedRows.compactMap { row in
+                guard let authorID = row["author_id"]?.stringValue,
+                      !authorID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return RiverBlockedAuthor(
+                    authorID: authorID,
+                    authorLabel: row["author_label"]?.stringValue ?? "",
+                    blockedAtMs: row["blocked_at_ms"]?.intValue ?? 0
+                )
+            }
+            let blockedIDs = Set(blockedAuthors.map(\.authorID))
+            items = loadedItems.filter { item in
+                guard let authorID = item.authorID else { return true }
+                return !blockedIDs.contains(authorID)
+            }
             let stateRows = try await db.query("SELECT id, read_revision FROM river_read_state")
             readState = Dictionary(uniqueKeysWithValues: stateRows.compactMap { row in
                 guard let id = row["id"]?.stringValue else { return nil }
@@ -56,6 +80,37 @@ final class RiverStore {
             available = scope != ""
         } catch {
             items = []
+        }
+    }
+
+    /// Blocks this account only in the signed-in person's on-device River
+    /// cache. It immediately removes the author's existing items locally;
+    /// it does not delete remote content, notify the author, or submit a
+    /// report to Field Theory.
+    func blockAuthor(of item: RiverItem) async -> Bool {
+        guard let authorID = item.authorID else { return false }
+        do {
+            try await db.run("""
+                INSERT INTO river_blocked_authors (author_id, author_label, blocked_at_ms)
+                VALUES (?, ?, ?)
+                ON CONFLICT(author_id) DO UPDATE SET
+                    author_label = excluded.author_label,
+                    blocked_at_ms = excluded.blocked_at_ms
+                """, [.text(authorID), .text(item.authorLabel), .int(Timestamps.nowMs())])
+            await reload()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func unblockAuthor(_ author: RiverBlockedAuthor) async -> Bool {
+        do {
+            try await db.run("DELETE FROM river_blocked_authors WHERE author_id = ?", [.text(author.authorID)])
+            await reload()
+            return true
+        } catch {
+            return false
         }
     }
 

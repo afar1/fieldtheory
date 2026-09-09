@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppSettings {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     var typographyPreset: TypographyPresetID {
         didSet { defaults.set(typographyPreset.rawValue, forKey: "librarian-typography-preset") }
@@ -19,6 +19,10 @@ final class AppSettings {
 
     var textSize: TextSizeID {
         didSet { defaults.set(textSize.rawValue, forKey: "librarian-text-size") }
+    }
+
+    var showLineNumbers: Bool {
+        didSet { defaults.set(showLineNumbers, forKey: "librarian-show-line-numbers") }
     }
 
     var accentPreset: AccentPreset {
@@ -62,14 +66,18 @@ final class AppSettings {
         ReadingTypography(preset: typographyPreset, lineHeight: lineHeight, textSize: textSize)
     }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         typographyPreset = TypographyPresetID(rawValue: defaults.string(forKey: "librarian-typography-preset") ?? "") ?? .book
         lineHeight = LineHeightID(rawValue: defaults.string(forKey: "librarian-line-height") ?? "") ?? .normal
         textSize = TextSizeID(rawValue: defaults.string(forKey: "librarian-text-size") ?? "") ?? .normal
+        showLineNumbers = defaults.object(forKey: "librarian-show-line-numbers") as? Bool ?? true
         accentPreset = AccentPreset(rawValue: defaults.string(forKey: "accentPreset") ?? "") ?? .forest
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearance-mode") ?? "") ?? .system
-        newDocFolder = defaults.string(forKey: "library-new-doc-location") ?? "scratchpad"
+        newDocFolder = defaults.string(forKey: "library-new-doc-location") ?? "Ambition"
         autoCopyTranscripts = defaults.object(forKey: "voice-auto-copy") as? Bool ?? true
+        // Engine selection was removed when Voice became Parakeet-only.
+        defaults.removeObject(forKey: "ft.speechEngineChoice.v1")
         syncedFolders = defaults.stringArray(forKey: "library-synced-folders")
         if let x = defaults.object(forKey: "mic-pos-x") as? Double,
            let y = defaults.object(forKey: "mic-pos-y") as? Double {
