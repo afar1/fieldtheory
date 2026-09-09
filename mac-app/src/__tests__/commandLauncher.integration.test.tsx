@@ -13,7 +13,7 @@ const bookmarks = Array.from({ length: 45 }, (_, i) => ({ id: String(i), text: `
 const clips = Array.from({ length: 75 }, (_, i) => ({ id: i, type: 'text', content: `Clipboard example ${i}`, createdAt: 1000 - i, stackId: null, useImprovedVersion: false }));
 let reset: (payload?: unknown) => void;
 const commands = {
-  getCommands: vi.fn(async () => []), getCommandDirectories: vi.fn(async () => []),
+  getCommands: vi.fn(async (): Promise<Array<{ name: string; displayName: string; filePath: string; lastModified: number }>> => []), getCommandDirectories: vi.fn(async () => []),
   getHandoffs: vi.fn(async () => []), getLauncherSettings: vi.fn(async () => ({})),
   getLauncherContext: vi.fn(async () => ({ fieldTheoryActive: true, hasActiveLibraryFileContext: true })),
   getActiveLibraryFileContext: vi.fn(async () => ({ filePath: '/library/active.md' })),
@@ -45,7 +45,7 @@ beforeAll(async () => {
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key), clear: () => storage.clear() });
   ({ CommandLauncher } = await import('../command-launcher'));
 });
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); commands.getLauncherSettings.mockResolvedValue({}); });
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); commands.getLauncherSettings.mockResolvedValue({}); commands.getCommands.mockResolvedValue([]); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 afterAll(() => vi.unstubAllGlobals());
 
@@ -60,7 +60,7 @@ async function mount(source: string) {
 }
 
 describe('launcher source navigation', () => {
-  it('opens on the first enabled folder, wraps both ways, and ignores the highlighted row and saved last section', async () => {
+  it('opens on the first enabled folder, wraps both ways, and ignores the highlighted row and a disabled saved section', async () => {
     const inbox = launcherFolderSection({ path: '/library', label: 'Inbox' });
     commands.getLauncherSettings.mockResolvedValue({ sections: [inbox, 'recents', 'clipboard', 'river'] });
     const { input } = await mount('bookmarks');
@@ -80,17 +80,18 @@ describe('launcher source navigation', () => {
     expect(commands.insertMarkdownText).not.toHaveBeenCalled();
   });
 
-  it('reopens at the first enabled section and applies a newly configured first section', async () => {
+  it('restores the last section and falls back when it is disabled', async () => {
     commands.getLauncherSettings.mockResolvedValue({ sections: ['clipboard', 'recents', 'river'] });
-    const { input } = await mount('river');
+    const { input } = await mount('clipboard');
     expect(screen.getByRole('button', { name: 'Collapse Clipboard' })).toBeTruthy();
     fireEvent.keyDown(input, { key: 'Tab' });
     await screen.findByRole('button', { name: 'Collapse Recents' });
     await act(async () => reset({ generation: 2 }));
-    await screen.findByRole('button', { name: 'Collapse Clipboard' });
-    commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', 'clipboard'] });
-    await act(async () => reset({ generation: 3 }));
     await screen.findByRole('button', { name: 'Collapse Recents' });
+    expect(localStorage.getItem('fieldTheory.launcher.defaultPanelSource.v1')).toBe('recents');
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['river', 'clipboard'] });
+    await act(async () => reset({ generation: 3 }));
+    await screen.findByRole('button', { name: 'Collapse River' });
   });
 
   it('ignores settings from an older open after the current open has loaded its order', async () => {
@@ -219,7 +220,7 @@ describe('launcher source navigation', () => {
     } finally { window.libraryAPI!.getRoots = originalRoots; commands.getLauncherSettings.mockResolvedValue({}); }
   });
 
-  it('cycles to a configured folder and searches only inside it', async () => {
+  it('browses a configured folder but searches all Field Theory content when typing', async () => {
     const folder = launcherFolderSection({ path: '/library', label: 'My notes' });
     commands.getLauncherSettings.mockResolvedValue({ sections: ['recents', folder] });
     const originalRoots = window.libraryAPI!.getRoots;
@@ -233,9 +234,9 @@ describe('launcher source navigation', () => {
       await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Markdown note'));
       expect(container.textContent).not.toContain('Outside Markdown');
       fireEvent.change(input, { target: { value: 'Clipboard example' } });
-      await waitFor(() => expect(container.querySelectorAll('[data-item-index]')).toHaveLength(0));
-      fireEvent.change(input, { target: { value: 'Markdown note 12' } });
-      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Markdown note 12'));
+      await waitFor(() => expect(container.textContent).toContain('Clipboard example'));
+      fireEvent.change(input, { target: { value: 'Outside Markdown note 12' } });
+      await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Outside Markdown note 12'));
     } finally { window.libraryAPI!.getRoots = originalRoots; commands.getLauncherSettings.mockResolvedValue({}); }
   });
 
@@ -315,5 +316,32 @@ describe('launcher source navigation', () => {
     for (let i = 0; i < 44; i++) fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
     await waitFor(() => expect(commands.openFieldTheoryMarkdown).toHaveBeenCalledWith(expect.objectContaining({ path: 'note-44' })));
+  });
+});
+
+
+describe('launcher global search and saved section', () => {
+  it('finds portable commands by name and by commands while Inbox is selected', async () => {
+    const folder = launcherFolderSection({ path: '/library', label: 'Inbox' });
+    commands.getLauncherSettings.mockResolvedValue({ sections: [folder] });
+    commands.getCommands.mockResolvedValue([{ name: 'local-install', displayName: 'Local install', filePath: '/commands/local-install.md', lastModified: 10 }]);
+    const { container, input } = await mount(folder);
+    fireEvent.change(input, { target: { value: 'local-install' } });
+    await waitFor(() => expect(container.textContent).toContain('Local install'));
+    fireEvent.change(input, { target: { value: 'commands' } });
+    await waitFor(() => expect(container.textContent).toContain('Local install'));
+    expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Local install');
+  });
+  it.each(['recents', 'clipboard', 'river', launcherFolderSection({ path: '/library', label: 'Inbox' })])('restores %s after the renderer is recreated', async source => {
+    commands.getLauncherSettings.mockResolvedValue({ sections: ['bookmarks', source] });
+    localStorage.setItem('fieldTheory.launcher.defaultPanelSource.v1', source);
+    const { unmount } = render(<CommandLauncher />);
+    await act(async () => reset({ generation: 1 }));
+    const label = source.startsWith('folder:') ? 'Inbox' : source === 'recents' ? 'Recents' : source === 'river' ? 'River' : 'Clipboard';
+    await screen.findByRole('button', { name: `Collapse ${label}` });
+    unmount();
+    render(<CommandLauncher />);
+    await act(async () => reset({ generation: 4 }));
+    await screen.findByRole('button', { name: `Collapse ${label}` });
   });
 });

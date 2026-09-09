@@ -386,6 +386,16 @@ function writeLauncherUsageMap(next: LauncherUsageMap): void {
 const NAMESPACE_PREFIXES = ['wiki', 'artifact', 'actions', 'river', 'recent'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
 const LAUNCHER_DEFAULT_PANEL_EXPANDED_STORAGE_KEY = 'fieldTheory.launcher.defaultPanelExpanded.v1';
+const LAUNCHER_LAST_SECTION_STORAGE_KEY = 'fieldTheory.launcher.defaultPanelSource.v1';
+
+function readLauncherLastSection(): string | null {
+  try { return localStorage.getItem(LAUNCHER_LAST_SECTION_STORAGE_KEY); } catch { return null; }
+}
+
+function writeLauncherLastSection(section: LauncherSection): void {
+  try { localStorage.setItem(LAUNCHER_LAST_SECTION_STORAGE_KEY, section); } catch {}
+}
+
 
 function readLauncherDefaultPanelExpanded(): boolean {
   try {
@@ -949,7 +959,7 @@ export function CommandLauncher() {
   const [launcherSections, setLauncherSections] = useState<LauncherSection[]>(() => normalizeLauncherSections(undefined));
   const launcherSectionsRef = useRef(launcherSections);
   const launcherSettingsRequestRef = useRef(0);
-  const launcherSectionNavigationRef = useRef(0);
+  const launcherLastSectionRef = useRef<string | null>(readLauncherLastSection());
   const [launcherDefaultPanelSource, setLauncherDefaultPanelSource] = useState<LauncherDefaultPanelSource>(launcherSections[0]);
   const [launcherDefaultPanelExpanded, setLauncherDefaultPanelExpanded] = useState<boolean>(() => readLauncherDefaultPanelExpanded());
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
@@ -1215,7 +1225,11 @@ export function CommandLauncher() {
       const sections = normalizeLauncherSections(settings?.sections);
       launcherSectionsRef.current = sections;
       setLauncherSections(sections);
-      setLauncherDefaultPanelSource(current => launcherSectionNavigationRef.current > 0 && sections.includes(current) ? current : sections[0]);
+      const lastSection = launcherLastSectionRef.current;
+      const source = sections.find(section => section === lastSection) ?? sections[0];
+      launcherLastSectionRef.current = source;
+      writeLauncherLastSection(source);
+      setLauncherDefaultPanelSource(source);
       const normalized = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds as LauncherRootSearchEnabledKinds);
       setLauncherRootSearchEnabledKinds(prev => (
         areLauncherRootSearchEnabledKindsEqual(prev, normalized) ? prev : normalized
@@ -1699,8 +1713,7 @@ export function CommandLauncher() {
   }, []);
 
   const clearLauncherSessionState = useCallback(() => {
-    launcherSectionNavigationRef.current = 0;
-    setLauncherDefaultPanelSource(launcherSectionsRef.current[0]);
+
     authorNamespaceRef.current = null;
     bookmarkNamespaceRef.current = null;
     authorBookmarkRequestRef.current += 1;
@@ -1939,6 +1952,8 @@ export function CommandLauncher() {
       keywords: [
         cmd.name,
         cmd.displayName,
+        'command',
+        'commands',
         cmd.sourceLabel ?? '',
         cmd.sharedAuthorCallsign ?? '',
         ...cmd.name.split('-'),
@@ -2226,8 +2241,8 @@ export function CommandLauncher() {
   }), [clipboardListRows, clipboardSearchQuery]);
 
   const normalModeItems = useMemo(() => (
-    [...allItems, ...bookmarkPostItems, ...clipboardLauncherItems].filter(shouldShowLauncherItemInTypedSearch)
-  ), [allItems, bookmarkPostItems, clipboardLauncherItems]);
+    [...allItems, ...artifactReadings, ...bookmarkAuthorItems, ...bookmarkFacetItems, ...bookmarkPostItems, ...clipboardLauncherItems].filter(shouldShowLauncherItemInTypedSearch)
+  ), [allItems, artifactReadings, bookmarkAuthorItems, bookmarkFacetItems, bookmarkPostItems, clipboardLauncherItems]);
 
   const isRootIdleLauncher = !namespacePrefix
     && !directoryNamespace
@@ -2308,7 +2323,8 @@ export function CommandLauncher() {
   const switchDefaultPanelSource = useCallback((direction: 1 | -1 = 1) => {
     const nextSource = nextLauncherSection(launcherDefaultPanelSource, launcherSectionsRef.current, direction);
     clearLauncherSessionState();
-    launcherSectionNavigationRef.current++;
+    launcherLastSectionRef.current = nextSource;
+    writeLauncherLastSection(nextSource);
     writeLauncherDefaultPanelExpanded(true);
     setLauncherDefaultPanelSource(nextSource);
     setLauncherDefaultPanelExpanded(true);
@@ -2949,13 +2965,6 @@ export function CommandLauncher() {
 
     if (moveSource) {
       const results = filterLauncherMoveTargetDirectories(directoryItems, moveSource, q);
-      showResults(results);
-      resizeForResults(results.length, true);
-      return;
-    }
-
-    if (parseLauncherFolder(launcherDefaultPanelSource) && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource && clipboardSearchQuery === null && fileSearchQuery === null) {
-      const results = getFolderPanelItems(launcherDefaultPanelSource, q);
       showResults(results);
       resizeForResults(results.length, true);
       return;

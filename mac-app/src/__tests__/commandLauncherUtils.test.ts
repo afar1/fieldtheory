@@ -2142,7 +2142,7 @@ describe('getLauncherAreaActionIdForQuery', () => {
   it('maps exact area queries to app-area actions', () => {
     expect(getLauncherAreaActionIdForQuery('clipboard')).toBe('open-history');
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
-    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
+    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBeNull();
     expect(getLauncherAreaActionIdForQuery('archive')).toBe('archive-current-library-file');
   });
 

@@ -471,3 +471,21 @@ describe('local inbox upgrade adoption', () => {
     expect(next.rpc.mock.calls.some(([name]) => name === 'voice_delivery_configure')).toBe(false);
   });
 });
+
+
+describe('Voice inbox instruction settings', () => {
+  it('persists exact text and supplies it to the next routing decision without starting work on save', async () => {
+    const h = harness(); await h.enable();
+    const text = '  Make a reasonable assumption.\nKeep my formatting.  ';
+    await h.manager.updateSettings({ inboxInstructions: text });
+    expect(h.routeRequest).not.toHaveBeenCalled();
+    expect(h.manager.getState().settings.inboxInstructions).toBe(text);
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.routeRequest.mock.calls[0][0].inboxInstructions).toBe(text);
+    h.manager.stop();
+    const next = harness(h.directory); await next.manager.authChanged();
+    expect(next.manager.getState().settings.inboxInstructions).toBe(text);
+    await expect(next.manager.updateSettings({ inboxInstructions: '   ' })).rejects.toThrow();
+    expect(next.manager.getState().settings.inboxInstructions).toBe(text);
+  });
+});

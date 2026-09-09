@@ -42,3 +42,16 @@ describe('persistent inbox routing decisions', () => {
     await expect(routeVoiceRequest({ text: 'Add blue.', inboxPath: cwd, previousThreadId: 'older-owner' })).rejects.toThrow(/durable voice task owner/);
   });
 });
+
+
+it('passes custom instructions to the inbox decision instead of the default routing policy', async () => {
+  mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: [] })
+    .mockResolvedValueOnce({ text: 'Save as context.' })
+    .mockResolvedValueOnce({ decision: 'context' });
+  const custom = '  Save every recording as context.\nDo not ask questions.  ';
+  await routeVoiceRequest({ text: 'A thought', inboxPath: cwd, inboxInstructions: custom,
+    inbox: { threadId: 'inbox', receiptKey: 'custom-intake', onThread: () => {} } });
+  const instructions = mocked.decide.mock.calls[1][1].instructions;
+  expect(instructions.startsWith(custom + '\nRouting evidence')).toBe(true);
+  expect(instructions).not.toContain('If essential routing intent is ambiguous');
+});

@@ -3,6 +3,7 @@ import type { VoiceInboxPresentation } from './voiceInboxPresentation';
 /** User-visible contract for the bundled Voice requests worker. */
 export interface VoiceWorkSettings {
   enabled: boolean;
+  inboxInstructions?: string;
   workspacePath: string | null;
 }
 

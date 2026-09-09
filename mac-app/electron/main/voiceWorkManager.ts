@@ -177,6 +177,11 @@ export class VoiceWorkManager extends EventEmitter {
   async updateSettings(changes: Partial<VoiceWorkSettings>): Promise<VoiceWorkState> {
     if (!this.current() || !this.snapshot) throw new Error('Sign in to Field Theory first.');
     if (changes.enabled !== undefined && typeof changes.enabled !== 'boolean') throw new Error('Invalid voice request setting.');
+    if (changes.inboxInstructions !== undefined) {
+      if (typeof changes.inboxInstructions !== 'string' || !changes.inboxInstructions.trim() || changes.inboxInstructions.length > 20000) throw new Error('Voice inbox instructions must contain 1–20,000 characters.');
+      this.snapshot.settings.inboxInstructions = changes.inboxInstructions;
+      this.persist();
+    }
     if (changes.workspacePath !== undefined) {
       if ((this.snapshot.settings.enabled || this.enabling) && changes.workspacePath !== this.snapshot.settings.workspacePath) {
         throw new Error('Pause voice requests before changing the folder.');
@@ -409,7 +414,7 @@ export class VoiceWorkManager extends EventEmitter {
       this.ensureCurrent(epoch);
       if (!attempt.route && !attempt.outcome) {
         attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
-          text: job.text, inboxPath: inboxPath!,
+          text: job.text, inboxPath: inboxPath!, inboxInstructions: snapshot.settings.inboxInstructions,
           inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
             this.ensureCurrent(epoch);
             if (snapshot.inboxThreadId && snapshot.inboxThreadId !== id) throw new Error('Voice inbox identity changed.');

@@ -1705,8 +1705,6 @@ export function getLauncherAreaActionIdForQuery(query: string): string | null {
       return 'open-history';
     case 'library':
       return 'open-library';
-    case 'commands':
-      return 'open-library';
     case 'archive':
       return 'archive-current-library-file';
     default:

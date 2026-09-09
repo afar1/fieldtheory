@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.53': [
+    'View and edit Voice inbox instructions, or reset them to the original defaults',
+    'Search across Field Theory from the command launcher, including commands outside the selected folder',
+    'The command launcher remembers your last section when you reopen it',
+  ],
   '0.3.52': [
     'Voice requests arrive in one pinned Codex inbox, with routing updates and task links',
     'Follow-ups use past conversations to find the right task; context-only recordings remain notes',
@@ -591,6 +596,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.53': 'September 8, 2026',
   '0.3.52': 'September 8, 2026',
   '0.3.51': 'September 7, 2026',
   '0.3.50': 'September 7, 2026',

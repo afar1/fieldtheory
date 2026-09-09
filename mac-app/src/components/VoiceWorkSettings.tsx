@@ -1,3 +1,4 @@
+import VoiceInboxInstructionsEditor from './VoiceInboxInstructionsEditor';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { VoiceWorkState } from '../../electron/shared/voiceWork';
 import { useTheme } from '../contexts/ThemeContext';
@@ -285,6 +286,18 @@ export default function VoiceWorkSettings() {
             </div>
           </div>
         )}
+        {state && state.status !== 'signed_out' && <VoiceInboxInstructionsEditor saved={state.settings.inboxInstructions} disabled={saving || choosing} onSave={async value => {
+          if (!api || mutationPending.current) throw new Error('Voice requests unavailable.');
+          mutationPending.current = true;
+          setSaving(true);
+          try {
+            const next = await api.updateSettings({ inboxInstructions: value });
+            if (mounted.current) setState(next);
+          } finally {
+            mutationPending.current = false;
+            if (mounted.current) setSaving(false);
+          }
+        }} />}
         <SettingsRow
           theme={theme}
           label={(

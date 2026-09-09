@@ -7746,7 +7746,7 @@ function setupVoiceWorkIPCHandlers(): void {
   ipcMain.handle(VOICE_WORK_CHANNELS.updateSettings, async (event, changes: Partial<VoiceWorkSettings>) => {
     requireSender(event);
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)
-      || Object.keys(changes).some((key) => key !== 'enabled' && key !== 'workspacePath')) {
+      || Object.keys(changes).some((key) => key !== 'enabled' && key !== 'workspacePath' && key !== 'inboxInstructions')) {
       throw new Error('Invalid voice request settings.');
     }
     const owner = authManager?.getSession()?.user.id;
