@@ -130,6 +130,16 @@ export class VoiceWorkManager extends EventEmitter {
 
   getState(): VoiceWorkState { return structuredClone(this.state); }
 
+  getRecordedTaskTitles(owner: string): ReadonlyMap<string, string> {
+    const titles = new Map<string, string>();
+    if (owner !== this.owner || !this.current() || !this.snapshot) return titles;
+    for (const attempt of Object.values(this.snapshot.attempts)) {
+      const title = attempt.route?.title;
+      if (attempt.threadId && attempt.turnId && attempt.dispatchStarted && title?.trim()) titles.set(attempt.threadId, title);
+    }
+    return titles;
+  }
+
   /** The auth manager remains the sole owner of credentials and token refresh. */
   async authChanged(): Promise<void> {
     const nextOwner = this.options.auth.getSession()?.user.id ?? null;

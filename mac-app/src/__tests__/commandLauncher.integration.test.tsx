@@ -345,3 +345,17 @@ describe('launcher global search and saved section', () => {
     await screen.findByRole('button', { name: `Collapse ${label}` });
   });
 });
+
+
+it('shows and searches the Voice display title supplied by Library metadata', async () => {
+  const originalRoots = window.libraryAPI!.getRoots;
+  window.libraryAPI!.getRoots = vi.fn(async () => [{ path: '/library', label: 'Library', builtin: true, tree: files.map((file, index) => index === 0 ? { ...file, title: 'Personal - Japanese tea set illustration' } : file) }]) as typeof originalRoots;
+  try {
+    const folder = launcherFolderSection({ path: '/library', label: 'Inbox' });
+    commands.getLauncherSettings.mockResolvedValue({ sections: [folder] });
+    const { container, input } = await mount(folder);
+    expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Personal - Japanese tea set illustration');
+    fireEvent.change(input, { target: { value: 'Japanese tea set' } });
+    await waitFor(() => expect(container.textContent).toContain('Personal - Japanese tea set illustration'));
+  } finally { window.libraryAPI!.getRoots = originalRoots; }
+});

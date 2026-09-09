@@ -36,6 +36,7 @@ export interface VoiceInboxServiceOptions {
   stateDirectory: string;
   libraryRoot: string;
   getLibraryRoots?: () => string[];
+  getTaskTitles?: (owner: string) => ReadonlyMap<string, string>;
   onChanged?: (notePath: string) => void;
 }
 
@@ -129,6 +130,7 @@ export class VoiceInboxService {
     output.folderPath = folder ?? state.folder.path;
     if (!folder) return output;
     const maximum = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.floor(limit))) : 500;
+    const taskTitles = this.options.getTaskTitles?.(ownerId);
     let remainingBytes = MAX_PRESENTATION_BYTES;
     let identities: Map<string, string> | undefined;
     const entries = Object.entries(state.entries).filter(([, entry]) => entry.notePath && isPathInside(state.folder!.path, entry.notePath))
@@ -154,7 +156,10 @@ export class VoiceInboxService {
           createdAtMs: entry.createdAtMs !== undefined && Number.isFinite(new Date(entry.createdAtMs).getTime())
             ? entry.createdAtMs : legacyCreatedAt(entry.notePath),
           ...(confirmedDispatch(entry.dispatch) ? { threadId: entry.dispatch.threadId } : {}),
-          ...summarizeVoiceInboxTranscript(text) });
+          ...summarizeVoiceInboxTranscript(text),
+          ...(confirmedDispatch(entry.dispatch) && taskTitles?.get(entry.dispatch.threadId)?.trim()
+            ? { title: taskTitles.get(entry.dispatch.threadId)! } : {}),
+        });
       } catch { /* Deleted, moved, or unreadable notes do not become fabricated records. */ }
     }
     return output;

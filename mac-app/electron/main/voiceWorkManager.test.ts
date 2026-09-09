@@ -489,3 +489,15 @@ describe('Voice inbox instruction settings', () => {
     expect(next.manager.getState().settings.inboxInstructions).toBe(text);
   });
 });
+
+
+it('exposes recorded task titles only after execution starts and only to their owner', async () => {
+  const h = harness(); await h.enable();
+  h.routeRequest.mockResolvedValue({ decision: 'new', title: 'Personal - Tea set', workspacePath: h.directory });
+  expect(h.manager.getRecordedTaskTitles('account-a').size).toBe(0);
+  h.jobs.push(h.job()); h.push(); await settle();
+  expect(h.manager.getRecordedTaskTitles('account-a').get('thread-1')).toBe('Personal - Tea set');
+  expect(h.manager.getRecordedTaskTitles('account-b').size).toBe(0);
+  h.setOwner(null); await h.manager.authChanged();
+  expect(h.manager.getRecordedTaskTitles('account-a').size).toBe(0);
+});

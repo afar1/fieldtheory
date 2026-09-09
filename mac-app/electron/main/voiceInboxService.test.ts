@@ -366,3 +366,19 @@ describe('Voice Inbox Library records', () => {
     expect(fs.readFileSync(first.notePath, 'utf8')).toBe('A user replaced this legacy body completely.');
   });
 });
+
+
+it('uses a confirmed task title for display without rewriting the transcript or generating a title', () => {
+  const getTaskTitles = vi.fn(() => new Map([[thread, 'Personal - Japanese tea set illustration']]));
+  store = new VoiceInboxService({ ...options(), getTaskTitles });
+  const note = store.materialize(owner, [row()])[0];
+  expect(store.getPresentation(owner).notes[0].title).toBe(row().text);
+  store.recordDispatch(owner, { transcriptId: row().transcriptId, threadId: thread, turnId: 'turn' });
+  const before = fs.readFileSync(note.notePath!, 'utf8');
+  expect(store.getPresentation(owner).notes[0]).toMatchObject({ title: 'Personal - Japanese tea set illustration', wordCount: 7, threadId: thread });
+  expect(getTaskTitles).toHaveBeenCalledWith(owner);
+  expect(fs.readFileSync(note.notePath!, 'utf8')).toBe(before);
+  expect(before).toBe(row().text);
+  getTaskTitles.mockReturnValue(new Map());
+  expect(store.getPresentation(owner).notes[0].title).toBe(row().text);
+});

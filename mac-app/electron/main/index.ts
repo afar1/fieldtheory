@@ -1,3 +1,4 @@
+import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
 import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
 import { VoiceInboxService } from './voiceInboxService';
@@ -7715,6 +7716,7 @@ let voiceInboxSync: VoiceInboxSync | null = null;
 let voicePreferencesReady: Promise<unknown> = Promise.resolve();
 
 function notifyVoiceInboxChanged(): void {
+  commandLauncherWindow?.send('library:changed');
   const window = clipboardHistoryWindow?.getWindow() ?? null;
   if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
     window.webContents.send(VOICE_WORK_CHANNELS.inboxChanged);
@@ -8058,7 +8060,9 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('library:getRoots', (): LibraryRoot[] => {
     if (!librarianManager) return [];
     const startedAt = Date.now();
-    const roots = librarianManager.getLibraryRoots();
+    const owner = authManager?.getSession()?.user.id;
+    const roots = applyVoiceInboxTitles(librarianManager.getLibraryRoots(),
+      owner && voiceInboxStore ? voiceInboxStore.getPresentation(owner) : null);
     const files = roots.reduce((total, root) => {
       const countNodes = (nodes: WikiNode[]): number => nodes.reduce((sum, node) => (
         sum + (node.kind === 'file' ? 1 : countNodes(node.children))
@@ -15475,6 +15479,7 @@ async function initTranscriberSystem(): Promise<void> {
     stateDirectory: path.join(app.getPath('userData'), 'voice-inbox'),
     libraryRoot: librarianManager!.getWikiRoot(),
     getLibraryRoots: () => librarianManager?.getLibraryRootPaths() ?? [],
+    getTaskTitles: (owner) => voiceWorkManager?.getRecordedTaskTitles(owner) ?? new Map(),
     onChanged: notifyVoiceInboxChanged,
   });
   voiceInboxSync = new VoiceInboxSync({
