@@ -319,6 +319,9 @@ export default function VoiceWorkSettings() {
           last
         />
         <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
+          Follow-ups to existing Codex conversations use that conversation’s permissions. Codex handles any approvals.
+        </p>
+        <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
           While Voice requests are enabled and Codex is signed in, Field Theory keeps this Mac awake when plugged in. Your screen can lock or turn off. Battery power, closing the lid without an external display, or choosing Sleep can pause delivery; saved requests resume when the Mac reconnects.
         </p>
         <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>

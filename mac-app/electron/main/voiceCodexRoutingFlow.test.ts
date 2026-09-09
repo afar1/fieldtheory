@@ -81,6 +81,29 @@ describe('persistent inbox routing decisions', () => {
     expect(inboxInput.instructions).toContain('Watercolor preference');
     expect(inboxInput.outputSchema).toBeUndefined();
   });
+  it('routes privately with retained history when Desktop owns the routing inbox', async () => {
+    mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: ['task'] })
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'active_writer' }))
+      .mockResolvedValueOnce({ decision: 'continue', threadId: 'task' });
+    const route = await routeVoiceRequest({ text: 'Make it blue.', inboxPath: cwd,
+      inbox: { threadId: 'inbox', receiptKey: 'intake', onThread: () => {} } });
+    expect(route.threadId).toBe('task');
+    const privateInput = mocked.decide.mock.calls[2][1];
+    expect(privateInput.inbox).toBeUndefined();
+    expect(privateInput.outputSchema).toBeDefined();
+    expect(privateInput.input).toContain('Watercolor preference');
+    expect(privateInput.input).toContain('Make it blue.');
+    expect(mocked.request.mock.calls.some(([method]) => method === 'thread/queue/add')).toBe(false);
+  });
+
+  it('does not hide other inbox failures behind the private routing fallback', async () => {
+    mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: [] })
+      .mockRejectedValueOnce(Object.assign(new Error('Sign in required'), { code: 'sign_in_required' }));
+    await expect(routeVoiceRequest({ text: 'Continue.', inboxPath: cwd,
+      inbox: { threadId: 'inbox', receiptKey: 'intake', onThread: () => {} } })).rejects.toMatchObject({ code: 'sign_in_required' });
+    expect(mocked.decide).toHaveBeenCalledTimes(2);
+  });
+
   it('honors a hold-off revision even when it already has a durable task owner', async () => {
     mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: [] }).mockResolvedValueOnce({ decision: 'context' });
     expect((await routeVoiceRequest({ text: 'Hold off, just context.', inboxPath: cwd, previousThreadId: 'older-owner' })).decision).toBe('context');

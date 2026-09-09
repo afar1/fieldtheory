@@ -20,6 +20,8 @@ export interface VoiceCodexOutcome {
   errorCode?: string;
   /** The earlier dispatch may still be running; newer revisions must remain held. */
   recoveryUncertain?: boolean;
+  /** A queued or started owner-managed delivery is still pending; never publish a terminal receipt. */
+  deliveryPending?: boolean;
 }
 
 export interface VoiceCodexRunnerOptions {
@@ -32,6 +34,12 @@ export interface VoiceCodexRunnerOptions {
   spawnFn?: SpawnFn;
   requestTimeoutMs?: number;
   turnTimeoutMs?: number;
+  queuePollMs?: number;
+}
+
+export interface VoiceQueueSubmission {
+  state: 'submitting' | 'accepted';
+  queuedSubmissionId?: string;
 }
 
 export interface VoiceCodexRequest {
@@ -49,6 +57,8 @@ export interface VoiceCodexRequest {
   title?: string;
   sandboxMode?: 'read-only' | 'workspace-write';
   onThreadStarted?: (threadId: string) => void | Promise<void>;
+  onBeforeQueue?: (event: { threadId: string }) => void | Promise<void>;
+  onQueued?: (event: { threadId: string; queuedSubmissionId: string }) => void | Promise<void>;
   onBeforeDispatch?: (event: { threadId: string; dispatchKey: string }) => void | Promise<void>;
   onStarted?: (event: { threadId: string; turnId: string }) => void | Promise<void>;
   signal?: AbortSignal;
@@ -56,6 +66,8 @@ export interface VoiceCodexRequest {
 
 export interface VoiceCodexRecoveryRequest {
   threadId: string;
+  queueSubmission?: VoiceQueueSubmission;
+  onStarted?: (event: { threadId: string; turnId: string }) => void | Promise<void>;
   turnId?: string;
   dispatchKey: string;
   workspacePath: string;
@@ -139,7 +151,7 @@ export class VoiceCodexClient {
   private nextId = 1;
   private buffer = '';
   private decoder = new StringDecoder('utf8');
-  private pending = new Map<number, { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; method: string }>();
   private stopped = false;
   private closePromise: Promise<void> | undefined;
   onNotification: (message: JsonObject) => void = () => {};
@@ -179,7 +191,7 @@ export class VoiceCodexClient {
         reject(error);
         this.fail(error);
       }, this.options.requestTimeoutMs ?? 60_000);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, method });
       this.write({ id, method, params });
     });
   }
@@ -245,7 +257,14 @@ export class VoiceCodexClient {
         if (!pending) continue;
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
-        if (message.error) pending.reject(new RunnerError('request_rejected', 'Codex could not accept this operation. Open the existing task to check its state.'));
+        if (message.error) {
+          const rejected = object(message.error);
+          const ownerBusy = pending.method === 'thread/resume' && rejected.code === -32600
+            && typeof rejected.message === 'string' && /already has an active writer/.test(rejected.message);
+          pending.reject(new RunnerError(ownerBusy ? 'active_writer' : 'request_rejected', ownerBusy
+            ? 'This conversation is managed by another Codex connection.'
+            : 'Codex could not accept this operation. Open the existing task to check its state.'));
+        }
         else if ('result' in message) pending.resolve(object(message.result));
         else pending.reject(new RunnerError('protocol_error', 'Codex returned an incomplete response.'));
       }
@@ -539,6 +558,115 @@ async function classifyFinishedOutcome(client: VoiceCodexClient, completed: Voic
   }
 }
 
+type QueueObservation = VoiceCodexRecoveryRequest;
+
+function pendingQueue(input: QueueObservation, turnId = input.turnId): VoiceCodexOutcome {
+  return { threadId: input.threadId, ...(turnId ? { turnId } : {}), status: 'interrupted', deliveryPending: true,
+    summary: turnId ? 'Codex is still working on this request.' : 'The request is queued in its existing Codex conversation.', finalResponse: '' };
+}
+
+function uncertainQueue(input: QueueObservation): VoiceCodexOutcome {
+  return { ...needsUser('The queued delivery could not be reconciled safely. Open its Codex conversation before retrying; the request was not sent again.',
+    { threadId: input.threadId, ...(input.turnId ? { turnId: input.turnId } : {}) }), recoveryUncertain: true };
+}
+
+async function queueRows(client: VoiceCodexClient, method: 'thread/queue/list' | 'thread/turns/list', threadId: string): Promise<JsonObject[]> {
+  const rows: JsonObject[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page++) {
+    const result = await client.request(method, { threadId, limit: 100, ...(cursor ? { cursor } : {}),
+      ...(method === 'thread/turns/list' ? { sortDirection: 'desc', itemsView: 'full' } : {}) });
+    if (!Array.isArray(result.data)) throw new RunnerError('protocol_error', 'Codex did not provide queue recovery records.');
+    rows.push(...result.data.map(object));
+    const next = string(result.nextCursor);
+    if (!next) return rows;
+    if (next === cursor) break;
+    cursor = next;
+  }
+  throw new RunnerError('protocol_error', 'The queued delivery history could not be checked completely.');
+}
+
+async function pauseQueueObservation(delay: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return;
+  await new Promise<void>(resolve => {
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, delay);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+/** Read-only, job-scoped observation. No queue mutation or owner lease is ever retried here. */
+async function observeVoiceQueue(client: VoiceCodexClient, input: QueueObservation, options: VoiceCodexRunnerOptions): Promise<VoiceCodexOutcome> {
+  const deadline = Date.now() + (options.turnTimeoutMs ?? 20 * 60_000);
+  let turnId = input.turnId;
+  let announced = false;
+  let missingSince: number | undefined;
+  let projectedInterruption = false;
+  try {
+    for (;;) {
+      if (input.signal?.aborted) return pendingQueue(input, turnId);
+      if (Date.now() >= deadline) return missingSince === undefined && !projectedInterruption ? pendingQueue(input, turnId) : uncertainQueue(input);
+      let queue = (await queueRows(client, 'thread/queue/list', input.threadId)).filter(item => item.clientUserMessageId === input.dispatchKey);
+      const turns = (await queueRows(client, 'thread/turns/list', input.threadId)).filter(turn =>
+        (Array.isArray(turn.items) ? turn.items.map(object) : []).some(item => item.type === 'userMessage' && item.clientId === input.dispatchKey));
+      // The owner can dequeue between the two reads; confirm whether the pending copy still exists.
+      if (queue.length === 1 && turns.length === 1) queue = (await queueRows(client, 'thread/queue/list', input.threadId))
+        .filter(item => item.clientUserMessageId === input.dispatchKey);
+      if (queue.length > 1 || turns.length > 1 || queue.length && turns.length) return uncertainQueue(input);
+      if (queue.length === 1 && (!string(queue[0].id) || input.queueSubmission?.queuedSubmissionId && queue[0].id !== input.queueSubmission.queuedSubmissionId)) return uncertainQueue(input);
+      if (turns.length === 1) {
+        const turn = turns[0];
+        const items = (Array.isArray(turn.items) ? turn.items : []).map(object);
+        const messages = items.filter(item => item.type === 'userMessage' && item.clientId === input.dispatchKey);
+        if (!string(turn.id) || messages.length !== 1 || turnId && turnId !== turn.id) return uncertainQueue(input);
+        turnId = turn.id as string;
+        if (!announced) { await input.onStarted?.({ threadId: input.threadId, turnId }); announced = true; }
+        // A separate writer's live rollout can project as interrupted until its completion record arrives.
+        projectedInterruption = turn.status === 'interrupted' && turn.completedAt == null;
+        if (turn.status === 'completed' || turn.status === 'failed' && (turn.error != null || turn.completedAt != null)
+          || turn.status === 'interrupted' && turn.completedAt != null) {
+          const completed = finalOutcome(turn, input.threadId, [], true);
+          if (completed.status !== 'completed' || completed.title) return completed;
+          const recording = (Array.isArray(messages[0].content) ? messages[0].content.map(object) : [])
+            .filter(item => item.type === 'text').map(item => string(item.text) ?? '').join('\n');
+          if (!recording.trim() || recording.length > MAX_INPUT) return uncertainQueue(input);
+          return await classifyFinishedOutcome(client, completed, recording, input.workspacePath, items, input.signal);
+        }
+      }
+      // A dequeue and rollout publication can briefly race. A removed request must not wait forever.
+      if (!queue.length && !turns.length) {
+        missingSince ??= Date.now();
+        if (Date.now() - missingSince >= Math.min(10_000, options.turnTimeoutMs ?? 10_000)) return uncertainQueue(input);
+      } else missingSince = undefined;
+      await pauseQueueObservation(Math.max(1, options.queuePollMs ?? 1_000), input.signal);
+    }
+  } catch (error) {
+    if (error instanceof RunnerError && error.code === 'protocol_error') return uncertainQueue(input);
+    return pendingQueue(input, turnId);
+  }
+}
+
+async function queueOwnedVoiceRequest(client: VoiceCodexClient, input: VoiceCodexRequest, options: VoiceCodexRunnerOptions): Promise<VoiceCodexOutcome> {
+  const threadId = input.threadId!;
+  const thread = object((await client.request('thread/read', { threadId, includeTurns: false })).thread);
+  if (thread.id !== threadId) throw new RunnerError('protocol_error', 'Codex returned an unexpected queued destination.');
+  await input.onThreadStarted?.(threadId);
+  if (input.signal?.aborted) return failure(new RunnerError('aborted', 'Voice processing was stopped.'), { threadId });
+  await input.onBeforeQueue!({ threadId });
+  const observation: QueueObservation = { threadId, dispatchKey: input.dispatchKey, workspacePath: input.workspacePath,
+    queueSubmission: { state: 'submitting' }, onStarted: input.onStarted, signal: input.signal };
+  if (input.signal?.aborted) return uncertainQueue(observation);
+  // queue/add does not deduplicate clientUserMessageId. This is the only enqueue call, after a durable marker.
+  try {
+    const result = await client.request('thread/queue/add', { threadId, clientUserMessageId: input.dispatchKey, input: [{ type: 'text', text: input.text }] });
+    const queued = object(result.queuedSubmission);
+    if (!string(queued.id) || queued.clientUserMessageId !== input.dispatchKey) return uncertainQueue(observation);
+    observation.queueSubmission = { state: 'accepted', queuedSubmissionId: queued.id as string };
+    await input.onQueued!({ threadId, queuedSubmissionId: queued.id as string });
+  } catch { return pendingQueue(observation); }
+  return observeVoiceQueue(client, observation, options);
+}
+
 /** Runs one new user request. Persist ids via callbacks; recover uncertain dispatches instead of retrying. */
 export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCodexRunnerOptions = {}): Promise<VoiceCodexOutcome> {
   let threadId = input.threadId;
@@ -644,9 +772,28 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
       ].filter(Boolean).join('\n\n'),
     };
     if (input.signal?.aborted || pendingStop) return pendingStop ?? failure(new RunnerError('aborted', 'Voice processing was stopped.'), { threadId });
-    const result = input.threadId
-      ? await activeTransport.request('thread/resume', { ...threadParams, threadId: input.threadId, excludeTurns: true })
-      : await activeTransport.request('thread/start', { ...threadParams, ephemeral: false, serviceName: 'field_theory_voice', threadSource: 'field-theory-voice', ...(input.projectId ? { projectId: input.projectId } : {}) });
+    let result: JsonObject;
+    try {
+      result = input.threadId
+        ? await activeTransport.request('thread/resume', { ...threadParams, threadId: input.threadId, excludeTurns: true })
+        : await activeTransport.request('thread/start', { ...threadParams, ephemeral: false, serviceName: 'field_theory_voice', threadSource: 'field-theory-voice', ...(input.projectId ? { projectId: input.projectId } : {}) });
+    } catch (error) {
+      if (!(error instanceof RunnerError) || error.code !== 'active_writer' || !input.threadId) throw error;
+      // The owner remains responsible for this existing conversation's permissions and workspace.
+      // Queueing cannot enforce a separate clarification-only sandbox contract.
+      if (input.routingQuestion || !input.onBeforeQueue || !input.onQueued) return needsUser(
+        'Open this conversation in Codex to continue. Its existing owner must handle this request.', { threadId: input.threadId });
+      if (runTimer) clearTimeout(runTimer);
+      runTimer = undefined;
+      if (abort) input.signal?.removeEventListener('abort', abort);
+      abort = undefined;
+      // This connection observes a different writer. It must never approve, cancel, or interrupt that writer's work.
+      activeTransport.onNotification = () => {};
+      activeTransport.onFailure = () => {};
+      activeTransport.onRequest = message => activeTransport.write({ id: message.id,
+        error: { code: -32601, message: 'This connection only observes the owning Codex conversation.' } });
+      return await queueOwnedVoiceRequest(activeTransport, input, options);
+    }
     const thread = object(result.thread);
     const returnedId = string(thread.id);
     if (!returnedId || (threadId && returnedId !== threadId)) throw new RunnerError('protocol_error', 'Codex returned an unexpected task. No Voice request was sent.');
@@ -707,6 +854,7 @@ export async function recoverVoiceRequest(input: VoiceCodexRecoveryRequest, opti
     transport = new VoiceCodexClient(binary, input.workspacePath, options);
     await transport.connect();
     await requireAccount(transport);
+    if (input.queueSubmission) return await observeVoiceQueue(transport, input, options);
     if (input.signal?.aborted) throw new RunnerError('aborted', 'Voice recovery was stopped.');
     const thread = object((await transport.request('thread/read', { threadId: input.threadId, includeTurns: true })).thread);
     if (thread.id !== input.threadId) throw new RunnerError('protocol_error', 'Codex returned an unexpected task during recovery.');
@@ -728,6 +876,10 @@ export async function recoverVoiceRequest(input: VoiceCodexRecoveryRequest, opti
     const recording = (Array.isArray(userMessage.content) ? userMessage.content.map(object) : []).filter(item => item.type === 'text').map(item => string(item.text) ?? '').join('\n');
     if (!recording.trim() || recording.length > MAX_INPUT) return { ...failure(new RunnerError('invalid_outcome', 'The existing Voice recording could not be read safely for outcome classification. Open its task to review the result.'), ids), finalResponse: completed.finalResponse };
     return await classifyFinishedOutcome(transport, completed, recording, input.workspacePath, matchedItems, input.signal);
-  } catch (error) { return { ...failure(error, ids), recoveryUncertain: true }; }
+  } catch (error) {
+    if (input.queueSubmission && error instanceof RunnerError
+      && ['aborted', 'connection_lost', 'request_timeout', 'startup_failed', 'sign_in_required'].includes(error.code)) return pendingQueue(input);
+    return { ...failure(error, ids), recoveryUncertain: true };
+  }
   finally { await transport?.close(); }
 }

@@ -732,3 +732,152 @@ describe('persistent Voice inbox turns', () => {
     expect(process.messages.some(m => m.method === 'turn/start')).toBe(false);
   });
 });
+
+describe('owner-managed continuation queue', () => {
+  const queued = { id: 'queue-1', clientUserMessageId: 'receipt-1', input: [] };
+  const completed = { id: 'owner-turn', status: 'completed', items: [
+    { type: 'userMessage', clientId: 'receipt-1', content: [{ type: 'text', text: 'What is 2+2?' }] },
+    { type: 'agentMessage', text: JSON.stringify(RESPONSE) },
+  ] };
+  function fixture() {
+    const state = { queue: [] as Message[], turns: [completed] as Message[] };
+    const h = setup((m, p) => {
+      if (m.method === 'thread/resume') p.send({ id: m.id, error: { code: -32600, message: 'thread thread-1 already has an active writer secret' } });
+      else if (m.method === 'thread/read') p.reply(m, { thread: { id: 'thread-1', cwd: os.tmpdir() } });
+      else if (m.method === 'thread/queue/add') p.reply(m, { queuedSubmission: queued });
+      else if (m.method === 'thread/queue/list') p.reply(m, { data: state.queue, nextCursor: null });
+      else if (m.method === 'thread/turns/list') p.reply(m, { data: state.turns, nextCursor: null });
+      else standard(m, p);
+    });
+    const onThreadStarted = vi.fn(), onBeforeQueue = vi.fn(), onQueued = vi.fn(), onStarted = vi.fn();
+    return { ...h, state, input: { ...h.input, threadId: 'thread-1', onThreadStarted, onBeforeQueue, onQueued, onStarted },
+      options: { ...h.options, turnTimeoutMs: 30, queuePollMs: 1 } };
+  }
+
+  it('persists before the single enqueue, then reports only a correlated actual turn', async () => {
+    const h = fixture();
+    h.input.onBeforeQueue.mockImplementation(() => expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false));
+    h.input.onQueued.mockImplementation(() => expect(h.input.onStarted).not.toHaveBeenCalled());
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result).toMatchObject({ status: 'completed', turnId: 'owner-turn', finalResponse: RESPONSE.finalResponse });
+    expect(h.input.onThreadStarted).toHaveBeenCalledWith('thread-1');
+    expect(h.input.onQueued).toHaveBeenCalledWith({ threadId: 'thread-1', queuedSubmissionId: 'queue-1' });
+    expect(h.input.onStarted).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'owner-turn' });
+    expect(h.process.messages.filter(m => m.method === 'thread/queue/add')).toHaveLength(1);
+    expect(h.process.messages.some(m => ['thread/queue/start', 'thread/settings/update', 'turn/start'].includes(m.method))).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('never sends an approval decision or interrupts the owner if an interaction reaches the observer', async () => {
+    const h = fixture(); const original = h.process.handler;
+    h.process.handler = (m, p) => {
+      if (m.method === 'thread/queue/add') p.send({ id: 'owner-approval', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'owner-turn' } });
+      original(m, p);
+    };
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result.status).toBe('completed');
+    const response = h.process.messages.find(m => m.id === 'owner-approval');
+    expect(response).toMatchObject({ error: { code: -32601 } });
+    expect(response).not.toHaveProperty('result');
+    expect(h.process.messages.some(m => m.method === 'turn/interrupt')).toBe(false);
+  });
+
+  it('keeps queue acceptance pending when the owning writer has not started', async () => {
+    const h = fixture(); h.state.queue = [queued]; h.state.turns = [];
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result).toMatchObject({ deliveryPending: true });
+    expect(h.input.onStarted).not.toHaveBeenCalled();
+    expect(h.process.messages.filter(m => m.method === 'thread/queue/add')).toHaveLength(1);
+  });
+
+  it('does not enqueue after cancellation during the durable pre-send callback', async () => {
+    const h = fixture(); const controller = new AbortController();
+    h.input.onBeforeQueue.mockImplementation(() => controller.abort());
+    const result = await runVoiceRequest({ ...h.input, signal: controller.signal }, h.options);
+    expect(result.recoveryUncertain).toBe(true);
+    expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false);
+  });
+
+  it.each(['onBeforeQueue', 'onQueued'] as const)('requires %s durability before entering the queue path', async missing => {
+    const h = fixture();
+    const result = await runVoiceRequest({ ...h.input, [missing]: undefined }, h.options);
+    expect(result.status).toBe('needs_user');
+    expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false);
+  });
+
+  it('does not queue a clarification that requires the separate no-work contract', async () => {
+    const h = fixture();
+    const result = await runVoiceRequest({ ...h.input, routingQuestion: 'Which folder?' }, h.options);
+    expect(result.status).toBe('needs_user');
+    expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false);
+  });
+
+  it('does not treat arbitrary protocol rejection as an owner conflict', async () => {
+    const h = fixture(); const original = h.process.handler;
+    h.process.handler = (m, p) => m.method === 'thread/resume'
+      ? p.send({ id: m.id, error: { code: -32600, message: 'invalid permission secret' } }) : original(m, p);
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result.errorCode).toBe('request_rejected');
+    expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('keeps an unacknowledged enqueue pending without retrying the mutation', async () => {
+    const h = fixture(); const original = h.process.handler;
+    h.process.handler = (m, p) => m.method === 'thread/queue/add' ? p.emit('close', 1) : original(m, p);
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result.deliveryPending).toBe(true);
+    expect(h.process.messages.filter(m => m.method === 'thread/queue/add')).toHaveLength(1);
+  });
+
+  it.each(['submitting', 'accepted'] as const)('recovers a %s queue receipt without another enqueue or resume', async state => {
+    const h = fixture(); const onStarted = vi.fn();
+    const result = await recoverVoiceRequest({ threadId: 'thread-1', workspacePath: os.tmpdir(), dispatchKey: 'receipt-1',
+      queueSubmission: { state, ...(state === 'accepted' ? { queuedSubmissionId: 'queue-1' } : {}) }, onStarted }, h.options);
+    expect(result).toMatchObject({ status: 'completed', turnId: 'owner-turn' });
+    expect(onStarted).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'owner-turn' });
+    expect(h.process.messages.some(m => ['thread/resume', 'thread/queue/add', 'turn/start'].includes(m.method))).toBe(false);
+  });
+
+  it.each(['duplicate-queue', 'duplicate-turn', 'wrong-ack', 'missing'] as const)('does not resend ambiguous %s evidence', async kind => {
+    const h = fixture();
+    if (kind === 'duplicate-queue') { h.state.queue = [queued, { ...queued, id: 'queue-2' }]; h.state.turns = []; }
+    if (kind === 'duplicate-turn') h.state.turns = [completed, { ...completed, id: 'other-turn' }];
+    if (kind === 'wrong-ack') { h.state.queue = [{ ...queued, id: 'wrong-queue' }]; h.state.turns = []; }
+    if (kind === 'missing') h.state.turns = [];
+    const result = await recoverVoiceRequest({ threadId: 'thread-1', workspacePath: os.tmpdir(), dispatchKey: 'receipt-1',
+      queueSubmission: { state: 'accepted', queuedSubmissionId: 'queue-1' } }, h.options);
+    expect(result.recoveryUncertain).toBe(true);
+    expect(h.process.messages.some(m => m.method === 'thread/queue/add')).toBe(false);
+  });
+
+  it('rereads the queue across the pending-to-turn snapshot race', async () => {
+    const h = fixture(); h.state.queue = [queued]; const original = h.process.handler;
+    h.process.handler = (m, p) => { original(m, p); if (m.method === 'thread/turns/list') h.state.queue = []; };
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result.status).toBe('completed');
+    expect(h.process.messages.filter(m => m.method === 'thread/queue/list')).toHaveLength(2);
+  });
+
+  it('waits through a live owner rollout projected as interrupted without completion evidence', async () => {
+    const h = fixture(); h.state.turns = [{ ...completed, status: 'interrupted', completedAt: null, items: [completed.items[0]] }];
+    const original = h.process.handler; let reads = 0;
+    h.process.handler = (m, p) => {
+      original(m, p);
+      if (m.method === 'thread/turns/list' && ++reads === 2) h.state.turns = [completed];
+    };
+    const result = await runVoiceRequest(h.input, { ...h.options, turnTimeoutMs: 100 });
+    expect(result.status).toBe('completed');
+    expect(h.input.onStarted).toHaveBeenCalledTimes(1);
+    expect(reads).toBe(3);
+  });
+
+  it('follows paginated receipt history to the exact client ID', async () => {
+    const h = fixture(); const original = h.process.handler;
+    h.process.handler = (m, p) => m.method === 'thread/turns/list' && !m.params.cursor
+      ? p.reply(m, { data: [{ id: 'unrelated', items: [] }], nextCursor: 'next' }) : original(m, p);
+    const result = await runVoiceRequest(h.input, h.options);
+    expect(result.status).toBe('completed');
+    expect(h.process.messages.some(m => m.method === 'thread/turns/list' && m.params.cursor === 'next')).toBe(true);
+  });
+});

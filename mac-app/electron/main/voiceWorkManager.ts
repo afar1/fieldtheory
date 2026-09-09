@@ -8,7 +8,7 @@ import { codexTaskUrl } from '../shared/taskLinks';
 import { routeVoiceRequest, refreshVoiceRouteWorkspace, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
 import {
   inspectVoiceCodexRuntime, runVoiceRequest, recoverVoiceRequest,
-  type VoiceCodexOutcome,
+  type VoiceCodexOutcome, type VoiceQueueSubmission,
 } from './voiceCodexRunner';
 
 interface VoiceAuth {
@@ -51,6 +51,8 @@ interface LocalAttempt {
   threadId?: string;
   turnId?: string;
   dispatchStarted?: boolean;
+  queueSubmission?: VoiceQueueSubmission;
+  notifiedTurnId?: string;
   outcome?: VoiceCodexOutcome;
   leaseToken: string;
   published?: boolean;
@@ -108,6 +110,8 @@ class VoiceRoutingFailure extends Error {
     this.code = typeof code === 'string' && ROUTING_ERROR_CODES.has(code) ? code : 'routing_failed';
   }
 }
+
+class VoiceDeliveryPending extends Error {}
 
 const DEFAULT_SETTINGS: VoiceWorkSettings = { enabled: false, workspacePath: null };
 const receiptText = (value: string, limit = value.length): string => {
@@ -547,6 +551,23 @@ export class VoiceWorkManager extends EventEmitter {
       }
       const route = attempt.route;
       const workspacePath = route?.workspacePath ?? inboxPath!;
+      const onStarted = async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
+        this.ensureCurrent(epoch);
+        attempt.threadId = threadId; attempt.turnId = turnId;
+        snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'working', summary: 'Codex is working.', canOpen: !!codexTaskUrl(threadId) };
+        this.persist();
+        if (attempt.notifiedTurnId !== turnId) {
+          await this.options.onDispatched?.(job, { threadId, turnId });
+          this.ensureCurrent(epoch);
+          attempt.notifiedTurnId = turnId;
+          this.persist();
+        }
+        this.ensureCurrent(epoch);
+        this.setStatus('working', 'Codex is working on your voice request.');
+        this.queueInboxReceipt(attempt, `${job.dispatch_key}:started`, { title: route?.title ?? 'Voice request',
+          status: 'working', summary: 'Codex confirmed that the task started.', threadId });
+        await this.flushInboxReceipts(attempt, epoch);
+      };
       let outcome: VoiceCodexOutcome;
       if (attempt.outcome) {
         outcome = attempt.outcome;
@@ -558,6 +579,7 @@ export class VoiceWorkManager extends EventEmitter {
         outcome = await (this.options.recoverRequest ?? recoverVoiceRequest)({
           threadId, turnId: attempt.turnId, dispatchKey: job.dispatch_key,
           workspacePath: workspacePath!, signal: controller.signal,
+          queueSubmission: attempt.queueSubmission, onStarted,
         });
       } else {
         outcome = await (this.options.runRequest ?? runVoiceRequest)({
@@ -585,22 +607,32 @@ export class VoiceWorkManager extends EventEmitter {
             attempt.dispatchStarted = true;
             this.persist();
           },
-          onStarted: async ({ threadId, turnId }) => {
+          onBeforeQueue: async () => {
             this.ensureCurrent(epoch);
-            attempt.threadId = threadId; attempt.turnId = turnId;
-            snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'working', summary: 'Codex is working.', canOpen: !!codexTaskUrl(threadId) };
+            const result = await this.rpc<{ ok: boolean }>('voice_jobs_begin_dispatch', {
+              p_job_id: job.job_id, p_lease_token: job.lease_token,
+            }, epoch);
+            if (!result.ok) throw new Error('Voice request was paused before queue submission.');
+            attempt.dispatchStarted = true;
+            attempt.queueSubmission = { state: 'submitting' };
             this.persist();
-            await this.options.onDispatched?.(job, { threadId, turnId });
-            this.ensureCurrent(epoch);
-            this.setStatus('working', 'Codex is working on your voice request.');
-            this.queueInboxReceipt(attempt, `${job.dispatch_key}:started`, { title: route?.title ?? 'Voice request',
-              status: 'working', summary: 'Codex confirmed that the task started.', threadId });
-            await this.flushInboxReceipts(attempt, epoch);
-
           },
+          onQueued: async ({ threadId, queuedSubmissionId }) => {
+            this.ensureCurrent(epoch);
+            attempt.queueSubmission = { state: 'accepted', queuedSubmissionId };
+            snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'queued',
+              summary: 'Waiting for this Codex conversation to start the request.', canOpen: !!codexTaskUrl(threadId) };
+            this.persist();
+            this.setStatus('ready', 'Your request is queued in its Codex conversation.');
+          },
+          onStarted,
         });
       }
       this.ensureCurrent(epoch);
+      if (outcome.deliveryPending) {
+        this.persist();
+        throw new VoiceDeliveryPending(outcome.summary);
+      }
       attempt.outcome = outcome;
       const threadId = outcome.threadId ?? attempt.threadId;
       if (threadId) snapshot.lastTask = {
@@ -745,6 +777,11 @@ export class VoiceWorkManager extends EventEmitter {
 
   private handleDeliveryFailure(epoch: number, error: unknown): void {
     if (!this.current(epoch)) return;
+    if (error instanceof VoiceDeliveryPending) {
+      this.setStatus(this.snapshot?.lastTask?.status === 'working' ? 'working' : 'ready', error.message);
+      this.scheduleReconnect(epoch);
+      return;
+    }
     this.setStatus('error', error instanceof VoiceRoutingFailure
       ? 'Voice could not find the destination for this request. Your request remains saved.'
       : 'Voice delivery was interrupted. Saved requests will resume after reconnecting.');

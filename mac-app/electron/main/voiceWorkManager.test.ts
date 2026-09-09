@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { VoiceWorkManager, type VoiceJob, type VoiceWorkManagerOptions } from './voiceWorkManager';
-import type { VoiceCodexRequest, VoiceCodexOutcome, VoiceCodexRuntimeStatus } from './voiceCodexRunner';
+import type { VoiceCodexRequest, VoiceCodexRecoveryRequest, VoiceCodexOutcome, VoiceCodexRuntimeStatus } from './voiceCodexRunner';
 import type { VoiceRoute, VoiceRouteRequest } from './voiceCodexRouter';
 
 const directories: string[] = [];
@@ -62,7 +62,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
     await request.onStarted?.({ threadId: 'thread-1', turnId: 'turn-1' });
     return outcome;
   });
-  const recoverRequest = vi.fn(async () => outcome);
+  const recoverRequest = vi.fn(async (_request: VoiceCodexRecoveryRequest) => outcome);
   const inspectRuntime = vi.fn<() => Promise<VoiceCodexRuntimeStatus>>(async () => ({ status: 'ready', message: 'Codex is ready.' }));
   const routeRequest = vi.fn(async (input: VoiceRouteRequest): Promise<VoiceRoute> => ({ decision: 'new', workspacePath: input.inboxPath }));
   const writeInboxReceipt = vi.fn(async () => {});
@@ -552,6 +552,51 @@ describe('bundled Voice push worker', () => {
     h.jobs.push({ ...h.job(), thread_id: 'recorded-thread' }); h.push(); await settle();
     expect(h.recoverRequest).not.toHaveBeenCalled();
     expect(h.runRequest).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'recorded-thread' }));
+  });
+
+  it('persists queue acceptance without completing or claiming a task has started, then recovers without resending', async () => {
+    const h = harness(); await h.enable();
+    const read = () => JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8')).attempts['job-1'];
+    h.runRequest.mockImplementationOnce(async request => {
+      await request.onThreadStarted?.('thread-1');
+      await request.onBeforeQueue?.({ threadId: 'thread-1' });
+      expect(read()).toMatchObject({ dispatchStarted: true, queueSubmission: { state: 'submitting' } });
+      await request.onQueued?.({ threadId: 'thread-1', queuedSubmissionId: 'queue-1' });
+      expect(read()).toMatchObject({ queueSubmission: { state: 'accepted', queuedSubmissionId: 'queue-1' } });
+      return { status: 'interrupted', summary: 'Queued in Codex.', finalResponse: '', deliveryPending: true };
+    });
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(read().outcome).toBeUndefined();
+    expect(h.onDispatched).not.toHaveBeenCalled();
+    expect(h.rpc.mock.calls.some(([name]) => name === 'voice_jobs_complete')).toBe(false);
+    expect(h.manager.getState().lastTask?.status).toBe('queued');
+    h.recoverRequest.mockImplementationOnce(async request => {
+      expect(request.queueSubmission).toEqual({ state: 'accepted', queuedSubmissionId: 'queue-1' });
+      await request.onStarted?.({ threadId: 'thread-1', turnId: 'turn-1' });
+      await request.onStarted?.({ threadId: 'thread-1', turnId: 'turn-1' });
+      return { threadId: 'thread-1', turnId: 'turn-1', status: 'completed', summary: 'Done.', finalResponse: 'Result.' };
+    });
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    expect(h.recoverRequest).toHaveBeenCalledTimes(1);
+    expect(h.onDispatched).toHaveBeenCalledTimes(1);
+    expect(read()).toMatchObject({ turnId: 'turn-1', published: true });
+  });
+
+  it('recovers an uncertain pre-acknowledgment queue submission after restart without another enqueue', async () => {
+    const h = harness(); await h.enable();
+    h.runRequest.mockImplementationOnce(async request => {
+      await request.onThreadStarted?.('thread-1');
+      await request.onBeforeQueue?.({ threadId: 'thread-1' });
+      throw new Error('Connection lost before acknowledgment');
+    });
+    h.jobs.push(h.job()); h.push(); await settle(); h.manager.stop();
+    const next = harness(h.directory); next.setServer(true, 1);
+    next.recoverRequest.mockResolvedValueOnce({ threadId: 'thread-1', status: 'needs_user', summary: 'Delivery uncertain.', finalResponse: '', recoveryUncertain: true });
+    next.jobs.push(next.job()); await next.manager.authChanged(); await settle();
+    expect(next.runRequest).not.toHaveBeenCalled();
+    expect(next.recoverRequest).toHaveBeenCalledWith(expect.objectContaining({ queueSubmission: { state: 'submitting' } }));
+    expect(next.rpc).toHaveBeenCalledWith('voice_jobs_complete', expect.objectContaining({ p_status: 'needs_user' }));
   });
 
   it('publishes uncertain recovery as needing attention and preserves the actual question', async () => {
