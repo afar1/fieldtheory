@@ -16,7 +16,7 @@ Apple documents [sleep settings and wake for network access](https://support.app
 
 ## Existing Field Theory path
 
-The phone syncs eligible recordings into the existing hosted delivery system. `mac-app/electron/main/voiceWorkManager.ts` runs in the Electron main process, subscribes to delivery events, claims leased jobs, persists dispatch information, and recovers earlier attempts before reporting outcomes. `voiceCodexRunner.ts` discovers the installed Codex executable and runs or observes the requested work. `voiceInboxSync.ts` separately materializes transcripts and task links in the Library.
+The native phone app marks transcript changes dirty in `ios-native/FieldTheory/Sources/Core/TranscriptStore.swift`; `Core/SyncEngine.swift` uploads them to `transcripts` with the signed-in user, stable client ID, original creation timestamp, and text. The existing hosted delivery system applies eligibility and durable-job rules before broadcasting a wake. `mac-app/electron/main/voiceWorkManager.ts` runs in the Electron main process, subscribes to delivery events, claims leased jobs, persists dispatch information, and recovers earlier attempts before reporting outcomes. `voiceCodexRunner.ts` discovers the installed Codex executable and runs or observes the requested work. `voiceInboxSync.ts` separately materializes transcripts and task links in the Library.
 
 The main process already stops delivery on system suspension and reconnects on resume. Screen locking is a different event: the inspected code does not stop the Voice worker merely because the screen locks. The missing power assertion allows idle system sleep to interrupt an otherwise available runner. Network readiness after waking must also trigger recovery, rather than requiring a visible window or manual refresh.
 
@@ -55,4 +55,16 @@ Power policy tests cover a single app-suspension assertion, screen lock, battery
 
 A development Electron power fixture was stopped before it could execute because the host moved its dependency application to Trash. The dependency was restored. No actual OS assertion from the new module is claimed from that attempted fixture; its lifecycle is covered by source tests, with the API choice corroborated by the installed ChatGPT implementation and Electron documentation.
 
-All 212 relevant tests across 11 suites passed, as did renderer and Electron TypeScript checks and whitespace checks. The feature diff was reviewed for lifecycle races and unnecessary code. Package integrity, signing, notarization, and artifact receipt will be recorded after packaging. No hosted changes, app installation, or GitHub publication are part of this delivery.
+All 212 relevant tests across 11 suites passed, as did renderer and Electron TypeScript checks and whitespace checks. The feature diff was reviewed for lifecycle races and unnecessary code. The final app and DMG passed Developer ID signature verification, Apple notarization, ticket stapling, and Gatekeeper assessment. Disk-image integrity passed. The packaged Electron 31.7.7 / ABI 125 / arm64 runtime directly queried SQLite and executed PTY with development fallback rejected. Verification checked 8,850 packed file hashes and matched 439 compiled files to source; signed unpacked native payloads were checked through their signatures and actual runtime probes. No hosted changes, app installation, or GitHub publication are part of this delivery.
+
+
+## Local release artifact
+
+- Version: **0.3.56**, `com.fieldtheory.app`, standard Field Theory application.
+- Build source: `dc4ec4caf9badc2db05bac5ea3c68b99fff5f117` on `codex/runner-remote-availability`.
+- [Signed and notarized local DMG](../mac-app/release/Field-Theory-0.3.56-arm64-local.dmg), 136,680,412 bytes.
+- SHA-256: `3830bc89ffd104416026ed58964b194e09e0341f3f195681a3407dfb0b01d5cb`.
+- DMG notarization: `672ceece-423f-4d58-bc7d-deb7ea5383b5` — Accepted.
+- [Machine-readable verification receipt](../mac-app/release/local-verification-0.3.56.json).
+
+Install the DMG as the normal Field Theory app. Existing enabled Voice requests use the new availability policy automatically; otherwise enable Voice requests in Settings. Keep the app running, signed in, online, and plugged in for idle-sleep prevention. A physical recording sent from the phone to the newly installed build is the remaining user acceptance check. The installed app was not replaced, and nothing was pushed or published to GitHub.
