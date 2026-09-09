@@ -19,4 +19,16 @@ Routing failures now retain an allowlisted local stage/code while showing a plai
 
 ## Local artifact
 
-Packaging and notarization verification pending.
+Source commit: `5319415397bdf282d26676f2ad6918872601f59f` on `codex/runner-remote-availability`.
+
+Artifact: `/Users/afar/dev/fieldtheory-runner-remote-availability/mac-app/release/Field-Theory-0.3.57-arm64-local.dmg`
+
+SHA-256: `f27b6c65e6a51da8fb4adb4e194adf1be9d4cce94d737211826a076874671bcb`
+
+Outer DMG notarization: `65e05868-708f-41b9-bc88-c756360fb2a8` — Accepted.
+
+App and DMG signatures, Apple notarization, stapling, Gatekeeper, and disk-image integrity passed. Production identity is `com.fieldtheory.app`, version `0.3.57`, with updater configuration included. Verified 8,850 post-sign packed hashes and 439 compiled files against the source build. Before signing, 9,356 file hashes and 182 JavaScript files passed archive checks. Packaged Electron 31.7.7 / ABI 125 / arm64 directly exercised SQLite and PTY with development fallback rejected.
+
+Receipt: `mac-app/release/local-verification-0.3.57.json`.
+
+Built with the standard local production package process and `--publish never`, then independently signed/notarized/stapled the outer DMG. No Field Theory installation, GUI launch, user-request dispatch, push, or public publication occurred during packaging. Prior 0.3.56 local DMG retained.
