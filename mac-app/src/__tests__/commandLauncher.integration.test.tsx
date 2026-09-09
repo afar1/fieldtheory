@@ -359,3 +359,16 @@ it('shows and searches the Voice display title supplied by Library metadata', as
     await waitFor(() => expect(container.textContent).toContain('Personal - Japanese tea set illustration'));
   } finally { window.libraryAPI!.getRoots = originalRoots; }
 });
+
+
+it('uses the current Library title in Recents instead of the stale recorded title', async () => {
+  const originalRoots = window.libraryAPI!.getRoots;
+  window.libraryAPI!.getRoots = vi.fn(async () => [{ path: '/library', label: 'Library', builtin: true, tree: files.map((file, index) => index === 0 ? { ...file, title: 'Personal - Spider eye SVG illustration' } : file) }]) as typeof originalRoots;
+  try {
+    const { container, input } = await mount('recents');
+    await waitFor(() => expect(container.querySelector('[data-item-index="0"]')?.textContent).toContain('Personal - Spider eye SVG illustration'));
+    expect(container.querySelector('[data-item-index="0"]')?.textContent).not.toContain('Markdown note 0');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(commands.insertMarkdownText).toHaveBeenCalledWith('[[Personal - Spider eye SVG illustration]]'));
+  } finally { window.libraryAPI!.getRoots = originalRoots; }
+});

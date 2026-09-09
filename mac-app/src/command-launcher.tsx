@@ -2041,14 +2041,15 @@ export function CommandLauncher() {
       const filePath = libraryItem?.filePath ?? entry.path;
       const relPath = entry.kind === 'wiki' ? entry.path : libraryItem?.relPath;
       const name = libraryItem?.name ?? entry.title;
+      const displayName = libraryItem?.displayName ?? entry.title;
       if (!shouldIncludeLauncherRecentFile({ filePath, commandFilePaths })) return [];
 
       return [{
         id: `recent-${entry.kind}-${entry.path}`,
         type: 'recent-file' as const,
         name,
-        displayName: entry.title,
-        keywords: [name, entry.title, entry.path, ...entry.title.split(/\s+/), ...entry.path.split(/[/-]/)].filter(Boolean),
+        displayName,
+        keywords: [name, displayName, entry.title, entry.path, ...displayName.split(/\s+/), ...entry.path.split(/[/-]/)].filter(Boolean),
         filePath,
         relPath,
         recentKind: entry.kind,

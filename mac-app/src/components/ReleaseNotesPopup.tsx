@@ -60,6 +60,9 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.55': [
+    'Recents shows current Library titles, including Voice task titles, instead of stale recording filenames',
+  ],
   '0.3.54': [
     'Voice Inbox and command launcher entries show available task titles instead of transcript openings',
     'Unrouted recordings keep readable transcript previews; original recordings remain unchanged',
@@ -600,6 +603,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.55': 'September 8, 2026',
   '0.3.54': 'September 8, 2026',
   '0.3.53': 'September 8, 2026',
   '0.3.52': 'September 8, 2026',
