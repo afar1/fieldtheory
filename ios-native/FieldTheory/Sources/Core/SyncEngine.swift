@@ -141,6 +141,9 @@ protocol VoiceSyncTransport: AnyObject {
     func softDelete(clientID: String, userID: String, deletedAtMs: Int64) async throws
     func submitFeedback(_ feedback: SupportFeedback) async throws
     func agentReceipts(ids: [String]) async throws -> [VoiceAgentReceipt]
+    func deliveryEvents(ids: [String]) async throws -> [VoiceDeliveryEvent]
+    func runnerPresence() async throws -> [VoiceRunnerPresence]
+    func runnerEvents() async throws -> [VoiceRunnerEvent]
 }
 
 struct VoiceAgentReceipt: Decodable {
@@ -149,6 +152,7 @@ struct VoiceAgentReceipt: Decodable {
     let thread_id: String?
     let turn_id: String?
     let status: String
+    var summary: String? = nil
 
     var confirmed: Bool {
         guard let thread_id, !thread_id.isEmpty else { return false }
@@ -161,6 +165,9 @@ extension VoiceSyncTransport {
         throw DatabaseError(message: "Feedback delivery is unavailable.")
     }
     func agentReceipts(ids: [String]) async throws -> [VoiceAgentReceipt] { [] }
+    func deliveryEvents(ids: [String]) async throws -> [VoiceDeliveryEvent] { [] }
+    func runnerPresence() async throws -> [VoiceRunnerPresence] { [] }
+    func runnerEvents() async throws -> [VoiceRunnerEvent] { [] }
 }
 
 @MainActor
@@ -197,7 +204,7 @@ private final class SupabaseVoiceSyncTransport: VoiceSyncTransport {
         for start in stride(from: 0, to: ids.count, by: 100) {
             let batch = Array(ids[start..<min(start + 100, ids.count)])
             let rows: [VoiceAgentReceipt] = try await client.from("voice_jobs")
-                .select("transcript_id,revision,thread_id,status,turn_id:result->>turn_id")
+                .select("transcript_id,revision,thread_id,status,summary,turn_id:result->>turn_id")
                 .in("transcript_id", values: batch)
                 .order("received_at", ascending: true)
                 .limit(1000)
@@ -205,6 +212,18 @@ private final class SupabaseVoiceSyncTransport: VoiceSyncTransport {
             result.append(contentsOf: rows)
         }
         return result
+    }
+
+    func deliveryEvents(ids: [String]) async throws -> [VoiceDeliveryEvent] {
+        try await client.from("voice_delivery_events").select().in("transcript_id", values: ids)
+            .order("occurred_at", ascending: false).limit(2000).execute().value
+    }
+    func runnerPresence() async throws -> [VoiceRunnerPresence] {
+        try await client.from("voice_runner_presence").select().order("last_seen_at", ascending: false).limit(10).execute().value
+    }
+    func runnerEvents() async throws -> [VoiceRunnerEvent] {
+        try await client.from("voice_runner_events").select().neq("event", value: "heartbeat")
+            .order("occurred_at", ascending: false).limit(100).execute().value
     }
 
     func softDelete(clientID: String, userID: String, deletedAtMs: Int64) async throws {
@@ -314,6 +333,10 @@ final class SyncEngine {
     private var pathMonitor: NWPathMonitor?
     private var connectivityGeneration = UUID()
     private var wasConnected = true
+    private var deliveryChannel: RealtimeChannelV2?
+    private var deliveryWatchTask: Task<Void, Never>?
+    private var deliveryWatchToken: UUID?
+    private var foreground = true
     private var timer: Timer?
     private var debounceTask: Task<Void, Never>?
     private var debounceGeneration: UInt64 = 0
@@ -349,12 +372,17 @@ final class SyncEngine {
     func start(userId: UUID, email: String?) async {
         await stopAndWait()
         let normalizedUserID = userId.uuidString.lowercased()
+        foreground = UIApplication.shared.applicationState != .background
         self.userId = normalizedUserID
         self.userEmail = email?.lowercased()
         sessionFence.activate(userId: normalizedUserID)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.syncNow() }
+            Task { @MainActor in
+                guard self?.foreground == true else { return }
+                self?.startDeliveryWatch()
+                await self?.syncNow()
+            }
         }
         let monitor = NWPathMonitor()
         // start() already retries. Only a later unavailable -> available
@@ -369,7 +397,72 @@ final class SyncEngine {
         }
         pathMonitor = monitor
         monitor.start(queue: DispatchQueue(label: "com.afar1.fieldtheory.connectivity"))
+        startDeliveryWatch()
         scheduleDebounced(after: 0)
+    }
+
+    func setForeground(_ active: Bool) {
+        foreground = active
+        if active {
+            startDeliveryWatch()
+            scheduleDebounced(after: 0.3)
+        } else {
+            deliveryWatchToken = nil
+            deliveryWatchTask?.cancel()
+            deliveryWatchTask = nil
+            if let channel = deliveryChannel {
+                deliveryChannel = nil
+                Task { await client.removeChannel(channel) }
+            }
+        }
+    }
+
+    private func startDeliveryWatch() {
+        guard foreground, deliveryWatchTask == nil, let lease = sessionFence.currentLease() else { return }
+        let channel = client.channel("voice-jobs:\(lease.userId)") { $0.isPrivate = true }
+        deliveryChannel = channel
+        let updates = channel.broadcastStream(event: "voice_delivery_changed")
+        let token = UUID()
+        deliveryWatchToken = token
+        deliveryWatchTask = Task { [weak self] in
+            defer {
+                if let self, self.deliveryWatchToken == token {
+                    self.deliveryWatchTask = nil
+                    self.deliveryWatchToken = nil
+                    self.deliveryChannel = nil
+                    Task { await self.client.removeChannel(channel) }
+                }
+            }
+            do {
+                try await channel.subscribeWithError()
+                guard let self, self.isActive(lease), self.foreground else { return }
+                self.scheduleDebounced(after: 0.3)
+                for await _ in updates {
+                    guard self.isActive(lease), self.foreground else { return }
+                    self.scheduleDebounced(after: 0.3)
+                }
+            } catch { /* The bounded sync timer supplies catch-up while open. */ }
+        }
+    }
+
+    func refreshDeliveryItem(_ id: String) async {
+        guard let lease = sessionFence.currentLease() else { return }
+        try? await refreshDelivery(lease: lease, selectedID: id)
+    }
+
+    private func refreshDelivery(lease: SyncSessionFence.Lease, selectedID: String? = nil) async throws {
+        let ids = selectedID.map { [$0] } ?? Array(transcripts.items.prefix(200).map(\.id))
+        guard !ids.isEmpty else { return }
+        let receipts = (try? await voiceTransport.agentReceipts(ids: ids)) ?? transcripts.deliveryReceipts.filter { ids.contains($0.transcript_id) }
+        try requireActive(lease)
+        try await transcripts.recordAgentReceipts(receipts)
+        let events = try? await voiceTransport.deliveryEvents(ids: ids)
+        try requireActive(lease)
+        let presence = try? await voiceTransport.runnerPresence()
+        try requireActive(lease)
+        let runnerEvents = try? await voiceTransport.runnerEvents()
+        try requireActive(lease)
+        transcripts.updateDelivery(receipts: receipts, events: events, presence: presence, runnerEvents: runnerEvents, replacingIDs: Set(ids))
     }
 
     func networkPathChanged(isConnected: Bool) {
@@ -394,6 +487,8 @@ final class SyncEngine {
     /// was already in flight to observe cancellation and finish. Callers can
     /// safely wipe or replace the local store once this returns.
     func stopAndWait() async {
+        setForeground(false)
+        transcripts.clearDelivery()
         connectivityGeneration = UUID()
         wasConnected = true
         pathMonitor?.cancel()
@@ -488,15 +583,18 @@ final class SyncEngine {
 
         do {
             try await syncTranscripts(lease: lease)
-            // Receipt availability never changes the cloud-upload result.
-            if let receipts = try? await voiceTransport.agentReceipts(ids: transcripts.items.map(\.id)) {
-                try requireActive(lease)
-                try await transcripts.recordAgentReceipts(receipts)
-            }
         } catch is CancellationError {
             return
         } catch {
             uploadError = error
+        }
+
+        do {
+            try await refreshDelivery(lease: lease)
+        } catch is CancellationError {
+            return
+        } catch {
+            // Delivery history is independent of the upload result.
         }
 
         do {

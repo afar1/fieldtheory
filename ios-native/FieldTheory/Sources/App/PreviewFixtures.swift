@@ -34,6 +34,17 @@ enum PreviewFixtures {
             try? await db.run("UPDATE transcripts SET agent_sent_revision = ? WHERE id = 't-2'", [.text(Hashing.sha256Hex(voiceFixtures[1].1))])
         }
         await transcripts.reload()
+        if ProcessInfo.processInfo.arguments.contains("ft-delivery-preview"), let item = transcripts.items.first {
+            let base = Date().addingTimeInterval(-60)
+            let stages = ["uploaded", "received_by_mac", "queued", "started", "completed"]
+            let events = stages.enumerated().map { index, stage in
+                VoiceDeliveryEvent(event_id: stage, transcript_id: item.id, revision: Hashing.sha256Hex(item.text), stage: stage,
+                    occurred_at: ISO8601DateFormatter().string(from: base.addingTimeInterval(Double(index * 10))), worker_id: "preview", time_source: stage == "started" ? "codex" : stage == "queued" ? "observed" : "server")
+            }
+            let presence = VoiceRunnerPresence(worker_id: "preview", observed_at: ISO8601DateFormatter().string(from: base), last_seen_at: ISO8601DateFormatter().string(from: base), locked: true, sleeping: false, online: true)
+            let lock = VoiceRunnerEvent(event_id: "lock", worker_id: "preview", event: "lock", occurred_at: ISO8601DateFormatter().string(from: base))
+            transcripts.updateDelivery(receipts: [], events: events, presence: [presence], runnerEvents: [lock])
+        }
     }
 }
 #endif

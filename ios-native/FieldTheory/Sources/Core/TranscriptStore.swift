@@ -22,6 +22,46 @@ final class TranscriptStore {
         feedbackStates[item.id + ":" + Hashing.sha256Hex(item.text)]
     }
 
+    private(set) var deliveryEvents: [VoiceDeliveryEvent] = []
+    private(set) var deliveryReceipts: [VoiceAgentReceipt] = []
+    private(set) var runnerPresence: [VoiceRunnerPresence] = []
+    private(set) var runnerEvents: [VoiceRunnerEvent] = []
+    private(set) var deliveryRefreshedAt: Date?
+
+    func events(for item: TranscriptItem) -> [VoiceDeliveryEvent] {
+        deliveryEvents.filter { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
+            .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+    }
+
+    func receipt(for item: TranscriptItem) -> VoiceAgentReceipt? {
+        deliveryReceipts.last { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
+    }
+
+    func updateDelivery(receipts: [VoiceAgentReceipt], events: [VoiceDeliveryEvent]?, presence: [VoiceRunnerPresence]?, runnerEvents: [VoiceRunnerEvent]?, replacingIDs: Set<String>? = nil) {
+        if let replacingIDs {
+            deliveryReceipts.removeAll { replacingIDs.contains($0.transcript_id) }
+            deliveryReceipts.append(contentsOf: receipts)
+            if let events {
+                deliveryEvents.removeAll { replacingIDs.contains($0.transcript_id) }
+                deliveryEvents.append(contentsOf: events)
+            }
+        } else {
+            deliveryReceipts = receipts
+            if let events { deliveryEvents = events }
+        }
+        if let presence { self.runnerPresence = presence }
+        if let runnerEvents { self.runnerEvents = runnerEvents }
+        deliveryRefreshedAt = Date()
+    }
+
+    func clearDelivery() {
+        deliveryEvents = []
+        deliveryReceipts = []
+        runnerPresence = []
+        runnerEvents = []
+        deliveryRefreshedAt = nil
+    }
+
     private(set) var items: [TranscriptItem] = []
 
     var pendingPrivacyOffers: [TranscriptItem] {

@@ -24,6 +24,7 @@ struct FieldTheoryApp: App {
                 .environment(model)
                 .tint(.accentColor)
                 .onChange(of: scenePhase) { _, phase in
+                    model.sync.setForeground(phase == .active)
                     if phase == .active { model.handleDidBecomeActive() }
                 }
         }

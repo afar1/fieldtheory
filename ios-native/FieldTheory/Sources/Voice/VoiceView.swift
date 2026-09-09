@@ -966,6 +966,7 @@ struct VoiceView: View {
 /// word count, action tag, cloud/Remote icons and a bottom-right expansion
 /// chevron, with a 3-line clamp and last-words verification line.
 struct StackCard: View {
+    @State private var showingDelivery = false
     let item: TranscriptItem
     let expanded: Bool
     let copied: Bool
@@ -1128,11 +1129,11 @@ struct StackCard: View {
     }
 
     private var actionLabel: String {
-        item.wasSentToAgent ? "Sent to agent" : "Transcript"
+        VoiceDelivery.status(item: item, events: model.transcripts.events(for: item), receipt: model.transcripts.receipt(for: item))
     }
 
     private var syncStateBadge: some View {
-        Button(action: onRequestCloudSync) {
+        Button { showingDelivery = true } label: {
             Text(actionLabel)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(item.wasSentToAgent ? Theme.link : Theme.markRead)
@@ -1141,11 +1142,13 @@ struct StackCard: View {
                 .background((item.wasSentToAgent ? Theme.link : Theme.markRead).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.borderless)
-        .disabled(item.wasSentToAgent)
+        .sheet(isPresented: $showingDelivery) {
+            VoiceDeliveryView(item: item, onSend: onRequestCloudSync)
+        }
         .fixedSize()
         .accessibilityLabel(actionLabel)
         .accessibilityValue(item.actionPolicy)
-        .accessibilityHint(item.wasSentToAgent ? "Confirmed agent receipt" : "Shows Send to agent option")
+        .accessibilityHint("Shows delivery timestamps and Mac observations")
     }
 
     private var cloudStatusButton: some View {
