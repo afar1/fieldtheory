@@ -20,7 +20,7 @@ async function settle() {
   for (let i = 0; i < 80; i++) await Promise.resolve();
 }
 
-function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManagerOptions, 'ensureInboxFolder' | 'selectInboxFolder'> = {}) {
+function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManagerOptions, 'ensureInboxFolder' | 'selectInboxFolder' | 'refreshRouteWorkspace'> = {}) {
   const directory = existingDirectory ?? fs.mkdtempSync(path.join(os.tmpdir(), 'voice-worker-test-'));
   if (!existingDirectory) directories.push(directory);
   let owner: string | null = 'account-a';
@@ -232,6 +232,94 @@ describe('bundled Voice push worker', () => {
     expect(h.manager.getState().settings.enabled).toBe(true);
   });
 
+  it('preserves repeated rename lineage only for confirmed same-account projectless Voice creations', async () => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const file = path.join(h.directory, 'account-a.json');
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const proven = { leaseToken: 'old', threadId: 'proven-thread', turnId: 'proven-turn', dispatchStarted: true,
+      route: { decision: 'new', workspacePath: path.join(h.directory, 'old-inbox') } };
+    snapshot.attempts = {
+      proven,
+      firstRename: { ...proven, route: { decision: 'continue', threadId: 'proven-thread', workspacePath: path.join(h.directory, 'renamed-inbox') } },
+      unstarted: { ...proven, threadId: 'unstarted', dispatchStarted: false },
+      unconfirmed: { ...proven, threadId: 'unconfirmed', turnId: undefined },
+      project: { ...proven, threadId: 'project', route: { ...proven.route, projectId: 'project-1' } },
+      continued: { ...proven, threadId: 'continued', route: { ...proven.route, decision: 'continue' } },
+      relative: { ...proven, threadId: 'relative', route: { ...proven.route, workspacePath: 'relative' } },
+    };
+    fs.writeFileSync(file, JSON.stringify(snapshot));
+    fs.writeFileSync(path.join(h.directory, 'account-b.json'), JSON.stringify({ ...snapshot, owner: 'account-b',
+      attempts: { other: { ...proven, threadId: 'other-account-thread' } } }));
+    const restarted = harness(h.directory); restarted.setServer(true, 1);
+    restarted.jobs.push(h.job('new-job')); await restarted.manager.authChanged(); await settle();
+    expect(restarted.routeRequest).toHaveBeenCalledWith(expect.objectContaining({ projectlessVoiceTasks: [
+      { threadId: 'proven-thread', workspacePath: path.join(h.directory, 'old-inbox') },
+      { threadId: 'proven-thread', workspacePath: path.join(h.directory, 'renamed-inbox') },
+    ] }));
+  });
+
+  it.each([false, true])('repairs a cached route after folder rename without rerouting (dispatched=%s)', async (dispatched) => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const file = path.join(h.directory, 'account-a.json');
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const oldPath = path.join(h.directory, 'missing-old-inbox');
+    snapshot.attempts['job-1'] = { leaseToken: 'old', threadId: 'existing-thread',
+      ...(dispatched ? { dispatchStarted: true, turnId: 'old-turn' } : {}),
+      route: { decision: 'new', workspacePath: oldPath } };
+    fs.writeFileSync(file, JSON.stringify(snapshot));
+    const refreshRouteWorkspace = vi.fn<NonNullable<VoiceWorkManagerOptions['refreshRouteWorkspace']>>(async route => ({ ...route, workspacePath: h.directory }));
+    const restarted = harness(h.directory, { refreshRouteWorkspace }); restarted.setServer(true, 1);
+    restarted.jobs.push(h.job()); await restarted.manager.authChanged(); await settle();
+    expect(restarted.routeRequest).not.toHaveBeenCalled();
+    expect(refreshRouteWorkspace).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: oldPath }),
+      expect.objectContaining({ threadId: 'existing-thread', inboxPath: h.directory }));
+    if (dispatched) {
+      expect(restarted.runRequest).not.toHaveBeenCalled();
+      expect(restarted.recoverRequest).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'existing-thread', workspacePath: h.directory }));
+    } else {
+      expect(restarted.recoverRequest).not.toHaveBeenCalled();
+      expect(restarted.runRequest).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'existing-thread', workspacePath: h.directory }));
+    }
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).attempts['job-1'].route.workspacePath).toBe(h.directory);
+  });
+
+  it.each([{ decision: 'new', dispatched: false }, { decision: 'new', dispatched: true },
+    { decision: 'ask', dispatched: false }, { decision: 'ask', dispatched: true }] as const)
+  ('keeps original cwd evidence across two repairs before Codex updates cwd ($decision, dispatched=$dispatched)', async ({ decision, dispatched }) => {
+    const h = harness(); await h.enable(); h.manager.stop();
+    const file = path.join(h.directory, 'account-a.json');
+    const original = path.join(h.directory, 'Inbox A');
+    const second = path.join(h.directory, 'Inbox B');
+    const third = path.join(h.directory, 'Inbox C');
+    fs.mkdirSync(second);
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    snapshot.settings.workspacePath = second;
+    snapshot.attempts['job-1'] = { leaseToken: 'old', threadId: 'existing-thread',
+      ...(dispatched ? { dispatchStarted: true, turnId: 'old-turn' } : {}),
+      route: { decision, workspacePath: original } };
+    fs.writeFileSync(file, JSON.stringify(snapshot));
+    const refreshRouteWorkspace = vi.fn<NonNullable<VoiceWorkManagerOptions['refreshRouteWorkspace']>>(async (route, input) => {
+      // Codex still reports cwd A throughout both recoveries; B never reached thread/resume.
+      expect(input.projectlessVoiceTasks).toContainEqual({ threadId: 'existing-thread', workspacePath: original });
+      return { ...route, workspacePath: input.inboxPath };
+    });
+    const first = harness(h.directory, { refreshRouteWorkspace }); first.setServer(true, 1);
+    first.runRequest.mockRejectedValueOnce(new Error('Stopped before thread resume'));
+    first.recoverRequest.mockRejectedValueOnce(new Error('Recovery transport unavailable'));
+    first.jobs.push(h.job()); await first.manager.authChanged(); await settle(); first.manager.stop();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).attempts['job-1'].route.workspacePath).toBe(second);
+    fs.renameSync(second, third);
+    const next = harness(h.directory, { refreshRouteWorkspace, ensureInboxFolder: () => third }); next.setServer(true, 1);
+    next.jobs.push(h.job()); await next.manager.authChanged(); await settle();
+    expect(refreshRouteWorkspace).toHaveBeenCalledTimes(2);
+    expect(next.routeRequest).not.toHaveBeenCalled();
+    expect(dispatched ? next.recoverRequest : next.runRequest).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: third }));
+    if (dispatched) expect(next.runRequest).not.toHaveBeenCalled();
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')).attempts['job-1'];
+    expect(saved.workspaceHistory).toContainEqual({ threadId: 'existing-thread', workspacePath: original });
+    expect(saved.workspaceHistory).toContainEqual({ threadId: 'existing-thread', workspacePath: second });
+  });
+
   it('keeps a missing saved folder visible and starts no work until the user replaces it', async () => {
     const h = harness(); await h.enable(); h.manager.stop();
     const restarted = harness(h.directory, { ensureInboxFolder: () => { throw new Error('Selected folder is unavailable.'); } });
@@ -400,6 +488,20 @@ describe('bundled Voice push worker', () => {
     h.connectionError(); h.manager.stop();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(channel.subscribe).toHaveBeenCalledTimes(10);
+  });
+
+  it.each(['internal_tool_request', 'secret-code-do-not-store'])('retains only sanitized routing diagnostics for %s', async (code) => {
+    const h = harness(); await h.enable();
+    h.routeRequest.mockRejectedValueOnce(Object.assign(new Error('secret transcript and credential'), { code }));
+    h.jobs.push(h.job()); h.push(); await settle();
+    const diagnostic = { stage: 'routing', code: code === 'internal_tool_request' ? code : 'routing_failed' };
+    const serialized = fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8');
+    expect(JSON.parse(serialized).attempts['job-1'].failure).toEqual(diagnostic);
+    expect(serialized).not.toContain('secret');
+    expect(h.manager.getState().message).toBe('Voice could not find the destination for this request. Your request remains saved.');
+    expect(JSON.stringify(h.manager.getState())).not.toContain('secret');
+    expect(h.runRequest).not.toHaveBeenCalled();
+    expect(h.rpc.mock.calls.some(([name]) => name === 'voice_jobs_complete')).toBe(false);
   });
 
   it('recovers an RPC outage without another broadcast and does not replay finished dispatch', async () => {

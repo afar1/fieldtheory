@@ -14,6 +14,27 @@ function folder() {
 }
 
 describe('Codex-owned Voice routing', () => {
+  it('recovers only confirmed projectless Voice tasks whose original inbox is gone', async () => {
+    const oldInbox = folder(); const inboxPath = folder(); const existing = folder();
+    fs.rmdirSync(oldInbox);
+    const rows = [
+      { id: 'voice', cwd: oldInbox, projectId: null },
+      { id: 'project', cwd: oldInbox, projectId: 'registered-project' },
+      { id: 'unknown', cwd: oldInbox },
+      { id: 'mismatch', cwd: `${oldInbox}/different` },
+      { id: 'still-present', cwd: existing },
+    ];
+    const recovery = { inboxPath, projectlessVoiceTasks: ['voice', 'project', 'mismatch', 'still-present']
+      .map(threadId => ({ threadId, workspacePath: threadId === 'still-present' ? existing : oldInbox })) };
+    const request = vi.fn(async (method: string) => ({ data: method === 'thread/list' ? rows : [] }));
+    const catalog = await readVoiceRouteCatalog({ request }, recovery);
+    expect(catalog.tasks.map(task => [task.id, task.workspacePath])).toEqual([
+      ['voice', inboxPath], ['still-present', existing],
+    ]);
+    expect(validateVoiceRoute({ decision: 'continue', threadId: 'voice' }, catalog, inboxPath))
+      .toMatchObject({ threadId: 'voice', workspacePath: inboxPath });
+    expect((await readVoiceRouteCatalog({ request })).tasks.map(task => task.id)).toEqual(['still-present']);
+  });
   it('chooses an existing task or registered project rather than forcing Inbox as its workspace', () => {
     const inbox = folder(); const project = folder();
     const catalog = { projects: [{ id: 'project-1', name: 'Field Theory', workspacePath: project }],
@@ -53,6 +74,19 @@ describe('Codex-owned Voice routing', () => {
 });
 
 describe('routing history evidence', () => {
+  it('recovers an older Voice task found by search after the inbox moves', async () => {
+    const oldInbox = folder(); const inboxPath = folder();
+    fs.rmdirSync(oldInbox);
+    const request = vi.fn(async (method: string) => method === 'thread/search'
+      ? { data: [{ thread: { id: 'older-voice', cwd: oldInbox, projectId: null, name: 'Personal - Navier–Stokes' } }] }
+      : { data: [{ items: [{ type: 'agentMessage', text: 'Earlier explanation' }] }] });
+    const catalog = { projects: [], tasks: [] };
+    const evidence = await inspectVoiceRouteCandidates({ request }, { queries: ['Navier–Stokes'] }, catalog, [],
+      { inboxPath, projectlessVoiceTasks: [{ threadId: 'older-voice', workspacePath: oldInbox }] });
+    expect(evidence[0].threadId).toBe('older-voice');
+    expect(validateVoiceRoute({ decision: 'continue', threadId: 'older-voice' }, catalog, inboxPath))
+      .toMatchObject({ workspacePath: inboxPath, threadId: 'older-voice' });
+  });
   it('keeps recent conversation text within budget and excludes tool and image payloads', async () => {
     const request = vi.fn(async () => ({ nextCursor: 'older', data: [
       { items: [{ type: 'userMessage', content: [{ type: 'text', text: 'Newest question' }, { type: 'image', url: 'secret-image' }] },

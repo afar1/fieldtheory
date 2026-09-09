@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.57': [
+    'Voice conversations continue after you rename your Inbox folder',
+    'Saved requests recover their current folder without creating duplicate tasks',
+    'Clearer status messages when Voice cannot find a destination',
+  ],
   '0.3.56': [
     'Voice requests keep your plugged-in Mac available while the screen is locked or off',
     'Voice delivery reconnects after interruptions and checks saved requests without repeating dispatched work',
@@ -607,6 +612,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.57': 'September 9, 2026',
   '0.3.56': 'September 8, 2026',
   '0.3.55': 'September 8, 2026',
   '0.3.54': 'September 8, 2026',

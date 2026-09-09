@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type { VoiceWorkSettings, VoiceWorkState } from '../shared/voiceWork';
 import { codexTaskUrl } from '../shared/taskLinks';
-import { routeVoiceRequest, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
+import { routeVoiceRequest, refreshVoiceRouteWorkspace, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
 import {
   inspectVoiceCodexRuntime, runVoiceRequest, recoverVoiceRequest,
   type VoiceCodexOutcome,
@@ -56,6 +56,8 @@ interface LocalAttempt {
   published?: boolean;
   needsReconciliation?: boolean;
   route?: VoiceRoute;
+  failure?: { stage: 'routing'; code: string };
+  workspaceHistory?: Array<{ threadId: string; workspacePath: string }>;
   inboxReceipts?: Array<{ input: VoiceInboxReceipt; delivered?: boolean }>;
 }
 
@@ -80,6 +82,7 @@ export interface VoiceWorkManagerOptions {
   now?: () => number;
   rpcTimeoutMs?: number;
   routeRequest?: typeof routeVoiceRequest;
+  refreshRouteWorkspace?: typeof refreshVoiceRouteWorkspace;
   writeInboxReceipt?: typeof writeVoiceInboxReceipt;
   ensureInboxFolder?: (owner: string, existingChoice: string | null) => string;
   selectInboxFolder?: (owner: string, folderPath: string) => string;
@@ -87,6 +90,23 @@ export interface VoiceWorkManagerOptions {
   onTranscript?: (job: VoiceJob) => void | Promise<void>;
   onDispatched?: (job: VoiceJob, event: { threadId: string; turnId: string }) => void | Promise<void>;
   onDeliveryWake?: () => void;
+}
+
+const ROUTING_ERROR_CODES = new Set([
+  'aborted', 'classification_timeout', 'connection_lost', 'internal_tool_request', 'invalid_outcome',
+  'invalid_request', 'not_installed', 'permissions_unsupported', 'protocol_error', 'receipt_failed',
+  'request_rejected', 'request_timeout', 'runtime_error', 'sign_in_required', 'startup_failed',
+  'turn_failed', 'turn_timeout', 'workspace_unavailable', 'task_unavailable', 'project_unavailable',
+]);
+
+/** Never persist exception messages, paths, transcript text, or arbitrary error codes. */
+class VoiceRoutingFailure extends Error {
+  readonly code: string;
+  constructor(error: unknown) {
+    super('Voice routing could not choose a destination.');
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    this.code = typeof code === 'string' && ROUTING_ERROR_CODES.has(code) ? code : 'routing_failed';
+  }
 }
 
 const DEFAULT_SETTINGS: VoiceWorkSettings = { enabled: false, workspacePath: null };
@@ -140,6 +160,36 @@ export class VoiceWorkManager extends EventEmitter {
       if (attempt.threadId && attempt.turnId && attempt.dispatchStarted && title?.trim()) titles.set(attempt.threadId, title);
     }
     return titles;
+  }
+
+  /** Only confirmed tasks originally created by this account's Voice worker qualify. */
+  private projectlessVoiceTasks(currentCreation?: LocalAttempt): Array<{ threadId: string; workspacePath: string }> {
+    if (!this.current() || !this.snapshot) return [];
+    const confirmed = Object.values(this.snapshot.attempts).filter(attempt => attempt.threadId?.trim()
+      && attempt.turnId?.trim() && attempt.dispatchStarted && !attempt.route?.projectId
+      && typeof attempt.route?.workspacePath === 'string' && path.isAbsolute(attempt.route.workspacePath));
+    const created = new Set(confirmed.filter(attempt => ['new', 'ask'].includes(attempt.route!.decision) && !attempt.route!.threadId)
+      .map(attempt => attempt.threadId));
+    // A newly allocated task is also proven for repairing this same attempt before its first turn.
+    if (currentCreation?.threadId && currentCreation.route && ['new', 'ask'].includes(currentCreation.route.decision)
+      && !currentCreation.route.projectId && !currentCreation.route.threadId) {
+      created.add(currentCreation.threadId);
+      if (!confirmed.includes(currentCreation)) confirmed.push(currentCreation);
+    }
+    const lineage = new Map<string, { threadId: string; workspacePath: string }>();
+    for (const attempt of confirmed) {
+      const route = attempt.route!;
+      if (!created.has(attempt.threadId) || !['new', 'ask', 'continue'].includes(route.decision)
+        || (route.threadId && route.threadId !== attempt.threadId)) continue;
+      const entry = { threadId: attempt.threadId!, workspacePath: route.workspacePath };
+      lineage.set(JSON.stringify(entry), entry);
+      for (const previous of attempt.workspaceHistory ?? []) {
+        if (previous.threadId === attempt.threadId && typeof previous.workspacePath === 'string' && path.isAbsolute(previous.workspacePath)) {
+          lineage.set(JSON.stringify(previous), previous);
+        }
+      }
+    }
+    return [...lineage.values()];
   }
 
   /** The auth manager remains the sole owner of credentials and token refresh. */
@@ -336,7 +386,7 @@ export class VoiceWorkManager extends EventEmitter {
         this.state.lastEventAt = this.now();
         this.options.onDeliveryWake?.();
         void this.checkDeliveryState(epoch).then((enabled) => { if (enabled) this.wake(); })
-          .catch(() => this.handleDeliveryFailure(epoch));
+          .catch(error => this.handleDeliveryFailure(epoch, error));
       })
       .subscribe((status) => {
         if (!this.current(epoch) || connectionVersion !== this.connectionVersion) { rejectJoin(new Error('Voice request session changed.')); return; }
@@ -391,7 +441,7 @@ export class VoiceWorkManager extends EventEmitter {
     if (this.pumping) { this.wakePending = true; return; }
     const epoch = this.epoch;
     this.pumping = true;
-    void this.pump(epoch).catch(() => this.handleDeliveryFailure(epoch)).finally(() => {
+    void this.pump(epoch).catch(error => this.handleDeliveryFailure(epoch, error)).finally(() => {
       this.pumping = false;
       if (this.wakePending) { this.wakePending = false; this.wake(); }
     });
@@ -446,19 +496,54 @@ export class VoiceWorkManager extends EventEmitter {
       await this.options.onTranscript?.(job);
       this.ensureCurrent(epoch);
       if (!attempt.route && !attempt.outcome) {
-        attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
-          text: job.text, inboxPath: inboxPath!, inboxInstructions: snapshot.settings.inboxInstructions,
-          inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
-            this.ensureCurrent(epoch);
-            if (snapshot.inboxThreadId && snapshot.inboxThreadId !== id) throw new Error('Voice inbox identity changed.');
-            snapshot.inboxThreadId = id;
-            this.persist();
-          } },
-          previousThreadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
-          signal: controller.signal,
-        });
+        try {
+          attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
+            text: job.text, inboxPath: inboxPath!, projectlessVoiceTasks: this.projectlessVoiceTasks(), inboxInstructions: snapshot.settings.inboxInstructions,
+            inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
+              this.ensureCurrent(epoch);
+              if (snapshot.inboxThreadId && snapshot.inboxThreadId !== id) throw new Error('Voice inbox identity changed.');
+              snapshot.inboxThreadId = id;
+              this.persist();
+            } },
+            previousThreadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
+            signal: controller.signal,
+          });
+        } catch (error) {
+          this.ensureCurrent(epoch);
+          const failure = new VoiceRoutingFailure(error);
+          attempt.failure = { stage: 'routing', code: failure.code };
+          this.persist();
+          throw failure;
+        }
         this.ensureCurrent(epoch);
+        delete attempt.failure;
         this.persist();
+      }
+      if (attempt.route && !attempt.outcome) {
+        try {
+          // Persist the old cwd before replacement: a crash or read-only recovery may leave Codex's cwd unchanged.
+          if (attempt.threadId && !attempt.route.projectId) {
+            const previous = { threadId: attempt.threadId, workspacePath: attempt.route.workspacePath };
+            const history = attempt.workspaceHistory ??= [];
+            if (!history.some(value => value.threadId === previous.threadId && value.workspacePath === previous.workspacePath)) {
+              history.push(previous);
+              this.persist();
+            }
+          }
+          attempt.route = await (this.options.refreshRouteWorkspace ?? refreshVoiceRouteWorkspace)(attempt.route, {
+            threadId: attempt.threadId ?? job.thread_id ?? attempt.route.threadId,
+            inboxPath: inboxPath!, projectlessVoiceTasks: this.projectlessVoiceTasks(attempt),
+          });
+          this.ensureCurrent(epoch);
+          delete attempt.failure;
+          this.persist();
+        } catch (error) {
+          this.ensureCurrent(epoch);
+          const failure = new VoiceRoutingFailure(error);
+          attempt.failure = { stage: 'routing', code: failure.code };
+          this.persist();
+          throw failure;
+        }
       }
       const route = attempt.route;
       const workspacePath = route?.workspacePath ?? inboxPath!;
@@ -658,9 +743,11 @@ export class VoiceWorkManager extends EventEmitter {
     this.reconnectTimer.unref?.();
   }
 
-  private handleDeliveryFailure(epoch: number): void {
+  private handleDeliveryFailure(epoch: number, error: unknown): void {
     if (!this.current(epoch)) return;
-    this.setStatus('error', 'Voice delivery was interrupted. Saved requests will resume after reconnecting.');
+    this.setStatus('error', error instanceof VoiceRoutingFailure
+      ? 'Voice could not find the destination for this request. Your request remains saved.'
+      : 'Voice delivery was interrupted. Saved requests will resume after reconnecting.');
     this.scheduleReconnect(epoch);
   }
 
