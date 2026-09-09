@@ -111,6 +111,8 @@ export class VoiceWorkManager extends EventEmitter {
   private channelClient: SupabaseClient | null = null;
   private joinPromise: Promise<void> | null = null;
   private subscribed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
   private connectionVersion = 0;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private renewTimer: ReturnType<typeof setTimeout> | null = null;
@@ -145,7 +147,7 @@ export class VoiceWorkManager extends EventEmitter {
     const nextOwner = this.options.auth.getSession()?.user.id ?? null;
     if (nextOwner === this.owner) {
       if (nextOwner && this.snapshot?.pendingDisable) await this.finishDisable();
-      if (nextOwner && this.state.settings.enabled && (!this.channel || this.state.status === 'error')) await this.refreshStatus();
+      if (nextOwner && this.state.settings.enabled && (!this.subscribed || this.state.status === 'error')) await this.refreshStatus();
       return;
     }
     this.disconnect();
@@ -275,28 +277,38 @@ export class VoiceWorkManager extends EventEmitter {
   private async inspectAndConnect(): Promise<VoiceWorkState> {
     if (!this.current() || !this.snapshot) return this.getState();
     const epoch = this.epoch;
+    let transportPhase = false;
     try {
       this.refreshInboxFolder();
+      transportPhase = true;
       const runtime = await (this.options.inspectRuntime ?? inspectVoiceCodexRuntime)();
       if (!this.current(epoch)) return this.getState();
       this.state.codex = {
         available: runtime.status !== 'not_installed',
         signedIn: runtime.status === 'ready' ? true : runtime.status === 'sign_in_required' ? false : null,
       };
+      transportPhase = false;
       if (runtime.status !== 'ready') {
-        this.setStatus('needs_setup', runtime.message);
+        this.setStatus(runtime.status === 'unavailable' ? 'connecting' : 'needs_setup', runtime.message);
+        if (runtime.status === 'unavailable') this.scheduleReconnect(epoch);
       } else if (!this.snapshot.settings.workspacePath) {
         this.setStatus('needs_setup', 'Choose the Library folder for your voice transcripts.');
       } else {
         this.validateWorkspace(this.snapshot.settings.workspacePath);
         if (this.snapshot.settings.enabled) {
+          transportPhase = true;
           await this.connect();
           this.wake();
         }
         else this.setStatus('disabled', 'Ready to enable voice requests.');
       }
     } catch {
-      if (this.current(epoch)) this.setStatus('needs_setup', 'Check Codex sign-in and the selected folder, then try again.');
+      if (this.current(epoch)) {
+        if (transportPhase) {
+          this.setStatus('connecting', 'Connection interrupted. Saved requests will resume after reconnecting.');
+          this.scheduleReconnect(epoch);
+        } else this.setStatus('needs_setup', 'Check Codex sign-in and the selected folder, then try again.');
+      }
     }
     return this.getState();
   }
@@ -328,11 +340,19 @@ export class VoiceWorkManager extends EventEmitter {
       })
       .subscribe((status) => {
         if (!this.current(epoch) || connectionVersion !== this.connectionVersion) { rejectJoin(new Error('Voice request session changed.')); return; }
-        if (status === 'SUBSCRIBED') { this.subscribed = true; resolveJoin(); if (this.snapshot?.settings.enabled) this.wake(); }
+        if (status === 'SUBSCRIBED') {
+          this.subscribed = true;
+          this.reconnectAttempt = 0;
+          if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+          resolveJoin();
+          if (this.snapshot?.settings.enabled) this.wake();
+        }
         else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           this.subscribed = false;
           rejectJoin(new Error('Voice delivery connection is unavailable.'));
           this.setStatus('connecting', 'Connection interrupted. Saved requests will resume after reconnecting.');
+          this.scheduleReconnect(epoch);
         }
       });
     try { await joined; this.ensureCurrent(epoch); }
@@ -388,6 +408,9 @@ export class VoiceWorkManager extends EventEmitter {
         await this.checkDeliveryState(epoch); return;
       }
       if (!claim.jobs.length) {
+        this.reconnectAttempt = 0;
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
         this.setStatus('ready', 'Listening for new voice requests.');
         if (claim.next_wake_at) {
           const delay = Date.parse(claim.next_wake_at) - Date.parse(claim.server_now);
@@ -623,10 +646,22 @@ export class VoiceWorkManager extends EventEmitter {
     this.wakeTimer.unref?.();
   }
 
+  /** Backed-off transport recovery only; broadcasts remain the normal discovery path. */
+  private scheduleReconnect(epoch: number): void {
+    const delays = [1_000, 5_000, 15_000, 30_000, 60_000];
+    if (!this.current(epoch) || !this.snapshot?.settings.enabled || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.current(epoch) || !this.snapshot?.settings.enabled) return;
+      void this.refreshStatus();
+    }, delays[Math.min(this.reconnectAttempt++, delays.length - 1)]);
+    this.reconnectTimer.unref?.();
+  }
+
   private handleDeliveryFailure(epoch: number): void {
     if (!this.current(epoch)) return;
-    this.setStatus('error', 'Voice delivery needs attention. Saved work has been retained; reconnect or check again to recover.');
-    // No endless auth/network retry loop and no periodic transcript discovery.
+    this.setStatus('error', 'Voice delivery was interrupted. Saved requests will resume after reconnecting.');
+    this.scheduleReconnect(epoch);
   }
 
   private async finishDisable(): Promise<void> {
@@ -688,6 +723,9 @@ export class VoiceWorkManager extends EventEmitter {
   private disconnect(): void {
     this.epoch++;
     this.connectionVersion++;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.reconnectAttempt = 0;
     this.joinPromise = null;
     this.subscribed = false;
     this.refreshPromise = null;

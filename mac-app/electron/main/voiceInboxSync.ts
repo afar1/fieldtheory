@@ -33,6 +33,8 @@ export class VoiceInboxSync {
   private subscribed = false;
   private rejectJoin: ((error: Error) => void) | null = null;
   private readonly pageSize: number;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryAttempt = 0;
 
   constructor(private readonly options: VoiceInboxSyncOptions) {
     this.pageSize = Number.isFinite(options.pageSize)
@@ -44,9 +46,15 @@ export class VoiceInboxSync {
   selectFolder(folderPath: string): string { return this.options.store.selectFolder(this.requireOwner(), folderPath); }
 
   async authChanged(existingChoice?: string | null): Promise<void> {
+    await this.connect(existingChoice);
+  }
+
+  private async connect(existingChoice?: string | null, retry = false): Promise<void> {
     const owner = this.options.auth.getSession()?.user.id ?? null;
-    if (owner && owner === this.owner && this.channel) { await this.refresh(); return; }
+    if (owner && owner === this.owner && this.channel && this.subscribed) { await this.refresh(); return; }
+    const attempts = retry ? this.retryAttempt : 0;
     this.stop();
+    this.retryAttempt = attempts;
     if (!owner) return;
     const client = this.options.auth.getSupabaseClient();
     if (!client || !uuid.test(owner)) throw new Error('Sign in to Field Theory to sync Voice Inbox.');
@@ -110,6 +118,8 @@ export class VoiceInboxSync {
   async resume(): Promise<void> { this.stop(); await this.authChanged(); }
 
   stop(): void {
+    this.clearRetry();
+    this.retryAttempt = 0;
     this.epoch++;
     this.rejectJoin?.(new Error('Voice Inbox stopped.'));
     this.rejectJoin = null;
@@ -155,8 +165,13 @@ export class VoiceInboxSync {
       } while (this.current(epoch, owner) && this.requested);
     })();
     this.syncPromise = work;
-    void work.then(() => { if (this.syncPromise === work) this.syncPromise = null; },
-      () => { if (this.syncPromise === work) this.syncPromise = null; });
+    void work.then(() => {
+      if (this.syncPromise === work) this.syncPromise = null;
+      if (this.current(epoch, owner) && this.subscribed) { this.clearRetry(); this.retryAttempt = 0; }
+    }, () => {
+      if (this.syncPromise === work) this.syncPromise = null;
+      this.report(epoch, owner);
+    });
     return work;
   }
 
@@ -232,7 +247,27 @@ export class VoiceInboxSync {
     return this.owner;
   }
 
+  private clearRetry(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+  }
+
+  /** Retry failed transport/history only. Healthy subscriptions never poll. */
+  private scheduleRetry(epoch: number, owner: string): void {
+    if (!this.current(epoch, owner) || this.retryTimer) return;
+    const delay = Math.min(60_000, 1_000 * 2 ** Math.min(this.retryAttempt++, 6));
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (!this.current(epoch, owner)) return;
+      // Rejoin a failed channel; a connected channel only needs history catch-up.
+      void this.connect(undefined, true).catch(() => {});
+    }, delay);
+    this.retryTimer.unref?.();
+  }
+
   private report(epoch: number, owner: string): void {
-    if (this.current(epoch, owner)) this.options.onError?.('Voice Inbox sync is unavailable. Saved notes are preserved; reconnect to catch up.');
+    if (!this.current(epoch, owner)) return;
+    this.scheduleRetry(epoch, owner);
+    this.options.onError?.('Voice Inbox sync is unavailable. Saved notes are preserved; reconnecting automatically.');
   }
 }

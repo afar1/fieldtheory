@@ -1,6 +1,7 @@
 import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
 import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
+import { VoiceRunnerPower } from './voiceRunnerPower';
 import { VoiceInboxService } from './voiceInboxService';
 import { VoiceInboxSync } from './voiceInboxSync';
 import { listVoiceLibraryFolders } from './voiceLibraryFolders';
@@ -8,7 +9,7 @@ import { codexTaskUrl } from '../shared/taskLinks';
 import { assertVoiceWorkSender, isVoiceWorkWindowTrusted } from './voiceWorkIpcTrust';
 import { VOICE_WORK_CHANNELS, type VoiceWorkSettings } from '../shared/voiceWork';
 import { LibraryLinkRelationReader } from './libraryLinkRelationReader';
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, powerSaveBlocker, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
 import path from 'path';
 import os from 'os';
@@ -7711,6 +7712,7 @@ let pendingOpenMarkdownPath: string | null = null;
  * Set up all IPC handlers for audio-related communication.
  */
 let voiceWorkManager: VoiceWorkManager | null = null;
+let voiceRunnerPower: VoiceRunnerPower | null = null;
 let voiceInboxStore: VoiceInboxService | null = null;
 let voiceInboxSync: VoiceInboxSync | null = null;
 let voicePreferencesReady: Promise<unknown> = Promise.resolve();
@@ -11406,6 +11408,7 @@ function setupClipboardIPCHandlers(): void {
 
   // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
+    voiceRunnerPower?.dispose();
     voiceWorkManager?.stop();
     voiceInboxSync?.stop();
     clearBrowserHelperState();
@@ -15505,7 +15508,9 @@ async function initTranscriberSystem(): Promise<void> {
     },
     onDeliveryWake: () => { void voiceInboxSync?.refresh().catch(() => log.warn('[Voice Inbox] Could not refresh task links.')); },
   });
+  voiceRunnerPower = new VoiceRunnerPower(powerMonitor, powerSaveBlocker);
   voiceWorkManager.on('stateChanged', (state) => {
+    voiceRunnerPower?.update(state);
     const window = clipboardHistoryWindow?.getWindow() ?? null;
     if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
       window.webContents.send(VOICE_WORK_CHANNELS.stateChanged, state);
@@ -15731,7 +15736,9 @@ async function initTranscriberSystem(): Promise<void> {
     }, 450);
   };
 
+  let voiceWakeGeneration = 0;
   powerMonitor.on('suspend', () => {
+    voiceWakeGeneration++;
     voiceWorkManager?.stop();
     voiceInboxSync?.stop();
     bookmarkSyncController?.suspend();
@@ -15744,8 +15751,13 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   powerMonitor.on('resume', () => {
-    void voiceWorkManager?.resume();
-    void voiceInboxSync?.resume().catch(() => log.warn('[Voice Inbox] Reconnect failed.'));
+    const generation = ++voiceWakeGeneration;
+    // Refresh the account before reconnecting private Voice delivery after sleep.
+    void (async () => {
+      await authManager?.refreshIfExpiringSoon().catch(() => log.warn('[Voice Inbox] Account refresh will retry after wake.'));
+      if (generation !== voiceWakeGeneration) return;
+      await Promise.all([voiceWorkManager?.resume(), voiceInboxSync?.resume()]);
+    })().catch(() => log.warn('[Voice Inbox] Wake recovery failed; saved requests are retained.'));
     bookmarkSyncController?.resume();
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');

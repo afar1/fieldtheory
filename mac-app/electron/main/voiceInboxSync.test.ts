@@ -105,7 +105,7 @@ beforeEach(() => {
   sync = new VoiceInboxSync({ auth: { getSession: () => activeOwner ? { user: { id: activeOwner } } : null,
     getSupabaseClient: () => h.client }, store, pageSize: 2, onError });
 });
-afterEach(() => { sync.stop(); fs.rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks(); });
+afterEach(() => { sync.stop(); fs.rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('Voice Inbox authenticated history and push sync', () => {
   it('subscribes before history, uses owner filters, and backfills only confirmed destinations', async () => {
@@ -217,4 +217,60 @@ describe('Voice Inbox authenticated history and push sync', () => {
     expect(h.requests.filter((request) => request.table === 'transcripts')).toHaveLength(2);
     const count = h.requests.length; await tick(); await tick(); expect(h.requests).toHaveLength(count);
   });
+
+  it('retries failed joins beyond a long outage, then stops retrying after history recovers', async () => {
+    vi.useFakeTimers();
+    const first = sync.authChanged();
+    const rejected = expect(first).rejects.toThrow(/connection/);
+    h.channels[0].status!('CHANNEL_ERROR'); await rejected;
+    for (const delay of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]) {
+      const count = h.channels.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(h.channels).toHaveLength(count);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.channels).toHaveLength(count + 1);
+      h.channels.at(-1)!.status!('CHANNEL_ERROR');
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    h.data.transcripts = [transcript(1)];
+    await vi.advanceTimersByTimeAsync(60000);
+    h.channels.at(-1)!.status!('SUBSCRIBED');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notes()).toHaveLength(1);
+    const count = h.channels.length;
+    const reads = h.requests.length;
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(h.channels).toHaveLength(count);
+    expect(h.requests).toHaveLength(reads);
+  });
+
+  it('retries history without a new event and resets backoff after successful catch-up', async () => {
+    vi.useFakeTimers();
+    await start(); h.fail(true);
+    await expect(sync.refresh()).rejects.toThrow(/history/);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    h.fail(false); h.data.transcripts = [transcript(1)];
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(notes()).toHaveLength(1); expect(h.channels).toHaveLength(1);
+    h.fail(true); await expect(sync.refresh()).rejects.toThrow(/history/);
+    const reads = h.requests.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.requests).toHaveLength(reads + 1);
+  });
+
+  it.each(['stop', 'logout', 'switch'] as const)('cancels pending recovery on %s', async (action) => {
+    vi.useFakeTimers();
+    const pending = sync.authChanged();
+    const rejected = expect(pending).rejects.toThrow(/connection/);
+    h.channels[0].status!('CHANNEL_ERROR'); await rejected;
+    if (action === 'stop') sync.stop();
+    else if (action === 'logout') { activeOwner = null; await sync.authChanged(); }
+    else { activeOwner = other; await start(); }
+    const count = h.channels.length;
+    const reads = h.requests.length;
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(h.channels).toHaveLength(count); expect(h.requests).toHaveLength(reads);
+  });
+
 });

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { VoiceWorkManager, type VoiceJob, type VoiceWorkManagerOptions } from './voiceWorkManager';
-import type { VoiceCodexRequest, VoiceCodexOutcome } from './voiceCodexRunner';
+import type { VoiceCodexRequest, VoiceCodexOutcome, VoiceCodexRuntimeStatus } from './voiceCodexRunner';
 import type { VoiceRoute, VoiceRouteRequest } from './voiceCodexRouter';
 
 const directories: string[] = [];
@@ -29,9 +29,11 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
   let enabled = false;
   let generation = 0;
   let failComplete = false;
+  let failClaim = false;
   const jobs: VoiceJob[] = [];
   const settings = () => ({ schema_version: 1, enabled, generation, enabled_at: new Date().toISOString(), server_now: new Date().toISOString() });
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'voice_jobs_claim' && failClaim) return { data: null, error: { code: 'network' } };
     let data: unknown = { ok: true };
     if (name === 'voice_delivery_configure') {
       if (enabled !== args.p_enabled) generation++;
@@ -61,7 +63,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
     return outcome;
   });
   const recoverRequest = vi.fn(async () => outcome);
-  const inspectRuntime = vi.fn(async () => ({ status: 'ready' as const, message: 'Codex is ready.' }));
+  const inspectRuntime = vi.fn<() => Promise<VoiceCodexRuntimeStatus>>(async () => ({ status: 'ready', message: 'Codex is ready.' }));
   const routeRequest = vi.fn(async (input: VoiceRouteRequest): Promise<VoiceRoute> => ({ decision: 'new', workspacePath: input.inboxPath }));
   const writeInboxReceipt = vi.fn(async () => {});
   const onTranscript = vi.fn();
@@ -86,6 +88,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
     setOwner: (next: string | null) => { owner = next; },
     setServer: (value: boolean, nextGeneration: number) => { enabled = value; generation = nextGeneration; },
     setFailComplete: (value: boolean) => { failComplete = value; },
+    setFailClaim: (value: boolean) => { failClaim = value; },
     async enable() {
       await manager.authChanged();
       await manager.updateSettings({ workspacePath: directory });
@@ -366,6 +369,80 @@ describe('bundled Voice push worker', () => {
     await h.manager.refreshStatus(); await settle();
     expect(h.client.channel).toHaveBeenCalledTimes(2);
     expect(h.runRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatically reconnects after a transport failure and catches up without periodic scans', async () => {
+    vi.useFakeTimers();
+    const h = harness(); await h.enable();
+    h.connectionError(); h.jobs.push(h.job());
+    await vi.advanceTimersByTimeAsync(1_000); await settle();
+    expect(h.client.channel).toHaveBeenCalledTimes(2);
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    const claims = h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_claim').length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_claim')).toHaveLength(claims);
+  });
+
+  it('backs off across a long outage, recovers automatically, and cancels recovery while suspended', async () => {
+    vi.useFakeTimers();
+    const h = harness(); await h.enable();
+    const channel = h.client.channel.mock.results[0].value;
+    channel.subscribe.mockImplementation((callback: (status: string) => void) => { queueMicrotask(() => callback('CHANNEL_ERROR')); return channel; });
+    h.connectionError();
+    await vi.advanceTimersByTimeAsync(300_000); await settle();
+    expect(channel.subscribe).toHaveBeenCalledTimes(9);
+    expect(h.manager.getState().status).toBe('connecting');
+    channel.subscribe.mockImplementation((callback: (status: string) => void) => { queueMicrotask(() => callback('SUBSCRIBED')); return channel; });
+    h.jobs.push(h.job());
+    await vi.advanceTimersByTimeAsync(60_000); await settle();
+    expect(channel.subscribe).toHaveBeenCalledTimes(10);
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    h.connectionError(); h.manager.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(channel.subscribe).toHaveBeenCalledTimes(10);
+  });
+
+  it('recovers an RPC outage without another broadcast and does not replay finished dispatch', async () => {
+    vi.useFakeTimers();
+    const h = harness(); await h.enable();
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    h.setFailClaim(true); h.jobs.push(h.job()); h.push(); await settle();
+    await vi.advanceTimersByTimeAsync(300_000); await settle();
+    expect(h.manager.getState().status).toBe('error');
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    h.setFailClaim(false);
+    await vi.advanceTimersByTimeAsync(60_000); await settle();
+    expect(h.manager.getState().status).toBe('ready');
+    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    expect(h.recoverRequest).not.toHaveBeenCalled();
+    const calls = h.rpc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.rpc).toHaveBeenCalledTimes(calls);
+  });
+
+  it('retries a temporarily unavailable Codex runtime but waits for invalid sign-in setup', async () => {
+    vi.useFakeTimers();
+    const h = harness(); await h.enable();
+    h.inspectRuntime.mockResolvedValueOnce({ status: 'unavailable', message: 'Temporarily unavailable.' });
+    await h.manager.resume();
+    expect(h.manager.getState().status).toBe('connecting');
+    const inspections = h.inspectRuntime.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000); await settle();
+    expect(h.inspectRuntime).toHaveBeenCalledTimes(inspections + 1);
+    h.inspectRuntime.mockResolvedValue({ status: 'sign_in_required', message: 'Sign in.' });
+    await h.manager.resume();
+    const stoppedAt = h.inspectRuntime.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.inspectRuntime).toHaveBeenCalledTimes(stoppedAt);
+    expect(h.manager.getState().status).toBe('needs_setup');
+  });
+
+  it('repairs an unsubscribed channel when the auth owner refreshes without changing accounts', async () => {
+    const h = harness(); await h.enable();
+    h.connectionError();
+    await h.manager.authChanged(); await settle();
+    expect(h.client.channel).toHaveBeenCalledTimes(2);
   });
 
   it('resumes a recorded thread safely if the dispatch boundary was never crossed', async () => {

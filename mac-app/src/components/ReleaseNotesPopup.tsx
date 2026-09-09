@@ -60,6 +60,10 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.56': [
+    'Voice requests keep your plugged-in Mac available while the screen is locked or off',
+    'Voice delivery reconnects after interruptions and checks saved requests without repeating dispatched work',
+  ],
   '0.3.55': [
     'Recents shows current Library titles, including Voice task titles, instead of stale recording filenames',
   ],
@@ -603,6 +607,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.56': 'September 8, 2026',
   '0.3.55': 'September 8, 2026',
   '0.3.54': 'September 8, 2026',
   '0.3.53': 'September 8, 2026',

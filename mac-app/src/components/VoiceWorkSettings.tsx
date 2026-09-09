@@ -225,7 +225,7 @@ export default function VoiceWorkSettings() {
         <SettingsSectionHeading
           theme={theme}
           title="Voice requests"
-          description="Save synced voice transcripts in Library and let Codex handle new requests. Keep Field Theory running and this Mac awake and online."
+          description="Save synced voice transcripts in Library and let Codex handle new requests. Keep Field Theory running and this Mac online."
         />
         <SettingsRow
           theme={theme}
@@ -318,6 +318,9 @@ export default function VoiceWorkSettings() {
           )}
           last
         />
+        <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
+          While Voice requests are enabled and Codex is signed in, Field Theory keeps this Mac awake when plugged in. Your screen can lock or turn off. Battery power, closing the lid without an external display, or choosing Sleep can pause delivery; saved requests resume when the Mac reconnects.
+        </p>
         <p style={{ margin: '10px 0 0', color: theme.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>
           Inbox contains your transcript and a link after it is sent to a task. Earlier synced recordings, “just context,” and “hold off” remain notes. Recordings kept local on your phone stay there.
         </p>
