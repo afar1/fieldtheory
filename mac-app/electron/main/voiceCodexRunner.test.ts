@@ -3,6 +3,7 @@ import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import {
   discoverVoiceCodexBinary,
+  voiceTurnStartedAt,
   inspectVoiceCodexRuntime,
   recoverVoiceRequest,
   runVoiceInternalTurn,
@@ -880,4 +881,14 @@ describe('owner-managed continuation queue', () => {
     expect(result.status).toBe('completed');
     expect(h.process.messages.some(m => m.method === 'thread/turns/list' && m.params.cursor === 'next')).toBe(true);
   });
+});
+
+it('normalizes actual Codex start timestamps and rejects absent or invalid evidence', () => {
+  const iso = '2026-09-09T20:00:00.000Z';
+  expect(voiceTurnStartedAt(Date.parse(iso) / 1000)).toBe(iso);
+  expect(voiceTurnStartedAt(Date.parse(iso))).toBe(iso);
+  expect(voiceTurnStartedAt(iso)).toBe(iso);
+  for (const value of [undefined, null, 'invalid', 0, -1, Infinity, Date.now() + 600_000]) {
+    expect(voiceTurnStartedAt(value)).toBeUndefined();
+  }
 });

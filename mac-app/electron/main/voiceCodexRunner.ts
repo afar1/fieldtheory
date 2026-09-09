@@ -60,14 +60,14 @@ export interface VoiceCodexRequest {
   onBeforeQueue?: (event: { threadId: string }) => void | Promise<void>;
   onQueued?: (event: { threadId: string; queuedSubmissionId: string }) => void | Promise<void>;
   onBeforeDispatch?: (event: { threadId: string; dispatchKey: string }) => void | Promise<void>;
-  onStarted?: (event: { threadId: string; turnId: string }) => void | Promise<void>;
+  onStarted?: (event: { threadId: string; turnId: string; startedAt?: string }) => void | Promise<void>;
   signal?: AbortSignal;
 }
 
 export interface VoiceCodexRecoveryRequest {
   threadId: string;
   queueSubmission?: VoiceQueueSubmission;
-  onStarted?: (event: { threadId: string; turnId: string }) => void | Promise<void>;
+  onStarted?: (event: { threadId: string; turnId: string; startedAt?: string }) => void | Promise<void>;
   turnId?: string;
   dispatchKey: string;
   workspacePath: string;
@@ -595,6 +595,13 @@ async function pauseQueueObservation(delay: number, signal?: AbortSignal): Promi
   });
 }
 
+export function voiceTurnStartedAt(value: unknown): string | undefined {
+  const milliseconds = typeof value === 'number' ? (value < 1e12 ? value * 1000 : value)
+    : typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(milliseconds) && milliseconds > 0 && milliseconds <= Date.now() + 300_000
+    ? new Date(milliseconds).toISOString() : undefined;
+}
+
 /** Read-only, job-scoped observation. No queue mutation or owner lease is ever retried here. */
 async function observeVoiceQueue(client: VoiceCodexClient, input: QueueObservation, options: VoiceCodexRunnerOptions): Promise<VoiceCodexOutcome> {
   const deadline = Date.now() + (options.turnTimeoutMs ?? 20 * 60_000);
@@ -620,7 +627,7 @@ async function observeVoiceQueue(client: VoiceCodexClient, input: QueueObservati
         const messages = items.filter(item => item.type === 'userMessage' && item.clientId === input.dispatchKey);
         if (!string(turn.id) || messages.length !== 1 || turnId && turnId !== turn.id) return uncertainQueue(input);
         turnId = turn.id as string;
-        if (!announced) { await input.onStarted?.({ threadId: input.threadId, turnId }); announced = true; }
+        if (!announced) { await input.onStarted?.({ threadId: input.threadId, turnId, startedAt: voiceTurnStartedAt(turn.startedAt) }); announced = true; }
         // A separate writer's live rollout can project as interrupted until its completion record arrives.
         projectedInterruption = turn.status === 'interrupted' && turn.completedAt == null;
         if (turn.status === 'completed' || turn.status === 'failed' && (turn.error != null || turn.completedAt != null)
@@ -712,7 +719,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
         void activeTransport.close();
       }, 2_000);
     };
-    const started = (id: string) => {
+    const started = (id: string, startedAt?: string) => {
       if (startedObserved || !threadId) return;
       if (turnId && turnId !== id) {
         protocolAmbiguous = true;
@@ -721,7 +728,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
       }
       turnId = id;
       startedObserved = true;
-      startedHook = Promise.resolve().then(() => input.onStarted?.({ threadId: threadId!, turnId: id })).catch(() => {
+      startedHook = Promise.resolve().then(() => input.onStarted?.({ threadId: threadId!, turnId: id, startedAt })).catch(() => {
         receiptFailure = failure(new RunnerError('receipt_failed', 'Codex started but its receipt could not be saved. Open the task before continuing.'), { threadId, turnId });
         requestStop(receiptFailure);
       });
@@ -735,7 +742,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
       const params = object(message.params);
       if (!dispatching || params.threadId !== threadId) return;
       const turn = object(params.turn);
-      if (message.method === 'turn/started' && string(turn.id)) started(turn.id as string);
+      if (message.method === 'turn/started' && string(turn.id)) started(turn.id as string, voiceTurnStartedAt(turn.startedAt));
       if (message.method === 'item/completed' && params.turnId === turnId) {
         const item = object(params.item);
         items.push(item.type === 'agentMessage' ? item : activityEvidence(item));

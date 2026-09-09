@@ -1,6 +1,7 @@
 import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
 import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
+import { VoiceRunnerTelemetry } from './voiceRunnerTelemetry';
 import { VoiceRunnerPower } from './voiceRunnerPower';
 import { VoiceInboxService } from './voiceInboxService';
 import { VoiceInboxSync } from './voiceInboxSync';
@@ -7712,6 +7713,7 @@ let pendingOpenMarkdownPath: string | null = null;
  * Set up all IPC handlers for audio-related communication.
  */
 let voiceWorkManager: VoiceWorkManager | null = null;
+let voiceRunnerTelemetry: VoiceRunnerTelemetry | null = null;
 let voiceRunnerPower: VoiceRunnerPower | null = null;
 let voiceInboxStore: VoiceInboxService | null = null;
 let voiceInboxSync: VoiceInboxSync | null = null;
@@ -11410,6 +11412,7 @@ function setupClipboardIPCHandlers(): void {
   app.on('will-quit', () => {
     voiceRunnerPower?.dispose();
     voiceWorkManager?.stop();
+    voiceRunnerTelemetry?.stop();
     voiceInboxSync?.stop();
     clearBrowserHelperState();
 
@@ -15508,8 +15511,33 @@ async function initTranscriberSystem(): Promise<void> {
     },
     onDeliveryWake: () => { void voiceInboxSync?.refresh().catch(() => log.warn('[Voice Inbox] Could not refresh task links.')); },
   });
+  voiceRunnerTelemetry = new VoiceRunnerTelemetry({
+    directory: path.join(app.getPath('userData'), 'voice-runner-telemetry'),
+    identity: () => voiceWorkManager?.getTelemetryIdentity() ?? null,
+    online: () => net.isOnline(),
+    report: async (args) => {
+      const client = authManager?.getSupabaseClient();
+      if (!client) return { ok: false };
+      const result = await client.rpc('voice_runner_report', args).abortSignal(AbortSignal.timeout(8_000));
+      return { ok: !result.error && result.data?.ok === true };
+    },
+  });
+  voiceRunnerTelemetry.start();
+  powerMonitor.on('lock-screen', () => voiceRunnerTelemetry?.record('lock'));
+  powerMonitor.on('unlock-screen', () => voiceRunnerTelemetry?.record('unlock'));
+  powerMonitor.on('suspend', () => voiceRunnerTelemetry?.record('sleep'));
+  powerMonitor.on('resume', () => voiceRunnerTelemetry?.record('wake'));
   voiceRunnerPower = new VoiceRunnerPower(powerMonitor, powerSaveBlocker);
+  let telemetryIdentity: string | null = null;
+  let telemetryConnected: boolean | null = null;
   voiceWorkManager.on('stateChanged', (state) => {
+    const identity = JSON.stringify(voiceWorkManager?.getTelemetryIdentity() ?? null);
+    if (identity !== telemetryIdentity) { telemetryIdentity = identity; voiceRunnerTelemetry?.refresh(); }
+    const connected = state.status === 'ready' || state.status === 'working';
+    if (connected !== telemetryConnected) {
+      telemetryConnected = connected;
+      voiceRunnerTelemetry?.record(connected ? 'connected' : 'disconnected');
+    }
     voiceRunnerPower?.update(state);
     const window = clipboardHistoryWindow?.getWindow() ?? null;
     if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {

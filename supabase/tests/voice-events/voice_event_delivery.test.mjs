@@ -69,6 +69,7 @@ before(async () => {
   `);
   const migration = await readFile(new URL('../../migrations/20260907233700_voice_event_delivery.sql', import.meta.url), 'utf8');
   await db.exec(migration);
+  await db.exec(await readFile(new URL('../../migrations/20260910001000_voice_delivery_timeline.sql', import.meta.url), 'utf8'));
 });
 
 after(async () => { await db?.close(); });
@@ -82,7 +83,8 @@ async function identity(id = owner, role = 'authenticated') {
 beforeEach(async () => {
   await db.exec('reset role');
   await db.exec(`truncate public.voice_jobs, public.voice_event_sources, public.voice_event_settings,
-    public.voice_event_config_cursors, public.transcripts, realtime.messages restart identity;
+    public.voice_event_config_cursors, public.transcripts, public.voice_delivery_events,
+    public.voice_runner_presence, public.voice_runner_events, realtime.messages restart identity;
     select set_config('test.broadcast_failure', 'false', false);
     select set_config('realtime.topic', '', false);`);
   await identity();
@@ -377,9 +379,10 @@ test('private wake signals contain no transcript text and restrictive RLS resist
   for (const message of messages) {
     assert.equal(message.topic, `voice-jobs:${owner}`);
     assert.equal(message.private, true);
-    assert.equal(message.event, 'voice_jobs_changed');
+    assert.ok(['voice_jobs_changed','voice_delivery_changed'].includes(message.event));
     assert.equal(message.payload.id, message.id, 'Supabase supplies its own transport message ID');
-    assert.deepEqual(Object.keys(message.payload).sort(), message.payload.job_id
+    assert.deepEqual(Object.keys(message.payload).sort(), message.event === 'voice_delivery_changed'
+      ? ['id','schema_version'] : message.payload.job_id
       ? ['generation', 'id', 'job_id', 'schema_version', 'wake_id'] : ['generation', 'id', 'schema_version', 'wake_id']);
   }
   await db.exec(`create policy test_broad_read on realtime.messages for select to anon, authenticated using(true);
@@ -433,4 +436,133 @@ test('failed configuration wakes roll back the cursor so the same command sequen
   const retried = await rpc('voice_delivery_configure', [true, 'mac-one', 1]);
   assert.equal(retried.applied, true);
   assert.equal(retried.enabled, true);
+});
+
+test('timeline distinguishes claim, dispatch authorization, queue acceptance, and actual start', async () => {
+  await enable();
+  const id = await insert();
+  const stages = async () => (await db.query(`select stage from voice_delivery_events where transcript_id=$1 order by recorded_at, case stage when 'uploaded' then 0 when 'received_by_mac' then 1 when 'queued' then 2 when 'started' then 3 else 4 end`, [id])).rows.map(row => row.stage);
+  assert.deepEqual(await stages(), ['uploaded']);
+  const job = (await claim()).jobs[0];
+  assert.deepEqual(await stages(), ['uploaded', 'received_by_mac']);
+  await recordAndBegin(job);
+  assert.deepEqual(await stages(), ['uploaded', 'received_by_mac']);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'queued','actual-thread'])).ok, true);
+  assert.deepEqual(await stages(), ['uploaded', 'received_by_mac', 'queued']);
+  await assert.rejects(rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'started','actual-thread']), /Invalid progress/);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'started','actual-thread','turn-one'])).ok, true);
+  await rpc('voice_jobs_complete', [job.job_id,job.lease_token,'completed','Done',{turn_id:'turn-one'}]);
+  assert.deepEqual(await stages(), ['uploaded','received_by_mac','queued','started','completed']);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'started','actual-thread','turn-one'])).ok, true);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'started','actual-thread','different-turn'])).ok, false);
+  assert.equal((await stages()).length, 5);
+});
+
+test('timeline rejects stale leases, different threads, cross-account reads and direct writes', async () => {
+  await enable(); await insert();
+  const job = (await claim()).jobs[0]; await recordAndBegin(job);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'queued','wrong-thread'])).ok, false);
+  await identity(other);
+  assert.deepEqual((await db.query('select * from voice_delivery_events')).rows, []);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'queued','actual-thread'])).ok, false);
+  await assert.rejects(db.query("insert into voice_delivery_events(job_id,user_id,transcript_id,revision,stage,occurred_at) values($1,$2,'x','x','started',now())",[job.job_id,other]), /permission denied/);
+  await identity(); await expire(job);
+  assert.equal((await rpc('voice_jobs_record_progress', [job.job_id,job.lease_token,'queued','actual-thread'])).ok, false);
+});
+
+test('completion backfills only explicit observed timestamps, never dispatch authorization', async () => {
+  await enable(); await insert();
+  const job = (await claim()).jobs[0]; await recordAndBegin(job);
+  const observed = new Date().toISOString();
+  await rpc('voice_jobs_complete',[job.job_id,job.lease_token,'completed','Done',{turn_id:'real-turn',queuedAt:observed,startedAt:observed}]);
+  const rows = (await db.query("select stage,turn_id,occurred_at from voice_delivery_events where stage in ('queued','started') order by stage")).rows;
+  assert.deepEqual(rows.map(r => [r.stage,r.turn_id]), [['queued',null],['started','real-turn']]);
+  assert.equal(new Date(rows[1].occurred_at).toISOString(), observed);
+});
+
+test('malformed completion observations do not reject results or invent start', async () => {
+  await enable(); await insert();
+  const job = (await claim()).jobs[0]; await recordAndBegin(job);
+  await rpc('voice_jobs_complete',[job.job_id,job.lease_token,'completed','Done',{turn_id:'real-turn',queuedAt:'2026-99-99T99:99:99Z',startedAt:12}]);
+  assert.deepEqual((await db.query("select stage from voice_delivery_events where stage in ('queued','started')")).rows, []);
+});
+
+test('runner state handles delayed observations and isolates owners without exposing content in wakes', async () => {
+  const latest = new Date().toISOString();
+  const older = new Date(Date.now()-10000).toISOString();
+  const id = '33333333-3333-4333-8333-333333333333';
+  assert.equal((await rpc('voice_runner_report',['mac-one','unlock',false,false,true,latest,id])).ok,true);
+  assert.equal((await rpc('voice_runner_report',['mac-one','unlock',false,false,true,latest,id])).ok,true);
+  await rpc('voice_runner_report',['mac-one','lock',true,false,true,older]);
+  assert.equal((await db.query('select locked from voice_runner_presence')).rows[0].locked,false);
+  assert.equal((await db.query('select * from voice_runner_events')).rows.length,2);
+  await identity(other);
+  assert.deepEqual((await db.query('select * from voice_runner_presence')).rows,[]);
+  assert.deepEqual((await db.query('select * from voice_runner_events')).rows,[]);
+  assert.equal((await rpc('voice_runner_report',['mac-one','unlock',false,false,true,latest,id])).ok,false);
+  await db.exec('reset role');
+  const messages = (await db.query("select payload from realtime.messages where event='voice_delivery_changed'")).rows;
+  assert.ok(messages.length > 0);
+  assert.ok(messages.every(({payload}) => Object.keys(payload).every(key => ['schema_version','id'].includes(key))));
+});
+
+test('completion cannot infer an actual start from a timestamp without a turn or from invalid dates', async () => {
+  await enable();
+  const samples = [
+    { startedAt: new Date().toISOString() },
+    { turn_id:'turn', startedAt:'infinity' },
+    { turn_id:'turn', startedAt:'2000-01-01T00:00:00Z' },
+    { turn_id:'turn', startedAt:'2099-01-01T00:00:00Z' },
+    { turn_id:'turn', startedAt:'2026-02-30T00:00:00Z' },
+  ];
+  for (const result of samples) {
+    await insert();
+    const job = (await claim()).jobs[0]; await recordAndBegin(job);
+    assert.equal((await rpc('voice_jobs_complete',[job.job_id,job.lease_token,'completed','Done',result])).ok,true);
+  }
+  assert.deepEqual((await db.query("select * from voice_delivery_events where stage='started'")).rows,[]);
+});
+
+test('reclaim retains the first Mac receipt and a telemetry wake outage does not undo accepted progress', async () => {
+  await enable(); await insert();
+  const first = (await claim()).jobs[0];
+  const firstEvent = (await db.query("select * from voice_delivery_events where stage='received_by_mac'")).rows[0];
+  await expire(first);
+  const next = (await claim('mac-two')).jobs[0]; await recordAndBegin(next);
+  await db.query("select set_config('test.broadcast_failure','true',false)");
+  assert.equal((await rpc('voice_jobs_record_progress',[next.job_id,next.lease_token,'started','actual-thread','turn'])).ok,true);
+  const events = (await db.query("select * from voice_delivery_events where stage='received_by_mac'")).rows;
+  assert.equal(events.length,1);
+  assert.equal(events[0].event_id,firstEvent.event_id);
+  assert.equal(events[0].worker_id,'mac-one');
+});
+
+test('runner input and grants restrict writable surface to authenticated structured observations', async () => {
+  await assert.rejects(rpc('voice_runner_report',['','lock']), /Invalid runner observation/);
+  await assert.rejects(rpc('voice_runner_report',['mac','freeform secret content']), /Invalid runner observation/);
+  await assert.rejects(rpc('voice_runner_report',['mac','lock',true,null,null,'infinity']), /Invalid runner observation/);
+  await assert.rejects(db.query("insert into voice_runner_presence(user_id,worker_id,last_seen_at,observed_at) values($1,'mac',now(),now())",[owner]), /permission denied/);
+  await identity(null,'anon');
+  await assert.rejects(rpc('voice_runner_report',['mac','heartbeat']), /permission denied/);
+  await assert.rejects(db.query('select * from voice_runner_events'), /permission denied/);
+});
+
+test('runner expected owner fences an authentication change before transport', async () => {
+  await identity(other);
+  await assert.rejects(rpc('voice_runner_report',['mac','lock',true,false,true,null,null,owner]), /Runner account changed/);
+  assert.deepEqual((await db.query('select * from voice_runner_events')).rows,[]);
+  assert.deepEqual((await db.query('select * from voice_runner_presence')).rows,[]);
+  assert.equal((await rpc('voice_runner_report',['mac','heartbeat',null,null,true,null,null,other])).ok,true);
+});
+
+test('timeline distinguishes server events, actual Codex time, and observation fallback', async () => {
+  await enable(); await insert();
+  const job = (await claim()).jobs[0]; await recordAndBegin(job);
+  const queued = await rpc('voice_jobs_record_progress',[job.job_id,job.lease_token,'queued','actual-thread']);
+  assert.equal(queued.event.time_source,'observed');
+  await assert.rejects(rpc('voice_jobs_record_progress',[job.job_id,job.lease_token,'started','actual-thread','turn',null,'invented']), /Invalid progress/);
+  const started = await rpc('voice_jobs_record_progress',[job.job_id,job.lease_token,'started','actual-thread','turn',new Date().toISOString(),'codex']);
+  assert.equal(started.event.time_source,'codex');
+  const uploaded = (await db.query("select time_source from voice_delivery_events where stage='uploaded'")).rows;
+  assert.deepEqual(uploaded,[{time_source:'server'}]);
 });

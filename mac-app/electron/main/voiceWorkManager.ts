@@ -52,6 +52,10 @@ interface LocalAttempt {
   turnId?: string;
   dispatchStarted?: boolean;
   queueSubmission?: VoiceQueueSubmission;
+  queuedAt?: string;
+  startedAt?: string;
+  startedAtSource?: 'codex' | 'observed';
+  progressPublished?: Array<'queued' | 'started'>;
   notifiedTurnId?: string;
   outcome?: VoiceCodexOutcome;
   leaseToken: string;
@@ -155,6 +159,11 @@ export class VoiceWorkManager extends EventEmitter {
   }
 
   getState(): VoiceWorkState { return structuredClone(this.state); }
+
+  getTelemetryIdentity(): { owner: string; workerId: string } | null {
+    return this.current() && this.snapshot?.settings.enabled && this.owner
+      ? { owner: this.owner, workerId: this.snapshot.workerId } : null;
+  }
 
   getRecordedTaskTitles(owner: string): ReadonlyMap<string, string> {
     const titles = new Map<string, string>();
@@ -551,11 +560,16 @@ export class VoiceWorkManager extends EventEmitter {
       }
       const route = attempt.route;
       const workspacePath = route?.workspacePath ?? inboxPath!;
-      const onStarted = async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
+      const onStarted = async ({ threadId, turnId, startedAt }: { threadId: string; turnId: string; startedAt?: string }) => {
         this.ensureCurrent(epoch);
         attempt.threadId = threadId; attempt.turnId = turnId;
+        if (!attempt.startedAt) {
+          attempt.startedAt = startedAt ?? new Date(this.now()).toISOString();
+          attempt.startedAtSource = startedAt ? 'codex' : 'observed';
+        }
         snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'working', summary: 'Codex is working.', canOpen: !!codexTaskUrl(threadId) };
         this.persist();
+        void this.publishProgress(job.job_id, attempt, epoch);
         if (attempt.notifiedTurnId !== turnId) {
           await this.options.onDispatched?.(job, { threadId, turnId });
           this.ensureCurrent(epoch);
@@ -620,9 +634,12 @@ export class VoiceWorkManager extends EventEmitter {
           onQueued: async ({ threadId, queuedSubmissionId }) => {
             this.ensureCurrent(epoch);
             attempt.queueSubmission = { state: 'accepted', queuedSubmissionId };
+            attempt.threadId = threadId;
+            attempt.queuedAt ??= new Date(this.now()).toISOString();
             snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'queued',
               summary: 'Waiting for this Codex conversation to start the request.', canOpen: !!codexTaskUrl(threadId) };
             this.persist();
+            void this.publishProgress(job.job_id, attempt, epoch);
             this.setStatus('ready', 'Your request is queued in its Codex conversation.');
           },
           onStarted,
@@ -718,6 +735,26 @@ export class VoiceWorkManager extends EventEmitter {
     }
   }
 
+  private async publishProgress(jobId: string, attempt: LocalAttempt, epoch: number): Promise<void> {
+    // Optional telemetry must never prevent dispatch, renewal, or result publication.
+    for (const stage of ['queued', 'started'] as const) {
+      const occurredAt = stage === 'queued' ? attempt.queuedAt : attempt.startedAt;
+      if (!occurredAt || attempt.progressPublished?.includes(stage) || !this.current(epoch)) continue;
+      try {
+        const result = await this.rpc<{ ok: boolean }>('voice_jobs_record_progress', {
+          p_job_id: jobId, p_lease_token: attempt.leaseToken, p_stage: stage,
+          p_thread_id: attempt.threadId ?? null, p_turn_id: stage === 'started' ? attempt.turnId ?? null : null,
+          p_occurred_at: occurredAt, p_time_source: stage === 'started' ? attempt.startedAtSource ?? 'observed' : 'observed',
+        }, epoch);
+        if (!this.current(epoch)) return;
+        if (result.ok) {
+          (attempt.progressPublished ??= []).push(stage);
+          this.persist();
+        }
+      } catch { return; }
+    }
+  }
+
   private receiptResult(outcome: VoiceCodexOutcome, attempt: LocalAttempt): Record<string, unknown> {
     const result = {
       thread_id: receiptText(outcome.threadId ?? attempt.threadId ?? '', 1024),
@@ -726,6 +763,9 @@ export class VoiceWorkManager extends EventEmitter {
       question: outcome.question ? receiptText(outcome.question) : undefined,
       error_code: outcome.errorCode ? receiptText(outcome.errorCode, 1024) : undefined,
       recovery_uncertain: outcome.recoveryUncertain === true,
+      queuedAt: attempt.queuedAt,
+      startedAt: attempt.startedAt,
+      startedAtSource: attempt.startedAtSource,
       response_truncated: false,
     };
     // The database caps result JSON at 64 KiB. Keep the complete answer locally.
@@ -748,7 +788,11 @@ export class VoiceWorkManager extends EventEmitter {
       }, epoch).then((result) => {
         if (this.controller !== controller || controller.signal.aborted) return;
         if (!result.ok) controller.abort();
-        else if (this.current(epoch)) this.scheduleRenew(job, epoch, controller);
+        else if (this.current(epoch)) {
+          const attempt = this.snapshot?.attempts[job.job_id];
+          if (attempt) void this.publishProgress(job.job_id, attempt, epoch);
+          this.scheduleRenew(job, epoch, controller);
+        }
       }).catch(() => { if (this.controller === controller) controller.abort(); });
     }, 25_000);
     this.renewTimer.unref?.();

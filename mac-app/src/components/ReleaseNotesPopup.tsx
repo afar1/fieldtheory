@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.59': [
+    'Voice reports actual pickup, queue acceptance, and task start to the delivery timeline',
+    'Runner availability records help explain delays across locking, sleep, and network changes',
+    'Saved delivery observations recover after temporary connection interruptions',
+  ],
   '0.3.58': [
     'Voice follow-ups can continue conversations already open in Codex',
     'Queued requests wait for Codex and keep the conversation’s existing permissions',
@@ -617,6 +622,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.59': 'September 9, 2026',
   '0.3.58': 'September 9, 2026',
   '0.3.57': 'September 9, 2026',
   '0.3.56': 'September 8, 2026',

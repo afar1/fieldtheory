@@ -725,3 +725,36 @@ it('exposes recorded task titles only after execution starts and only to their o
   h.setOwner(null); await h.manager.authChanged();
   expect(h.manager.getRecordedTaskTitles('account-a').size).toBe(0);
 });
+
+it('publishes queue and actual start independently before completion with durable timestamp backfill', async () => {
+  const h = harness(); await h.enable();
+  const actualStart = '2026-09-09T20:00:00.000Z';
+  h.runRequest.mockImplementation(async request => {
+    await request.onThreadStarted?.('thread-1');
+    await request.onBeforeQueue?.({ threadId: 'thread-1' });
+    await request.onQueued?.({ threadId: 'thread-1', queuedSubmissionId: 'queue-1' });
+    await settle();
+    expect(h.rpc.mock.calls.some(([name, args]) => name === 'voice_jobs_record_progress' && args.p_stage === 'queued')).toBe(true);
+    expect(h.rpc.mock.calls.some(([name, args]) => name === 'voice_jobs_record_progress' && args.p_stage === 'started')).toBe(false);
+    await request.onStarted?.({ threadId: 'thread-1', turnId: 'turn-1', startedAt: actualStart });
+    await settle();
+    expect(h.rpc.mock.calls.find(([name, args]) => name === 'voice_jobs_record_progress' && args.p_stage === 'started')?.[1])
+      .toMatchObject({ p_occurred_at: actualStart, p_turn_id: 'turn-1' });
+    return { threadId: 'thread-1', turnId: 'turn-1', status: 'completed', summary: 'Done', finalResponse: 'Done' };
+  });
+  h.jobs.push(h.job()); h.push(); await settle();
+  await settle(); await settle();
+  const result = h.rpc.mock.calls.find(([name]) => name === 'voice_jobs_complete')?.[1].p_result;
+  expect(result).toMatchObject({ startedAt: actualStart, startedAtSource: 'codex', queuedAt: expect.any(String) });
+});
+
+it('completes delivery if optional progress RPC is unavailable, retaining timestamps for backfill', async () => {
+  const h = harness(); await h.enable();
+  const original = h.rpc.getMockImplementation()!;
+  h.rpc.mockImplementation(async (name, args) => name === 'voice_jobs_record_progress'
+    ? { data: null, error: { code: 'missing_rpc' } } : original(name, args));
+  h.jobs.push(h.job()); h.push(); await settle();
+  expect(h.runRequest).toHaveBeenCalledTimes(1);
+  expect(h.rpc.mock.calls.find(([name]) => name === 'voice_jobs_complete')?.[1].p_result)
+    .toMatchObject({ startedAt: expect.any(String), startedAtSource: 'observed' });
+});
