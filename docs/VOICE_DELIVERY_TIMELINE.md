@@ -37,4 +37,12 @@ Applying the additive migration creates three owner-readable telemetry tables, t
 
 If rollout must be paused, keep or reinstall the previous clients; missing telemetry does not stop their existing delivery path. Remove the new trigger/functions/tables only after reviewing any diagnostic data that would be lost. Do not delete or reset `voice_jobs` or transcripts as a rollback step.
 
-Local Mac signing/notarization receipt pending.
+## Local Mac release
+
+- Version 0.3.59, source commit `8c7d18a0a`.
+- Artifact: `mac-app/release/Field-Theory-0.3.59-arm64-local.dmg`.
+- App and outer DMG notarization accepted; signatures, stapled tickets, Gatekeeper and disk-image integrity verified.
+- 8,852 packed file hashes and 441 compiled outputs verified; packaged Electron 31.7.7 / ABI 125 SQLite and terminal probes passed.
+- SHA-256: `a0d3f54265b6e4a4647e00b4973228db4ef2a71571b2782e2fd9e95bf96b7c68`.
+- Detailed receipt: `mac-app/release/local-verification-0.3.59.json`.
+- Local only: not published or installed. Database migration remains unapplied.
