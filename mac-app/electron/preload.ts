@@ -1141,7 +1141,8 @@ export interface ClipboardAPI {
 
   // Word substitutions - correction pairs for transcription
   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
-  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
+  getWordSubstitutionSyncStatus?: () => Promise<string>;
+  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => Promise<boolean>;
 
   // App voice aliases - custom voice trigger words for app switching
   getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
@@ -2228,8 +2229,9 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:getWordSubstitutions');
   },
 
-  setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>): Promise<boolean> => {
-    return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions);
+  getWordSubstitutionSyncStatus: async (): Promise<string> => ipcRenderer.invoke('clipboard:getWordSubstitutionSyncStatus'),
+  setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions, base);
   },
 
   // App voice aliases - custom voice trigger words for app switching.

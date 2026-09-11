@@ -588,6 +588,17 @@ async function fetchWebPageHtml(url: string, redirects = 0): Promise<string> {
 export class BookmarksManager extends EventEmitter {
   private watcher: chokidar.FSWatcher | null = null;
   private watcherPending = false;
+  private parentWatcher: chokidar.FSWatcher | null = null;
+  private destroyed = false;
+  private destroyPromise?: Promise<void>;
+  private pendingCloses = new Set<Promise<void>>();
+
+  private closeWatcher(watcher: chokidar.FSWatcher): Promise<void> {
+    const pending = Promise.resolve().then(() => watcher.close());
+    this.pendingCloses.add(pending);
+    void pending.then(() => this.pendingCloses.delete(pending), (error) => log.error('Bookmarks watcher close failed:', error));
+    return pending;
+  }
   private cached: BookmarksSnapshot | null = null;
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   private parsedInput: { gate: FileGate; rows: Map<string, Bookmark> } | null = null;
@@ -790,6 +801,7 @@ export class BookmarksManager extends EventEmitter {
   }
 
   startWatcher(): void {
+    if (this.destroyed) return;
     if (this.watcher || this.watcherPending) return;
 
     const dir = bookmarksDir();
@@ -798,9 +810,12 @@ export class BookmarksManager extends EventEmitter {
       const parent = path.dirname(dir);
       if (!fs.existsSync(parent)) return;
       const parentWatcher = chokidar.watch(parent, { depth: 0, ignoreInitial: true });
+      this.parentWatcher = parentWatcher;
       parentWatcher.on('addDir', (dirPath) => {
+        if (this.destroyed || this.parentWatcher !== parentWatcher) return;
         if (path.basename(dirPath) === path.basename(dir)) {
-          parentWatcher.close();
+          void this.closeWatcher(parentWatcher);
+          this.parentWatcher = null;
           this.watcherPending = false;
           this.startWatcher();
         }
@@ -837,6 +852,20 @@ export class BookmarksManager extends EventEmitter {
     this.changeTimer = null;
     const watcher = this.watcher;
     this.watcher = null;
-    await watcher?.close();
+    const parent = this.parentWatcher;
+    this.parentWatcher = null;
+    this.watcherPending = false;
+    const results = await Promise.allSettled([
+      ...(watcher ? [this.closeWatcher(watcher)] : []),
+      ...(parent ? [this.closeWatcher(parent)] : []),
+      ...this.pendingCloses,
+    ]);
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (errors.length) throw new AggregateError(errors.map((result) => result.reason), 'Bookmarks cleanup failed');
+  }
+
+  destroy(): Promise<void> {
+    this.destroyed = true;
+    return this.destroyPromise ??= this.stopWatcher();
   }
 }

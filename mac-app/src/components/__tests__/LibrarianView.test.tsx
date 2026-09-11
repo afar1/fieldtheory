@@ -1361,7 +1361,8 @@ describe('LibrarianView render', () => {
       initialOpenTarget={{ kind: 'artifact', path: notePath, contentMode: mode }} />);
     const heading = await screen.findByRole('heading', { name: 'Please inspect the left … me what you find.' });
     const documentPanel = heading.parentElement!;
-    const button = await within(documentPanel).findByRole('button', { name: 'Open task' });
+    const button = await within(documentPanel).findByRole('button', { name: 'Codex' });
+    expect(button.getAttribute('title')).toBe('Open task in Codex');
     const editor = documentPanel.querySelector('.cm-content')!;
     expect(editor.textContent).toBe(transcript);
     expect(editor.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

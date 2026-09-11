@@ -60,6 +60,33 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.66': [
+    'Word replacements can sync between your Mac and iPhone once account sync is enabled.',
+    'Offline word edits stay on your device and sync when connectivity returns.',
+  ],
+  '0.3.65': [
+    'Fixed speech engine setup failing on Macs with custom Python installation settings',
+    'Improved shutdown of speech engines and background services when quitting',
+    'Fixed a file-watcher cleanup issue that could cause a crash when quitting',
+    'Tables use a single horizontal scrollbar, with line numbers aligned around tables and wrapped text',
+  ],
+  '0.3.64': [
+    'Improved file-watcher cleanup to prevent a crash when quitting',
+  ],
+  '0.3.63': [
+    'Improved shutdown of speech engines and background services when quitting',
+    'Fixed speech engine setup failing on Macs with custom Python installation settings',
+  ],
+  '0.3.62': [
+    'Fixed speech engine setup failing on Macs with custom Python installation settings',
+  ],
+  '0.3.61': [
+    'Tables use a single horizontal scrollbar',
+  ],
+  '0.3.60': [
+    'Tables now have one line number for the whole table',
+    'Line numbers stay aligned around tables, headings, and wrapped text',
+  ],
   '0.3.59': [
     'Voice reports actual pickup, queue acceptance, and task start to the delivery timeline',
     'Runner availability records help explain delays across locking, sleep, and network changes',
@@ -622,6 +649,13 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.66': 'September 11, 2026',
+  '0.3.65': 'September 10, 2026',
+  '0.3.64': 'September 10, 2026',
+  '0.3.63': 'September 10, 2026',
+  '0.3.62': 'September 10, 2026',
+  '0.3.61': 'September 10, 2026',
+  '0.3.60': 'September 10, 2026',
   '0.3.59': 'September 9, 2026',
   '0.3.58': 'September 9, 2026',
   '0.3.57': 'September 9, 2026',

@@ -1,0 +1,7 @@
+{
+  "name": "field-theory-word-substitution-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test word_substitutions.test.mjs" },
+  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
+}

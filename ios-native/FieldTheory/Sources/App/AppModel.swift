@@ -98,6 +98,7 @@ final class AppModel {
         let recorder = recorderOverride ?? Self.makeRecorder()
         self.recorder = recorder
         self.productionRecorder = recorder
+        recorder.replaceWords = { [weak sync] text in sync?.wordSubstitutions.apply(to: text) ?? text }
         recorder.setWorkEnabled(auth.hasIdentity && opened.error == nil)
         wireStorageErrors()
         if let error = opened.error {
@@ -191,6 +192,7 @@ final class AppModel {
         previewMode = false
 #endif
         await sync.stopAndWait()
+        sync.wordSubstitutions.selectUser(nil)
         auth.clearIdentity()
         do {
             try await recorder.discardRecordings()
@@ -199,6 +201,7 @@ final class AppModel {
         }
         await auth.signOut()
         // A token-refresh event may have repersisted identity while cleanup awaited.
+        sync.wordSubstitutions.selectUser(nil)
         auth.clearIdentity()
         await wipeLocalData()
         recorder.setWorkEnabled(false)
@@ -482,6 +485,7 @@ final class AppModel {
             return
         }
 
+        sync.wordSubstitutions.selectUser(userId?.uuidString.lowercased())
         if let userId {
             let ownerID = userId.uuidString.lowercased()
             var databaseActivated = false

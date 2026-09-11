@@ -38,6 +38,12 @@ struct SettingsView: View {
                 Section {
                     modelRow
                     Toggle("Copy transcripts automatically", isOn: $settings.autoCopyTranscripts)
+                    NavigationLink("Word replacements") {
+                        WordReplacementsView(store: model.sync.wordSubstitutions)
+                    }
+                    if let error = model.sync.wordSubstitutionSyncError {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Ambition")
                 } footer: {
@@ -336,5 +342,68 @@ private struct SettingsFormLayout: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+private struct WordReplacementsView: View {
+    let store: WordSubstitutionSettings
+    @State private var from = ""
+    @State private var to = ""
+    @State private var editingFrom: String?
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Heard word or phrase", text: $from)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Replace with", text: $to)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button(editingFrom == nil ? "Add replacement" : "Save replacement") {
+                    let source = from.trimmingCharacters(in: .whitespacesAndNewlines)
+                    var pairs = store.pairs
+                    if let editingFrom, let index = pairs.firstIndex(where: { $0.from == editingFrom }) {
+                        pairs[index] = WordSubstitution(from: source, to: to)
+                    } else {
+                        pairs.append(WordSubstitution(from: source, to: to))
+                    }
+                    store.set(pairs)
+                    from = ""
+                    to = ""
+                    editingFrom = nil
+                }
+                .disabled(from.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || from.count > 500 || to.count > 2000
+                    || store.pairs.contains { $0.from == from.trimmingCharacters(in: .whitespacesAndNewlines) && $0.from != editingFrom })
+                if editingFrom != nil {
+                    Button("Cancel", role: .cancel) { editingFrom = nil; from = ""; to = "" }
+                }
+            } footer: {
+                Text("Replacements apply to new transcripts and sync with your Mac when online. Tap a replacement to edit it; swipe to delete.")
+            }
+            Section("Replacements") {
+                ForEach(store.pairs, id: \.from) { pair in
+                    Button {
+                        editingFrom = pair.from
+                        from = pair.from
+                        to = pair.to
+                    } label: {
+                        HStack {
+                            Text(pair.from)
+                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                            Text(pair.to.isEmpty ? "(remove)" : pair.to)
+                        }
+                    }
+                }
+                .onDelete { indices in
+                    var pairs = store.pairs
+                    pairs.remove(atOffsets: indices)
+                    store.set(pairs)
+                    editingFrom = nil
+                    from = ""
+                    to = ""
+                }
+            }
+        }
+        .navigationTitle("Word replacements")
     }
 }

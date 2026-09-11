@@ -638,7 +638,8 @@ interface ClipboardAPI {
 
   // Word substitutions - correction pairs for transcription
   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
-  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
+  getWordSubstitutionSyncStatus?: () => Promise<string>;
+  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => Promise<boolean>;
 
   // App voice aliases - custom voice trigger words for app switching
   getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;

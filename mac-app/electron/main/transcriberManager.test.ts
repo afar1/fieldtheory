@@ -69,6 +69,32 @@ function writePcmWav(filePath: string, durationMs = 100): void {
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
 // since both engines use the shared StdioJsonServer class.
 
+describe('TranscriberManager shutdown', () => {
+  it.each([false, true])('waits for Parakeet exit and blocks recreation when overlay cleanup fails=%s', async failOverlay => {
+    let finish!: () => void;
+    const shutdown = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const manager = Object.assign(Object.create(TranscriberManager.prototype), {
+      parakeetServer: { shutdown },
+      unregisterAbandonHotkey: vi.fn(),
+      detachStandardChunkListener: vi.fn(),
+      clearStandardLiveTranscript: vi.fn(),
+      overlay: { destroy: vi.fn(() => { if (failOverlay) throw new Error('window destroyed'); }) },
+    });
+    const pending = manager.destroy();
+    expect(manager.destroy()).toBe(pending);
+    expect(() => manager.getOrCreateParakeetServer('parakeet')).toThrow('shutting down');
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    finish();
+    if (failOverlay) await expect(pending).rejects.toThrow('Transcription cleanup failed');
+    else await pending;
+    expect(shutdown).toHaveBeenCalledOnce();
+  });
+});
+
 describe('formatWhisperSpeakerTurnTranscript', () => {
   it('removes whisper.cpp tinydiarize markers without inventing speakers', () => {
     const text = formatWhisperSpeakerTurnTranscript([

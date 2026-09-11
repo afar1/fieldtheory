@@ -247,6 +247,8 @@ export class TranscriberManager extends EventEmitter {
   // Persistent JSON server for Parakeet engines.
   // All use the same stdin/stdout JSON protocol via StdioJsonServer.
   private parakeetServer: StdioJsonServer | null = null;
+  private destroyPromise: Promise<void> | null = null;
+  private destroyed = false;
   private parakeetServerEngine: ParakeetEngine | null = null;
 
   private abandonHotkeyRegistered: boolean = false;
@@ -2924,6 +2926,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private getOrCreateParakeetServer(engine: ParakeetEngine): StdioJsonServer {
+    if (this.destroyed) throw new Error('Transcription is shutting down');
     if (!this.parakeetServer || this.parakeetServerEngine !== engine) {
       this.parakeetServer?.stop();
       this.parakeetServer = new StdioJsonServer({
@@ -3760,7 +3763,7 @@ export class TranscriberManager extends EventEmitter {
       const matches = result.match(regex);
       
       if (matches) {
-        result = result.replace(regex, to);
+        result = result.replace(regex, () => to);
         totalReplacements += matches.length;
       }
     }
@@ -4878,18 +4881,27 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Cleanup resources.
    */
-  destroy(): void {
-    this.unregisterAbandonHotkey();
-    this.detachStandardChunkListener();
-    this.clearStandardLiveTranscript();
-
-    // Unregister transcription hotkeys via HotkeyManager
-    const hotkeyManager = getHotkeyManager();
-    hotkeyManager.unregister('transcription');
-    hotkeyManager.unregister('transcriptionSecondary');
-    this.registeredHotkey = null;
-    this.registeredSecondaryHotkey = null;
-
-    this.overlay.destroy();
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise;
+    this.destroyed = true;
+    const serverShutdown = this.parakeetServer?.shutdown() ?? Promise.resolve();
+    this.parakeetServer = null;
+    this.parakeetServerEngine = null;
+    const cleanup = Promise.resolve().then(() => {
+      this.unregisterAbandonHotkey();
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
+      const hotkeyManager = getHotkeyManager();
+      hotkeyManager.unregister('transcription');
+      hotkeyManager.unregister('transcriptionSecondary');
+      this.registeredHotkey = null;
+      this.registeredSecondaryHotkey = null;
+      this.overlay.destroy();
+    });
+    this.destroyPromise = Promise.allSettled([serverShutdown, cleanup]).then(results => {
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (errors.length) throw new AggregateError(errors.map(result => result.reason), 'Transcription cleanup failed');
+    });
+    return this.destroyPromise;
   }
 }

@@ -308,6 +308,7 @@ interface Preferences {
 
   // Word substitutions - pairs of [from, to] for transcription correction.
   // Example: ["main", "main"] for correcting "main" state to "main" branch.
+  wordSubstitutionsSynced?: Array<{ from: string; to: string }>;
   wordSubstitutions?: Array<{ from: string; to: string }>;
 
   // Data retention - how long to keep clipboard history items.
@@ -681,7 +682,7 @@ export class PreferencesManager {
    * Save preferences to disk.
    * Serialized to prevent race conditions when multiple saves occur during user switch.
    */
-  async save(prefs: Partial<Preferences>): Promise<void> {
+  async save(prefs: Partial<Preferences>, isCurrent: () => boolean = () => true): Promise<void> {
     // Serialize save operations to prevent race conditions
     const previousLock = this.saveLock;
     let releaseLock: () => void;
@@ -691,7 +692,7 @@ export class PreferencesManager {
 
     try {
       await previousLock;  // Wait for previous save to complete
-      await this.saveInternal(prefs);
+      if (isCurrent()) await this.saveInternal(prefs);
     } finally {
       releaseLock!();
     }

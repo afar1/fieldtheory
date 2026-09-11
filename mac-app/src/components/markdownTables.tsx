@@ -96,14 +96,6 @@ export function observeTableViewport(wrapper: HTMLElement, scroller: HTMLElement
     const remaining = total - width;
     wrapper.classList.toggle('can-scroll-left', scroller.scrollLeft > 1);
     wrapper.classList.toggle('can-scroll-right', remaining - scroller.scrollLeft > 1);
-    wrapper.classList.toggle('has-horizontal-overflow', remaining > 1);
-    const thumb = wrapper.querySelector<HTMLElement>('.cm-markdown-table-overflow-thumb');
-    if (thumb) {
-      const fraction = total > 0 ? Math.min(1, width / total) : 1;
-      const thumbWidth = Math.max(8, fraction * 100);
-      thumb.style.width = `${thumbWidth}%`;
-      thumb.style.left = `${remaining > 0 ? Math.max(0, Math.min(1, scroller.scrollLeft / remaining)) * (100 - thumbWidth) : 0}%`;
-    }
   };
   const measure = () => {
     if (disposed || !wrapper.isConnected) return;
@@ -234,10 +226,6 @@ class MarkdownTableWidget extends WidgetType {
         });
       });
     });
-    const track = wrapper.appendChild(document.createElement('div'));
-    track.className = 'cm-markdown-table-overflow-track';
-    track.setAttribute('aria-hidden', 'true');
-    track.appendChild(document.createElement('div')).className = 'cm-markdown-table-overflow-thumb';
     tableCleanups.set(wrapper, observeTableViewport(wrapper, scroller, view.contentDOM));
     return wrapper;
   }
@@ -261,15 +249,6 @@ export const markdownTablesExtension = [markdownTableRanges, tableDecorations,
     width: '100%', minWidth: '0', overflowX: 'auto', overscrollBehaviorX: 'contain',
     // Flex/grid intrinsic sizing must never propagate the table width to prose.
     contain: 'inline-size', paddingBottom: '6px',
-  },
-  '.cm-markdown-table-overflow-track': {
-    display: 'none', position: 'relative', height: '4px', marginTop: '2px',
-    background: 'color-mix(in srgb, currentColor 5%, transparent)', borderRadius: '4px', pointerEvents: 'none',
-  },
-  '.has-horizontal-overflow > .cm-markdown-table-overflow-track': { display: 'block' },
-  '.cm-markdown-table-overflow-thumb': {
-    position: 'absolute', height: '100%', borderRadius: '4px',
-    background: 'color-mix(in srgb, currentColor 24%, transparent)',
   },
   '.cm-markdown-table-scroll:focus-visible' : { outline: '2px solid currentColor', outlineOffset: '3px' },
   '.cm-markdown-table-viewport.can-scroll-left .cm-markdown-table-scroll': {

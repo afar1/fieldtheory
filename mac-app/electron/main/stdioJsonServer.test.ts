@@ -187,6 +187,71 @@ describe('StdioJsonServer', () => {
     expect(() => server.stop()).not.toThrow();
   });
 
+  it('shutdown waits for the child to close, is idempotent, and prevents restart', async () => {
+    const server = createServer();
+    const start = server.start();
+    proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+    await start;
+    const closed = vi.fn();
+    const pending = server.shutdown();
+    void pending.then(closed);
+    expect(server.shutdown()).toBe(pending);
+    expect(proc.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await flushMicrotasks();
+    expect(closed).not.toHaveBeenCalled();
+    await expect(server.start()).rejects.toThrow('shutting down');
+    proc.emit('close', 0);
+    await pending;
+    expect(closed).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('shutdown terminates only its child if graceful termination is ignored', async () => {
+    vi.useFakeTimers();
+    try {
+      const server = createServer();
+      const start = server.start();
+      proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+      await start;
+      const pending = server.shutdown();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      proc.emit('close', null, 'SIGKILL');
+      await pending;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports failure if the owned child never reports exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const server = createServer();
+      const start = server.start();
+      proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+      await start;
+      const pending = server.shutdown();
+      const assertion = expect(pending).rejects.toThrow('did not exit');
+      await vi.advanceTimersByTimeAsync(4_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shutdown during preflight prevents delayed startup from spawning a child', async () => {
+    let finish!: () => void;
+    const server = createServer({ preStart: () => new Promise<void>(resolve => { finish = resolve; }) });
+    const starting = server.start();
+    const assertion = expect(starting).rejects.toThrow('startup cancelled');
+    await server.shutdown();
+    finish();
+    await assertion;
+    expect(mockSpawn).not.toHaveBeenCalled();
+    await expect(server.start()).rejects.toThrow('shutting down');
+  });
+
   // -- send --
 
   it('sends JSON command and resolves with response', async () => {

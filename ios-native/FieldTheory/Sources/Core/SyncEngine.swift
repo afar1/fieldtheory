@@ -322,10 +322,13 @@ final class SyncEngine {
     private let settings: AppSettings
     private let library: LibraryStore
     private let river: RiverStore
+    let wordSubstitutions = WordSubstitutionSettings()
+    private(set) var wordSubstitutionSyncError: String?
     private let transcripts: TranscriptStore
     private let voiceTransport: VoiceSyncTransport
     private let backgroundTasks: VoiceSyncBackgroundTaskManaging
     private let retryDelaySeconds: Double
+    private let wordSubstitutionRequest: ([WordSubstitutionChange]) async throws -> [WordSubstitution]
 
     private(set) var status: SyncStatus = .idle
     private(set) var lastSyncAt: Date?
@@ -350,6 +353,7 @@ final class SyncEngine {
 
     init(client: SupabaseClient, db: Database, settings: AppSettings,
          library: LibraryStore, river: RiverStore, transcripts: TranscriptStore,
+         wordSubstitutionRequest: (([WordSubstitutionChange]) async throws -> [WordSubstitution])? = nil,
          voiceTransport: VoiceSyncTransport? = nil,
          backgroundTasks: VoiceSyncBackgroundTaskManaging? = nil,
          retryDelaySeconds: Double = 10) {
@@ -362,17 +366,23 @@ final class SyncEngine {
         self.voiceTransport = voiceTransport ?? SupabaseVoiceSyncTransport(client: client)
         self.backgroundTasks = backgroundTasks ?? ApplicationVoiceSyncBackgroundTasks()
         self.retryDelaySeconds = retryDelaySeconds
+        self.wordSubstitutionRequest = wordSubstitutionRequest ?? { changes in
+            struct Parameters: Encodable { let changes: [WordSubstitutionChange] }
+            return try await client.rpc("sync_word_substitutions",
+                params: Parameters(changes: changes)).execute().value
+        }
 
-        // Voice is the only account-synced content in this release. Starting
-        // immediately also acquires finite background time before a user locks
+        // Starting immediately acquires finite background time before a user locks
         // the phone after ending a recording.
         transcripts.onLocalChange = { [weak self] in self?.scheduleDebounced(after: 0) }
+        wordSubstitutions.onChange = { [weak self] in self?.scheduleDebounced() }
     }
 
     func start(userId: UUID, email: String?) async {
         await stopAndWait()
         let normalizedUserID = userId.uuidString.lowercased()
         foreground = UIApplication.shared.applicationState != .background
+        wordSubstitutions.selectUser(normalizedUserID)
         self.userId = normalizedUserID
         self.userEmail = email?.lowercased()
         sessionFence.activate(userId: normalizedUserID)
@@ -613,6 +623,16 @@ final class SyncEngine {
         } catch {
             if uploadError == nil { uploadError = error }
         }
+        do {
+            try requireActive(lease)
+            try await syncWordSubstitutions(userId: lease.userId)
+            try requireActive(lease)
+            wordSubstitutionSyncError = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            wordSubstitutionSyncError = "Saved on this iPhone. Sync unavailable; will retry."
+        }
         guard isActive(lease) else { return }
         if let uploadError {
             status = .error("voice: \(uploadError.localizedDescription)")
@@ -655,6 +675,13 @@ final class SyncEngine {
     }
 
     // MARK: - Library
+
+    private func syncWordSubstitutions(userId: String) async throws {
+        let revision = wordSubstitutions.revision
+        let pairs = try await wordSubstitutionRequest(wordSubstitutions.changes())
+        guard !Task.isCancelled, self.userId == userId else { return }
+        wordSubstitutions.accept(pairs, userId: userId, revision: revision)
+    }
 
     private func normalizeSourcePath(_ sourcePath: String?, title: String) -> String? {
         LibraryPaths.normalize(sourcePath, title: title)

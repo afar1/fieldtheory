@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { history, undo } from '@codemirror/commands';
-import { createRenderedMarkdownEditorPresentationExtension } from '../MarkdownCodeEditor';
+import { buildVisualLineNumberOverlayRows, createRenderedMarkdownEditorPresentationExtension, getMarkdownCodeEditorVisualLineMap } from '../MarkdownCodeEditor';
 import { markdownTablesExtension, parseMarkdownTables, tableViewportLayout, observeTableViewport } from '../markdownTables';
 
 const source = 'Intro\n\n| Example | Before | After |\n| --- | :---: | ---: |\n| Small bug | **Review** | Fix it |\n| Empty | | a\\|b |\n\nEnd';
@@ -34,6 +34,48 @@ describe('native Markdown tables', () => {
     expect(document.querySelectorAll('td')[1].style.textAlign).toBe('center');
     expect(editor.state.doc.toString()).toBe(source);
   });
+  it('counts a rendered table once and keeps following wrapped prose in order', () => {
+    const editor = mount();
+    // Supply layout only; CodeMirror builds the real replacement blocks and DOM.
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      const element = this.commonAncestorContainer as HTMLElement;
+      const top = element.textContent === 'End' ? 300 : 20;
+      return (element.textContent?.trim() ? [
+        { top, width: 100, height: 20 },
+        ...(element.textContent === 'End' ? [{ top: top + 20, width: 60, height: 20 }] : []),
+      ] : []) as unknown as DOMRectList;
+    });
+    const rows = getMarkdownCodeEditorVisualLineMap(editor);
+    expect(rows.map(row => [row.visualLine, row.sourceLine, row.rowInSourceLine])).toEqual([
+      [1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 7, 1], [5, 8, 1], [6, 8, 2],
+    ]);
+    expect(rows[2].rowsInSourceLine).toBe(1);
+  });
+
+  it('anchors one number to each table and highlights it for selection in any cell', () => {
+    const editor = mount();
+    const tableSource = '| A | B |\n| --- | --- |\n| x | y |';
+    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: `${tableSource}\n\n${tableSource}` } });
+    const tables = [...document.querySelectorAll<HTMLElement>('.cm-markdown-table-viewport')];
+    tables.forEach((element, index) => {
+      vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({ top: 100 + index * 300 } as DOMRect);
+    });
+    const blankLine = [...editor.contentDOM.querySelectorAll<HTMLElement>('.cm-line')].find(element => !element.textContent?.trim())!;
+    vi.spyOn(blankLine, 'getBoundingClientRect').mockReturnValue({ top: 250 } as DOMRect);
+    const overlayHost = document.createElement('div');
+    vi.spyOn(overlayHost, 'getBoundingClientRect').mockReturnValue({ top: 40 } as DOMRect);
+    editor.dispatch({ selection: { anchor: tableSource.indexOf('x'), head: tableSource.indexOf('y') + 1 } });
+    const overlay = buildVisualLineNumberOverlayRows(editor, overlayHost);
+    expect(overlay.rows.filter(row => row.top === 60 || row.top === 360)).toEqual([
+      { number: '1', top: 60, selected: true },
+      { number: '3', top: 360, selected: false },
+    ]);
+    expect(overlay.rows).toHaveLength(3);
+    // Blank lines use their actual DOM position, including table margins.
+    expect(overlay.rows[1]).toEqual({ number: '2', top: 210, selected: false });
+    expect(getMarkdownCodeEditorVisualLineMap(editor).map(row => row.sourceLine)).toEqual([1, 4, 5]);
+  });
+
   it('lets keyboard users reach both ends without moving the editor selection', () => {
     const editor = mount(true);
     const scroller = document.querySelector<HTMLElement>('.cm-markdown-table-scroll')!;
@@ -133,8 +175,6 @@ describe('table viewport containment', () => {
     const wrapper = content.appendChild(document.createElement('div'));
     const scroller = wrapper.appendChild(document.createElement('div'));
     scroller.appendChild(document.createElement('table'));
-    const thumb = wrapper.appendChild(document.createElement('div'));
-    thumb.className = 'cm-markdown-table-overflow-thumb';
     let paneWidth = 1000;
     let viewportWidth = 952;
     Object.defineProperty(pane, 'clientWidth', { get: () => paneWidth });
@@ -146,8 +186,6 @@ describe('table viewport containment', () => {
     callbacks.shift()!(0);
     callbacks.shift()!(0);
     expect(wrapper.style.width).toBe('952px');
-    expect(wrapper.classList.contains('has-horizontal-overflow')).toBe(true);
-    expect(thumb.style.width).toBe('68%');
     expect(wrapper.style.marginLeft).toBe('-76px');
     expect(wrapper.classList.contains('can-scroll-left')).toBe(false);
     expect(wrapper.classList.contains('can-scroll-right')).toBe(true);

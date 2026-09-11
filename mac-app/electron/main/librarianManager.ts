@@ -1760,6 +1760,26 @@ export class LibrarianManager extends EventEmitter {
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
   private watchers: Map<string, chokidar.FSWatcher> = new Map();
+  private destroyed = false;
+  private destroyPromise?: Promise<void>;
+  private wikiParentWatcher?: chokidar.FSWatcher;
+  private discoveryWatcher?: fs.FSWatcher;
+  private watcherClosures = new Set<Promise<void>>();
+  private closedWatchers = new WeakMap<chokidar.FSWatcher, Promise<void>>();
+
+  private closeWatcher(watcher: chokidar.FSWatcher): Promise<void> {
+    this.closedWatchers ??= new WeakMap();
+    const existing = this.closedWatchers.get(watcher);
+    if (existing) return existing;
+    const pending = Promise.resolve().then(() => watcher.close());
+    this.closedWatchers.set(watcher, pending);
+    this.watcherClosures ??= new Set();
+    this.watcherClosures.add(pending);
+    void pending.then(() => this.watcherClosures.delete(pending), (error) => {
+      log.error('Watcher close failed:', error);
+    });
+    return pending;
+  }
   private libraryRootWatchers: Map<string, chokidar.FSWatcher> = new Map();
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
@@ -1902,15 +1922,17 @@ export class LibrarianManager extends EventEmitter {
    * Reinitialize for the current user. Call after setUserDataManager when user changes.
    */
   async reinitializeForUser(): Promise<void> {
+    if (this.destroyed) return;
     // Stop existing watchers
     for (const watcher of this.watchers.values()) {
-      await watcher.close();
+      await this.closeWatcher(watcher);
     }
     this.watchers.clear();
     for (const watcher of this.libraryRootWatchers.values()) {
-      await watcher.close();
+      await this.closeWatcher(watcher);
     }
     this.libraryRootWatchers.clear();
+    if (this.destroyed) return;
     this.clearPendingRenameTimers();
     this.cache.clear();
 
@@ -1935,11 +1957,11 @@ export class LibrarianManager extends EventEmitter {
   async onUserLoggedOut(): Promise<void> {
     // Stop watchers
     for (const watcher of this.watchers.values()) {
-      await watcher.close();
+      await this.closeWatcher(watcher);
     }
     this.watchers.clear();
     for (const watcher of this.libraryRootWatchers.values()) {
-      await watcher.close();
+      await this.closeWatcher(watcher);
     }
     this.libraryRootWatchers.clear();
     this.cache.clear();
@@ -2336,6 +2358,7 @@ export class LibrarianManager extends EventEmitter {
    * Watch a directory for file changes using chokidar for reliability.
    */
   private watchDirectory(dirPath: string): void {
+    if (this.destroyed) return;
     const normalizedDir = this.normalizePath(dirPath);
 
     if (this.watchers.has(normalizedDir)) {
@@ -2476,7 +2499,7 @@ export class LibrarianManager extends EventEmitter {
     const normalizedDir = this.normalizePath(dirPath);
     const watcher = this.watchers.get(normalizedDir);
     if (watcher) {
-      watcher.close();
+      void this.closeWatcher(watcher);
       this.watchers.delete(normalizedDir);
     }
   }
@@ -2485,6 +2508,7 @@ export class LibrarianManager extends EventEmitter {
    * Start watching all configured directories.
    */
   private startWatching(): void {
+    if (this.destroyed) return;
     for (const dirPath of this.settings.watchedDirs) {
       this.watchDirectory(dirPath);
     }
@@ -2493,6 +2517,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private watchLibraryRoot(dirPath: string): void {
+    if (this.destroyed) return;
     const normalizedDir = this.normalizePath(dirPath);
     if (this.libraryRootWatchers.has(normalizedDir) || !fs.existsSync(normalizedDir)) {
       return;
@@ -2537,7 +2562,7 @@ export class LibrarianManager extends EventEmitter {
     const normalizedDir = this.normalizePath(dirPath);
     const watcher = this.libraryRootWatchers.get(normalizedDir);
     if (!watcher) return;
-    watcher.close();
+    void this.closeWatcher(watcher);
     this.libraryRootWatchers.delete(normalizedDir);
   }
 
@@ -2552,6 +2577,8 @@ export class LibrarianManager extends EventEmitter {
    * The state-enforced hook writes project paths here when creating artifacts.
    */
   private watchDiscoveryFile(): void {
+    if (this.destroyed) return;
+    this.discoveryWatcher?.close();
     const discoveryFile = path.join(this.getCentralLibrarianDir(), 'discovered_projects.json');
 
     // Process any existing discovered projects
@@ -2560,8 +2587,8 @@ export class LibrarianManager extends EventEmitter {
     // Watch for changes
     const parentDir = path.dirname(discoveryFile);
     if (fs.existsSync(parentDir)) {
-      fs.watch(parentDir, (eventType, filename) => {
-        if (filename === 'discovered_projects.json') {
+      this.discoveryWatcher = fs.watch(parentDir, (eventType, filename) => {
+        if (!this.destroyed && filename === 'discovered_projects.json') {
           this.processDiscoveryFile(discoveryFile);
         }
       });
@@ -3944,6 +3971,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   startWikiWatcher(): void {
+    if (this.destroyed) return;
     if (this.wikiWatcher || this.wikiWatcherPending) return;
     const wikiRoot = this.wikiDir;
 
@@ -3955,9 +3983,12 @@ export class LibrarianManager extends EventEmitter {
         ignoreInitial: true,
         depth: 0,
       });
+      this.wikiParentWatcher = parentWatcher;
       parentWatcher.on('addDir', (dirPath) => {
+        if (this.destroyed || this.wikiParentWatcher !== parentWatcher) return;
         if (path.basename(dirPath) === path.basename(wikiRoot)) {
-          parentWatcher.close();
+          void this.closeWatcher(parentWatcher);
+          this.wikiParentWatcher = undefined;
           this.wikiWatcherPending = false;
           this.startWikiWatcher();
         }
@@ -7780,13 +7811,29 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   /**
    * Stop all watchers.
    */
-  async destroy(): Promise<void> {
-    await Promise.allSettled(Array.from(this.watchers.values(), (watcher) => watcher.close()));
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise;
+    this.destroyed = true;
+    const watchers = new Set([
+      ...this.watchers.values(), ...this.libraryRootWatchers.values(),
+      this.wikiWatcher, this.wikiParentWatcher,
+    ]);
     this.watchers.clear();
-    await Promise.allSettled(Array.from(this.libraryRootWatchers.values(), (watcher) => watcher.close()));
     this.libraryRootWatchers.clear();
-    this.clearPendingRenameTimers();
-    this.libraryIndexStore?.close();
+    this.wikiWatcher = null;
+    this.wikiParentWatcher = undefined;
+    this.wikiWatcherPending = false;
+    this.destroyPromise = (async () => {
+      const results = await Promise.allSettled([
+        ...Array.from(watchers).filter((watcher): watcher is chokidar.FSWatcher => !!watcher).map((watcher) => this.closeWatcher(watcher)),
+        ...(this.watcherClosures ?? []),
+        Promise.resolve().then(() => { this.discoveryWatcher?.close(); this.discoveryWatcher = undefined; }),
+        Promise.resolve().then(() => { this.clearPendingRenameTimers(); this.libraryIndexStore?.close(); }),
+      ]);
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (errors.length) throw new AggregateError(errors.map((result) => result.reason), 'Librarian cleanup failed');
+    })();
+    return this.destroyPromise;
   }
 
   // ===========================================================================

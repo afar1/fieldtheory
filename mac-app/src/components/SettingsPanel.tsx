@@ -651,15 +651,32 @@ export default function SettingsPanel({
     }
   };
 
+  const [wordSyncStatus, setWordSyncStatus] = useState('Waiting to sync');
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      const [pairs, status] = await Promise.all([
+        window.clipboardAPI?.getWordSubstitutions?.(),
+        window.clipboardAPI?.getWordSubstitutionSyncStatus?.(),
+      ]);
+      if (!active) return;
+      if (pairs) setWordSubstitutions(pairs);
+      if (status) setWordSyncStatus(status);
+    };
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
+
   // Handler for adding a word substitution pair.
   const handleAddWordSubstitution = async () => {
     if (!window.clipboardAPI?.setWordSubstitutions || !newSubFrom.trim()) return;
 
-    const updated = [...wordSubstitutions, { from: newSubFrom.trim(), to: newSubTo.trim() }];
+    const updated = [...wordSubstitutions.filter(pair => pair.from !== newSubFrom.trim()), { from: newSubFrom.trim(), to: newSubTo.trim() }];
     try {
-      const success = await window.clipboardAPI.setWordSubstitutions(updated);
+      const success = await window.clipboardAPI.setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
       if (success) {
-        setWordSubstitutions(updated);
+        setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
         setNewSubFrom('');
         setNewSubTo('');
       }
@@ -674,9 +691,9 @@ export default function SettingsPanel({
 
     const updated = wordSubstitutions.filter((_, i) => i !== index);
     try {
-      const success = await window.clipboardAPI.setWordSubstitutions(updated);
+      const success = await window.clipboardAPI.setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
       if (success) {
-        setWordSubstitutions(updated);
+        setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
       }
     } catch (err) {
       console.error('Failed to remove word substitution:', err);
@@ -1983,6 +2000,7 @@ export default function SettingsPanel({
           </p>
 
           {/* Existing substitutions list */}
+          <p className="text-xs text-muted-foreground">{wordSyncStatus}</p>
           {wordSubstitutions.length > 0 && (
             <div style={{
               marginBottom: '12px',

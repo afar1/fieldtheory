@@ -986,7 +986,7 @@ describe('recursive wiki tree scan', () => {
     fs.writeFileSync(filePath, 'Before');
     const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
     Object.defineProperty(manager, 'wikiDir', { value: root });
-    Object.assign(manager, { settings: { libraryRoots: [] } });
+    Object.assign(manager, { settings: { libraryRoots: [] }, watchers: new Map(), libraryRootWatchers: new Map() });
     expect(manager.getLibraryRootPaths({ ensureWatching: true })).toEqual([root]);
     const watcher = (manager as unknown as { wikiWatcher: import('chokidar').FSWatcher }).wikiWatcher;
     try {
@@ -997,7 +997,8 @@ describe('recursive wiki tree scan', () => {
         type: 'file-changed', absPath: filePath, relPath: 'Note', source: 'watcher',
       }));
     } finally {
-      await watcher.close();
+      await manager.destroy();
+      expect(watcher.getWatched()).toEqual({});
     }
   });
 
@@ -2284,6 +2285,85 @@ describe('default folder readmes', () => {
 });
 
 describe('librarian watcher cleanup', () => {
+  it('ignores a queued parent-directory callback after destruction', async () => {
+    const root = makeTempDir();
+    const wiki = path.join(root, 'wiki');
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: wiki });
+    Object.assign(manager, { watchers: new Map(), libraryRootWatchers: new Map() });
+    manager.startWikiWatcher();
+    const parent = (manager as unknown as { wikiParentWatcher: import('chokidar').FSWatcher }).wikiParentWatcher;
+    const callback = parent.listeners('addDir')[0];
+    await manager.destroy();
+    const restart = vi.spyOn(manager, 'startWikiWatcher');
+    callback(wiki);
+    expect(restart).not.toHaveBeenCalled();
+    expect(parent.getWatched()).toEqual({});
+  });
+
+  it('awaits wiki and parent closes, prevents restart, and reports failures', async () => {
+    let finish!: () => void;
+    const wikiClose = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const parentClose = vi.fn(async () => { throw new Error('close failed'); });
+    const discoveryClose = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.assign(manager, {
+      watchers: new Map(), libraryRootWatchers: new Map(),
+      wikiWatcher: { close: wikiClose }, wikiParentWatcher: { close: parentClose },
+      discoveryWatcher: { close: discoveryClose },
+    });
+    const pending = manager.destroy();
+    const rejected = expect(pending).rejects.toThrow('Librarian cleanup failed');
+    expect(manager.destroy()).toBe(pending);
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(discoveryClose).toHaveBeenCalledOnce();
+    manager.startWikiWatcher();
+    expect((manager as unknown as { wikiWatcher: unknown }).wikiWatcher).toBeNull();
+    finish();
+    await rejected;
+    expect(wikiClose).toHaveBeenCalledOnce();
+    expect(parentClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not reinitialize watchers after destruction overtakes an awaited close', async () => {
+    let finish!: () => void;
+    const close = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    const updatePathsForUser = vi.fn();
+    Object.assign(manager, {
+      watchers: new Map([['/reading', { close }]]), libraryRootWatchers: new Map(),
+      updatePathsForUser,
+    });
+    const reinitialize = manager.reinitializeForUser();
+    await Promise.resolve();
+    const destruction = manager.destroy();
+    finish();
+    await Promise.all([reinitialize, destruction]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(updatePathsForUser).not.toHaveBeenCalled();
+  });
+
+  it('waits for a watcher removed from its registry while its close is pending', async () => {
+    let finish!: () => void;
+    const close = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.assign(manager, { watchers: new Map([['/reading', { close }]]), libraryRootWatchers: new Map() });
+    (manager as unknown as { unwatchDirectory: (path: string) => void }).unwatchDirectory('/reading');
+    const pending = manager.destroy();
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish();
+    await pending;
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('closes both reading watchers and library root watchers on destroy', async () => {
     const readingClose = vi.fn(async () => undefined);
     const libraryClose = vi.fn(async () => undefined);

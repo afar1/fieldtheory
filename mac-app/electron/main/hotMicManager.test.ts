@@ -120,6 +120,51 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
+describe('HotMicManager shutdown', () => {
+  it.each(['activate', 'resume', 'unmute'])('does not restart recording after a pending %s finishes during shutdown', async mode => {
+    const { manager, nativeHelper } = createManager();
+    let finish!: () => void;
+    const priority = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    Reflect.set(manager, 'audioManager', { ensurePriorityEnforced: priority });
+    let pending: Promise<unknown> | undefined;
+    if (mode === 'activate') {
+      manager.activate();
+    } else {
+      Reflect.set(manager, 'state', 'listening');
+      if (mode === 'resume') {
+        Reflect.set(manager, 'yieldedToTranscriber', true);
+        pending = manager.resumeAfterTranscriber();
+      } else {
+        Reflect.set(manager, 'muted', true);
+        pending = manager.toggleMute();
+      }
+    }
+    await flushAsyncWork();
+    expect(priority).toHaveBeenCalledOnce();
+    manager.destroy();
+    finish();
+    await pending;
+    await flushAsyncWork();
+    manager.activate();
+    manager.start();
+    expect(nativeHelper.startRecording).not.toHaveBeenCalled();
+    expect(manager.isActive).toBe(false);
+    expect(priority).toHaveBeenCalledOnce();
+  });
+
+  it('closes its HTTP listener even when another cleanup step throws', () => {
+    const { manager } = createManager();
+    const close = vi.fn();
+    Reflect.set(manager, 'server', { close });
+    Reflect.set(manager, 'cleanup', () => { throw new Error('UI destroyed'); });
+    expect(() => manager.destroy()).toThrow('UI destroyed');
+    expect(close).toHaveBeenCalledOnce();
+    expect(() => manager.destroy()).not.toThrow();
+    expect(close).toHaveBeenCalledOnce();
+    expect(manager.isActive).toBe(false);
+  });
+});
+
 describe('HotMicManager run-command phrases', () => {
   afterEach(() => {
     vi.clearAllMocks();

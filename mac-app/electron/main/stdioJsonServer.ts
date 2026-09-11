@@ -54,6 +54,7 @@ export class StdioJsonServer {
   private commandChain: Promise<void> = Promise.resolve();
   private lifecycleGeneration: number = 0;
   private _disabledReason: string | null = null;
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor(config: StdioJsonServerConfig) {
     this.name = config.name;
@@ -238,6 +239,37 @@ export class StdioJsonServer {
       this.process.kill('SIGTERM');
     }
     this.resetState();
+  }
+
+  /** Permanently stop this runtime and wait for its owned child to exit. */
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this._disabledReason = `${this.name} server is shutting down`;
+    const proc = this.process;
+    this.shutdownPromise = new Promise<void>((resolve, reject) => {
+      if (!proc || proc.exitCode != null || proc.signalCode != null) {
+        this.stop();
+        resolve();
+        return;
+      }
+
+      let exitTimer: NodeJS.Timeout | undefined;
+      const finish = (error?: Error) => {
+        clearTimeout(killTimer);
+        clearTimeout(exitTimer);
+        proc.removeListener('close', onClose);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onClose = () => finish();
+      proc.once('close', onClose);
+      const killTimer = setTimeout(() => {
+        exitTimer = setTimeout(() => finish(new Error(`${this.name} server did not exit after termination`)), 2_000);
+        try { proc.kill('SIGKILL'); } catch (error) { finish(error as Error); }
+      }, 2_000);
+      try { this.stop(); } catch (error) { finish(error as Error); }
+    });
+    return this.shutdownPromise;
   }
 
   /**

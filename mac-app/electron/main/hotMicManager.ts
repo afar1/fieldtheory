@@ -387,6 +387,7 @@ export class HotMicManager extends EventEmitter {
 
   // Warmup promise — awaited before first transcription to avoid racing the runtime startup
   private warmupPromise: Promise<void> | null = null;
+  private destroyed = false;
 
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
@@ -841,7 +842,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   get isActive(): boolean {
-    return this.state !== 'idle';
+    return !this.destroyed && this.state !== 'idle';
   }
 
   getTargetBundleId(): string | null {
@@ -1052,6 +1053,7 @@ export class HotMicManager extends EventEmitter {
    * Resume listening after the regular transcriber finishes.
    */
   async resumeAfterTranscriber(): Promise<void> {
+    if (this.destroyed) return;
     if (this.state !== 'listening') return;
     if (this.muted) return;
     if (this.resumeInFlight) return;
@@ -1072,6 +1074,7 @@ export class HotMicManager extends EventEmitter {
         try {
           if (attempt > 0) {
             await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+            if (this.destroyed) return;
             log.info('Hot Mic: resume attempt %d', attempt + 1);
           }
           if (this.nativeHelper.isRecordingActive()) {
@@ -1085,8 +1088,10 @@ export class HotMicManager extends EventEmitter {
           if (this.audioManager) {
             await this.audioManager.ensurePriorityEnforced();
           }
+          if (this.destroyed) return;
           this.setRealtimeHarvestMode();
           await this.nativeHelper.startRecording();
+          if (this.destroyed) return;
           this.yieldedToTranscriber = false;
           this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
           this.startAudioMonitoring();
@@ -1094,6 +1099,7 @@ export class HotMicManager extends EventEmitter {
           this.registerEscapeDismissHotkey();
           return;
         } catch (error) {
+          if (this.destroyed) return;
           log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
           if (this.nativeHelper.isRecordingActive()) {
             log.info('Hot Mic: resume recovered (helper already recording)');
@@ -1133,15 +1139,19 @@ export class HotMicManager extends EventEmitter {
       this.muted = false;
       this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
       await this.persistMutedPreference();
+      if (this.destroyed) return false;
       log.info('Hot Mic: unmuted');
       try {
         if (this.audioManager) {
           await this.audioManager.ensurePriorityEnforced();
         }
+        if (this.destroyed) return false;
         this.setRealtimeHarvestMode();
         await this.nativeHelper.startRecording();
+        if (this.destroyed) return false;
         this.startAudioMonitoring();
       } catch (error) {
+        if (this.destroyed) return false;
         log.error('Hot Mic: failed to unmute:', error);
       }
       this.syncDynamicIslandHotMicState();
@@ -1193,6 +1203,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private enqueue(pid: string): void {
+    if (this.destroyed) return;
     const enabled = this.preferences.getPreference('hotMicEnabled');
     if (!enabled) return;
 
@@ -1211,6 +1222,7 @@ export class HotMicManager extends EventEmitter {
    * into the buffer. No wake word needed.
    */
   private async startListening(): Promise<void> {
+    if (this.destroyed) return;
     this.transcriptBuffer = [];
     this.resetHotMicFigureSession();
     this.resumeInFlight = false;
@@ -1232,11 +1244,13 @@ export class HotMicManager extends EventEmitter {
 
     this.warmupPromise = this.externalWarmup
       ? this.externalWarmup().then(() => {
+          if (this.destroyed) return;
           this.engineReady = true;
           if (this.condition === 'warming') {
             this.setCondition('ready');
           }
         }).catch((err) => {
+          if (this.destroyed) return;
           // Keep chunk processing alive so engine-level fallback can still run.
           log.error('Hot Mic: warmup failed:', err);
           this.maybeShowTranscriptionFailure(err, 'warmup');
@@ -1261,15 +1275,17 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
+      if (this.destroyed) return;
       this.setRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
     } catch (error) {
+      if (this.destroyed) return;
       log.error('Hot Mic: failed to start recording in listening:', error);
       this.setState('idle');
       return;
     }
 
-    this.startAudioMonitoring();
+    if (!this.destroyed) this.startAudioMonitoring();
   }
 
 
@@ -1278,6 +1294,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   activate(): void {
+    if (this.destroyed) return;
     if (this.isActive) {
       this.deactivate();
       return;
@@ -1328,6 +1345,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   start(): void {
+    if (this.destroyed) return;
     if (this.state === 'idle') {
       const enabled = this.preferences.getPreference('hotMicEnabled');
       if (!enabled) return;
@@ -1500,15 +1518,17 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
+      if (this.destroyed) return;
       this.setRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
     } catch (error) {
+      if (this.destroyed) return;
       log.error('Failed to start recording for Hot Mic:', error);
       this.deactivate();
       return;
     }
 
-    this.startAudioMonitoring();
+    if (!this.destroyed) this.startAudioMonitoring();
   }
 
   private getBackgroundFilterEnabled(): boolean {
@@ -1913,6 +1933,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   private startAudioMonitoring(): void {
+    if (this.destroyed) return;
     this.stopAudioMonitoring();
     this.registerChunkReadyAt(Date.now());
     this.lastFilterMeterEmitMs = 0;
@@ -3291,7 +3312,7 @@ export class HotMicManager extends EventEmitter {
     for (const { from, to } of substitutions) {
       if (!from || from === to) continue;
       const regex = new RegExp(`\\b${this.escapeRegex(from)}\\b`, 'gi');
-      result = result.replace(regex, to);
+      result = result.replace(regex, () => to);
     }
     return result;
   }
@@ -4071,9 +4092,14 @@ export class HotMicManager extends EventEmitter {
   }
 
   destroy(): void {
-    this.cleanup();
-    this.stopServer();
-    this.state = 'idle';
-    this.removeAllListeners();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    try {
+      this.cleanup();
+    } finally {
+      this.stopServer();
+      this.state = 'idle';
+      this.removeAllListeners();
+    }
   }
 }

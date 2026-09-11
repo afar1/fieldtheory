@@ -5,6 +5,22 @@ import XCTest
 /// librarySyncService.ts and the previous mobile app's sync code.
 final class ProtocolTests: XCTestCase {
 
+    @MainActor
+    func testWordReplacementUsesWholeWordsAndLiteralReplacement() {
+        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "Maine", to: "main")],
+            to: "Maine, MAINE; maintained."), "main, main; maintained.")
+        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "price", to: "$1")],
+            to: "price"), "$1")
+        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "remove", to: "")],
+            to: "remove this"), " this")
+    }
+
+    func testWordReplacementDeletionEncodesExplicitNull() throws {
+        let data = try JSONEncoder().encode(WordSubstitutionChange(from: "Maine", to: nil))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertTrue(object["to"] is NSNull)
+    }
+
     // MARK: client_id derivation
 
     func testLibraryClientIdMatchesMacDerivation() {

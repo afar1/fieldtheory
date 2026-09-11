@@ -465,12 +465,46 @@ function getVisualLineRowTopsFromElement(element: HTMLElement, lineHeight: numbe
 function getLineElementForBlock(
   view: EditorView,
   line: { from: number; to: number },
-  fallback: HTMLElement | undefined,
 ): HTMLElement | undefined {
   const lookupPosition = line.from < line.to ? line.from + 1 : line.from;
   const domAtLine = view.domAtPos(lookupPosition);
   const element = domAtLine.node instanceof HTMLElement ? domAtLine.node : domAtLine.node.parentElement;
-  return element?.closest<HTMLElement>('.cm-line') ?? fallback;
+  return element?.closest<HTMLElement>('.cm-line') ?? undefined;
+}
+
+// Replacement widgets do not have a .cm-line. Resolve each block by its
+// document position, never by its index in the (text-only) list of DOM lines.
+function measureVisualLineBlocks(view: EditorView, lineHeight: number) {
+  const tables = new Map((view.state.field(markdownTableRanges, false) ?? []).map(table => [table.from, table]));
+  const tableElements = new Map(Array.from(
+    view.contentDOM.querySelectorAll<HTMLElement>('.cm-markdown-table-viewport'),
+    element => [view.posAtDOM(element), element] as const,
+  ));
+  return view.viewportLineBlocks.map(block => {
+    const line = view.state.doc.lineAt(block.from);
+    const table = tables.get(block.from);
+    if (table) {
+      const element = tableElements.get(table.from);
+      return {
+        line,
+        element,
+        sourceRange: table,
+        atomic: true,
+        rowTops: [element?.getBoundingClientRect().top ?? (view.documentTop + block.top)],
+      };
+    }
+    const element = getLineElementForBlock(view, line);
+    const rangeTops = element ? getVisualLineRowTopsFromElement(element, lineHeight) : [];
+    return {
+      line,
+      element,
+      sourceRange: line,
+      atomic: false,
+      rowTops: rangeTops.length > 0 ? rangeTops : (line.text.trim() === ''
+        ? [element?.getBoundingClientRect().top ?? (view.documentTop + block.top)]
+        : []),
+    };
+  });
 }
 
 type VisualLineNumberOverlayRow = {
@@ -531,35 +565,28 @@ export function getVisualLineNumberOverlayMeasureDelay(input: Pick<ViewUpdate, '
   return MARKDOWN_CODE_EDITOR_LINE_NUMBER_TYPING_MEASURE_DELAY_MS;
 }
 
-function buildVisualLineNumberOverlayRows(
+export function buildVisualLineNumberOverlayRows(
   view: EditorView,
   overlayHost: HTMLElement = getMarkdownCodeEditorLineNumberOverlayHost(view),
 ): { rows: VisualLineNumberOverlayRow[]; signature: string } {
   const overlayHostRect = overlayHost.getBoundingClientRect();
   const lineHeight = getMeasuredEditorLineHeight(view);
   const blocks = view.viewportLineBlocks;
-  const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
   const browserSelection = view.dom.ownerDocument.getSelection();
   const selectedRowTops = getBrowserSelectionVisualRowTops(browserSelection, lineHeight);
   let visualLineNumber = blocks.length > 0 ? view.state.doc.lineAt(blocks[0].from).number : 1;
   const signatureParts: string[] = [];
   const rows: VisualLineNumberOverlayRow[] = [];
 
-  for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index];
-    const line = view.state.doc.lineAt(block.from);
-    const lineElement = getLineElementForBlock(view, line, lineElements[index]);
-    const rangeTops = lineElement ? getVisualLineRowTopsFromElement(lineElement, lineHeight) : [];
-    const fallbackTop = view.documentTop + block.top;
-    const rowTops = rangeTops.length > 0 ? rangeTops : (line.text.trim() === '' ? [fallbackTop] : []);
+  for (const { line, element: lineElement, sourceRange, atomic, rowTops } of measureVisualLineBlocks(view, lineHeight)) {
     if (rowTops.length === 0) {
       signatureParts.push(`${line.from}:hidden`);
       continue;
     }
-    const isFallbackSelected = selectedRowTops.length === 0
-      && (isSourceLineSelected(view.state, line) || isLineElementSelected(view, lineElement));
+    const isFallbackSelected = (atomic || selectedRowTops.length === 0)
+      && (isSourceLineSelected(view.state, sourceRange) || isLineElementSelected(view, lineElement));
     const rowSelectionState = rowTops.map((top) => (
-      selectedRowTops.length > 0
+      !atomic && selectedRowTops.length > 0
         ? isVisualLineNumberRowSelected(top, selectedRowTops, lineHeight)
         : isFallbackSelected
     ));
@@ -587,17 +614,10 @@ function buildVisualLineNumberOverlayRows(
 export function getMarkdownCodeEditorVisualLineMap(view: EditorView): MarkdownCodeEditorVisualLine[] {
   const lineHeight = getMeasuredEditorLineHeight(view);
   const blocks = view.viewportLineBlocks;
-  const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
   let visualLineNumber = blocks.length > 0 ? view.state.doc.lineAt(blocks[0].from).number : 1;
   const rows: MarkdownCodeEditorVisualLine[] = [];
 
-  for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index];
-    const line = view.state.doc.lineAt(block.from);
-    const lineElement = getLineElementForBlock(view, line, lineElements[index]);
-    const rangeTops = lineElement ? getVisualLineRowTopsFromElement(lineElement, lineHeight) : [];
-    const fallbackTop = view.documentTop + block.top;
-    const rowTops = rangeTops.length > 0 ? rangeTops : (line.text.trim() === '' ? [fallbackTop] : []);
+  for (const { line, rowTops } of measureVisualLineBlocks(view, lineHeight)) {
     if (rowTops.length === 0) continue;
     for (let rowIndex = 0; rowIndex < rowTops.length; rowIndex += 1) {
       rows.push({

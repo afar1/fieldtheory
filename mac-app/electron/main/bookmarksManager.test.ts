@@ -12,6 +12,23 @@ vi.mock('./logger', () => ({
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+describe('bookmarks terminal cleanup', () => {
+  it('awaits the parent watcher and stays stopped after destruction', async () => {
+    const manager = new BookmarksManager();
+    let finish!: () => void;
+    const close = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    Object.assign(manager, { parentWatcher: { close }, watcherPending: true });
+    const pending = manager.destroy();
+    expect(manager.destroy()).toBe(pending);
+    await Promise.resolve();
+    manager.startWatcher();
+    expect((manager as unknown as { watcher: unknown }).watcher).toBeNull();
+    finish();
+    await pending;
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
 describe('parseRawBookmark', () => {
   it('extracts photos with dimensions and picks highest-bitrate mp4 for videos', () => {
     const raw: RawBookmark = {

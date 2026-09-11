@@ -130,6 +130,7 @@ final class VoiceSyncTests: XCTestCase {
             library: LibraryStore(db: db, libraryRoot: libraryRoot),
             river: RiverStore(db: db),
             transcripts: transcripts ?? TranscriptStore(db: db),
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: transport,
             backgroundTasks: backgroundTasks ?? RecordingVoiceBackgroundTasks(),
             retryDelaySeconds: retryDelaySeconds
@@ -367,6 +368,7 @@ final class VoiceSyncTests: XCTestCase {
             library: LibraryStore(db: db),
             river: RiverStore(db: db),
             transcripts: TranscriptStore(db: db),
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: blockingTransport,
             backgroundTasks: RecordingVoiceBackgroundTasks()
         )
@@ -470,6 +472,7 @@ final class VoiceSyncTests: XCTestCase {
             library: LibraryStore(db: db),
             river: RiverStore(db: db),
             transcripts: store,
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: transport,
             backgroundTasks: RecordingVoiceBackgroundTasks(),
             retryDelaySeconds: 0.01
@@ -539,6 +542,7 @@ final class VoiceSyncTests: XCTestCase {
             library: LibraryStore(db: db),
             river: RiverStore(db: db),
             transcripts: TranscriptStore(db: db),
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: transport,
             backgroundTasks: backgroundTasks,
             retryDelaySeconds: 0.01
@@ -573,6 +577,7 @@ final class VoiceSyncTests: XCTestCase {
             library: LibraryStore(db: db),
             river: RiverStore(db: db),
             transcripts: TranscriptStore(db: db),
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: transport,
             backgroundTasks: RecordingVoiceBackgroundTasks(),
             retryDelaySeconds: 0.01

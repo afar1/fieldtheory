@@ -1,3 +1,4 @@
+import { WordSubstitutionSync } from './wordSubstitutionSync';
 import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
 import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
@@ -165,6 +166,7 @@ import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type
 import { registerFieldTheorySyncIpc } from './fieldTheorySyncIpc';
 import { resolveStartupReadiness, shouldForceAccountOnboarding } from './startupReadinessPolicy';
 import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail, relaunchThroughQuit } from './appQuitGuard';
+import { AppShutdown, type ShutdownEvent } from './appShutdown';
 import {
   CommandsIPCChannels,
   type LauncherFileIconResult,
@@ -2700,6 +2702,7 @@ let ambientManager: AmbientManager | null = null;
 let diarizationManager: DiarizationManager | null = null;
 let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
+let wordSubstitutionSync: WordSubstitutionSync | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let runNativeLocalCommand = async (_rawRequest: unknown): Promise<LocalCommandRunResult> => ({
   success: false,
@@ -3994,7 +3997,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     onClientDisconnected: (clientId) => {
       const windowId = browserLibraryWindowId(clientId);
-      getDocumentPresenceManager().closeWindow(windowId);
+      documentPresenceManager?.closeWindow(windowId);
       if (clientId) {
         browserLibraryContextByClientId.delete(clientId);
         browserLibraryImmersiveDismissableByClientId.delete(clientId);
@@ -4264,6 +4267,18 @@ let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
 let globalImproveInFlight = false;
 
+function recordShutdownEvent(event: ShutdownEvent): void {
+  const directory = path.join(app.getPath('userData'), 'diagnostics');
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+    fs.appendFileSync(path.join(directory, 'shutdown.jsonl'), `${JSON.stringify({
+      timestamp: new Date().toISOString(), pid: process.pid, version: app.getVersion(), ...event,
+    })}\n`);
+  } catch (error) {
+    log.warn('Could not write shutdown trace: %s', error instanceof Error ? error.message : String(error));
+  }
+}
+
 function emitBrowserLibraryNavigationEvent(event: BrowserHelperNativeEvent, options: { broadcastFallback?: boolean } = {}): boolean {
   if (
     shouldTargetBrowserLibraryNavigation({ nativeMarkdownEditorFocused: librarianMarkdownEditorFocused }) &&
@@ -4451,10 +4466,10 @@ function cleanupFileWatchersBeforeQuit(): Promise<void> {
   if (appQuitWatcherCleanupInFlight) return appQuitWatcherCleanupInFlight;
 
   appQuitWatcherCleanupInFlight = (async () => {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       librarianManager?.destroy(),
       taggedDocsManager?.destroy(),
-      bookmarksManager?.stopWatcher(),
+      bookmarksManager?.destroy(),
       documentPresenceManager?.flush(),
     ]);
     documentPresenceManager?.destroy();
@@ -4463,6 +4478,8 @@ function cleanupFileWatchersBeforeQuit(): Promise<void> {
     documentPresenceManager = null;
     bookmarksWatcherStarted = false;
     appQuitWatcherCleanupComplete = true;
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (errors.length) throw new AggregateError(errors.map((result) => result.reason), 'File watcher cleanup failed');
   })().finally(() => {
     appQuitWatcherCleanupInFlight = null;
   });
@@ -4942,6 +4959,10 @@ function sharedAvailabilityWithEntitlement<T extends { stale?: boolean }>(
 }
 
 function refreshFieldTheorySyncServices(): void {
+  if (authManager && preferencesManager) {
+    wordSubstitutionSync ??= new WordSubstitutionSync(authManager, preferencesManager);
+    void wordSubstitutionSync.sync();
+  }
   getRiverTeamService();
   if (!canUseSharedFeatures()) {
     clearPendingSharedFilesSync();
@@ -11408,30 +11429,8 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
-  // Clean up temp files and hotkeys on app quit
+  // These files are no longer in use once Electron has closed all windows.
   app.on('will-quit', () => {
-    voiceRunnerPower?.dispose();
-    voiceWorkManager?.stop();
-    voiceRunnerTelemetry?.stop();
-    voiceInboxSync?.stop();
-    clearBrowserHelperState();
-
-    // Unregister all hotkeys via HotkeyManager
-    const hotkeyManager = getHotkeyManager();
-    hotkeyManager.unregisterAll();
-
-    // Unregister Squares window management hotkeys.
-    squaresManager?.unregisterHotkeys();
-
-    // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
-    transcriberManager?.destroy();
-
-    // Stop any local agent kickoff subprocesses.
-    agentKickoffManager?.destroy();
-
-    // Clean up embedded Codex terminals.
-    codexTerminalManager?.destroy();
-
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
       try {
@@ -12185,6 +12184,8 @@ function setupClipboardIPCHandlers(): void {
   // Word Substitutions - correction pairs for transcription
   // =========================================================================
 
+  ipcMain.handle('clipboard:getWordSubstitutionSyncStatus', () => wordSubstitutionSync?.status ?? 'Waiting to sync');
+
   ipcMain.handle('clipboard:getWordSubstitutions', async () => {
     if (!preferencesManager) {
       return [];
@@ -12192,11 +12193,12 @@ function setupClipboardIPCHandlers(): void {
     return preferencesManager.getPreference('wordSubstitutions') ?? [];
   });
 
-  ipcMain.handle('clipboard:setWordSubstitutions', async (_event, substitutions: Array<{ from: string; to: string }>) => {
+  ipcMain.handle('clipboard:setWordSubstitutions', async (_event, substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => {
     if (!preferencesManager) {
       return false;
     }
-    await preferencesManager.save({ wordSubstitutions: substitutions });
+    if (wordSubstitutionSync) await wordSubstitutionSync.set(substitutions, base);
+    else await preferencesManager.save({ wordSubstitutions: substitutions });
     return true;
   });
 
@@ -15549,6 +15551,7 @@ async function initTranscriberSystem(): Promise<void> {
     notifyVoiceInboxChanged();
     void voiceWorkManager!.authChanged().then(async () => {
       await voicePreferencesReady;
+      wordSubstitutionSync?.resume();
       if (requestedOwner !== authManager?.getSession()?.user.id) return;
       if (requestedOwner) {
         while (voiceInboxStore!.migrateLegacyNotes(requestedOwner).remaining > 0) {
@@ -15605,10 +15608,12 @@ async function initTranscriberSystem(): Promise<void> {
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
   authManager.on('userChanged', async (userId: string) => {
+    wordSubstitutionSync?.pause();
     // Reinitialize all managers with user-specific data
     if (preferencesManager) {
       voicePreferencesReady = preferencesManager.load();
       await voicePreferencesReady;
+      wordSubstitutionSync?.resume();
 
       // Reload hotkeys from freshly loaded preferences
       const prefs = preferencesManager.get();
@@ -17251,8 +17256,53 @@ if (!gotTheLock) {
     }
   });
 
+  const shutdown = new AppShutdown([
+    { name: 'hotkeys', run: () => getHotkeyManager().unregisterAll() },
+    { name: 'squares-hotkeys', run: () => squaresManager?.unregisterHotkeys() },
+    { name: 'bookmarks-sync', run: () => bookmarkSyncController?.stop() },
+    { name: 'voice-work', run: () => voiceWorkManager?.stop() },
+    { name: 'voice-telemetry', run: () => voiceRunnerTelemetry?.stop() },
+    { name: 'voice-inbox', run: () => voiceInboxSync?.stop() },
+    { name: 'hot-mic', run: () => hotMicManager?.destroy() },
+    { name: 'browser-launcher', run: () => browserPanelLauncherServer?.stop() },
+    { name: 'browser-helper', run: () => browserHelperServer?.stop() },
+    { name: 'browser-state', run: () => clearBrowserHelperState() },
+    { name: 'library-sync', run: () => librarySyncService?.dispose() },
+    { name: 'shared-sync-timer', run: () => clearPendingSharedFilesSync() },
+    { name: 'shared-sync', run: () => sharedSyncService?.dispose() },
+    { name: 'commands-sync', run: () => commandSyncService?.destroy() },
+    { name: 'file-watchers-and-presence', run: () => cleanupFileWatchersBeforeQuit() },
+    { name: 'transcription', run: () => transcriberManager?.destroy() },
+    { name: 'feedback', run: () => feedbackManager?.destroy() },
+    { name: 'dynamic-island', run: () => dynamicIslandManager?.destroy() },
+    { name: 'gaze-tracking', run: () => gazeTrackingManager?.destroy() },
+    { name: 'gaze-debug-overlay', run: () => gazeDebugOverlayManager?.destroy() },
+    { name: 'gaze-screen-overlay', run: () => gazeScreenOverlayManager?.destroy() },
+    { name: 'tray', run: () => trayManager?.destroy() },
+    { name: 'native-helper', run: () => nativeHelper?.stop() },
+    { name: 'clipboard', run: () => clipboardManager?.destroy() },
+    { name: 'agent-runs', run: () => agentKickoffManager?.destroy() },
+    { name: 'codex-terminals', run: () => codexTerminalManager?.destroy() },
+    { name: 'clipboard-window', run: () => clipboardHistoryWindow?.destroy() },
+    { name: 'document-windows', run: () => libraryDocumentWindowManager?.destroy() },
+    { name: 'todos', run: () => todoStore?.destroy() },
+    { name: 'local-model', run: () => localLlmManager?.stop() },
+    { name: 'ambient', run: () => ambientManager?.stop() },
+    { name: 'diarization', run: () => diarizationManager?.stop() },
+    { name: 'metrics', run: () => metricsManager?.shutdown() },
+    { name: 'voice-power', run: () => voiceRunnerPower?.dispose() },
+  ], recordShutdownEvent);
+
+  app.on('will-quit', () => recordShutdownEvent({ name: 'electron-will-quit', status: 'completed', elapsedMs: 0 }));
+  app.on('quit', () => recordShutdownEvent({ name: 'electron-quit', status: 'completed', elapsedMs: 0 }));
+
   app.on('before-quit', (event) => {
     appQuitInProgress = true;
+    if (shutdown.complete) return;
+    if (shutdown.started) {
+      event.preventDefault();
+      return;
+    }
     const blockingActivities = getQuitBlockingActivities();
     if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
       event.preventDefault();
@@ -17291,81 +17341,9 @@ if (!gotTheLock) {
       return;
     }
 
-    log.info('App quitting, cleaning up...');
-    bookmarkSyncController?.stop();
-
-    if (!appQuitWatcherCleanupComplete) {
-      event.preventDefault();
-      void cleanupFileWatchersBeforeQuit().then(() => {
-        app.quit();
-      }).catch((error) => {
-        log.warn('File watcher cleanup before quit failed: %s', error instanceof Error ? error.message : String(error));
-        appQuitWatcherCleanupComplete = true;
-        app.quit();
-      });
-      return;
-    }
-
-    if (feedbackManager) {
-      feedbackManager.destroy();
-    }
-
-    if (transcriberManager) {
-      transcriberManager.destroy();
-    }
-
-    if (dynamicIslandManager) {
-      dynamicIslandManager.destroy();
-    }
-
-    if (gazeTrackingManager) {
-      gazeTrackingManager.destroy().catch(() => {});
-    }
-
-    if (gazeDebugOverlayManager) {
-      gazeDebugOverlayManager.destroy();
-      gazeDebugOverlayManager = null;
-    }
-
-    if (gazeScreenOverlayManager) {
-      gazeScreenOverlayManager.destroy();
-      gazeScreenOverlayManager = null;
-    }
-
-    if (trayManager) {
-      trayManager.destroy();
-    }
-
-    if (nativeHelper) {
-      nativeHelper.stop();
-    }
-
-    if (clipboardManager) {
-      clipboardManager.destroy();
-    }
-
-    agentKickoffManager?.destroy();
-
-    if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.destroy();
-    }
-
-    libraryDocumentWindowManager?.destroy();
-
-    librarySyncService?.dispose();
-    clearPendingSharedFilesSync();
-    void sharedSyncService?.dispose();
-    void browserHelperServer?.stop();
-    browserHelperServer = null;
-    commandSyncService?.destroy();
-    todoStore?.destroy();
-    localLlmManager?.stop();
-    ambientManager?.stop();
-    diarizationManager?.stop();
-
-    // Sync metrics before quitting (fire-and-forget, don't block quit)
-    if (metricsManager) {
-      metricsManager.shutdown().catch(() => {});
-    }
+    event.preventDefault();
+    void shutdown.run().then(() => {
+      setImmediate(() => app.quit());
+    });
   });
 }

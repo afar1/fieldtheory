@@ -68,6 +68,7 @@ final class RecorderController {
     /// (insert at cursor vs. save to Voice).
     /// Returns true only after the destination accepted the transcript. Raw
     /// audio stays queued when local persistence fails.
+    var replaceWords: ((String) -> String)?
     var onTranscript: ((String) async -> Bool)?
     /// Lightweight status line for toasts (queued audio, errors).
     var onNotice: ((String, String) -> Void)?
@@ -564,8 +565,9 @@ final class RecorderController {
             logger.info("Voice transcription finished for \(url.lastPathComponent, privacy: .public)")
             if !text.isEmpty { parts.append(text) }
         }
+        let text = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         return (
-            parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
+            replaceWords?(text) ?? text,
             max(0, Timestamps.nowMs() - inferenceStartedAtMs)
         )
     }

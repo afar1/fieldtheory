@@ -47,6 +47,13 @@ afterEach(async () => {
 });
 
 describe('BrowserPanelLauncherServer', () => {
+  it('releases its listening port when stopped and tolerates a second stop', async () => {
+    const { server, address } = await startServer();
+    await server.stop();
+    await server.stop();
+    await expect(request(`http://${address.host}:${address.port}/health`)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+  });
+
   it('redirects stable panel URLs to the current helper panel without adding tokens', async () => {
     const { address } = await startServer();
 

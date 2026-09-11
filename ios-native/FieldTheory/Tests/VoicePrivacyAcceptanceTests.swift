@@ -88,6 +88,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
             library: LibraryStore(db: db),
             river: RiverStore(db: db),
             transcripts: store,
+            wordSubstitutionRequest: { _ in [] },
             voiceTransport: transport,
             backgroundTasks: PrivacyAcceptanceBackgroundTasks(),
             retryDelaySeconds: retryDelaySeconds

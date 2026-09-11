@@ -57,11 +57,11 @@ if [[ ! -d "$VENV_DIR" ]]; then
   "$PYTHON_CMD" -m venv "$VENV_DIR"
 fi
 
-source "$VENV_DIR/bin/activate"
+VENV_PYTHON="$VENV_DIR/bin/python"
 
-pip install --upgrade pip --quiet
-pip install "onnx-asr[cpu,hub]==0.10.2" --quiet
+PIP_USER=false "$VENV_PYTHON" -m pip install --upgrade pip --quiet
+PIP_USER=false "$VENV_PYTHON" -m pip install "onnx-asr[cpu,hub]==0.10.2" --quiet
 
 echo "Parakeet setup complete."
-echo "  python: $(which python)"
-echo "  onnx-asr: $(python -c 'import onnx_asr; print(onnx_asr.__version__)' 2>/dev/null || echo 'installed')"
+echo "  python: $VENV_PYTHON"
+echo "  onnx-asr: $("$VENV_PYTHON" -c 'import onnx_asr; print(onnx_asr.__version__)' 2>/dev/null || echo 'installed')"
