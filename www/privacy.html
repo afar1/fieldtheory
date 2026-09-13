@@ -39,7 +39,7 @@
   <!-- Privacy Policy -->
   <main class="theory-content">
     <h1>Privacy Policy</h1>
-    <p>Last updated: September 6, 2026</p>
+    <p>Last updated: September 13, 2026</p>
     <p>This policy explains how Field Theory, operated by Andrew Farah, handles information in the native iPhone and iPad app and on fieldtheory.dev.</p>
 
     <h2>Information we use</h2>
@@ -50,11 +50,15 @@
     <p>Reviewer Demo uses a separate local sample workspace. It does not create an account or synchronize its sample content, and its changes are removed when you exit the demo.</p>
 
     <h2>Voice recordings</h2>
-    <p>The app asks for microphone permission before recording. Speech transcription runs on your device using whisper.cpp. Audio is not uploaded to a cloud transcription service. The speech model is downloaded from Hugging Face; that download requires an internet connection.</p>
+    <p>The app asks for microphone permission before recording. In the current native beta, speech transcription runs on your device using NVIDIA Parakeet through FluidAudio. Older builds used whisper.cpp. Audio is not uploaded to a cloud transcription service. The speech model is downloaded from Hugging Face; that download requires an internet connection.</p>
     <p>Unfinished recordings are kept on your device so transcription can resume. The app removes queued audio after its transcript is delivered successfully or when you sign out. Pending audio and downloaded speech models are excluded from device backups. Completed transcripts can sync to your account. If automatic copying is enabled, completed transcripts are also placed on your device clipboard; you can turn this off in Settings.</p>
 
     <h2>Service providers and sharing</h2>
     <p>Supabase processes account and synced workspace data to provide authentication and storage. Hugging Face receives ordinary connection information, such as an IP address, when your device downloads a model. We share information with service providers as needed to operate Field Theory, respond to support requests, and meet legal obligations. Opening an external link takes you to a service with its own privacy practices.</p>
+
+    <h2>TestFlight beta and agent handoff</h2>
+    <p>Apple distributes the iPhone and iPad beta through TestFlight and provides us with beta testing information, such as installation and session information, crashes, and feedback you submit. Public-link enrollment does not show us your name or email address unless you choose to include them in feedback. If you email us to request an invitation, we receive your email and the information you send.</p>
+    <p>The current native beta focuses on Voice and Settings. Transcript text and stack metadata can sync to your Field Theory account and connected Mac. If you use a configured Mac workflow to send instructions to a coding agent, that agent provider processes the content under its own terms and privacy policy. On-device transcription does not mean the later agent workflow stays on-device. The Open Remote shortcut opens the configured destination; that button does not itself send recording data.</p>
 
     <h2>This website</h2>
     <p>Vercel hosts this website and provides website analytics. Website requests and analytics may include technical information such as pages visited, browser and device type, and approximate location. The site stores your light or dark appearance preference in your browser. If you contact us, we receive the information you choose to send.</p>

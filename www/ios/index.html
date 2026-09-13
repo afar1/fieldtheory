@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="description" content="Try the Field Theory beta for iPhone and iPad, and help shape what comes next.">
+  <meta name="theme-color" content="#faf9f7">
+  <title>Field Theory for iOS — TestFlight beta</title>
+  <link rel="icon" href="/favicon.png">
+  <style>
+    :root { color-scheme: light dark; --paper:#faf9f7; --ink:#24231f; --muted:#68665f; --line:#d8d5cd; --panel:#f1efe9; --accent:#46662e; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:740px; margin:auto; padding:42px 26px 72px; }
+    a { color:inherit; text-underline-offset:4px; }
+    a:hover { color:var(--accent); }
+    a:focus-visible { outline:3px solid var(--accent); outline-offset:5px; }
+    .brand { text-decoration:none; font-size:17px; font-weight:650; letter-spacing:-.4px; }
+    .eyebrow { margin:64px 0 14px; font:12px/1.5 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+    h1 { margin:0 0 22px; max-width:600px; font-size:clamp(38px,7vw,60px); line-height:1.06; font-weight:550; letter-spacing:-2px; }
+    .intro { max-width:570px; font-size:20px; line-height:1.6; color:var(--muted); }
+    .invitation { margin:36px 0; padding:26px; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .status { margin:0 0 16px; font-weight:600; }
+    .button { display:inline-block; padding:12px 20px; background:var(--ink); color:var(--paper); border-radius:5px; text-decoration:none; font-weight:600; }
+    .button:hover { background:var(--accent); color:var(--paper); }
+    .note { color:var(--muted); font-size:14px; margin:14px 0 0; }
+    h2 { font-size:19px; letter-spacing:-.3px; margin:32px 0 12px; }
+    ol { padding-left:23px; }
+    li { margin:12px 0; padding-left:5px; }
+    footer { border-top:1px dotted var(--line); margin-top:42px; padding-top:22px; font-size:14px; color:var(--muted); display:flex; gap:22px; flex-wrap:wrap; }
+    @media (max-width:440px) { main { padding:28px 22px 48px; } .eyebrow { margin-top:44px; } .invitation { padding:22px; } .button { width:100%; text-align:center; } }
+    @media (prefers-color-scheme:dark) { :root { --paper:#1e1e1c; --ink:#eeece6; --muted:#b2afa5; --line:#45433d; --panel:#292925; --accent:#a6c985; } }
+  </style>
+  <script defer src="/ios/invitation.js"></script>
+</head>
+<body>
+  <main>
+    <a class="brand" href="/">Field Theory</a>
+    <p class="eyebrow">iPhone &amp; iPad / early access</p>
+    <h1>Your next idea.<br>Ready for your agents.</h1>
+    <p class="intro">Capture longer instructions, turn speech into text, and hand off work through your Field Theory Mac setup. Help us make the mobile experience better.</p>
+
+    <section class="invitation" aria-label="Beta invitation">
+      <p class="status" id="beta-status" role="status">The TestFlight beta is being prepared.</p>
+      <a class="button" id="beta-join" href="mailto:support@fieldtheory.dev?subject=Field%20Theory%20iOS%20beta%20invitation&amp;body=Hi%2C%20I%27d%20like%20to%20try%20the%20Field%20Theory%20iOS%20beta.%0A%0AMy%20device%20and%20iOS%20version%3A%20">Email for an invitation</a>
+      <p class="note" id="beta-note">Opens your email app. Send the message to request an invitation when testing opens; this does not enroll you automatically.</p>
+    </section>
+
+    <h2>What you’ll need</h2>
+    <p>An iPhone or iPad running iOS or iPadOS 26 or later. Transcription runs on your device after an English speech-model download of about 500 MB. A configured Field Theory Mac and your coding-agent tools are needed for agent handoff.</p>
+
+    <h2>Once your invitation is ready</h2>
+    <ol>
+      <li>Install <a href="https://apps.apple.com/app/testflight/id899247664">Apple’s TestFlight app</a> on your device.</li>
+      <li>Open your invitation on that device and install <strong>Field Theory</strong>.</li>
+      <li>Try recording, editing, stacking instructions, and handing work to your Mac. Tell us what feels useful, confusing, slow, or broken.</li>
+    </ol>
+    <p class="note">Send feedback from Field Theory’s page in TestFlight, or share a screenshot through TestFlight. Include the steps that led to a problem and what you expected to happen.</p>
+    <footer>
+      <a href="/privacy.html">Privacy</a>
+      <a href="mailto:support@fieldtheory.dev">Contact</a>
+    </footer>
+  </main>
+</body>
+</html>
