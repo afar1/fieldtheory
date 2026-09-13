@@ -30,8 +30,15 @@ enum PreviewFixtures {
             }
         }
         if layoutPreview {
+            try? await db.run("UPDATE transcripts SET privacy_state = 'local_only' WHERE id = 't-1'")
             try? await db.run("UPDATE transcripts SET acknowledged_updated_at_ms = updated_at_ms")
             try? await db.run("UPDATE transcripts SET agent_sent_revision = ? WHERE id = 't-2'", [.text(Hashing.sha256Hex(voiceFixtures[1].1))])
+        }
+        if ProcessInfo.processInfo.arguments.contains("ft-stack-preview") {
+            let segments = [TranscriptSegment(id: "one", text: "First segment", createdAt: 1, updatedAt: 1), TranscriptSegment(id: "two", text: "Second segment", createdAt: 2, updatedAt: 2)]
+            if let data = try? JSONEncoder().encode(segments) {
+                try? await db.run("UPDATE transcripts SET segments_json = ? WHERE id = 't-1'", [.text(String(decoding: data, as: UTF8.self))])
+            }
         }
         await transcripts.reload()
         if ProcessInfo.processInfo.arguments.contains("ft-delivery-preview"), let item = transcripts.items.first {

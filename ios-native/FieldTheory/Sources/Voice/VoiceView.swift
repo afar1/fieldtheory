@@ -29,21 +29,9 @@ struct VoiceView: View {
     @State private var expandedIds: Set<String> = []
     @State private var copiedId: String?
     @State private var copiedResetTask: Task<Void, Never>?
-    @State private var savingLocalChoice = false
     @State private var feedbackRequest: TranscriptSyncRequest?
     @State private var feedbackError: String?
     @State private var syncRequest: TranscriptSyncRequest?
-
-    // Offer queued transcripts one at a time in the main control. Keep an
-    // already-running deadline first so a new transcript cannot displace it.
-    private var recordingPrivacyItem: TranscriptItem? {
-        guard model.recorder.phase == .idle else { return nil }
-        let offers = model.transcripts.pendingPrivacyOffers
-        return offers.first(where: {
-            if case .privacyHold = $0.syncState { return true }
-            return false
-        }) ?? offers.first
-    }
 
     private var items: [TranscriptItem] {
         guard !searchText.isEmpty else { return model.transcripts.items }
@@ -114,31 +102,6 @@ struct VoiceView: View {
             .navigationTitle("Field Theory")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic))
             .refreshable { await model.sync.syncNow() }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active, !showSettings {
-                    beginVisiblePrivacyWindows()
-                } else if phase != .active {
-                    refreshVisiblePrivacyOffers()
-                }
-            }
-            .onChange(of: showSettings) { _, isShowing in
-                if isShowing {
-                    refreshVisiblePrivacyOffers()
-                } else if scenePhase == .active {
-                    beginVisiblePrivacyWindows()
-                }
-            }
-            .onChange(of: editingItem?.id) { _, id in
-                if id != nil {
-                    refreshVisiblePrivacyOffers()
-                } else if scenePhase == .active, !showSettings {
-                    beginVisiblePrivacyWindows()
-                }
-            }
-            .onChange(of: model.storageAlert?.id) { _, id in
-                if id != nil { refreshVisiblePrivacyOffers() }
-                else { beginVisiblePrivacyWindows() }
-            }
             .toolbar {
                 if isRegularWidth {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -210,12 +173,12 @@ struct VoiceView: View {
         ZStack(alignment: .bottom) {
             Group {
                 if model.transcripts.items.isEmpty {
-                    emptyState
+                    VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 16); emptyState }
                 } else {
                     compactList
                 }
             }
-            if selectionMode && recordingPrivacyItem == nil {
+            if selectionMode {
                 selectionBar
             } else {
                 recordBar
@@ -227,19 +190,44 @@ struct VoiceView: View {
         ZStack(alignment: .bottom) {
             Group {
                 if model.transcripts.items.isEmpty {
-                    regularEmptyState
+                    VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 24); regularEmptyState }
                 } else if items.isEmpty {
-                    noSearchResults
+                    VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 24); noSearchResults }
                 } else {
                     regularGrid
                 }
             }
 
-            if selectionMode && recordingPrivacyItem == nil {
+            if selectionMode {
                 regularSelectionBar
             } else {
                 regularRecordBar
             }
+        }
+    }
+
+    private var autoSendControl: some View {
+        Button { model.settings.autoSendTranscriptions.toggle() } label: {
+            Text("Auto-send")
+                .font(.system(size: 11, weight: .medium))
+                .strikethrough(!model.settings.autoSendTranscriptions)
+                .foregroundStyle(model.settings.autoSendTranscriptions ? Theme.text(colorScheme) : Theme.textMuted(colorScheme))
+                .frame(minWidth: 70, minHeight: 44, alignment: .trailing)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("AutoSendTranscriptions")
+        .accessibilityLabel("Auto send transcriptions")
+        .accessibilityValue(model.settings.autoSendTranscriptions ? "On" : "Off")
+        .accessibilityHint("Applies to new recordings. Cloud saving stays on.")
+    }
+
+    private func dateHeading(_ title: String, showAutoSend: Bool) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12, weight: .semibold))
+                .tracking(0.6).textCase(.uppercase).foregroundStyle(.secondary)
+            Spacer()
+            if showAutoSend { autoSendControl }
         }
     }
 
@@ -250,15 +238,11 @@ struct VoiceView: View {
         return ScrollView {
             LazyVStack(spacing: 12, pinnedViews: []) {
                 modelStatus
+                if snapshot.isEmpty { dateHeading("", showAutoSend: true) }
                 ForEach(Array(snapshot.enumerated()), id: \.element.id) { index, item in
                     if showsDateHeader(at: index, in: snapshot) {
-                        Text(Self.dateHeader(for: item.createdAtMs))
-                            .font(.system(size: 12, weight: .semibold))
-                            .tracking(0.6)
-                            .textCase(.uppercase)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, index == 0 ? 4 : 10)
+                        dateHeading(Self.dateHeader(for: item.createdAtMs), showAutoSend: index == 0)
+                            .padding(.top, index == 0 ? 0 : 10)
                     }
                     transcriptCard(item, wideLayout: false)
                 }
@@ -279,11 +263,7 @@ struct VoiceView: View {
 
                 ForEach(dayGroups) { group in
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(Self.dateHeader(for: group.items[0].createdAtMs))
-                            .font(.system(size: 12, weight: .semibold))
-                            .tracking(0.6)
-                            .textCase(.uppercase)
-                            .foregroundStyle(.secondary)
+                        dateHeading(Self.dateHeader(for: group.items[0].createdAtMs), showAutoSend: group.id == dayGroups.first?.id)
 
                         LazyVGrid(columns: regularGridColumns, alignment: .leading, spacing: 16) {
                             ForEach(group.items) { item in
@@ -327,12 +307,23 @@ struct VoiceView: View {
             onRequestCloudSave: {
                 syncRequest = TranscriptSyncRequest(item: item, workspace: model.workspaceGeneration, sendToAgent: false)
             },
-            onOpenRemote: refreshVisiblePrivacyOffers,
+            onOpenRemote: {},
             onToggleExpand: { toggleExpanded(item) },
             onUnstack: {
                 unstackItems([item])
             }
         )
+        }
+        .overlay(alignment: .topLeading) {
+            if selectionMode {
+                Image(systemName: selectedIds.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 21))
+                    .foregroundStyle(selectedIds.contains(item.id) ? Theme.accent(model.settings.accentPreset, colorScheme) : Color.secondary)
+                    .background(Theme.background(colorScheme), in: Circle())
+                    .onTapGesture { handleTap(item) }
+                    .accessibilityLabel(selectedIds.contains(item.id) ? "Deselect transcript" : "Select transcript")
+                    .offset(x: -7, y: -7)
+            }
         }
         .accessibilityIdentifier("VoiceTranscript-\(item.id)")
         .onAppear {
@@ -408,71 +399,6 @@ struct VoiceView: View {
                 actionTitle: "Open Settings"
             )
         }
-    }
-
-    private func beginVisiblePrivacyWindows() {
-        if let item = recordingPrivacyItem { beginPrivacyWindow(item.id) }
-    }
-
-    /// A privacy window begins only after its affordance appears while Voice is
-    /// genuinely usable. The store records the absolute deadline atomically.
-    private func beginPrivacyWindow(_ id: String) {
-        guard scenePhase == .active, !showSettings, editingItem == nil,
-              model.storageAlert == nil, recordingPrivacyItem?.id == id else { return }
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        Task { @MainActor in
-            guard workspace == model.workspaceGeneration,
-                  !model.isSigningOut,
-                  scenePhase == .active,
-                  !showSettings,
-                  editingItem == nil,
-                  model.storageAlert == nil,
-                  recordingPrivacyItem?.id == id
-            else { return }
-            _ = await store.beginPrivacyWindow(id: id)
-        }
-    }
-
-    /// The explicit tap is available only during the visible, persisted
-    /// deadline. A false write immediately reloads instead of claiming success.
-    private func keepPrivacyOfferLocal(_ id: String) {
-        guard case .privacyHold(let deadline)? = model.transcripts.items.first(where: { $0.id == id })?.syncState,
-              deadline > Timestamps.nowMs()
-        else { return }
-        persistLocalPrivacyChoice(id)
-    }
-
-    private func persistLocalPrivacyChoice(_ id: String) {
-        guard !savingLocalChoice else { return }
-        savingLocalChoice = true
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        Task { @MainActor in
-            defer { savingLocalChoice = false }
-            guard workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-            let kept = await store.keepLocal(id: id)
-            if !kept, workspace == model.workspaceGeneration {
-                await store.reload()
-            }
-        }
-    }
-
-    /// Already-started windows belong to the store and survive navigation.
-    private func refreshVisiblePrivacyOffers() {
-        beginVisiblePrivacyWindows()
-    }
-
-    /// A time is enough to distinguish simultaneous privacy choices without
-    /// putting a transcript excerpt into the compact, time-bounded control.
-    private func privacyOfferRecordHint(for item: TranscriptItem) -> String? {
-        guard model.transcripts.pendingPrivacyOffers.count > 1 else { return nil }
-        let time = DateFormatter.localizedString(
-            from: item.createdAtMs.msToDate,
-            dateStyle: .none,
-            timeStyle: .short
-        )
-        return "Recording at \(time)"
     }
 
     private func engineProgressBanner(message: String, progress: Double?) -> some View {
@@ -579,57 +505,32 @@ struct VoiceView: View {
 
     private var recordingControls: some View {
         let recorder = model.recorder
-        let privacyItem = recordingPrivacyItem
-        let pending = recorder.phase == .idle && privacyItem == nil ? recorder.nextPendingSession : nil
+        let pending = recorder.phase == .idle ? recorder.nextPendingSession : nil
         return VStack(spacing: 8) {
             if recorder.phase == .idle, let error = recorder.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 20)
             }
             HStack(spacing: 10) {
                 if let pending {
                     Button { audioToDiscard = pending } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 48, height: 52)
+                        Image(systemName: "xmark").frame(width: 48, height: 52)
                             .background(.regularMaterial, in: Capsule())
                     }
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")
                 }
                 Button {
-                    if let privacyItem {
-                        // A tap rendered for this choice can never start audio,
-                        // including at the exact countdown expiry boundary.
-                        keepPrivacyOfferLocal(privacyItem.id)
-                    } else if pending != nil {
-                        Task { await recorder.transcribeUserInitiated() }
-                    } else {
-                        recorder.toggle()
-                    }
+                    guard recorder.phase != .transcribing else { return }
+                    if pending != nil { Task { await recorder.transcribeUserInitiated() } }
+                    else { recorder.toggle() }
                 } label: {
-                    Group {
-                        if let privacyItem {
-                            privacyControlLabel(for: privacyItem)
-                        } else {
-                            recordingControlLabel
-                        }
-                    }
-                        .padding(.horizontal, 22)
-                        .frame(height: 52)
-                        .background(
-                            privacyItem != nil ? Color(hex: 0xB45309)
-                                : recorder.phase == .recording ? Theme.unread
-                                : Theme.accent(model.settings.accentPreset, colorScheme),
-                            in: Capsule()
-                        )
+                    recordingControlLabel
+                        .padding(.horizontal, 22).frame(height: 52)
+                        .background(recorder.phase == .recording ? Theme.unread : Theme.accent(model.settings.accentPreset, colorScheme), in: Capsule())
                         .foregroundStyle(.white)
                 }
-                .disabled(recorder.phase == .transcribing || savingLocalChoice)
-                .accessibilityValue(privacyItem?.id ?? "")
+                .allowsHitTesting(recorder.phase != .transcribing)
                 .accessibilityIdentifier("VoiceRecordingControl")
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -637,30 +538,6 @@ struct VoiceView: View {
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         }
         .animation(.spring(duration: 0.3), value: recorder.phase)
-        .onAppear { beginVisiblePrivacyWindows() }
-        .onChange(of: privacyItem?.id) { _, _ in beginVisiblePrivacyWindows() }
-    }
-
-    private func privacyControlLabel(for item: TranscriptItem) -> some View {
-        TimelineView(.periodic(from: .now, by: 0.2)) { context in
-            HStack(spacing: 10) {
-                Image(systemName: "hand.raised.fill")
-                VStack(spacing: 2) {
-                    Text("No action")
-                        .font(.system(size: 15, weight: .semibold))
-                    if case .privacyHold(let deadline) = item.syncState {
-                        let remaining = max(0, Int(ceil(deadline.msToDate.timeIntervalSince(context.date))))
-                        Text("Send to agent in \(remaining)s")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    } else {
-                        Text("Starting countdown…").font(.system(size: 12))
-                    }
-                    if let hint = privacyOfferRecordHint(for: item) {
-                        Text(hint).font(.system(size: 10))
-                    }
-                }
-            }
-        }
     }
 
     @ViewBuilder
@@ -966,7 +843,6 @@ struct VoiceView: View {
 /// word count, action tag, cloud/Remote icons and a bottom-right expansion
 /// chevron, with a 3-line clamp and last-words verification line.
 struct StackCard: View {
-    @State private var showingDelivery = false
     let item: TranscriptItem
     let expanded: Bool
     let copied: Bool
@@ -1036,7 +912,7 @@ struct StackCard: View {
                 .lineSpacing(3)
                 .lineLimit(expanded ? nil : (wideLayout ? 5 : 3))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if needsExpansion {
+            if needsExpansion || item.isStack {
                 HStack(alignment: .bottom, spacing: 8) {
                     if let lastWords {
                         Text("[…] \(lastWords)")
@@ -1044,7 +920,10 @@ struct StackCard: View {
                             .foregroundStyle(Theme.textMuted(colorScheme))
                     }
                     Spacer(minLength: 0)
-                    expansionButton.fixedSize()
+                    ZStack(alignment: .trailing) {
+                        if needsExpansion { expansionButton.fixedSize() }
+                        if item.isStack { stackCount.padding(.trailing, needsExpansion ? 20 : 0) }
+                    }
                 }
             }
         }
@@ -1062,15 +941,6 @@ struct StackCard: View {
                         )
                 )
         )
-        .overlay(alignment: .topLeading) {
-            if selectionMode {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 21))
-                    .foregroundStyle(selected ? accent : Color.secondary)
-                    .background(Theme.background(colorScheme), in: Circle())
-                    .offset(x: -7, y: -7)
-            }
-        }
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(selectionMode ? "Toggles selection" : "Copies transcript")
@@ -1123,6 +993,32 @@ struct StackCard: View {
         }
     }
 
+    @State private var showingDelivery = false
+    @State private var showingDeliveryError = false
+
+    private var deliveryError: String? {
+        if actionLabel != "Complete", ["failed", "uncertain", "retry"].contains(item.currentAgentStatus ?? "") {
+            return item.wasSentToAgent
+                ? "The agent task encountered an error. Open Remote to inspect the task and retry there."
+                : "Sending to the agent encountered an error. Open Remote to inspect delivery. Your transcript remains saved."
+        }
+        if !item.isCloudSaved, case .error(let message) = model.sync.status { return message }
+        return nil
+    }
+
+    private var deliveryErrorButton: some View {
+        Button { showingDeliveryError = true } label: {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12)).foregroundStyle(.orange)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Delivery error")
+        .alert("Delivery error", isPresented: $showingDeliveryError) {
+            if !item.isCloudSaved { Button("Retry cloud save", action: onRequestCloudSave) }
+            Button("OK", role: .cancel) {}
+        } message: { Text(deliveryError ?? "Delivery will retry when possible.") }
+    }
+
     private var hasEarlierSyncedRevision: Bool {
         (item.acknowledgedUpdatedAtMs ?? 0) > 0
             && item.acknowledgedUpdatedAtMs != item.updatedAtMs
@@ -1133,22 +1029,25 @@ struct StackCard: View {
     }
 
     private var syncStateBadge: some View {
-        Button { showingDelivery = true } label: {
-            Text(actionLabel)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(item.wasSentToAgent ? Theme.link : Theme.markRead)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background((item.wasSentToAgent ? Theme.link : Theme.markRead).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        Button {
+            if actionLabel == "Send to agent" { onRequestCloudSync() }
+            else { showingDelivery = true }
+        } label: {
+            HStack(spacing: 3) {
+                Text(actionLabel)
+                if VoiceDelivery.isInProgress(actionLabel) { DeliveryEllipsis() }
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(item.wasSentToAgent ? Theme.link : Theme.markRead)
+            .padding(.horizontal, 6).padding(.vertical, 2.5)
+            .background((item.wasSentToAgent ? Theme.link : Theme.markRead).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.borderless)
-        .sheet(isPresented: $showingDelivery) {
-            VoiceDeliveryView(item: item, onSend: onRequestCloudSync)
-        }
+        .sheet(isPresented: $showingDelivery) { VoiceDeliveryView(item: item, onSend: onRequestCloudSync) }
         .fixedSize()
         .accessibilityLabel(actionLabel)
         .accessibilityValue(item.actionPolicy)
-        .accessibilityHint("Shows delivery timestamps and Mac observations")
+        .accessibilityHint(actionLabel == "Send to agent" ? "Shows Send to agent option" : "Shows delivery timestamps and Mac observations")
     }
 
     private var cloudStatusButton: some View {
@@ -1186,20 +1085,7 @@ struct StackCard: View {
         .help(expanded ? "Collapse transcript" : "Expand transcript")
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text(copied ? "Copied!" : timeLabel)
-                .font(.system(size: 12, weight: copied ? .semibold : .regular))
-                .foregroundStyle(copied ? Theme.link : Theme.textMuted(colorScheme).opacity(0.8))
-
-            Text("\(wordCount) words")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background(Theme.textMuted(colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-
-            if item.isStack {
+    private var stackCount: some View {
                 HStack(spacing: 4) {
                     Image(systemName: "square.3.layers.3d")
                         .font(.system(size: 11, weight: .semibold))
@@ -1213,13 +1099,30 @@ struct StackCard: View {
                 .onLongPressGesture(minimumDuration: 0.6) {
                     if !wideLayout && !selectionMode { onUnstack() }
                 }
-            }
+        .accessibilityLabel("Stack count")
+        .accessibilityValue(String(item.segments?.count ?? 0))
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(copied ? "Copied!" : timeLabel)
+                .font(.system(size: 12, weight: copied ? .semibold : .regular))
+                .foregroundStyle(copied ? Theme.link : Theme.textMuted(colorScheme).opacity(0.8))
+
+            Text("\(wordCount) words")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2.5)
+                .background(Theme.textMuted(colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
 
             syncStateBadge
 
             Spacer()
 
             HStack(spacing: 8) {
+                if deliveryError != nil { deliveryErrorButton }
                 cloudStatusButton
                 if !selectionMode {
                     ChatGPTRemoteButton(onWillOpen: onOpenRemote)

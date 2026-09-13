@@ -13,15 +13,18 @@ struct VoiceDeliveryView: View {
         NavigationStack {
             List {
                 Section("Delivery") {
-                    Text(VoiceDelivery.status(item: item, events: events, receipt: store.receipt(for: item)))
-                        .font(.headline)
+                    let status = VoiceDelivery.status(item: item, events: events, receipt: store.receipt(for: item))
+                    HStack(spacing: 5) {
+                        Text(status)
+                        if VoiceDelivery.isInProgress(status) { DeliveryEllipsis() }
+                    }.font(.headline)
                     LabeledContent("Saved on phone", value: item.createdAtMs.msToDate.formatted(date: .abbreviated, time: .standard))
                     if item.isCloudSaved && !events.contains(where: { $0.stage == "uploaded" }) {
                         Text("Upload confirmed. Its server timestamp is unavailable.").foregroundStyle(.secondary)
                     }
                     ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(VoiceDelivery.label(event.stage))
+                            Text(["completed", "failed", "needs_user", "context"].contains(event.stage) && store.receipt(for: item)?.hasUsableResult == true ? "Complete" : VoiceDelivery.label(event.stage))
                             Text(event.time_source == "server" ? "Server timestamp" : event.time_source == "codex" ? "Reported by Codex" : "Observed by Mac")
                                 .font(.caption2).foregroundStyle(.secondary)
                             if let date = event.date {
@@ -33,8 +36,9 @@ struct VoiceDeliveryView: View {
                             }
                         }
                     }
-                    if let receipt = store.receipt(for: item), ["failed", "needs_user"].contains(receipt.status), let summary = receipt.summary, !summary.isEmpty {
-                        Text(summary)
+                    if let receipt = store.receipt(for: item) {
+                        if let result = receipt.final_response, !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Text(result) }
+                        else if let summary = receipt.summary, !summary.isEmpty { Text(summary) }
                     }
                     if events.isEmpty {
                         Text("Detailed delivery history is not available yet. Status is based on confirmed upload and agent receipts.").font(.caption).foregroundStyle(.secondary)
@@ -80,5 +84,25 @@ struct VoiceDeliveryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+    }
+}
+
+/// Fixed width keeps the delivery label still. VoiceOver reads the status once.
+struct DeliveryEllipsis: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Group {
+            if reduceMotion { Text("…").opacity(0.65) }
+            else {
+                TimelineView(.animation(minimumInterval: 0.35)) { context in
+                    let step = Int(context.date.timeIntervalSinceReferenceDate / 0.35) % 3
+                    HStack(spacing: 1.5) {
+                        ForEach(0..<3) { index in
+                            Circle().frame(width: 2, height: 2).opacity(index == step ? 0.8 : 0.3)
+                        }
+                    }
+                }
+            }
+        }.frame(width: 10).accessibilityHidden(true)
     }
 }

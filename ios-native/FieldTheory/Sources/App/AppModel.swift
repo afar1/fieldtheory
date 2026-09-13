@@ -72,7 +72,7 @@ final class AppModel {
 
         let library = LibraryStore(db: db, libraryRoot: libraryRootOverride)
         let river = RiverStore(db: db)
-        let transcripts = TranscriptStore(db: db)
+        let transcripts = TranscriptStore(db: db, usesCountdown: false)
         let auth = AuthStore(client: client)
         let sync = SyncEngine(client: client, db: db, settings: settings,
                               library: library, river: river, transcripts: transcripts)
@@ -388,7 +388,7 @@ final class AppModel {
     private func makeStack(db: Database, libraryRoot: URL) -> StorageStack {
         let library = LibraryStore(db: db, libraryRoot: libraryRoot)
         let river = RiverStore(db: db)
-        let transcripts = TranscriptStore(db: db)
+        let transcripts = TranscriptStore(db: db, usesCountdown: false)
         let sync = SyncEngine(
             client: auth.client, db: db, settings: settings,
             library: library, river: river, transcripts: transcripts

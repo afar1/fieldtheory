@@ -44,7 +44,7 @@ enum VoiceDelivery {
         case "received_by_mac": return "Received by Mac"
         case "queued": return "Queued in Codex"
         case "started": return "Working"
-        case "completed": return "Completed"
+        case "completed": return "Complete"
         case "context": return "Saved as context"
         case "needs_user": return "Needs you"
         case "failed": return "Failed"
@@ -54,10 +54,22 @@ enum VoiceDelivery {
         }
     }
 
+    static func isInProgress(_ status: String) -> Bool {
+        ["Saved on phone", "Uploaded", "Received by Mac", "Queued in Codex", "Working"].contains(status)
+    }
+
     static func status(item: TranscriptItem, events: [VoiceDeliveryEvent], receipt: VoiceAgentReceipt?) -> String {
         let matching = events.filter { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
             .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
         let terminal = ["completed", "context", "needs_user", "failed", "cancelled", "superseded"]
+        // A completed run can truthfully report blockers or partial work.
+        // Only a terminal receipt with actual result text establishes this.
+        if let receipt, receipt.transcript_id == item.id,
+           receipt.revision == Hashing.sha256Hex(item.text),
+           terminal.contains(receipt.status), receipt.hasUsableResult { return "Complete" }
+        if item.actionPolicy != "send", !item.wasSentToAgent, receipt?.confirmed != true,
+           matching.allSatisfy({ ["uploaded", "cancelled", "superseded"].contains($0.stage) }) { return "Send to agent" }
+
         if let event = matching.last(where: { terminal.contains($0.stage) }) { return label(event.stage) }
         if let receipt, receipt.revision == Hashing.sha256Hex(item.text) {
             if terminal.contains(receipt.status) {
@@ -68,6 +80,7 @@ enum VoiceDelivery {
         for stage in ["started", "queued", "received_by_mac", "uploaded"] {
             if matching.contains(where: { $0.stage == stage }) { return label(stage) }
         }
+        if item.wasSentToAgent { return "Sent to agent" }
         return item.isCloudSaved ? "Uploaded" : "Saved on phone"
     }
 }

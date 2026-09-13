@@ -3,6 +3,38 @@ import XCTest
 
 @MainActor
 final class TranscriptStoreTests: XCTestCase {
+    func testAutomaticAndManualCapturesSaveWithoutCountdownOrRetroactiveRelease() async throws {
+        let db = try Database(path: ":memory:")
+        let store = TranscriptStore(db: db, usesCountdown: false)
+        let automatic = await store.add(text: "automatic", autoSend: true)
+        let manual = await store.add(text: "manual", autoSend: false)
+        XCTAssertEqual(automatic?.actionPolicy, "send")
+        XCTAssertEqual(manual?.actionPolicy, "no_action")
+        await store.reload()
+        XCTAssertTrue(store.pendingPrivacyOffers.isEmpty)
+        let queued = try await db.query("SELECT dirty FROM transcripts")
+        XCTAssertTrue(queued.allSatisfy { $0["dirty"]?.intValue == 1 })
+        _ = await store.add(text: "new automatic", autoSend: true)
+        XCTAssertEqual(store.items.first(where: { $0.id == manual?.id })?.actionPolicy, "no_action")
+        let sent = await store.requestCloudSync(id: try XCTUnwrap(manual).id)
+        XCTAssertTrue(sent)
+    }
+
+    func testCompleteReceiptIsScopedToCurrentTextRevision() async throws {
+        let db = try Database(path: ":memory:")
+        let store = TranscriptStore(db: db, usesCountdown: false)
+        let created = await store.add(text: "task", autoSend: true)
+        let item = try XCTUnwrap(created)
+        try await store.recordAgentReceipts([VoiceAgentReceipt(
+            transcript_id: item.id, revision: Hashing.sha256Hex(item.text),
+            thread_id: "thread", turn_id: "turn", status: "completed")])
+        XCTAssertEqual(store.items.first?.currentAgentStatus, "completed")
+        let changed = await store.update(item, text: "different task")
+        XCTAssertTrue(changed)
+        XCTAssertNil(store.items.first?.currentAgentStatus)
+        XCTAssertFalse(store.items.first?.wasSentToAgent ?? true)
+    }
+
     private func makeStore() throws -> TranscriptStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ft-tests-\(UUID().uuidString)")

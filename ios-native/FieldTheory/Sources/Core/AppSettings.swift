@@ -91,6 +91,22 @@ final class WordSubstitutionSettings {
 final class AppSettings {
     private let defaults: UserDefaults
 
+    var autoSendTranscriptions: Bool {
+        didSet {
+            defaults.set(autoSendTranscriptions, forKey: "ambition-auto-send")
+            if autoSendTranscriptions && !oldValue {
+                autoSendEnabledSinceMs = Timestamps.nowMs()
+                defaults.set(autoSendEnabledSinceMs, forKey: "ambition-auto-send-since")
+            }
+        }
+    }
+    private(set) var autoSendEnabledSinceMs: Int64
+
+    func shouldAutoSend(sessionID: String?) -> Bool {
+        guard autoSendTranscriptions, let sessionID, let started = Int64(sessionID) else { return false }
+        return started > autoSendEnabledSinceMs
+    }
+
     var typographyPreset: TypographyPresetID {
         didSet { defaults.set(typographyPreset.rawValue, forKey: "librarian-typography-preset") }
     }
@@ -150,6 +166,8 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        autoSendTranscriptions = defaults.object(forKey: "ambition-auto-send") as? Bool ?? true
+        autoSendEnabledSinceMs = (defaults.object(forKey: "ambition-auto-send-since") as? NSNumber)?.int64Value ?? Timestamps.nowMs()
         typographyPreset = TypographyPresetID(rawValue: defaults.string(forKey: "librarian-typography-preset") ?? "") ?? .book
         lineHeight = LineHeightID(rawValue: defaults.string(forKey: "librarian-line-height") ?? "") ?? .normal
         textSize = TextSizeID(rawValue: defaults.string(forKey: "librarian-text-size") ?? "") ?? .normal
@@ -165,6 +183,7 @@ final class AppSettings {
            let y = defaults.object(forKey: "mic-pos-y") as? Double {
             micPositionFraction = CGPoint(x: x, y: y)
         }
+        defaults.set(autoSendEnabledSinceMs, forKey: "ambition-auto-send-since")
     }
 }
 

@@ -188,6 +188,9 @@ struct TranscriptItem: Identifiable, Hashable {
     var cloudExposureUpdatedAtMs: Int64?
     var actionProtocol: Bool
     var agentSentRevision: String?
+    var agentStatus: String? = nil
+    var agentStatusRevision: String? = nil
+    var currentAgentStatus: String? { agentStatusRevision == Hashing.sha256Hex(text) ? agentStatus : nil }
 
     var isCloudSaved: Bool { acknowledgedUpdatedAtMs == updatedAtMs }
     var wasSentToAgent: Bool { agentSentRevision == Hashing.sha256Hex(text) }

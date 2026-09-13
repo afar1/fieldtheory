@@ -153,6 +153,8 @@ struct VoiceAgentReceipt: Decodable {
     let turn_id: String?
     let status: String
     var summary: String? = nil
+    var final_response: String? = nil
+    var hasUsableResult: Bool { !(final_response?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
 
     var confirmed: Bool {
         guard let thread_id, !thread_id.isEmpty else { return false }
@@ -204,7 +206,7 @@ private final class SupabaseVoiceSyncTransport: VoiceSyncTransport {
         for start in stride(from: 0, to: ids.count, by: 100) {
             let batch = Array(ids[start..<min(start + 100, ids.count)])
             let rows: [VoiceAgentReceipt] = try await client.from("voice_jobs")
-                .select("transcript_id,revision,thread_id,status,summary,turn_id:result->>turn_id")
+                .select("transcript_id,revision,thread_id,status,summary,turn_id:result->>turn_id,final_response:result->>final_response")
                 .in("transcript_id", values: batch)
                 .order("received_at", ascending: true)
                 .limit(1000)

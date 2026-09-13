@@ -2,9 +2,9 @@ import XCTest
 
 #if targetEnvironment(simulator)
 final class ChatGPTRemoteUITests: XCTestCase {
-    func testRemoteSetupPreservesCountdown() {
+    func testRemoteSetupPreservesAutoSendControl() {
         let app = XCUIApplication()
-        app.launchArguments = ["ft-preview", "ft-privacy-preview",
+        app.launchArguments = ["ft-preview", "ft-card-layout-preview",
                                "-chatgpt-remote-shortcut-configured", "NO"]
         app.launch()
         XCTAssertTrue(app.buttons["VoiceRecordingControl"].firstMatch.waitForExistence(timeout: 15))
@@ -19,11 +19,7 @@ final class ChatGPTRemoteUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         app.navigationBars["ChatGPT Remote"].buttons["Done"].tap()
-        let pending = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier == %@ AND value == %@",
-            "VoiceTranscript-t-1", "send")).firstMatch
-        XCTAssertTrue(pending.waitForExistence(timeout: 10))
-        XCTAssertEqual(pending.value as? String, "send")
+        XCTAssertTrue(app.buttons["AutoSendTranscriptions"].firstMatch.waitForExistence(timeout: 5))
     }
 }
 #endif

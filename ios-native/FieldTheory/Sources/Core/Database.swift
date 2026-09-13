@@ -175,6 +175,8 @@ actor Database {
 
         _ = try ensureColumn(table: "transcripts", name: "action_protocol", definition: "INTEGER NOT NULL DEFAULT 0")
         _ = try ensureColumn(table: "transcripts", name: "agent_sent_revision", definition: "TEXT")
+        _ = try ensureColumn(table: "transcripts", name: "agent_status", definition: "TEXT")
+        _ = try ensureColumn(table: "transcripts", name: "agent_status_revision", definition: "TEXT")
 
         // Existing Voice databases predate the per-recording privacy hold.
         // Clean rows are known cloud history. Dirty legacy rows retain their

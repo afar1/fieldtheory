@@ -5,7 +5,7 @@ final class VoiceDeliveryUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["ft-preview", "ft-delivery-preview"]
         app.launch()
-        let status = app.buttons["Completed"].firstMatch
+        let status = app.buttons["Complete"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 15))
         status.tap()
         XCTAssertTrue(app.navigationBars["Delivery timeline"].waitForExistence(timeout: 5))

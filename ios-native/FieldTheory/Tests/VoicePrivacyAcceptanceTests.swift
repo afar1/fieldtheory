@@ -39,7 +39,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testFailedKeepLocalWriteCannotExpireIntoUpload() async throws {
         let db = try makeDatabase()
         let store = TranscriptStore(db: db, privacyHoldDurationMs: 40)
-        let added = await store.add(text: "keep private despite storage failure")
+        let added = try await addLegacyCapture(text: "keep private despite storage failure", store: store, db: db)
         let item = try XCTUnwrap(added)
         let began = await store.beginPrivacyWindow(id: item.id)
         XCTAssertTrue(began)
@@ -65,6 +65,17 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
         XCTAssertTrue(retried)
         XCTAssertEqual(store.items.first?.syncState, .localOnly)
         await engine.stopAndWait()
+    }
+
+    // These assertions cover pre-action-protocol local-only recordings. New
+    // captures intentionally cloud-save with an explicit send/no_action policy;
+    // VoiceSyncTests covers that separate contract. Mark legacy fixtures
+    // explicitly rather than relying on add() to create the old protocol.
+    private func addLegacyCapture(text: String, store: TranscriptStore, db: Database) async throws -> TranscriptItem? {
+        guard let item = await store.add(text: text) else { return nil }
+        try await db.run("UPDATE transcripts SET action_protocol = 0 WHERE id = ?", [.text(item.id)])
+        await store.reload()
+        return store.items.first { $0.id == item.id }
     }
 
     private let userID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -112,7 +123,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testNeverOfferedRecordingCannotUploadEvenOnManualSync() async throws {
         let db = try makeDatabase()
         let store = TranscriptStore(db: db)
-        let added = await store.add(text: "never shown")
+        let added = try await addLegacyCapture(text: "never shown", store: store, db: db)
         let item = try XCTUnwrap(added)
         let transport = PrivacyAcceptanceTransport()
         let engine = makeEngine(db: db, store: store, transport: transport)
@@ -128,7 +139,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testActivePrivacyHoldBlocksManualRefresh() async throws {
         let db = try makeDatabase()
         let store = TranscriptStore(db: db, privacyHoldDurationMs: 60_000)
-        let added = await store.add(text: "still deciding")
+        let added = try await addLegacyCapture(text: "still deciding", store: store, db: db)
         let item = try XCTUnwrap(added)
         let began = await store.beginPrivacyWindow(id: item.id)
         XCTAssertTrue(began)
@@ -149,7 +160,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
         let db = try makeDatabase()
         let now: Int64 = 10_000
         let store = TranscriptStore(db: db, nowMs: { now })
-        let added = await store.add(text: "seven seconds")
+        let added = try await addLegacyCapture(text: "seven seconds", store: store, db: db)
         let item = try XCTUnwrap(added)
         let began = await store.beginPrivacyWindow(id: item.id)
         XCTAssertTrue(began)
@@ -163,12 +174,12 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testRecordingsReceiveIndependentPrivacyWindows() async throws {
         let db = try makeDatabase()
         let store = TranscriptStore(db: db, privacyHoldDurationMs: 200)
-        let firstAdded = await store.add(text: "first")
+        let firstAdded = try await addLegacyCapture(text: "first", store: store, db: db)
         let first = try XCTUnwrap(firstAdded)
         let beganFirst = await store.beginPrivacyWindow(id: first.id)
         XCTAssertTrue(beganFirst)
         try await Task.sleep(for: .milliseconds(150))
-        let secondAdded = await store.add(text: "second")
+        let secondAdded = try await addLegacyCapture(text: "second", store: store, db: db)
         let second = try XCTUnwrap(secondAdded)
         let beganSecond = await store.beginPrivacyWindow(id: second.id)
         XCTAssertTrue(beganSecond)
@@ -184,7 +195,7 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testKeepLocalSurvivesRelaunchAndEdit() async throws {
         let db = try makeDatabase()
         let firstStore = TranscriptStore(db: db, privacyHoldDurationMs: 60_000)
-        let added = await firstStore.add(text: "private first draft")
+        let added = try await addLegacyCapture(text: "private first draft", store: firstStore, db: db)
         let original = try XCTUnwrap(added)
         let began = await firstStore.beginPrivacyWindow(id: original.id)
         XCTAssertTrue(began)
@@ -312,13 +323,13 @@ final class VoicePrivacyAcceptanceTests: XCTestCase {
     func testMixedLocalOnlyStackIsRejectedAndPrivateTextNeverEntersWireSnapshot() async throws {
         let db = try makeDatabase()
         let store = TranscriptStore(db: db, privacyHoldDurationMs: 60_000)
-        let privateAdded = await store.add(text: "private phrase")
+        let privateAdded = try await addLegacyCapture(text: "private phrase", store: store, db: db)
         let privateItem = try XCTUnwrap(privateAdded)
         let began = await store.beginPrivacyWindow(id: privateItem.id)
         XCTAssertTrue(began)
         let kept = await store.keepLocal(id: privateItem.id)
         XCTAssertTrue(kept)
-        let publicAdded = await store.add(text: "public phrase")
+        let publicAdded = try await addLegacyCapture(text: "public phrase", store: store, db: db)
         let publicItem = try XCTUnwrap(publicAdded)
         try await db.run("""
             UPDATE transcripts

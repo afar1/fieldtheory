@@ -1,7 +1,7 @@
 # Native iOS source preservation — 2026-09-13
 
-Two divergent source versions must be reconciled before the next full-featured
-phone build. A newer directory timestamp did not establish feature completeness.
+Two divergent source versions were preserved and reconciled for build 17.
+A newer directory timestamp did not establish feature completeness.
 
 ## Current development branch
 
@@ -10,9 +10,11 @@ new continued background transcription implementation, its 43 passing targeted
 tests, and the corrected Field Theory / Preparing voice model UI copy.
 The signed iPhone build passes. Background inference on the phone remains unverified.
 
-This branch currently lacks the prior Auto-send feature and related Voice UI.
-The earlier background-transcription candidate installed on Focus was built from
-this branch before the name/copy correction; it omitted those prior features.
+The branch now includes the prior Auto-send control, capture-time eligibility,
+selection/stack layout, processing dots, and agent result/status display. The
+initial background-transcription candidate installed on Focus omitted those
+features; build 17 reconciles them while retaining word replacements and continued
+background processing. Explicit Retry still enters the new continued-task path.
 
 ## Preserved prior phone source
 
@@ -36,7 +38,9 @@ successful phone installation. They do not establish which version was on the
 phone immediately before this thread's install, or prove physical UI behavior.
 
 The preservation branch also predates shared word-replacement synchronization.
-Do not replace the current source wholesale with it. Reconcile its feature changes
-with the current background transcription and word replacements, then run the
-combined behavior tests and physical-device checks. Saving both branches is not
-itself that reconciliation.
+Do not replace the current source wholesale with it. Reconciliation used
+200d94856 as the shared source baseline, retaining subsequent word replacements
+and background processing while restoring the earlier Voice feature changes.
+The legacy privacy acceptance fixtures now explicitly mark pre-action-protocol
+records; modern send/no_action cloud behavior remains covered independently.
+Physical background inference remains an outstanding device acceptance check.

@@ -9,6 +9,7 @@ import Observation
 @Observable
 final class TranscriptStore {
     private let db: Database
+    private let usesCountdown: Bool
     private let privacyHoldDurationMs: Int64
     private let nowMs: @MainActor () -> Int64
     private var privacyTimers: [String: (deadline: Int64, token: UUID, task: Task<Void, Never>)] = [:]
@@ -80,9 +81,11 @@ final class TranscriptStore {
     init(
         db: Database,
         privacyHoldDurationMs: Int64 = 7_000,
+        usesCountdown: Bool = true,
         nowMs: @escaping @MainActor () -> Int64 = Timestamps.nowMs
     ) {
         self.db = db
+        self.usesCountdown = usesCountdown
         self.privacyHoldDurationMs = privacyHoldDurationMs
         self.nowMs = nowMs
     }
@@ -97,7 +100,7 @@ final class TranscriptStore {
                 guard let id = row["transcript_id"]?.stringValue, let revision = row["revision"]?.stringValue else { return nil }
                 return (id + ":" + revision, row["sent"]?.intValue == 1)
             })
-            reconcilePrivacyTimers()
+            if usesCountdown { reconcilePrivacyTimers() }
         } catch {
             items = []
             report("Voice notes could not be loaded. Existing recordings and notes were left unchanged.", error: error)
@@ -109,7 +112,7 @@ final class TranscriptStore {
         if let json = row["segments_json"]?.stringValue, let data = json.data(using: .utf8) {
             segments = try? JSONDecoder().decode([TranscriptSegment].self, from: data)
         }
-        return TranscriptItem(
+        var item = TranscriptItem(
             id: row["id"]?.stringValue ?? "",
             text: row["text"]?.stringValue ?? "",
             createdAtMs: row["created_at_ms"]?.intValue ?? 0,
@@ -124,6 +127,9 @@ final class TranscriptStore {
             actionProtocol: row["action_protocol"]?.intValue == 1,
             agentSentRevision: row["agent_sent_revision"]?.stringValue
         )
+        item.agentStatus = row["agent_status"]?.stringValue
+        item.agentStatusRevision = row["agent_status_revision"]?.stringValue
+        return item
     }
 
     /// Starts the hold only after the UI has actually rendered its affordance.
@@ -246,7 +252,10 @@ final class TranscriptStore {
     }
 
     func recordAgentReceipts(_ receipts: [VoiceAgentReceipt]) async throws {
-        for receipt in receipts where receipt.confirmed {
+        for receipt in receipts {
+            try await db.run("UPDATE transcripts SET agent_status = ?, agent_status_revision = ? WHERE id = ?",
+                             [.text(receipt.status), .text(receipt.revision), .text(receipt.transcript_id)])
+            guard receipt.confirmed else { continue }
             try await db.run("UPDATE transcripts SET agent_sent_revision = ? WHERE id = ?",
                              [.text(receipt.revision), .text(receipt.transcript_id)])
         }
@@ -258,6 +267,13 @@ final class TranscriptStore {
         if let initialPrivacyRecoveryTask {
             try await initialPrivacyRecoveryTask.value
             return
+        }
+        if !usesCountdown {
+            try await db.run("""
+                UPDATE transcripts SET privacy_state = 'local_only', privacy_deadline_at_ms = NULL,
+                    dirty = 1, updated_at_ms = MAX(updated_at_ms + 1, ?)
+                WHERE privacy_state IN ('pending', 'holding') AND action_protocol = 1
+                """, [.int(Timestamps.nowMs())])
         }
         let db = self.db
         let task = Task { try await db.run("""
@@ -387,7 +403,7 @@ final class TranscriptStore {
     }
 
     @discardableResult
-    func add(text: String) async -> TranscriptItem? {
+    func add(text: String, autoSend: Bool? = nil) async -> TranscriptItem? {
         let now = Timestamps.nowMs()
         let item = TranscriptItem(
             id: "\(now)-\(String(UUID().uuidString.prefix(8)))",
@@ -395,7 +411,7 @@ final class TranscriptStore {
             createdAtMs: now,
             updatedAtMs: now,
             segments: nil,
-            privacyPolicy: .awaitingOffer, actionProtocol: true
+            privacyPolicy: autoSend.map { $0 ? .uploadEligible : .localOnly } ?? .awaitingOffer, actionProtocol: true
         )
         do {
             try await db.run("""
@@ -403,8 +419,8 @@ final class TranscriptStore {
                     id, text, created_at_ms, updated_at_ms, segments_json, dirty,
                     privacy_state, privacy_deadline_at_ms, acknowledged_updated_at_ms,
                     cloud_exposure_updated_at_ms, upload_claim_token, action_protocol
-                ) VALUES (?, ?, ?, ?, NULL, 1, 'pending', NULL, NULL, NULL, NULL, 1)
-                """, [.text(item.id), .text(text), .int(now), .int(now)])
+                ) VALUES (?, ?, ?, ?, NULL, 1, ?, NULL, NULL, NULL, NULL, 1)
+                """, [.text(item.id), .text(text), .int(now), .int(now), .text(item.privacyPolicy.rawValue)])
             await reload()
             onLocalChange?()
             return item
