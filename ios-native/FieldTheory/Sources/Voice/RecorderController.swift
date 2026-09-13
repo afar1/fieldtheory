@@ -35,6 +35,7 @@ final class RecorderController {
     private(set) var nextPendingSession: PendingAudioSession?
     var lastError: String?
 
+    private var lastStartFailure: Error?
     private var recorder: AVAudioRecorder?
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
@@ -448,16 +449,20 @@ final class RecorderController {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
         lastError = nil
-        beginSession()
+        beginSession(mixWithOtherAudio: true)
         guard phase == .recording else {
-            throw SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
+            throw lastStartFailure ?? SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
         }
     }
 
-    private func beginSession() {
+    private func beginSession(mixWithOtherAudio: Bool = false) {
+        lastStartFailure = nil
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
+            // A background intent must not request interruption of the foreground app's audio.
+            var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+            if mixWithOtherAudio { options.insert(.mixWithOthers) }
+            try session.setCategory(.playAndRecord, mode: .default, options: options)
             try session.setActive(true)
             segmentURLs = []
             sessionId = Timestamps.nowMs()
@@ -467,6 +472,8 @@ final class RecorderController {
             elapsed = 0
             startMetering()
         } catch {
+            lastStartFailure = error
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle

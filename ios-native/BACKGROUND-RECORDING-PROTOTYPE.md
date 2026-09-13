@@ -41,3 +41,14 @@ This prototype does not establish unlimited background Parakeet processing.
 AppModel owns persistence before any scene appears; the UI only installs toast
 presentation. Existing Auto-send preferences and word substitutions are preserved.
 The shared AppModel ensures foreground UI and intents use the same recorder.
+
+## Build 19 follow-up
+
+Build 18 device tests failed twice while UIApplication was background (state 2),
+before microphone start: “Session activation failed.” No recording was captured.
+The localized error alone did not preserve Apple's numeric reason code.
+Build 19 changes only intent capture to a mixable playAndRecord session, testing
+whether background nonmixable-session activation caused the refusal. Foreground
+recording retains its original audio policy. Failed starts now preserve NSError
+domain/code and deactivate the failed session. This is a hypothesis under device
+test, not proof that iOS permits cold background microphone activation.

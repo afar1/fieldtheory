@@ -56,7 +56,7 @@ final class BackgroundRecordingSession {
         } catch {
             activity = nil
             await newActivity.end(nil, dismissalPolicy: .immediate)
-            recordEvidence("microphone-start-failed", error: error.localizedDescription)
+            recordEvidence("microphone-start-failed", error: error)
             logger.error("Microphone start failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
@@ -90,7 +90,7 @@ final class BackgroundRecordingSession {
     }
 
     /// Content-free device evidence; no audio or transcript is copied into diagnostics.
-    private func recordEvidence(_ event: String, error: String? = nil) {
+    private func recordEvidence(_ event: String, error: Error? = nil) {
         let directory = RecorderController.voiceDiagnosticsDir
         let url = directory.appendingPathComponent("background-recording.json")
         do {
@@ -102,7 +102,12 @@ final class BackgroundRecordingSession {
                 "applicationState": UIApplication.shared.applicationState.rawValue,
                 "elapsedSeconds": AppModel.shared.recorder.elapsed,
                 "pendingSessions": AppModel.shared.recorder.pendingSessionCount]
-            if let error { entry["error"] = error }
+            if let error {
+                let nsError = error as NSError
+                entry["error"] = nsError.localizedDescription
+                entry["errorDomain"] = nsError.domain
+                entry["errorCode"] = nsError.code
+            }
             events.append(entry)
             try JSONSerialization.data(withJSONObject: Array(events.suffix(30)), options: [.prettyPrinted, .sortedKeys])
                 .write(to: url, options: .atomic)
