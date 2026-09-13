@@ -134,6 +134,20 @@ final class AppModel {
 #endif
     }
 
+    func startRecordingIfEnabledOnOpen() async {
+        guard settings.startRecordingOnOpen else { return }
+        for _ in 0..<200 {
+            if !isPreparingStorage { break }
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+        }
+        guard UIApplication.shared.applicationState == .active,
+              settings.startRecordingOnOpen, showMainUI, !isSigningOut,
+              !isReviewerDemoStorage, recorder.phase == .idle,
+              recorder.pendingSessionCount == 0 else { return }
+        recorder.start()
+    }
+
     func handleDidBecomeActive() {
         guard !isPreparingStorage, !storageAccessBlocked else { return }
         if case .signedIn = auth.phase {
@@ -413,6 +427,10 @@ final class AppModel {
     func wireRecorderPersistence() {
         let recorder = recorder
         recorder.replaceWords = { [weak self] text in self?.sync.wordSubstitutions.apply(to: text) ?? text }
+        recorder.onCaptureStarted = { [weak self] in
+            guard let self, self === AppModel.shared else { return }
+            BackgroundRecordingSession.shared.attachToForegroundRecording()
+        }
         recorder.onTranscript = { [weak self, weak recorder] text in
             guard let self, let recorder, self.recorder === recorder,
                   self.showMainUI, !self.isSigningOut else { return false }
@@ -426,6 +444,9 @@ final class AppModel {
             if self.settings.autoCopyTranscripts, UIApplication.shared.applicationState == .active {
                 UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true])
             }
+            // Keep the transcription's execution allowance until the upload attempt settles.
+            // The durable dirty row remains retryable on network/auth failure.
+            if !self.isReviewerDemoStorage { await self.sync.syncNow() }
             recorder.onNotice?("Saved to Field Theory", "waveform")
             return true
         }

@@ -22,6 +22,7 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var searchText = ""
+    @State private var recordingToDiscard: String?
     @State private var audioToDiscard: PendingAudioSession?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
@@ -133,6 +134,15 @@ struct VoiceView: View {
                     .accessibilityLabel("Settings")
                 }
             }
+            .alert("Are you sure you want to discard this audio?", isPresented: Binding(
+                get: { recordingToDiscard != nil }, set: { if !$0 { recordingToDiscard = nil } }
+            )) {
+                Button("Keep recording", role: .cancel) { recordingToDiscard = nil }
+                Button("Discard audio", role: .destructive) {
+                    if let id = recordingToDiscard { model.recorder.discardActiveRecording(expectedID: id) }
+                    recordingToDiscard = nil
+                }
+            } message: { Text("This cannot be undone.") }
             .alert("Discard this audio?", isPresented: Binding(
                 get: { audioToDiscard != nil },
                 set: { if !$0 { audioToDiscard = nil } }
@@ -512,6 +522,14 @@ struct VoiceView: View {
                     .multilineTextAlignment(.center).padding(.horizontal, 20)
             }
             HStack(spacing: 10) {
+                if recorder.phase == .recording {
+                    Button { recordingToDiscard = recorder.activeRecordingID } label: {
+                        Image(systemName: "xmark").frame(width: 48, height: 48)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Cancel recording")
+                    .accessibilityIdentifier("VoiceCancelRecording")
+                }
                 if let pending {
                     Button { audioToDiscard = pending } label: {
                         Image(systemName: "xmark").frame(width: 48, height: 52)

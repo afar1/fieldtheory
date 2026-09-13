@@ -91,6 +91,10 @@ final class WordSubstitutionSettings {
 final class AppSettings {
     private let defaults: UserDefaults
 
+    var startRecordingOnOpen: Bool {
+        didSet { defaults.set(startRecordingOnOpen, forKey: "ft-start-recording-on-open") }
+    }
+
     var autoSendTranscriptions: Bool {
         didSet {
             defaults.set(autoSendTranscriptions, forKey: "ambition-auto-send")
@@ -166,6 +170,7 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        startRecordingOnOpen = defaults.bool(forKey: "ft-start-recording-on-open")
         autoSendTranscriptions = defaults.object(forKey: "ambition-auto-send") as? Bool ?? true
         autoSendEnabledSinceMs = (defaults.object(forKey: "ambition-auto-send-since") as? NSNumber)?.int64Value ?? Timestamps.nowMs()
         typographyPreset = TypographyPresetID(rawValue: defaults.string(forKey: "librarian-typography-preset") ?? "") ?? .book

@@ -77,6 +77,8 @@ final class RecorderController {
     var replaceWords: ((String) -> String)?
     var onTranscript: ((String) async -> Bool)?
     /// Lightweight status line for toasts (queued audio, errors).
+    var onCaptureCancelled: (() -> Void)?
+    var onCaptureStarted: (() -> Void)?
     var onCaptureStopped: (() -> Void)?
     var onCaptureFinished: (() -> Void)?
     var onNotice: ((String, String) -> Void)?
@@ -86,6 +88,7 @@ final class RecorderController {
     private(set) var lastTranscriptionMetrics: VoiceTranscriptionMetrics?
     /// Non-nil only while onTranscript is persisting this recording. The UI
     /// can associate it with the new transcript ID and later mark row display.
+    private(set) var lastTranscribedSessionID: String?
     private(set) var currentDeliverySessionID: String?
 
     var engineIdentity: String { speechEngine.runtimeIdentity }
@@ -269,7 +272,7 @@ final class RecorderController {
                 Task { await self.resumePendingWork() }
             } else if case .failed(let message) = speechEngine.state,
                       !Self.pendingSessions(in: pendingDirectory).isEmpty {
-                lastError = "Parakeet preparation failed: \(message)"
+                lastError = "Voice model preparation failed: \(message)"
             }
         }
     }
@@ -296,9 +299,9 @@ final class RecorderController {
             } catch {
                 guard let self, workEnabled, workGeneration == generation,
                       enginePreparationToken == token else { return }
-                lastError = "Parakeet preparation failed: \(error.localizedDescription)"
+                lastError = "Voice model preparation failed: \(error.localizedDescription)"
                 if !Self.pendingSessions(in: pendingDirectory).isEmpty {
-                    onNotice?("Saved — retry Parakeet preparation", "clock.arrow.circlepath")
+                    onNotice?("Saved — retry voice model preparation", "clock.arrow.circlepath")
                 }
             }
             guard let self, workEnabled, workGeneration == generation,
@@ -369,7 +372,7 @@ final class RecorderController {
     /// Stop capture immediately, invalidate every suspended completion, then
     /// settle any delivery already in progress before AppModel wipes its stores.
     func discardRecordings() async throws {
-        onCaptureFinished?()
+        onCaptureCancelled?()
         workEnabled = false
         workGeneration = UUID()
         cancelPreparationWaiters()
@@ -416,6 +419,27 @@ final class RecorderController {
         }
     }
 
+    var activeRecordingID: String? { phase == .recording ? String(sessionId) : nil }
+
+    /// Cancel only the capture represented by the confirmation; never delete older queued audio.
+    func discardActiveRecording(expectedID: String) {
+        guard activeRecordingID == expectedID else { return }
+        meterTimer?.invalidate()
+        meterTimer = nil
+        recorder?.stop()
+        recorder = nil
+        let files = segmentURLs
+        segmentURLs = []
+        phase = .idle
+        startedAt = nil
+        elapsed = 0
+        level = 0
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        do { for file in files { try FileManager.default.removeItem(at: file) } }
+        catch { lastError = "Could not remove discarded audio: \(error.localizedDescription)" }
+        onCaptureCancelled?()
+    }
+
     func toggle() {
         switch phase {
         case .idle: start()
@@ -430,7 +454,7 @@ final class RecorderController {
         lastError = nil
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
-                guard let self, self.workEnabled, self.workGeneration == generation else { return }
+                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle else { return }
                 guard granted else {
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     return
@@ -471,6 +495,7 @@ final class RecorderController {
             startedAt = Date()
             elapsed = 0
             startMetering()
+            onCaptureStarted?()
         } catch {
             lastStartFailure = error
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -569,7 +594,7 @@ final class RecorderController {
             case .notDownloaded, .downloading:
                 phase = .idle
                 startedAt = nil
-                onNotice?("Saved — download Parakeet to transcribe", "clock.arrow.circlepath")
+                onNotice?("Saved — download the voice model to transcribe", "clock.arrow.circlepath")
                 return
             default: break
             }
@@ -603,7 +628,7 @@ final class RecorderController {
                     }
                 } catch {
                     if !(error is CancellationError) {
-                        lastError = "Parakeet preparation failed: \(error.localizedDescription)"
+                        lastError = "Voice model preparation failed: \(error.localizedDescription)"
                     }
                     return false
                 }
@@ -722,6 +747,7 @@ final class RecorderController {
                         in: pendingDirectory
                     )
                     let delivered = await task.value
+                    if delivered { lastTranscribedSessionID = session.id }
                     currentDeliverySessionID = nil
                     guard workEnabled, workGeneration == generation else { return }
                     deliveryTask = nil

@@ -2,6 +2,27 @@ import XCTest
 
 #if targetEnvironment(simulator)
 final class PrivacyHoldUITests: XCTestCase {
+    func testActiveRecordingCanBeKeptThenDiscarded() {
+        let app = XCUIApplication()
+        app.launchArguments = ["ft-preview"]
+        app.launch()
+        let record = app.buttons["VoiceRecordingControl"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15))
+        record.tap()
+        let cancel = app.buttons["VoiceCancelRecording"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        let alert = app.alerts["Are you sure you want to discard this audio?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        alert.buttons["Keep recording"].tap()
+        XCTAssertTrue(cancel.exists)
+        cancel.tap()
+        alert.buttons["Discard audio"].tap()
+        XCTAssertTrue(app.buttons["VoiceRecordingControl"].waitForExistence(timeout: 3))
+        XCTAssertFalse(cancel.exists)
+        XCTAssertFalse(app.buttons["VoiceDiscardAudio"].exists)
+    }
+
     func testToggleReplacesCountdownAndSelectionMarkersRemainVisible() {
         let app = XCUIApplication()
         app.launchArguments = ["ft-preview", "ft-card-layout-preview"]

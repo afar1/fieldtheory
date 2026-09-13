@@ -18,6 +18,7 @@ final class BackgroundRecordingSession {
     static let shared = BackgroundRecordingSession()
     private var activity: Activity<RecordingActivityAttributes>?
     private var starting = false
+    private var captureSessionID: String?
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "BackgroundRecording")
 
     func start() async throws {
@@ -48,9 +49,11 @@ final class BackgroundRecordingSession {
         activity = newActivity
         model.wireRecorderPersistence()
         model.recorder.onCaptureStopped = { [weak self] in self?.showProcessing() }
+        model.recorder.onCaptureCancelled = { [weak self] in self?.cancelActivity() }
         model.recorder.onCaptureFinished = { [weak self] in self?.finish() }
         do {
             try model.recorder.startFromIntent()
+            captureSessionID = model.recorder.activeRecordingID
             recordEvidence("microphone-started")
             logger.notice("Microphone started; applicationState=\(UIApplication.shared.applicationState.rawValue)")
         } catch {
@@ -59,6 +62,42 @@ final class BackgroundRecordingSession {
             recordEvidence("microphone-start-failed", error: error)
             logger.error("Microphone start failed: \(error.localizedDescription, privacy: .public)")
             throw error
+        }
+    }
+
+    private func cancelActivity() {
+        guard let activity else { return }
+        self.activity = nil
+        Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
+
+    func attachToForegroundRecording() {
+        guard activity == nil, UIApplication.shared.applicationState == .active,
+              let startedAt = AppModel.shared.recorder.startedAt,
+              ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        do {
+            captureSessionID = AppModel.shared.recorder.activeRecordingID
+            let oldActivities = Activity<RecordingActivityAttributes>.activities
+            for old in oldActivities { Task { await old.end(nil, dismissalPolicy: .immediate) } }
+            activity = try Activity.request(attributes: RecordingActivityAttributes(startedAt: startedAt),
+                content: ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil), pushType: nil)
+            AppModel.shared.recorder.onCaptureStopped = { [weak self] in self?.showProcessing() }
+            AppModel.shared.recorder.onCaptureCancelled = { [weak self] in self?.cancelActivity() }
+            AppModel.shared.recorder.onCaptureFinished = { [weak self] in self?.finish() }
+        } catch { logger.error("Live Activity unavailable: \(error.localizedDescription, privacy: .public)") }
+    }
+
+    func discard(recordingID: String, confirmed: Bool, keep: Bool) async {
+        guard let activity, activity.attributes.recordingID == recordingID,
+              let captureID = AppModel.shared.recorder.activeRecordingID else { return }
+        if confirmed {
+            self.activity = nil
+            AppModel.shared.recorder.discardActiveRecording(expectedID: captureID)
+            await activity.end(nil, dismissalPolicy: .immediate)
+        } else {
+            await activity.update(ActivityContent(state: .init(
+                status: keep ? "Recording" : "Are you sure you want to discard this audio?",
+                recording: true, confirmDiscard: !keep), staleDate: nil))
         }
     }
 
@@ -76,7 +115,7 @@ final class BackgroundRecordingSession {
     private func showProcessing() {
         guard let activity else { return }
         recordEvidence("microphone-stopped")
-        Task { await activity.update(ActivityContent(state: .init(status: "Saving audio…", recording: false), staleDate: nil)) }
+        Task { await activity.update(ActivityContent(state: .init(status: "Transcribing…", recording: false), staleDate: nil)) }
     }
 
     private func finish() {
@@ -84,8 +123,9 @@ final class BackgroundRecordingSession {
         self.activity = nil
         recordEvidence("processing-returned")
         let pending = AppModel.shared.recorder.pendingSessionCount > 0
+        let transcribed = captureSessionID != nil && AppModel.shared.recorder.lastTranscribedSessionID == captureSessionID
         let state = RecordingActivityAttributes.ContentState(
-            status: pending ? "Audio saved — open to finish" : "Finished", recording: false)
+            status: transcribed ? "Transcribed" : (pending ? "Audio saved — open to finish" : "No speech detected"), recording: false)
         Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30))) }
     }
 

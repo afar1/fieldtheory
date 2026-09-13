@@ -36,6 +36,15 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(reopened.shouldAutoSend(sessionID: "legacy-import"))
     }
 
+    func testRecordingOnOpenDefaultsOffAndPersistsOnlyExplicitOptIn() {
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertFalse(settings.startRecordingOnOpen)
+        settings.startRecordingOnOpen = true
+        XCTAssertTrue(AppSettings(defaults: defaults).startRecordingOnOpen)
+        settings.startRecordingOnOpen = false
+        XCTAssertFalse(AppSettings(defaults: defaults).startRecordingOnOpen)
+    }
+
     func testLegacyEnginePreferenceIsRemovedWithoutChangingOtherSettings() {
         defaults.set("whisper", forKey: "ft.speechEngineChoice.v1")
         defaults.set("unrelated", forKey: "preserve-setting")

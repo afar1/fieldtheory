@@ -52,3 +52,34 @@ whether background nonmixable-session activation caused the refusal. Foreground
 recording retains its original audio policy. Failed starts now preserve NSError
 domain/code and deactivate the failed session. This is a hypothesis under device
 test, not proof that iOS permits cold background microphone activation.
+
+## Build 20: recording controls and foreground fallback
+
+Build 19 user test passed session activation but AVAudioRecorder.record() returned
+false ("The microphone did not start recording"). Background-only microphone start
+remains unproven; do not describe the shortcut as reliable.
+
+Settings → Start recording on open is persisted and defaults OFF. When enabled,
+a foreground opening from launch/background starts capture after local storage is
+ready, provided there is no active recording/transcription or queued audio. An
+inactive/active transition for a permission dialog does not count as another open.
+Configure the Action button to Open App → Field Theory to test this fallback.
+
+Every foreground recording gets a Live Activity when allowed. The app has a separate
+circular X during capture; the Live Activity has X with an inline confirmation.
+Both use the question "Are you sure you want to discard this audio?". Discard targets
+only the active capture and rejects stale confirmations; older queued recordings
+remain intact. The completed Live Activity says "Transcribed" with a checkmark only
+when a transcript was saved. Pending/no-speech outcomes do not get a success check.
+
+Transcript persistence now awaits the sync attempt inside the completion callback,
+keeping the existing execution allowance through upload. Durable dirty rows retain
+retry behavior. Auto-send capture cutoff and No action behavior remain preserved.
+Read-only device flags showed the newest saved transcript acknowledged and sent;
+an older No action item predates the current Auto-send enable timestamp. No older
+transcripts were released or modified.
+
+Validation: full unit suite and Auto-send UI regressions passed; a dedicated UI test
+started recording, kept it through cancellation confirmation, then discarded it
+and confirmed no pending retry audio. Real phone Live Activity controls, start-on-open,
+and end-to-end background delivery remain device acceptance checks.

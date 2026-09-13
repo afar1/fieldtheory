@@ -16,6 +16,7 @@ final class FieldTheoryAppDelegate: NSObject, UIApplicationDelegate {
 struct FieldTheoryApp: App {
     @UIApplicationDelegateAdaptor(FieldTheoryAppDelegate.self) private var appDelegate
     @State private var model = AppModel.shared
+    @State private var recordingOnNextOpen = true
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -23,9 +24,16 @@ struct FieldTheoryApp: App {
             RootView()
                 .environment(model)
                 .tint(.accentColor)
-                .onChange(of: scenePhase) { _, phase in
+                .onChange(of: scenePhase, initial: true) { _, phase in
                     model.sync.setForeground(phase == .active)
-                    if phase == .active { model.handleDidBecomeActive() }
+                    if phase == .background { recordingOnNextOpen = true }
+                    if phase == .active {
+                        model.handleDidBecomeActive()
+                        if recordingOnNextOpen {
+                            recordingOnNextOpen = false
+                            Task { await model.startRecordingIfEnabledOnOpen() }
+                        }
+                    }
                 }
         }
     }

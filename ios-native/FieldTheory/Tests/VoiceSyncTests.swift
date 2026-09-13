@@ -290,6 +290,23 @@ final class VoiceSyncTests: XCTestCase {
         XCTAssertEqual(patch["deleted_at"] as? String, "1970-01-01T00:00:04.000Z")
     }
 
+    func testBackgroundCompletionUploadsSendPolicyWithoutManualSend() async throws {
+        let db = try makeDatabase()
+        let store = TranscriptStore(db: db, usesCountdown: false)
+        let transport = RecordingVoiceTransport()
+        let engine = makeEngine(db: db, transport: transport, transcripts: store)
+        await engine.start(userId: UUID(), email: nil)
+        engine.setForeground(false)
+        let added = await store.add(text: "background completion", autoSend: true)
+        let item = try XCTUnwrap(added)
+        await engine.syncNow()
+        let sent = try XCTUnwrap(transport.upsertBatches.flatMap { $0 }.first { $0.client_id == item.id })
+        XCTAssertEqual(sent.metadata.actionPolicy, "send")
+        let rows = try await db.query("SELECT dirty FROM transcripts WHERE id = ?", [.text(item.id)])
+        XCTAssertEqual(rows.first?["dirty"]?.intValue, 0)
+        await engine.stopAndWait()
+    }
+
     func testUploadIncludesOnlyDirtyPhoneRowsAndDoesNotReplaceLocalHistory() async throws {
         let db = try makeDatabase()
         try await db.run("""

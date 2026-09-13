@@ -36,6 +36,8 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Start recording on open", isOn: $settings.startRecordingOnOpen)
+                        .accessibilityIdentifier("StartRecordingOnOpen")
                     modelRow
                     Toggle("Copy transcripts automatically", isOn: $settings.autoCopyTranscripts)
                     NavigationLink("Word replacements") {
