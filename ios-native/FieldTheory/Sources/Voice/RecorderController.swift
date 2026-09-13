@@ -76,6 +76,8 @@ final class RecorderController {
     var replaceWords: ((String) -> String)?
     var onTranscript: ((String) async -> Bool)?
     /// Lightweight status line for toasts (queued audio, errors).
+    var onCaptureStopped: (() -> Void)?
+    var onCaptureFinished: (() -> Void)?
     var onNotice: ((String, String) -> Void)?
     /// Bounded, content-free evidence for device inference and delivery tests.
     var onTranscriptionMetrics: ((VoiceTranscriptionMetrics) -> Void)?
@@ -366,6 +368,7 @@ final class RecorderController {
     /// Stop capture immediately, invalidate every suspended completion, then
     /// settle any delivery already in progress before AppModel wipes its stores.
     func discardRecordings() async throws {
+        onCaptureFinished?()
         workEnabled = false
         workGeneration = UUID()
         cancelPreparationWaiters()
@@ -436,6 +439,21 @@ final class RecorderController {
         }
     }
 
+    /// An intent must finish starting the microphone before returning to the system.
+    func startFromIntent() throws {
+        guard workEnabled, phase == .idle else {
+            throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
+        }
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
+        }
+        lastError = nil
+        beginSession()
+        guard phase == .recording else {
+            throw SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
+        }
+    }
+
     private func beginSession() {
         do {
             let session = AVAudioSession.sharedInstance()
@@ -468,7 +486,9 @@ final class RecorderController {
         ]
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
-        recorder.record()
+        guard recorder.record() else {
+            throw SpeechTranscriptionEngineError(message: "The microphone did not start recording.")
+        }
         self.recorder = recorder
         segmentURLs.append(url)
     }
@@ -513,6 +533,8 @@ final class RecorderController {
 
     func stopAndTranscribe() async {
         guard workEnabled, phase == .recording else { return }
+        onCaptureStopped?()
+        defer { onCaptureFinished?() }
         let stoppedAtMs = Timestamps.nowMs()
         meterTimer?.invalidate()
         recorder?.stop()

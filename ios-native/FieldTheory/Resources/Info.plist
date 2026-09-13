@@ -30,6 +30,8 @@
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Field Theory records audio so it can transcribe your voice entirely on this device.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIAppFonts</key>
 	<array>
 		<string>SourceSerif4-Variable.ttf</string>

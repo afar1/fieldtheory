@@ -1,18 +1,22 @@
 import Foundation
 import Observation
+import UIKit
 import Supabase
 
 /// Composition root: owns every store and wires auth state to the sync engine.
 @MainActor
 @Observable
 final class AppModel {
+    static let shared = AppModel()
     let settings: AppSettings
     let auth: AuthStore
     private(set) var library: LibraryStore
     private(set) var river: RiverStore
     private(set) var transcripts: TranscriptStore
     private(set) var sync: SyncEngine
-    private(set) var recorder: RecorderController
+    private(set) var recorder: RecorderController {
+        didSet { wireRecorderPersistence() }
+    }
 
     private(set) var isSigningOut = false
     private(set) var isPreparingStorage = true
@@ -405,7 +409,30 @@ final class AppModel {
         wireStorageErrors()
     }
 
+    /// Persistence must be available even when an intent starts the process without a scene.
+    func wireRecorderPersistence() {
+        let recorder = recorder
+        recorder.replaceWords = { [weak self] text in self?.sync.wordSubstitutions.apply(to: text) ?? text }
+        recorder.onTranscript = { [weak self, weak recorder] text in
+            guard let self, let recorder, self.recorder === recorder,
+                  self.showMainUI, !self.isSigningOut else { return false }
+            let workspace = self.workspaceGeneration
+            let userID = self.auth.userId
+            guard let item = await self.transcripts.add(text: text,
+                autoSend: self.settings.shouldAutoSend(sessionID: recorder.currentDeliverySessionID)) else { return false }
+            recorder.associateCurrentDelivery(transcriptID: item.id)
+            guard self.workspaceGeneration == workspace, !self.isSigningOut,
+                  self.auth.userId == userID else { return false }
+            if self.settings.autoCopyTranscripts, UIApplication.shared.applicationState == .active {
+                UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true])
+            }
+            recorder.onNotice?("Saved to Field Theory", "waveform")
+            return true
+        }
+    }
+
     private func wireStorageErrors() {
+        wireRecorderPersistence()
         library.onStorageError = { [weak self] message in self?.presentStorageError(message) }
         transcripts.onStorageError = { [weak self] message in self?.presentStorageError(message) }
     }

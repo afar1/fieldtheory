@@ -46,11 +46,14 @@ targets:
         - FieldTheoryTests
         - FieldTheoryUITests
     sources:
+      - path: RecordingShared
       - path: FieldTheory/Sources
         excludes: [Goals]
       - path: FieldTheory/Resources
         excludes: [goals-cards.json]
     dependencies:
+      - target: RecordingWidget
+        embed: true
       - package: Supabase
         product: Supabase
       - package: Markdown
@@ -61,7 +64,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "17"
+        CURRENT_PROJECT_VERSION: "18"
         FT_BUILD_COMMIT: development
         DEVELOPMENT_TEAM: 3244UJ94D8
         CODE_SIGN_STYLE: Automatic
@@ -77,6 +80,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         FTBuildCommit: $(FT_BUILD_COMMIT)
+        NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.afar1.fieldtheory.voice.transcription]
@@ -97,3 +101,26 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIRequiresFullScreen: false
         ITSAppUsesNonExemptEncryption: false
+
+  RecordingWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: RecordingWidget
+      - path: RecordingShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory.recording
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "18"
+        DEVELOPMENT_TEAM: 3244UJ94D8
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: RecordingWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Field Theory Recording
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

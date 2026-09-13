@@ -109,25 +109,8 @@ struct RootView: View {
     /// workspace. There is no longer an editor route that can receive text.
     private func wireRecorder() {
         let recorder = model.recorder
-        let transcripts = model.transcripts
+        model.wireRecorderPersistence()
         let workspace = model.workspaceGeneration
-        recorder.onTranscript = { text in
-            guard model.workspaceGeneration == workspace,
-                  model.showMainUI, !model.isSigningOut else { return false }
-            let userID = model.auth.userId
-            guard let item = await transcripts.add(text: text, autoSend: model.settings.shouldAutoSend(sessionID: recorder.currentDeliverySessionID)) else { return false }
-            recorder.associateCurrentDelivery(transcriptID: item.id)
-            guard model.workspaceGeneration == workspace,
-                  !model.isSigningOut, model.auth.userId == userID else { return false }
-            if model.settings.autoCopyTranscripts {
-                // Keep automatically copied text on this device.
-                UIPasteboard.general.setItems(
-                    [["public.utf8-plain-text": text]], options: [.localOnly: true]
-                )
-            }
-            toast.show("Saved to Ambition", symbol: "waveform")
-            return true
-        }
         recorder.onNotice = { message, symbol in
             guard model.workspaceGeneration == workspace else { return }
             toast.show(message, symbol: symbol, duration: 2.6)

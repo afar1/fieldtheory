@@ -15,7 +15,7 @@ final class FieldTheoryAppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct FieldTheoryApp: App {
     @UIApplicationDelegateAdaptor(FieldTheoryAppDelegate.self) private var appDelegate
-    @State private var model = AppModel()
+    @State private var model = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
