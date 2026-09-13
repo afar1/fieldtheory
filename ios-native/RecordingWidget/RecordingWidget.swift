@@ -43,7 +43,8 @@ struct RecordingLiveActivity: Widget {
                     Text(context.attributes.startedAt, style: .timer)
                         .monospacedDigit().font(.caption2).frame(width: 48)
                 } else {
-                    Image(systemName: context.state.symbol).foregroundStyle(tint(context))
+                    Text(context.state.copyReady ? "Done" : "…")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
             } minimal: {
                 Image(systemName: context.state.symbol).foregroundStyle(tint(context))
@@ -98,6 +99,7 @@ struct RecordingLiveActivity: Widget {
                     }
                 } else {
                     HStack(spacing: 8) {
+                        Spacer(minLength: 0)
                         Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
                             Image(systemName: "xmark").font(.body.weight(.semibold))
                                 .frame(width: 44, height: 44)
@@ -115,12 +117,11 @@ struct RecordingLiveActivity: Widget {
                         Button(intent: SendFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
                             HStack(spacing: 6) {
                                 Image(systemName: "stop.fill").font(.caption2)
-                                Text("Stop + Send").fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 0)
+                                Image(systemName: "plus").font(.system(size: 9, weight: .medium))
                                 Image(systemName: "paperplane").font(.caption)
                             }
                             .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 44)
+                            .padding(.horizontal, 12).frame(minHeight: 44)
                             .background(.white, in: Capsule()).foregroundStyle(.black)
                         }.accessibilityLabel("Stop, transcribe and send to computer")
                     }
@@ -132,12 +133,12 @@ struct RecordingLiveActivity: Widget {
             HStack(spacing: 8) {
                 Button(intent: CopyCompletedTranscriptIntent(recordingID: context.attributes.recordingID)) {
                     HStack {
-                        Text("Copy")
+                        Text("Open to copy")
                         Spacer(minLength: 8)
                         Image(systemName: "doc.on.doc")
                     }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44)
                         .background(.white.opacity(0.14), in: Capsule())
-                }.accessibilityLabel("Copy completed transcript")
+                }.accessibilityLabel("Open Field Theory and copy completed transcript")
                 if context.state.sendReady {
                     Button(intent: SendCompletedTranscriptIntent(recordingID: context.attributes.recordingID)) {
                         HStack {

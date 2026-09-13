@@ -155,6 +155,16 @@ final class BackgroundRecordingSession {
                 copyReady: true, sendReady: false), staleDate: Date().addingTimeInterval(300)))
             await model.sync.syncNow()
         } else {
+            // The Copy intent opens the app because background clipboard writes fail on device.
+            for _ in 0..<100 {
+                if UIApplication.shared.applicationState == .active { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            guard UIApplication.shared.applicationState == .active,
+                  model.showMainUI, !model.isSigningOut,
+                  saved["owner"] == model.auth.userId?.uuidString else {
+                throw SpeechTranscriptionEngineError(message: "Open Field Theory to copy this transcript.")
+            }
             let before = UIPasteboard.general.changeCount
             UIPasteboard.general.setItems([["public.utf8-plain-text": item.text]], options: [.localOnly: true])
             recordEvidence(UIPasteboard.general.changeCount != before

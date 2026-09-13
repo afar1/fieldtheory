@@ -79,9 +79,9 @@ struct SendFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent 
 }
 
 struct CopyCompletedTranscriptIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "Copy transcript"
+    static var title: LocalizedStringResource = "Open to copy transcript"
     static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
-    static var openAppWhenRun: Bool = false
+    static var openAppWhenRun: Bool = true
     @Parameter(title: "Recording") var recordingID: String
     init() { recordingID = "" }
     init(recordingID: String) { self.recordingID = recordingID }
