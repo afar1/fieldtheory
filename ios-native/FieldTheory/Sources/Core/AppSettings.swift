@@ -91,6 +91,10 @@ final class WordSubstitutionSettings {
 final class AppSettings {
     private let defaults: UserDefaults
 
+    var confirmBeforeDiscarding: Bool {
+        didSet { defaults.set(confirmBeforeDiscarding, forKey: "ft-confirm-before-discarding") }
+    }
+
     var startRecordingOnOpen: Bool {
         didSet { defaults.set(startRecordingOnOpen, forKey: "ft-start-recording-on-open") }
     }
@@ -170,6 +174,7 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        confirmBeforeDiscarding = defaults.object(forKey: "ft-confirm-before-discarding") as? Bool ?? true
         startRecordingOnOpen = defaults.bool(forKey: "ft-start-recording-on-open")
         autoSendTranscriptions = defaults.object(forKey: "ambition-auto-send") as? Bool ?? true
         autoSendEnabledSinceMs = (defaults.object(forKey: "ambition-auto-send-since") as? NSNumber)?.int64Value ?? Timestamps.nowMs()

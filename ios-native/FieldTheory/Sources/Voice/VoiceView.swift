@@ -523,17 +523,32 @@ struct VoiceView: View {
             }
             HStack(spacing: 10) {
                 if recorder.phase == .recording {
-                    Button { recordingToDiscard = recorder.activeRecordingID } label: {
-                        Image(systemName: "xmark").frame(width: 48, height: 48)
+                    Button {
+                        guard let id = recorder.activeRecordingID else { return }
+                        if model.settings.confirmBeforeDiscarding { recordingToDiscard = id }
+                        else { recorder.discardActiveRecording(expectedID: id) }
+                    } label: {
+                        Image(systemName: "xmark").font(.body.weight(.semibold))
+                            .foregroundStyle(Theme.text(colorScheme))
+                            .frame(width: 48, height: 48)
                             .background(.regularMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(Theme.text(colorScheme).opacity(0.3), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
                     }
                     .accessibilityLabel("Cancel recording")
                     .accessibilityIdentifier("VoiceCancelRecording")
                 }
                 if let pending {
-                    Button { audioToDiscard = pending } label: {
-                        Image(systemName: "xmark").frame(width: 48, height: 52)
-                            .background(.regularMaterial, in: Capsule())
+                    Button {
+                        if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
+                        else { recorder.discardPendingSession(pending) }
+                    } label: {
+                        Image(systemName: "xmark").font(.body.weight(.semibold))
+                            .foregroundStyle(Theme.text(colorScheme))
+                            .frame(width: 48, height: 48)
+                            .background(.regularMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(Theme.text(colorScheme).opacity(0.3), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
                     }
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")

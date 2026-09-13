@@ -36,6 +36,15 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(reopened.shouldAutoSend(sessionID: "legacy-import"))
     }
 
+    func testDiscardConfirmationDefaultsOnAndPersistsOptOut() {
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertTrue(settings.confirmBeforeDiscarding)
+        settings.confirmBeforeDiscarding = false
+        XCTAssertFalse(AppSettings(defaults: defaults).confirmBeforeDiscarding)
+        settings.confirmBeforeDiscarding = true
+        XCTAssertTrue(AppSettings(defaults: defaults).confirmBeforeDiscarding)
+    }
+
     func testRecordingOnOpenDefaultsOffAndPersistsOnlyExplicitOptIn() {
         let settings = AppSettings(defaults: defaults)
         XCTAssertFalse(settings.startRecordingOnOpen)

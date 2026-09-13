@@ -90,7 +90,7 @@ final class BackgroundRecordingSession {
     func discard(recordingID: String, confirmed: Bool, keep: Bool) async {
         guard let activity, activity.attributes.recordingID == recordingID,
               let captureID = AppModel.shared.recorder.activeRecordingID else { return }
-        if confirmed {
+        if confirmed || (!keep && !AppModel.shared.settings.confirmBeforeDiscarding) {
             self.activity = nil
             AppModel.shared.recorder.discardActiveRecording(expectedID: captureID)
             await activity.end(nil, dismissalPolicy: .immediate)

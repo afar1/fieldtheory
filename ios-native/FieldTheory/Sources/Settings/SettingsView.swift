@@ -38,6 +38,8 @@ struct SettingsView: View {
                 Section {
                     Toggle("Start recording on open", isOn: $settings.startRecordingOnOpen)
                         .accessibilityIdentifier("StartRecordingOnOpen")
+                    Toggle("Confirm before discarding", isOn: $settings.confirmBeforeDiscarding)
+                        .accessibilityIdentifier("ConfirmBeforeDiscarding")
                     modelRow
                     Toggle("Copy transcripts automatically", isOn: $settings.autoCopyTranscripts)
                     NavigationLink("Word replacements") {
