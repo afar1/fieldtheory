@@ -59,6 +59,8 @@ export interface VoiceCodexRequest {
   onThreadStarted?: (threadId: string) => void | Promise<void>;
   onBeforeQueue?: (event: { threadId: string }) => void | Promise<void>;
   onQueued?: (event: { threadId: string; queuedSubmissionId: string }) => void | Promise<void>;
+  /** Exact server acceptance; distinct from execution starting. Persist before releasing submission ordering. */
+  onSubmissionAccepted?: (event: { threadId: string; turnId?: string; queuedSubmissionId?: string }) => void | Promise<void>;
   onBeforeDispatch?: (event: { threadId: string; dispatchKey: string }) => void | Promise<void>;
   onStarted?: (event: { threadId: string; turnId: string; startedAt?: string }) => void | Promise<void>;
   signal?: AbortSignal;
@@ -670,6 +672,7 @@ async function queueOwnedVoiceRequest(client: VoiceCodexClient, input: VoiceCode
     if (!string(queued.id) || queued.clientUserMessageId !== input.dispatchKey) return uncertainQueue(observation);
     observation.queueSubmission = { state: 'accepted', queuedSubmissionId: queued.id as string };
     await input.onQueued!({ threadId, queuedSubmissionId: queued.id as string });
+    await input.onSubmissionAccepted?.({ threadId, queuedSubmissionId: queued.id as string });
   } catch { return pendingQueue(observation); }
   return observeVoiceQueue(client, observation, options);
 }
@@ -779,13 +782,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
       ].filter(Boolean).join('\n\n'),
     };
     if (input.signal?.aborted || pendingStop) return pendingStop ?? failure(new RunnerError('aborted', 'Voice processing was stopped.'), { threadId });
-    let result: JsonObject;
-    try {
-      result = input.threadId
-        ? await activeTransport.request('thread/resume', { ...threadParams, threadId: input.threadId, excludeTurns: true })
-        : await activeTransport.request('thread/start', { ...threadParams, ephemeral: false, serviceName: 'field_theory_voice', threadSource: 'field-theory-voice', ...(input.projectId ? { projectId: input.projectId } : {}) });
-    } catch (error) {
-      if (!(error instanceof RunnerError) || error.code !== 'active_writer' || !input.threadId) throw error;
+    const queueContinuation = async (): Promise<VoiceCodexOutcome> => {
       // The owner remains responsible for this existing conversation's permissions and workspace.
       // Queueing cannot enforce a separate clarification-only sandbox contract.
       if (input.routingQuestion || !input.onBeforeQueue || !input.onQueued) return needsUser(
@@ -799,14 +796,26 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
       activeTransport.onFailure = () => {};
       activeTransport.onRequest = message => activeTransport.write({ id: message.id,
         error: { code: -32601, message: 'This connection only observes the owning Codex conversation.' } });
-      return await queueOwnedVoiceRequest(activeTransport, input, options);
+      return queueOwnedVoiceRequest(activeTransport, input, options);
+    };
+    let result: JsonObject;
+    try {
+      result = input.threadId
+        ? await activeTransport.request('thread/resume', { ...threadParams, threadId: input.threadId, excludeTurns: true })
+        : await activeTransport.request('thread/start', { ...threadParams, ephemeral: false, serviceName: 'field_theory_voice', threadSource: 'field-theory-voice', ...(input.projectId ? { projectId: input.projectId } : {}) });
+    } catch (error) {
+      if (!(error instanceof RunnerError) || error.code !== 'active_writer' || !input.threadId) throw error;
+      return await queueContinuation();
     }
     const thread = object(result.thread);
     const returnedId = string(thread.id);
     if (!returnedId || (threadId && returnedId !== threadId)) throw new RunnerError('protocol_error', 'Codex returned an unexpected task. No Voice request was sent.');
     threadId = returnedId;
     await input.onThreadStarted?.(threadId);
-    if (object(thread.status).type === 'active') return needsUser('This Codex task is already working. Open it before sending another request.', { threadId });
+    if (object(thread.status).type === 'active') {
+      if (!input.threadId) throw new RunnerError('protocol_error', 'A new Codex task unexpectedly already has active work.');
+      return await queueContinuation();
+    }
     const { sandboxPolicy, approvalPolicy } = boundedPermissions(result, input, effective);
     if (input.title?.trim() && !input.threadId) await activeTransport.request('thread/name/set', { threadId, name: input.title.trim().slice(0, 200) });
     await input.onBeforeDispatch?.({ threadId, dispatchKey: input.dispatchKey });
@@ -824,6 +833,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
     // The acceptance response identifies the turn for recovery/interruption;
     // only a real turn/started notification fires the execution callback.
     turnId = returnedTurn.id as string;
+    await input.onSubmissionAccepted?.({ threadId, turnId });
     if (pendingStop) interrupt();
     let completed = await done;
     await startedHook;

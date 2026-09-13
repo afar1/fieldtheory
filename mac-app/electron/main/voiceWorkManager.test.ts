@@ -625,9 +625,11 @@ describe('bundled Voice push worker', () => {
     const h = harness(); await h.enable();
     h.runRequest.mockResolvedValueOnce({ status: 'failed', summary: 'Sign in.', finalResponse: '', errorCode: 'sign_in_required' });
     h.jobs.push(h.job(), h.job('job-2')); h.push(); await settle();
-    expect(h.runRequest).toHaveBeenCalledTimes(1);
+    const dispatched = h.runRequest.mock.calls.length;
+    expect(dispatched).toBeLessThanOrEqual(2);
     expect(h.manager.getState()).toMatchObject({ status: 'needs_setup', codex: { signedIn: false } });
-    expect(h.jobs).toHaveLength(1);
+    h.jobs.push(h.job('after-signout')); h.push(); await settle();
+    expect(h.runRequest).toHaveBeenCalledTimes(dispatched);
   });
 });
 
@@ -757,4 +759,135 @@ it('completes delivery if optional progress RPC is unavailable, retaining timest
   expect(h.runRequest).toHaveBeenCalledTimes(1);
   expect(h.rpc.mock.calls.find(([name]) => name === 'voice_jobs_complete')?.[1].p_result)
     .toMatchObject({ startedAt: expect.any(String), startedAtSource: 'observed' });
+});
+
+describe('bounded concurrent Voice intake', () => {
+  const drain = async () => { for (let i = 0; i < 12; i++) await settle(); };
+
+  it('routes a 15-recording burst, runs at most four isolated tasks, and drains without replay', async () => {
+    const h = harness(); await h.enable();
+    const finishes = new Map<string, (value: VoiceCodexOutcome) => void>();
+    let running = 0; let peak = 0;
+    h.runRequest.mockImplementation(async request => {
+      running++; peak = Math.max(peak, running);
+      await request.onThreadStarted?.(request.dispatchKey);
+      await request.onBeforeDispatch?.({ threadId: request.dispatchKey, dispatchKey: request.dispatchKey });
+      await request.onStarted?.({ threadId: request.dispatchKey, turnId: request.dispatchKey });
+      const outcome = await new Promise<VoiceCodexOutcome>(resolve => finishes.set(request.dispatchKey, resolve));
+      running--; return outcome;
+    });
+    for (let i = 0; i < 15; i++) h.jobs.push(h.job(`burst-${i}`));
+    h.push(); await drain();
+    expect(h.routeRequest).toHaveBeenCalledTimes(15);
+    expect(h.runRequest).toHaveBeenCalledTimes(4);
+    expect(h.manager.getState().activeTasks?.filter(task => task.status === 'waiting')).toHaveLength(11);
+    expect(new Set(h.runRequest.mock.calls.map(([request]) => request.workspacePath)).size).toBe(4);
+    while (finishes.size) {
+      const batch = [...finishes.values()]; finishes.clear();
+      batch.forEach(finish => finish({ status: 'completed', summary: 'Done', finalResponse: 'Done' }));
+      await drain();
+    }
+    expect(h.runRequest).toHaveBeenCalledTimes(15);
+    expect(peak).toBe(4);
+    expect(h.manager.getState().activeTasks).toEqual([]);
+    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(15);
+  });
+
+  it('holds an addendum locally until its conversation finishes while independent work starts', async () => {
+    const h = harness(); await h.enable();
+    const threadId = '01a07e3f-8d87-7a43-a7a5-f90f1b67d4d3';
+    let finish!: (value: VoiceCodexOutcome) => void;
+    let ownerWorkspace = '';
+    h.runRequest.mockImplementationOnce(async request => {
+      ownerWorkspace = request.workspacePath;
+      await request.onThreadStarted?.(threadId);
+      await request.onBeforeDispatch?.({ threadId, dispatchKey: request.dispatchKey });
+      await request.onStarted?.({ threadId, turnId: 'owner-turn' });
+      return new Promise(resolve => { finish = resolve; });
+    });
+    h.jobs.push(h.job('owner')); h.push(); await drain();
+    h.routeRequest.mockResolvedValueOnce({ decision: 'continue', workspacePath: ownerWorkspace, threadId });
+    h.jobs.push(h.job('addendum'), h.job('independent')); h.push(); await drain();
+    expect(h.runRequest).toHaveBeenCalledTimes(2);
+    expect(h.runRequest.mock.calls[1][0].dispatchKey).toBe('voice:independent');
+    expect(h.manager.getState().activeTasks).toContainEqual(expect.objectContaining({ jobId: 'addendum', status: 'waiting', threadId }));
+    const persisted = JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8'));
+    expect(persisted.attempts.addendum).toMatchObject({ waitingLocally: true });
+    expect(persisted.attempts.addendum.queueSubmission).toBeUndefined();
+    finish({ threadId, turnId: 'owner-turn', status: 'completed', summary: 'Done', finalResponse: 'Done' });
+    await drain();
+    expect(h.runRequest).toHaveBeenCalledTimes(3);
+    expect(h.runRequest.mock.calls[2][0].threadId).toBe(threadId);
+  });
+
+  it('renews every active lease independently and cancels all jobs and capacity waiters on stop', async () => {
+    vi.useFakeTimers();
+    const h = harness(); await h.enable();
+    const signals: AbortSignal[] = [];
+    h.runRequest.mockImplementation(async request => {
+      signals.push(request.signal!);
+      return new Promise(resolve => request.signal!.addEventListener('abort', () => resolve({ status: 'interrupted', summary: 'Stopped', finalResponse: '' }), { once: true }));
+    });
+    for (let i = 0; i < 6; i++) h.jobs.push(h.job(`renew-${i}`));
+    h.push(); await drain();
+    expect(signals).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(25_000); await drain();
+    expect(new Set(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_renew').map(([, args]) => args.p_job_id)).size).toBe(6);
+    h.manager.stop(); await drain();
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(h.runRequest).toHaveBeenCalledTimes(4);
+    expect(h.manager.getState().activeTasks).toEqual([]);
+  });
+});
+
+it('waits for remote destination readiness before opening its runner without consuming execution capacity', async () => {
+  vi.useFakeTimers();
+  const h = harness(); await h.enable();
+  const baseRpc = h.rpc.getMockImplementation()!;
+  let ready = false;
+  h.rpc.mockImplementation(async (name, args) => name === 'voice_jobs_submission_ready'
+    ? { data: { ok: ready, blocked: !ready }, error: null } : baseRpc(name, args));
+  h.routeRequest.mockResolvedValueOnce({ decision: 'continue', threadId: 'remote-owner', workspacePath: h.directory });
+  h.jobs.push(h.job('remote-followup'));
+  h.push(); for (let i = 0; i < 4; i++) await settle();
+  expect(h.runRequest).not.toHaveBeenCalled();
+  expect(h.manager.getState().activeTasks).toContainEqual(expect.objectContaining({ jobId: 'remote-followup', status: 'waiting' }));
+  h.runRequest.mockImplementation(async () => new Promise(() => {}));
+  for (let i = 0; i < 4; i++) h.jobs.push(h.job(`free-${i}`));
+  h.push(); for (let i = 0; i < 10; i++) await settle();
+  expect(h.runRequest).toHaveBeenCalledTimes(4);
+  expect(h.runRequest.mock.calls.every(([request]) => request.threadId !== 'remote-owner')).toBe(true);
+  ready = true;
+  await vi.advanceTimersByTimeAsync(1000); await settle();
+  expect(h.runRequest).toHaveBeenCalledTimes(4);
+});
+
+it('does not replay an in-flight duplicate lease delivery', async () => {
+  const h = harness(); await h.enable();
+  h.runRequest.mockImplementation(async () => new Promise(() => {}));
+  h.jobs.push(h.job('duplicate')); h.push(); await settle();
+  h.jobs.push(h.job('duplicate')); h.push(); await settle();
+  expect(h.runRequest).toHaveBeenCalledTimes(1);
+  expect(h.manager.getState().activeTasks).toHaveLength(1);
+});
+
+it('keeps queued observers alive without spending execution capacity and retains their workspace exclusion', async () => {
+  const h = harness(); await h.enable();
+  h.runRequest.mockImplementation(async request => {
+    if (request.dispatchKey === 'voice:queued') {
+      await request.onQueued?.({ threadId: 'external-thread', queuedSubmissionId: 'queue-id' });
+      await request.onSubmissionAccepted?.({ threadId: 'external-thread', queuedSubmissionId: 'queue-id' });
+    }
+    return new Promise(() => {});
+  });
+  h.routeRequest.mockResolvedValueOnce({ decision: 'continue', workspacePath: h.directory, threadId: 'external-thread' });
+  h.jobs.push(h.job('queued')); h.push(); for (let i = 0; i < 4; i++) await settle();
+  h.routeRequest.mockResolvedValueOnce({ decision: 'continue', workspacePath: h.directory, threadId: 'external-thread' });
+  h.jobs.push(h.job('same-workspace'));
+  for (let i = 0; i < 4; i++) h.jobs.push(h.job(`independent-${i}`));
+  h.push(); for (let i = 0; i < 10; i++) await settle();
+  expect(h.runRequest).toHaveBeenCalledTimes(5);
+  expect(h.runRequest.mock.calls.some(([request]) => request.dispatchKey === 'voice:same-workspace')).toBe(false);
+  expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_accept_submission')).toHaveLength(1);
+  expect(h.manager.getState().activeTasks).toContainEqual(expect.objectContaining({ jobId: 'queued', status: 'queued' }));
 });

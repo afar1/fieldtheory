@@ -76,6 +76,23 @@ describe('VoiceWorkSettings', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement).disabled).toBe(false));
   }
 
+  it('keeps a waiting follow-up visible alongside independent running work', async () => {
+    const threadId = '01a0795a-a845-7ef2-a60b-91a2ff036a45';
+    current.activeTasks = [
+      { jobId: 'a', threadId, title: 'Field Theory - Website', status: 'working' },
+      { jobId: 'b', title: 'Personal - Research', status: 'routing' },
+      { jobId: 'c', threadId, title: 'Website addendum', status: 'waiting' },
+    ];
+    render(<VoiceWorkSettings />);
+    await waitForReadiness();
+    expect(screen.getByText('Active voice requests · 3')).toBeTruthy();
+    expect(screen.getByText('Website addendum')).toBeTruthy();
+    expect(screen.getByText('Waiting to start')).toBeTruthy();
+    expect(screen.getByText('Choosing destination')).toBeTruthy();
+    act(() => publish({ ...readyState(), status: 'signed_out', activeTasks: [] }));
+    expect(screen.queryByText('Website addendum')).toBeNull();
+  });
+
   it('opens the persistent inbox independently of the latest work task', async () => {
     current.inboxThreadId = '01a0795a-a845-7ef2-a60b-91a2ff036a45';
     render(<VoiceWorkSettings />);

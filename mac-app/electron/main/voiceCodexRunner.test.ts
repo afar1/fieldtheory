@@ -769,6 +769,29 @@ describe('owner-managed continuation queue', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 
+  it('queues a resumed active conversation without starting or interrupting its turn', async () => {
+    const h = fixture(); const original = h.process.handler;
+    const onSubmissionAccepted = vi.fn();
+    h.process.handler = (m, p) => m.method === 'thread/resume'
+      ? p.reply(m, threadResult(p, { id: 'thread-1', status: { type: 'active' } })) : original(m, p);
+    const result = await runVoiceRequest({ ...h.input, onSubmissionAccepted }, h.options);
+    expect(result.status).toBe('completed');
+    expect(onSubmissionAccepted).toHaveBeenCalledWith({ threadId: 'thread-1', queuedSubmissionId: 'queue-1' });
+    expect(h.process.messages.filter(m => m.method === 'thread/queue/add')).toHaveLength(1);
+    expect(h.process.messages.some(m => ['turn/start', 'turn/interrupt', 'thread/queue/start'].includes(m.method))).toBe(false);
+  });
+
+  it('reports exact turn acceptance before completion while retaining the executor', async () => {
+    const h = setup((m, p) => m.method === 'turn/start' ? p.start(m) : standard(m, p));
+    const onSubmissionAccepted = vi.fn(() => {
+      expect(h.process.kill).not.toHaveBeenCalled();
+      h.process.complete();
+    });
+    const result = await runVoiceRequest({ ...h.input, onSubmissionAccepted }, h.options);
+    expect(onSubmissionAccepted).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1' });
+    expect(result.status).toBe('completed');
+  });
+
   it('never sends an approval decision or interrupts the owner if an interaction reaches the observer', async () => {
     const h = fixture(); const original = h.process.handler;
     h.process.handler = (m, p) => {

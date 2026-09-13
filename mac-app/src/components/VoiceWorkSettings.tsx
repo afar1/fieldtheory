@@ -32,6 +32,9 @@ function statusLabel(state: VoiceWorkState): string {
 
 function taskStatusLabel(status: string): string {
   switch (status) {
+    case 'routing': return 'Choosing destination';
+    case 'waiting': return 'Waiting to start';
+    case 'finishing': return 'Saving result';
     case 'completed': return 'Done';
     case 'context': return 'Saved as context';
     case 'queued':
@@ -331,6 +334,18 @@ export default function VoiceWorkSettings() {
           <SettingsRow theme={theme} label="Codex voice inbox"
             hint="Your pinned intake conversation records arrivals, routing decisions, and task links."
             control={<OpenVoiceTaskButton threadId={state.inboxThreadId} label="Open voice inbox" />} />
+        )}
+        {!!state?.activeTasks?.length && (
+          <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 18, paddingTop: 16 }}>
+            <div style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 7 }}>Active voice requests · {state.activeTasks.length}</div>
+            {state.activeTasks.map(task => (
+              <div key={task.jobId} style={{ marginTop: 12 }}>
+                <div style={{ color: theme.text, fontSize: 13 }}>{task.title}</div>
+                <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 4 }}>{taskStatusLabel(task.status)}</div>
+                {task.threadId && <OpenVoiceTaskButton threadId={task.threadId} style={{ marginTop: 6 }} />}
+              </div>
+            ))}
+          </div>
         )}
         {state?.lastTask && (
           <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 18, paddingTop: 16 }}>

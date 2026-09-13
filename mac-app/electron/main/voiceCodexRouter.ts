@@ -1,6 +1,7 @@
 import { DEFAULT_VOICE_INBOX_INSTRUCTIONS } from '../shared/voiceInboxInstructions';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { codexTaskUrl } from '../shared/taskLinks';
 import { runVoiceInternalTurn, withVoiceCodexClient, type VoiceCodexRunnerOptions } from './voiceCodexRunner';
 
@@ -23,6 +24,20 @@ export interface VoiceRouteRequest {
   /** Confirmed projectless tasks created by this account's Voice worker. */
   projectlessVoiceTasks?: Array<{ threadId: string; workspacePath: string }>;
   signal?: AbortSignal;
+}
+
+/** Independent projectless requests must not share a writable working directory. */
+export function prepareVoiceWorkspace(route: VoiceRoute, inboxPath: string, dispatchKey: string): VoiceRoute {
+  if (route.decision !== 'new' || route.projectId || route.threadId) return route;
+  const root = path.join(fs.realpathSync(inboxPath), '.voice-workspaces');
+  const directory = path.join(root, createHash('sha256').update(dispatchKey).digest('hex'));
+  for (const candidate of [root, directory]) {
+    if (!fs.existsSync(candidate)) fs.mkdirSync(candidate, { mode: 0o700 });
+    if (!fs.lstatSync(candidate).isDirectory() || fs.realpathSync(candidate) !== candidate) {
+      throw new Error('The Voice working directory is unavailable.');
+    }
+  }
+  return { ...route, workspacePath: directory };
 }
 
 type WorkspaceRecovery = Pick<VoiceRouteRequest, 'inboxPath' | 'projectlessVoiceTasks'>;

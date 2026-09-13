@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type { VoiceWorkSettings, VoiceWorkState } from '../shared/voiceWork';
 import { codexTaskUrl } from '../shared/taskLinks';
-import { routeVoiceRequest, refreshVoiceRouteWorkspace, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
+import { routeVoiceRequest, refreshVoiceRouteWorkspace, prepareVoiceWorkspace, writeVoiceInboxReceipt, type VoiceInboxReceipt, type VoiceRoute } from './voiceCodexRouter';
 import {
   inspectVoiceCodexRuntime, runVoiceRequest, recoverVoiceRequest,
   type VoiceCodexOutcome, type VoiceQueueSubmission,
@@ -53,6 +53,7 @@ interface LocalAttempt {
   dispatchStarted?: boolean;
   queueSubmission?: VoiceQueueSubmission;
   queuedAt?: string;
+  waitingLocally?: boolean;
   startedAt?: string;
   startedAtSource?: 'codex' | 'observed';
   progressPublished?: Array<'queued' | 'started'>;
@@ -143,8 +144,12 @@ export class VoiceWorkManager extends EventEmitter {
   private reconnectAttempt = 0;
   private connectionVersion = 0;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
-  private renewTimer: ReturnType<typeof setTimeout> | null = null;
-  private controller: AbortController | null = null;
+  private readonly active = new Map<string, { controller: AbortController; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly receiptControllers = new Set<AbortController>();
+  private inboxChain: Promise<unknown> = Promise.resolve();
+  private executionCount = 0;
+  private readonly executionKeys = new Set<string>();
+  private readonly executionWaiters = new Set<() => void>();
   private pumping = false;
   private wakePending = false;
   private refreshPromise: Promise<VoiceWorkState> | null = null;
@@ -158,7 +163,16 @@ export class VoiceWorkManager extends EventEmitter {
     this.now = options.now ?? Date.now;
   }
 
-  getState(): VoiceWorkState { return structuredClone(this.state); }
+  getState(): VoiceWorkState {
+    const state = structuredClone(this.state);
+    state.activeTasks = [...this.active.keys()].map(jobId => {
+      const attempt = this.snapshot?.attempts[jobId];
+      return { jobId, threadId: attempt?.route?.threadId ?? (attempt?.turnId || attempt?.queueSubmission?.state === 'accepted' ? attempt.threadId : undefined),
+        title: attempt?.route?.title ?? 'Field Theory - Voice request',
+        status: attempt?.outcome ? 'finishing' : attempt?.waitingLocally ? 'waiting' : attempt?.startedAt ? 'working' : attempt?.queueSubmission ? 'queued' : 'routing' };
+    });
+    return state;
+  }
 
   getTelemetryIdentity(): { owner: string; workerId: string } | null {
     return this.current() && this.snapshot?.settings.enabled && this.owner
@@ -333,7 +347,12 @@ export class VoiceWorkManager extends EventEmitter {
   }
 
   canOpenTask(threadId: string): boolean {
-    return this.current() && !!codexTaskUrl(threadId) && (this.snapshot?.inboxThreadId === threadId
+    const activeTask = [...this.active.keys()].some(id => {
+      const attempt = this.snapshot?.attempts[id];
+      return attempt?.route?.threadId === threadId
+        || !!(attempt?.turnId || attempt?.queueSubmission?.state === 'accepted') && attempt?.threadId === threadId;
+    });
+    return this.current() && !!codexTaskUrl(threadId) && (activeTask || this.snapshot?.inboxThreadId === threadId
       || this.state.lastTask?.threadId === threadId && this.state.lastTask.canOpen === true);
   }
 
@@ -463,7 +482,7 @@ export class VoiceWorkManager extends EventEmitter {
   private async pump(epoch: number): Promise<void> {
     if (!await this.checkDeliveryState(epoch)) return;
     await this.flushOutcomes(epoch);
-    while (this.current(epoch) && this.snapshot?.settings.enabled) {
+    while (this.current(epoch) && this.snapshot?.settings.enabled && this.active.size < 16) {
       const claim = await this.rpc<ClaimResult>('voice_jobs_claim', {
         p_worker_id: this.snapshot.workerId, p_limit: 1,
       }, epoch);
@@ -474,7 +493,7 @@ export class VoiceWorkManager extends EventEmitter {
         this.reconnectAttempt = 0;
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
-        this.setStatus('ready', 'Listening for new voice requests.');
+        if (!this.active.size && !Object.values(this.snapshot.attempts).some(attempt => attempt.failure)) this.setStatus('ready', 'Listening for new voice requests.');
         if (claim.next_wake_at) {
           const delay = Date.parse(claim.next_wake_at) - Date.parse(claim.server_now);
           if (Number.isFinite(delay)) this.scheduleWake(Math.max(1000, delay), epoch);
@@ -486,11 +505,17 @@ export class VoiceWorkManager extends EventEmitter {
         || !job.job_id || !job.lease_token || typeof job.text !== 'string') {
         throw new Error('Invalid voice job.');
       }
-      await this.execute(job, epoch);
+      if (this.active.has(job.job_id)) return;
+      const entry = { controller: new AbortController() };
+      this.active.set(job.job_id, entry);
+      void this.execute(job, epoch, entry.controller).catch(error => this.handleDeliveryFailure(epoch, error)).finally(() => {
+        if (this.active.get(job.job_id) === entry) this.active.delete(job.job_id);
+        if (this.current(epoch)) { this.publish(); this.wake(); }
+      });
     }
   }
 
-  private async execute(job: VoiceJob, epoch: number): Promise<void> {
+  private async execute(job: VoiceJob, epoch: number, controller: AbortController): Promise<void> {
     this.ensureCurrent(epoch);
     this.refreshInboxFolder();
     const snapshot = this.snapshot!;
@@ -502,15 +527,15 @@ export class VoiceWorkManager extends EventEmitter {
     attempt.needsReconciliation = false;
     snapshot.attempts[job.job_id] = attempt;
     this.persist();
-    this.controller = new AbortController();
-    const controller = this.controller;
+    const executionLockKeys: string[] = [];
+    let releaseExecution: { release: () => void; releaseCapacity: () => void } | undefined;
     this.scheduleRenew(job, epoch, controller);
     try {
       await this.options.onTranscript?.(job);
       this.ensureCurrent(epoch);
       if (!attempt.route && !attempt.outcome) {
         try {
-          attempt.route = await (this.options.routeRequest ?? routeVoiceRequest)({
+          attempt.route = await this.withInbox(epoch, () => (this.options.routeRequest ?? routeVoiceRequest)({
             text: job.text, inboxPath: inboxPath!, projectlessVoiceTasks: this.projectlessVoiceTasks(), inboxInstructions: snapshot.settings.inboxInstructions,
             inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
               this.ensureCurrent(epoch);
@@ -520,7 +545,7 @@ export class VoiceWorkManager extends EventEmitter {
             } },
             previousThreadId: attempt.threadId ?? job.thread_id ?? job.previous_thread_id ?? undefined,
             signal: controller.signal,
-          });
+          }));
         } catch (error) {
           this.ensureCurrent(epoch);
           const failure = new VoiceRoutingFailure(error);
@@ -529,6 +554,7 @@ export class VoiceWorkManager extends EventEmitter {
           throw failure;
         }
         this.ensureCurrent(epoch);
+        attempt.route = prepareVoiceWorkspace(attempt.route!, inboxPath!, job.dispatch_key);
         delete attempt.failure;
         this.persist();
       }
@@ -559,6 +585,29 @@ export class VoiceWorkManager extends EventEmitter {
         }
       }
       const route = attempt.route;
+      if (!attempt.outcome && route?.decision !== 'context') {
+        const destination = attempt.threadId ?? job.thread_id ?? route?.threadId ?? job.previous_thread_id;
+        attempt.waitingLocally = true;
+        if (destination) {
+          snapshot.lastTask = { threadId: destination, title: route?.title ?? 'Field Theory - Voice request', status: 'queued',
+            summary: 'Saved on this Mac, waiting for this conversation or workspace to become available.', canOpen: !!codexTaskUrl(destination) };
+        }
+        this.persist();
+        const knownThread = attempt.threadId ?? job.thread_id ?? route?.threadId ?? job.previous_thread_id;
+        if (knownThread && !attempt.dispatchStarted && !job.dispatch_started_at) {
+          const mapped = await this.rpc<{ ok: boolean }>('voice_jobs_record_dispatch', {
+            p_job_id: job.job_id, p_lease_token: job.lease_token, p_thread_id: knownThread,
+          }, epoch);
+          if (!mapped.ok) throw new Error('Voice request ownership changed before routing.');
+          const ready = await this.beginSubmission(job, epoch, controller.signal, 'voice_jobs_submission_ready');
+          if (!ready.ok) throw new Error('Voice request destination needs reconciliation.');
+        }
+        executionLockKeys.push(`workspace:${fs.realpathSync(route?.workspacePath ?? inboxPath!)}`, ...(destination ? [`thread:${destination}`] : []));
+        releaseExecution = await this.acquireExecution(executionLockKeys, controller.signal, epoch);
+        if (attempt.queueSubmission?.state === 'accepted') releaseExecution.releaseCapacity();
+        delete attempt.waitingLocally;
+        this.persist();
+      }
       const workspacePath = route?.workspacePath ?? inboxPath!;
       const onStarted = async ({ threadId, turnId, startedAt }: { threadId: string; turnId: string; startedAt?: string }) => {
         this.ensureCurrent(epoch);
@@ -606,6 +655,11 @@ export class VoiceWorkManager extends EventEmitter {
           onThreadStarted: async (threadId) => {
             this.ensureCurrent(epoch);
             attempt.threadId = threadId;
+            const threadKey = `thread:${threadId}`;
+            if (!executionLockKeys.includes(threadKey)) {
+              if (this.executionKeys.has(threadKey)) throw new Error('Voice conversation already has an owner.');
+              executionLockKeys.push(threadKey); this.executionKeys.add(threadKey);
+            }
             this.persist();
             const result = await this.rpc<{ ok: boolean }>('voice_jobs_record_dispatch', {
               p_job_id: job.job_id, p_lease_token: job.lease_token, p_thread_id: threadId,
@@ -614,18 +668,14 @@ export class VoiceWorkManager extends EventEmitter {
           },
           onBeforeDispatch: async () => {
             this.ensureCurrent(epoch);
-            const result = await this.rpc<{ ok: boolean }>('voice_jobs_begin_dispatch', {
-              p_job_id: job.job_id, p_lease_token: job.lease_token,
-            }, epoch);
+            const result = await this.beginSubmission(job, epoch, controller.signal);
             if (!result.ok) throw new Error('Voice request was paused before dispatch.');
             attempt.dispatchStarted = true;
             this.persist();
           },
           onBeforeQueue: async () => {
             this.ensureCurrent(epoch);
-            const result = await this.rpc<{ ok: boolean }>('voice_jobs_begin_dispatch', {
-              p_job_id: job.job_id, p_lease_token: job.lease_token,
-            }, epoch);
+            const result = await this.beginSubmission(job, epoch, controller.signal);
             if (!result.ok) throw new Error('Voice request was paused before queue submission.');
             attempt.dispatchStarted = true;
             attempt.queueSubmission = { state: 'submitting' };
@@ -636,11 +686,20 @@ export class VoiceWorkManager extends EventEmitter {
             attempt.queueSubmission = { state: 'accepted', queuedSubmissionId };
             attempt.threadId = threadId;
             attempt.queuedAt ??= new Date(this.now()).toISOString();
+            releaseExecution?.releaseCapacity();
             snapshot.lastTask = { threadId, title: route?.title ?? 'Field Theory - Voice request', status: 'queued',
               summary: 'Waiting for this Codex conversation to start the request.', canOpen: !!codexTaskUrl(threadId) };
             this.persist();
             void this.publishProgress(job.job_id, attempt, epoch);
             this.setStatus('ready', 'Your request is queued in its Codex conversation.');
+          },
+          onSubmissionAccepted: async (event) => {
+            // Direct owners do not drain queue/add; retain their destination gate until completion.
+            if (!event.queuedSubmissionId) return;
+            const accepted = await this.rpc<{ ok: boolean }>('voice_jobs_accept_submission', {
+              p_job_id: job.job_id, p_lease_token: job.lease_token,
+            }, epoch);
+            if (!accepted.ok) throw new Error('Voice request submission needs reconciliation.');
           },
           onStarted,
         });
@@ -667,9 +726,9 @@ export class VoiceWorkManager extends EventEmitter {
         this.setStatus('needs_setup', 'Sign in to Codex, then check again to resume voice requests.');
       }
     } finally {
-      if (this.controller === controller) this.controller = null;
-      if (this.renewTimer) clearTimeout(this.renewTimer);
-      this.renewTimer = null;
+      releaseExecution?.release();
+      const entry = this.active.get(job.job_id);
+      if (entry?.controller === controller && entry.timer) clearTimeout(entry.timer);
     }
   }
 
@@ -683,27 +742,74 @@ export class VoiceWorkManager extends EventEmitter {
   }
 
   private async flushInboxReceipts(attempt: LocalAttempt, epoch: number): Promise<void> {
-    const ownedController = this.controller ? undefined : new AbortController();
-    const controller = this.controller ?? ownedController!;
-    if (ownedController) this.controller = ownedController;
+    const controller = new AbortController();
+    this.receiptControllers.add(controller);
     try {
-      for (const receipt of attempt.inboxReceipts ?? []) {
-        this.ensureCurrent(epoch);
-        if (receipt.delivered) continue;
-        try {
-          await (this.options.writeInboxReceipt ?? writeVoiceInboxReceipt)({ ...receipt.input, signal: controller.signal });
+      await this.withInbox(epoch, async () => {
+        for (const receipt of attempt.inboxReceipts ?? []) {
           this.ensureCurrent(epoch);
-          receipt.delivered = true;
-          this.persist();
-        } catch {
-          // Receipt retries use the same key and cannot replay substantive work.
-          if (this.current(epoch)) this.scheduleWake(30_000, epoch);
-          return;
+          if (receipt.delivered) continue;
+          try {
+            await (this.options.writeInboxReceipt ?? writeVoiceInboxReceipt)({ ...receipt.input, signal: controller.signal });
+            this.ensureCurrent(epoch);
+            receipt.delivered = true;
+            this.persist();
+          } catch {
+            if (this.current(epoch)) this.scheduleWake(30_000, epoch);
+            return;
+          }
         }
-      }
-    } finally {
-      if (ownedController && this.controller === ownedController) this.controller = null;
+      });
+    } finally { this.receiptControllers.delete(controller); }
+  }
+
+  private withInbox<T>(epoch: number, work: () => Promise<T>): Promise<T> {
+    const pending = this.inboxChain.then(() => { this.ensureCurrent(epoch); return work(); });
+    this.inboxChain = pending.catch(() => {});
+    return pending;
+  }
+
+  private async beginSubmission(job: VoiceJob, epoch: number, signal: AbortSignal, rpcName = 'voice_jobs_begin_dispatch'): Promise<{ ok: boolean }> {
+    while (true) {
+      if (signal.aborted) throw new Error('Voice request ownership changed.');
+      const result = await this.rpc<{ ok: boolean; blocked?: boolean  }>(rpcName, {
+        p_job_id: job.job_id, p_lease_token: job.lease_token,
+      }, epoch);
+      if (!result.blocked) return result;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, 1000);
+        const abort = () => { clearTimeout(timer); reject(new Error('Voice request ownership changed.')); };
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      });
     }
+  }
+
+  private async acquireExecution(keys: string[], signal: AbortSignal, epoch: number): Promise<{ release: () => void; releaseCapacity: () => void }> {
+    while (this.executionCount >= 4 || keys.some(key => this.executionKeys.has(key))) {
+      await new Promise<void>((resolve, reject) => {
+        const wake = () => { cleanup(); resolve(); };
+        const abort = () => { cleanup(); reject(new Error('Voice request session changed.')); };
+        const cleanup = () => { this.executionWaiters.delete(wake); signal.removeEventListener('abort', abort); };
+        this.executionWaiters.add(wake);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      });
+    }
+    this.ensureCurrent(epoch);
+    if (signal.aborted) throw new Error('Voice request session changed.');
+    this.executionCount++;
+    keys.forEach(key => this.executionKeys.add(key));
+    let counted = true;
+    const releaseCapacity = () => {
+      if (!counted) return;
+      counted = false; this.executionCount--;
+      for (const wake of [...this.executionWaiters]) wake();
+    };
+    return { releaseCapacity, release: () => {
+      releaseCapacity(); keys.forEach(key => this.executionKeys.delete(key));
+      for (const wake of [...this.executionWaiters]) wake();
+    } };
   }
 
   private async publishOutcome(jobId: string, attempt: LocalAttempt, epoch: number): Promise<void> {
@@ -730,6 +836,7 @@ export class VoiceWorkManager extends EventEmitter {
   private async flushOutcomes(epoch: number): Promise<void> {
     if (!this.snapshot) return;
     for (const [jobId, attempt] of Object.entries(this.snapshot.attempts)) {
+      if (this.active.has(jobId)) continue;
       if (attempt.outcome && !attempt.published && !attempt.needsReconciliation) await this.publishOutcome(jobId, attempt, epoch);
       await this.flushInboxReceipts(attempt, epoch);
     }
@@ -781,21 +888,23 @@ export class VoiceWorkManager extends EventEmitter {
   }
 
   private scheduleRenew(job: VoiceJob, epoch: number, controller: AbortController): void {
-    this.renewTimer = setTimeout(() => {
+    const entry = this.active.get(job.job_id);
+    if (!entry || entry.controller !== controller) return;
+    entry.timer = setTimeout(() => {
       if (!this.current(epoch) || controller.signal.aborted) return;
       void this.rpc<{ ok: boolean }>('voice_jobs_renew', {
         p_job_id: job.job_id, p_lease_token: job.lease_token,
       }, epoch).then((result) => {
-        if (this.controller !== controller || controller.signal.aborted) return;
+        if (this.active.get(job.job_id) !== entry || controller.signal.aborted) return;
         if (!result.ok) controller.abort();
         else if (this.current(epoch)) {
           const attempt = this.snapshot?.attempts[job.job_id];
           if (attempt) void this.publishProgress(job.job_id, attempt, epoch);
           this.scheduleRenew(job, epoch, controller);
         }
-      }).catch(() => { if (this.controller === controller) controller.abort(); });
+      }).catch(() => { if (this.active.get(job.job_id) === entry) controller.abort(); });
     }, 25_000);
-    this.renewTimer.unref?.();
+    entry.timer.unref?.();
   }
 
   private scheduleWake(delay: number, epoch: number): void {
@@ -899,10 +1008,12 @@ export class VoiceWorkManager extends EventEmitter {
     this.refreshPromise = null;
     this.generation = null;
     this.enabling = false;
-    this.controller?.abort(); this.controller = null;
+    for (const entry of this.active.values()) { entry.controller.abort(); if (entry.timer) clearTimeout(entry.timer); }
+    this.active.clear();
+    for (const controller of this.receiptControllers) controller.abort();
+    this.inboxChain = Promise.resolve();
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
-    if (this.renewTimer) clearTimeout(this.renewTimer);
-    this.wakeTimer = null; this.renewTimer = null;
+    this.wakeTimer = null;
     this.wakePending = false;
     if (this.channel && this.channelClient) void this.channelClient.removeChannel(this.channel).catch(() => {});
     this.channel = null; this.channelClient = null;

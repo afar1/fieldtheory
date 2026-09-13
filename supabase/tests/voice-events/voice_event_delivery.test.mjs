@@ -69,6 +69,7 @@ before(async () => {
   `);
   const migration = await readFile(new URL('../../migrations/20260907233700_voice_event_delivery.sql', import.meta.url), 'utf8');
   await db.exec(migration);
+  await db.exec(await readFile(new URL('../../migrations/20260913120000_voice_parallel_submission.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../migrations/20260910001000_voice_delivery_timeline.sql', import.meta.url), 'utf8'));
 });
 
@@ -565,4 +566,99 @@ test('timeline distinguishes server events, actual Codex time, and observation f
   assert.equal(started.event.time_source,'codex');
   const uploaded = (await db.query("select time_source from voice_delivery_events where stage='uploaded'")).rows;
   assert.deepEqual(uploaded,[{time_source:'server'}]);
+});
+
+
+test('conversation gate crosses workers, releases on acceptance, and leaves unrelated threads free', async () => {
+  await enable();
+  await insert('first'); await insert('second'); await insert('independent');
+  const [a] = (await claim('mac-one')).jobs;
+  const [b, c] = (await claim('mac-two', 2)).jobs;
+  await recordAndBegin(a, 'shared');
+  await rpc('voice_jobs_record_dispatch', [b.job_id, b.lease_token, 'shared']);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).blocked, true);
+  await recordAndBegin(c, 'independent');
+  const accepted = await rpc('voice_jobs_accept_submission', [a.job_id, a.lease_token]);
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.job.status, 'running');
+  const replay = await rpc('voice_jobs_accept_submission', [a.job_id, a.lease_token]);
+  assert.equal(replay.job.submission_accepted_at, accepted.job.submission_accepted_at);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).ok, true);
+});
+
+test('uncertain submission holds destination; wrong owner and expired lease cannot accept', async () => {
+  await enable(); await insert('first'); await insert('follow up');
+  const [a, b] = (await claim('mac-one', 2)).jobs;
+  await recordAndBegin(a, 'shared');
+  await rpc('voice_jobs_record_dispatch', [b.job_id, b.lease_token, 'shared']);
+  await identity(other);
+  assert.equal((await rpc('voice_jobs_accept_submission', [a.job_id, a.lease_token])).ok, false);
+  await identity();
+  await rpc('voice_jobs_retry', [a.job_id, a.lease_token, 'unknown', 1]);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).blocked, true);
+  assert.equal((await rpc('voice_jobs_accept_submission', [a.job_id, a.lease_token])).ok, false);
+});
+
+test('registered destination order survives retry and legacy running tasks conservatively hold', async () => {
+  await enable(); await insert('first'); await insert('second');
+  const [a, b] = (await claim('mac-one', 2)).jobs;
+  const registered = await rpc('voice_jobs_record_dispatch', [a.job_id, a.lease_token, 'shared']);
+  const repeated = await rpc('voice_jobs_record_dispatch', [a.job_id, a.lease_token, 'shared']);
+  assert.equal(repeated.job.submission_order, registered.job.submission_order);
+  await rpc('voice_jobs_record_dispatch', [b.job_id, b.lease_token, 'shared']);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).blocked, true);
+  await rpc('voice_jobs_begin_dispatch', [a.job_id, a.lease_token]);
+  await db.exec('reset role');
+  await db.query('update public.voice_jobs set submission_order=null where job_id=$1', [a.job_id]);
+  await identity();
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).blocked, true);
+  await rpc('voice_jobs_complete', [a.job_id, a.lease_token, 'completed', 'Done', {}]);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).ok, true);
+});
+
+test('expired acceptance is fenced and exact recovery can release destination under a new lease', async () => {
+  await enable(); await insert('first'); await insert('follow up');
+  const [a, b] = (await claim('mac-one', 2)).jobs;
+  await recordAndBegin(a, 'shared');
+  await rpc('voice_jobs_record_dispatch', [b.job_id, b.lease_token, 'shared']);
+  await expire(a);
+  assert.equal((await rpc('voice_jobs_accept_submission', [a.job_id, a.lease_token])).ok, false);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).blocked, true);
+  const recovered = (await claim('mac-two')).jobs[0];
+  assert.equal(recovered.job_id, a.job_id);
+  assert.equal((await rpc('voice_jobs_accept_submission', [a.job_id, recovered.lease_token])).ok, true);
+  assert.equal((await rpc('voice_jobs_begin_dispatch', [b.job_id, b.lease_token])).ok, true);
+});
+
+test('fifteen independent recordings can be claimed in bounded batches without duplicate ownership', async () => {
+  await enable();
+  for (let i = 0; i < 15; i++) await insert(`independent ${i}`);
+  const first = (await claim('mac-one', 10)).jobs;
+  const second = (await claim('mac-two', 10)).jobs;
+  assert.equal(first.length, 10); assert.equal(second.length, 5);
+  assert.equal(new Set([...first, ...second].map(job => job.job_id)).size, 15);
+  assert.equal((await claim('mac-three', 10)).jobs.length, 0);
+});
+
+test('submission preflight is side-effect free, destination ordered and lease fenced', async () => {
+  await enable(); await insert('first'); await insert('second');
+  const [a, b] = (await claim('mac-one', 2)).jobs;
+  assert.equal((await rpc('voice_jobs_submission_ready', [a.job_id, a.lease_token])).ok, false);
+  const mapped = await rpc('voice_jobs_record_dispatch', [a.job_id, a.lease_token, 'shared']);
+  await rpc('voice_jobs_record_dispatch', [b.job_id, b.lease_token, 'shared']);
+  const ready = await rpc('voice_jobs_submission_ready', [a.job_id, a.lease_token]);
+  assert.equal(ready.ok, true);
+  assert.deepEqual(ready.job, mapped.job);
+  assert.equal(ready.job.dispatch_started_at, null);
+  assert.equal((await rpc('voice_jobs_submission_ready', [b.job_id, b.lease_token])).blocked, true);
+  await identity(other);
+  assert.equal((await rpc('voice_jobs_submission_ready', [a.job_id, a.lease_token])).ok, false);
+  await identity(); await expire(a);
+  assert.equal((await rpc('voice_jobs_submission_ready', [a.job_id, a.lease_token])).ok, false);
+  const recovered = (await claim('mac-two')).jobs[0];
+  assert.equal((await rpc('voice_jobs_submission_ready', [a.job_id, recovered.lease_token])).ok, true);
+  await rpc('voice_jobs_begin_dispatch', [a.job_id, recovered.lease_token]);
+  assert.equal((await rpc('voice_jobs_submission_ready', [a.job_id, recovered.lease_token])).ok, false);
+  await rpc('voice_jobs_complete', [a.job_id, recovered.lease_token, 'completed', 'Done', {}]);
+  assert.equal((await rpc('voice_jobs_submission_ready', [b.job_id, b.lease_token])).ok, true);
 });

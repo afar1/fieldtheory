@@ -26,6 +26,7 @@ export interface VoiceWorkState {
   inboxThreadId?: string;
   lastEventAt?: number;
   lastTask?: VoiceWorkTask;
+  activeTasks?: Array<{ jobId: string; threadId?: string; title: string; status: 'routing' | 'waiting' | 'queued' | 'working' | 'finishing' }>;
 }
 
 export interface VoiceWorkAPI {

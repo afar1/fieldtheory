@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readVoiceRouteCatalog, validateVoiceRoute, readVoiceThreadEvidence, inspectVoiceRouteCandidates } from './voiceCodexRouter';
+import { readVoiceRouteCatalog, validateVoiceRoute, readVoiceThreadEvidence, inspectVoiceRouteCandidates, prepareVoiceWorkspace } from './voiceCodexRouter';
 
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })));
@@ -14,6 +14,27 @@ function folder() {
 }
 
 describe('Codex-owned Voice routing', () => {
+  it('isolates independent projectless requests and reuses the same folder on retry', () => {
+    const inbox = folder();
+    const route = { decision: 'new' as const, workspacePath: inbox };
+    const first = prepareVoiceWorkspace(route, inbox, 'first');
+    const second = prepareVoiceWorkspace(route, inbox, 'second');
+    expect(first.workspacePath).not.toBe(second.workspacePath);
+    expect(prepareVoiceWorkspace(route, inbox, 'first')).toEqual(first);
+    fs.writeFileSync(path.join(first.workspacePath, 'result.md'), 'first result');
+    expect(fs.existsSync(path.join(second.workspacePath, 'result.md'))).toBe(false);
+    for (const existing of [{ ...route, projectId: 'project' }, { ...route, decision: 'continue' as const, threadId: 'task' },
+      { ...route, decision: 'context' as const }, { ...route, decision: 'ask' as const }]) {
+      expect(prepareVoiceWorkspace(existing, inbox, 'first')).toBe(existing);
+    }
+  });
+
+  it('rejects a symlink redirect of a Voice working folder', () => {
+    const inbox = folder();
+    fs.symlinkSync(folder(), path.join(inbox, '.voice-workspaces'));
+    expect(() => prepareVoiceWorkspace({ decision: 'new', workspacePath: inbox }, inbox, 'request')).toThrow(/unavailable/);
+  });
+
   it('recovers only confirmed projectless Voice tasks whose original inbox is gone', async () => {
     const oldInbox = folder(); const inboxPath = folder(); const existing = folder();
     fs.rmdirSync(oldInbox);
