@@ -274,7 +274,7 @@ final class AppModel {
         let opened = Database.recovering(path: productionDatabasePath)
         if let error = opened.error {
             isPreparingStorage = false
-            presentStorageError("Local storage is still unavailable. Check device storage and try again, or relaunch Ambition. (\(error.localizedDescription))")
+            presentStorageError("Local storage is still unavailable. Check device storage and try again, or relaunch Field Theory. (\(error.localizedDescription))")
             finishExplicitWorkspaceTransition(resumeLatestAuth: true)
             return
         }
@@ -344,7 +344,7 @@ final class AppModel {
         if !isReviewerDemoStorage, !productionStorageAvailable {
             // The durable index could not be opened, so deleting the document
             // root would destroy files we cannot safely reconcile.
-            presentStorageError("You were signed out, but local files were retained because storage is unavailable. Relaunch Ambition before signing in to another account.")
+            presentStorageError("You were signed out, but local files were retained because storage is unavailable. Relaunch Field Theory before signing in to another account.")
             return
         }
         do {

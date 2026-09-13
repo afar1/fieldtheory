@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreML
 import FluidAudio
 import Foundation
@@ -40,6 +41,7 @@ struct ParakeetPreparationDiagnostics: Codable, Equatable, Sendable {
 /// Internal seams keep lifecycle behavior testable without loading production assets.
 struct ParakeetLoadedRuntime: @unchecked Sendable {
     let transcribe: @Sendable (URL) async throws -> String
+    var transcribeWithProgress: (@Sendable (URL, @escaping @MainActor @Sendable (Double) -> Void) async throws -> String)?
     let cleanup: @Sendable () async -> Void
 
     init(
@@ -318,7 +320,7 @@ actor ParakeetService {
 
     /// Uses FluidAudio's disk-backed source so long recordings do not determine
     /// the in-memory PCM working set. It shares an in-progress cold preparation.
-    func transcribe(audioURL: URL, modelDirectory: URL) async throws -> String {
+    func transcribe(audioURL: URL, modelDirectory: URL, progress: @escaping @MainActor @Sendable (Double) -> Void = { _ in }) async throws -> String {
         try Task.checkCancellation()
         guard FileManager.default.isReadableFile(atPath: audioURL.path) else {
             throw ParakeetTranscriptionError(message: "The saved recording could not be read.")
@@ -327,6 +329,9 @@ actor ParakeetService {
         latestPreparationDiagnostics = diagnostics
         try await inferenceGate.acquire()
         defer { inferenceGate.release() }
+        if let transcribe = runtime.transcribeWithProgress {
+            return try await transcribe(audioURL, progress)
+        }
         return try await runtime.transcribe(audioURL)
     }
 
@@ -504,17 +509,32 @@ actor ParakeetService {
             finishStage()
             try Task.checkCancellation()
 
-            let runtime = ParakeetLoadedRuntime(
-                transcribe: { audioURL in
-                    var decoderState = try TdtDecoderState(decoderLayers: 2)
-                    let result = try await manager.transcribeDiskBacked(
-                        audioURL, decoderState: &decoderState)
-                    try Task.checkCancellation()
-                    return result.text
-                        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                },
+            let transcribe: @Sendable (URL, @escaping @MainActor @Sendable (Double) -> Void) async throws -> String = { audioURL, progress in
+                // FluidAudio only closes its progress stream for audio longer
+                // than 240,000 converted samples. Cancelling a short-file
+                // observer would leave a terminated stream for the next file.
+                let audioFile = try AVAudioFile(forReading: audioURL)
+                let emitsProgress = Double(audioFile.length) / audioFile.processingFormat.sampleRate > 15
+                let stream = emitsProgress ? await manager.transcriptionProgressStream : nil
+                let observer = stream.map { stream in
+                    Task {
+                        do {
+                            for try await fraction in stream { await progress(fraction) }
+                        } catch { /* Inference below owns error reporting. */ }
+                    }
+                }
+                defer { observer?.cancel() }
+                var decoderState = try TdtDecoderState(decoderLayers: 2)
+                let result = try await manager.transcribeDiskBacked(audioURL, decoderState: &decoderState)
+                try Task.checkCancellation()
+                await progress(1)
+                return result.text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            var runtime = ParakeetLoadedRuntime(
+                transcribe: { audioURL in try await transcribe(audioURL, { _ in }) },
                 cleanup: { await manager.cleanup() })
+            runtime.transcribeWithProgress = transcribe
             return .init(
                 runtime: runtime,
                 diagnostics: .init(

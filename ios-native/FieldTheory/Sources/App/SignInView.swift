@@ -22,7 +22,7 @@ struct SignInView: View {
                 .foregroundStyle(Theme.accent(model.settings.accentPreset, colorScheme))
                 .padding(.bottom, 18)
 
-            Text("Ambition")
+            Text("Field Theory")
                 .font(.custom("Source Serif 4", size: 32).weight(.semibold))
                 .foregroundStyle(Theme.text(colorScheme))
 

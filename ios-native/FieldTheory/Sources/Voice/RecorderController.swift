@@ -41,6 +41,11 @@ final class RecorderController {
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
     private var draining = false
+    private var transcriptionProgress: Progress?
+    private var userTranscriptionPending = false
+    private var progressCompletedFiles = 0
+    private var progressTotalFiles = 1
+    private let continuedProcessing: VoiceContinuedProcessing
     private var workEnabled = false
     private var workGeneration = UUID()
     private var deliveryTask: Task<Bool, Never>?
@@ -112,7 +117,9 @@ final class RecorderController {
          metricsDirectory: URL = RecorderController.voiceDiagnosticsDir,
          defaults: UserDefaults = .standard,
          transcribe: ((URL) async throws -> String)? = nil,
-         speechEngine: (any SpeechTranscriptionEngine)? = nil) {
+         speechEngine: (any SpeechTranscriptionEngine)? = nil,
+         continuedProcessing: VoiceContinuedProcessing? = nil) {
+        self.continuedProcessing = continuedProcessing ?? .shared
         self.pendingDirectory = pendingDirectory
         self.metricsDirectory = metricsDirectory
         self.defaults = defaults
@@ -528,16 +535,54 @@ final class RecorderController {
             stoppedAtMsBySessionID[Self.pendingSessionID(for: first)] = stoppedAtMs
         }
 
-        guard engineReady else {
-            phase = .idle
-            startedAt = nil
-            onNotice?("Saved — download Parakeet to transcribe", "clock.arrow.circlepath")
-            return
+        if !engineReady {
+            switch speechEngine.state {
+            case .notDownloaded, .downloading:
+                phase = .idle
+                startedAt = nil
+                onNotice?("Saved — download Parakeet to transcribe", "clock.arrow.circlepath")
+                return
+            default: break
+            }
         }
 
         phase = .idle
         startedAt = nil
-        await drainPendingQueue()
+        await transcribeUserInitiated()
+    }
+
+    /// Only Stop and explicit Retry may create a system continued-processing task.
+    func transcribeUserInitiated() async {
+        guard workEnabled, !draining, !userTranscriptionPending, phase != .recording,
+              pendingSessionCount > 0 else { return }
+        let generation = workGeneration
+        userTranscriptionPending = true
+        defer { userTranscriptionPending = false }
+        await continuedProcessing.run { [self] progress, hasContinuedRuntime in
+            guard workEnabled, workGeneration == generation else { return false }
+            transcriptionProgress = progress
+            defer { transcriptionProgress = nil }
+            if !engineReady {
+                do {
+                    let engine = speechEngine
+                    try await withTaskCancellationHandler {
+                        try Task.checkCancellation()
+                        try await engine.prepare()
+                        try Task.checkCancellation()
+                    } onCancel: {
+                        Task { @MainActor in engine.cancelPreparation() }
+                    }
+                } catch {
+                    if !(error is CancellationError) {
+                        lastError = "Parakeet preparation failed: \(error.localizedDescription)"
+                    }
+                    return false
+                }
+            }
+            guard workEnabled, workGeneration == generation, !Task.isCancelled else { return false }
+            await drainPendingQueue(continued: true, hasContinuedRuntime: hasContinuedRuntime)
+            return pendingSessionCount == 0 && !Task.isCancelled
+        }
     }
 
     private var engineReady: Bool {
@@ -553,16 +598,27 @@ final class RecorderController {
         var parts: [String] = []
         let inferenceStartedAtMs = Timestamps.nowMs()
         for url in urls {
+            let completedBeforeFile = progressCompletedFiles
+            let totalFiles = progressTotalFiles
+            try Task.checkCancellation()
             guard workEnabled, workGeneration == generation else { throw CancellationError() }
             logger.info("Voice transcription starting for \(url.lastPathComponent, privacy: .public)")
             let text: String
             if let transcribeOverride {
                 text = try await transcribeOverride(url)
             } else {
-                text = try await speechEngine.transcribe(audioURL: url)
+                text = try await speechEngine.transcribe(audioURL: url, progress: { [weak self] fraction in
+                    guard fraction.isFinite else { return }
+                    let completed = (Double(completedBeforeFile) + min(1, max(0, fraction))) / Double(totalFiles)
+                    if let progress = self?.transcriptionProgress {
+                        progress.completedUnitCount = max(progress.completedUnitCount, Int64(completed * 990))
+                    }
+                })
             }
             guard workEnabled, workGeneration == generation else { throw CancellationError() }
+            try Task.checkCancellation()
             logger.info("Voice transcription finished for \(url.lastPathComponent, privacy: .public)")
+            progressCompletedFiles += 1
             if !text.isEmpty { parts.append(text) }
         }
         let text = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -575,9 +631,9 @@ final class RecorderController {
     /// Transcribes recordings that were parked while the model downloaded.
     /// Segments are grouped by recording session (rec-<session>-<index>.wav)
     /// so one long capture stays one transcript.
-    func drainPendingQueue() async {
+    func drainPendingQueue(continued: Bool = false, hasContinuedRuntime: Bool = false) async {
         refreshPendingAudioStatus()
-        guard workEnabled, !draining, phase != .recording, pendingSessionCount > 0 else { return }
+        guard workEnabled, !draining, (!userTranscriptionPending || continued), phase != .recording, pendingSessionCount > 0 else { return }
         requestPreparationIfNeeded()
         let generation = workGeneration
         guard onTranscript != nil else {
@@ -593,7 +649,9 @@ final class RecorderController {
             return
         }
         draining = true
-        let task = beginBackgroundTask()
+        progressCompletedFiles = 0
+        progressTotalFiles = max(1, Self.pendingSessions(in: pendingDirectory).reduce(0) { $0 + $1.files.count })
+        let task: UIBackgroundTaskIdentifier = hasContinuedRuntime ? .invalid : beginBackgroundTask()
         phase = .transcribing
         logger.info("Voice pending queue drain started")
         defer {
@@ -607,6 +665,7 @@ final class RecorderController {
         }
 
         for session in Self.pendingSessions(in: pendingDirectory) {
+            guard !Task.isCancelled else { return }
             guard engineReady else {
                 requestPreparationIfNeeded()
                 break
@@ -682,6 +741,10 @@ final class RecorderController {
                 refreshPendingAudioStatus()
             } catch {
                 guard workEnabled, workGeneration == generation else { return }
+                if error is CancellationError {
+                    onNotice?("Saved — transcription paused", "clock.arrow.circlepath")
+                    break
+                }
                 lastError = "Parakeet transcription failed: \(error.localizedDescription)"
                 logger.error("Voice transcription failed engine=\(engineIdentity, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                 onNotice?("Saved — retry transcription when Field Theory is open", "clock.arrow.circlepath")

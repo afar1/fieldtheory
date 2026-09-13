@@ -24,6 +24,15 @@ protocol SpeechTranscriptionEngine: AnyObject {
     /// Stops this engine's preparation waiter without deleting local assets.
     func cancelPreparation()
     func transcribe(audioURL: URL) async throws -> String
+    func transcribe(audioURL: URL, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> String
+}
+
+extension SpeechTranscriptionEngine {
+    func transcribe(audioURL: URL, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> String {
+        let text = try await transcribe(audioURL: audioURL)
+        progress(1)
+        return text
+    }
 }
 
 struct SpeechTranscriptionEngineError: LocalizedError {
@@ -156,6 +165,13 @@ final class ParakeetSpeechTranscriptionEngine: SpeechTranscriptionEngine {
             )
         }
         return try await service.transcribe(audioURL: audioURL, modelDirectory: modelDirectory)
+    }
+
+    func transcribe(audioURL: URL, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> String {
+        guard let directory = models.readyModelDirectory else {
+            throw SpeechTranscriptionEngineError(message: "Parakeet is not ready.")
+        }
+        return try await service.transcribe(audioURL: audioURL, modelDirectory: directory, progress: progress)
     }
 
     func unload() async {

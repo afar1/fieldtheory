@@ -73,13 +73,14 @@ targets:
     info:
       path: FieldTheory/Resources/Info.plist
       properties:
-        CFBundleDisplayName: Ambition
+        CFBundleDisplayName: Field Theory
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         FTBuildCommit: $(FT_BUILD_COMMIT)
         UILaunchScreen: {}
-        UIBackgroundModes: [audio]
-        NSMicrophoneUsageDescription: "Ambition records audio so it can transcribe your voice entirely on this device."
+        UIBackgroundModes: [audio, processing]
+        BGTaskSchedulerPermittedIdentifiers: [com.afar1.fieldtheory.voice.transcription]
+        NSMicrophoneUsageDescription: "Field Theory records audio so it can transcribe your voice entirely on this device."
         UIAppFonts:
           - SourceSerif4-Variable.ttf
           - SourceSerif4-Italic-Variable.ttf

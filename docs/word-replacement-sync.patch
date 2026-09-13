@@ -1,0 +1,960 @@
+--- a/ios-native/FieldTheory/Sources/App/AppModel.swift
++++ b/ios-native/FieldTheory/Sources/App/AppModel.swift
+@@ -98,6 +98,7 @@
+         let recorder = recorderOverride ?? Self.makeRecorder()
+         self.recorder = recorder
+         self.productionRecorder = recorder
++        recorder.replaceWords = { [weak sync] text in sync?.wordSubstitutions.apply(to: text) ?? text }
+         recorder.setWorkEnabled(auth.hasIdentity && opened.error == nil)
+         wireStorageErrors()
+         if let error = opened.error {
+@@ -191,6 +192,7 @@
+         previewMode = false
+ #endif
+         await sync.stopAndWait()
++        sync.wordSubstitutions.selectUser(nil)
+         auth.clearIdentity()
+         do {
+             try await recorder.discardRecordings()
+@@ -199,6 +201,7 @@
+         }
+         await auth.signOut()
+         // A token-refresh event may have repersisted identity while cleanup awaited.
++        sync.wordSubstitutions.selectUser(nil)
+         auth.clearIdentity()
+         await wipeLocalData()
+         recorder.setWorkEnabled(false)
+@@ -482,6 +485,7 @@
+             return
+         }
+ 
++        sync.wordSubstitutions.selectUser(userId?.uuidString.lowercased())
+         if let userId {
+             let ownerID = userId.uuidString.lowercased()
+             var databaseActivated = false
+--- a/ios-native/FieldTheory/Sources/Core/AppSettings.swift
++++ b/ios-native/FieldTheory/Sources/Core/AppSettings.swift
+@@ -1,4 +1,86 @@
+ import SwiftUI
++
++struct WordSubstitution: Codable, Equatable {
++    var from: String
++    var to: String
++}
++
++struct WordSubstitutionChange: Encodable {
++    let from: String
++    let to: String?
++
++    enum CodingKeys: String, CodingKey { case from, to }
++    func encode(to encoder: Encoder) throws {
++        var container = encoder.container(keyedBy: CodingKeys.self)
++        try container.encode(from, forKey: .from)
++        if let to { try container.encode(to, forKey: .to) }
++        else { try container.encodeNil(forKey: .to) }
++    }
++}
++
++@MainActor
++@Observable
++final class WordSubstitutionSettings {
++    private struct State: Codable {
++        var pairs: [WordSubstitution] = []
++        var synced: [WordSubstitution] = []
++    }
++    private var state = State()
++    private var userId: String?
++    private(set) var revision = 0
++    var onChange: (() -> Void)?
++    var pairs: [WordSubstitution] { state.pairs }
++
++    func selectUser(_ id: String?) {
++        guard userId != id else { return }
++        userId = id
++        revision += 1
++        state = id.flatMap { UserDefaults.standard.data(forKey: "word-substitutions-" + $0) }
++            .flatMap { try? JSONDecoder().decode(State.self, from: $0) } ?? State()
++    }
++
++    func set(_ pairs: [WordSubstitution]) {
++        guard userId != nil else { return }
++        state.pairs = pairs
++        revision += 1
++        persist()
++        onChange?()
++    }
++
++    func changes() -> [WordSubstitutionChange] {
++        state.synced.filter { old in !state.pairs.contains { $0.from == old.from } }
++            .map { WordSubstitutionChange(from: $0.from, to: nil) }
++        + state.pairs.filter { pair in !state.synced.contains(pair) }
++            .map { WordSubstitutionChange(from: $0.from, to: $0.to) }
++    }
++
++    func accept(_ pairs: [WordSubstitution], userId: String, revision: Int) {
++        guard self.userId == userId, self.revision == revision else { return }
++        state = State(pairs: pairs, synced: pairs)
++        persist()
++    }
++
++    private func persist() {
++        guard let userId, let data = try? JSONEncoder().encode(state) else { return }
++        UserDefaults.standard.set(data, forKey: "word-substitutions-" + userId)
++    }
++
++    func apply(to text: String) -> String {
++        Self.apply(pairs, to: text)
++    }
++
++    static func apply(_ pairs: [WordSubstitution], to text: String) -> String {
++        pairs.reduce(text) { result, pair in
++            guard !pair.from.isEmpty, pair.from != pair.to,
++                  let regex = try? NSRegularExpression(
++                    pattern: "\\b" + NSRegularExpression.escapedPattern(for: pair.from) + "\\b",
++                    options: .caseInsensitive) else { return result }
++            return regex.stringByReplacingMatches(in: result,
++                range: NSRange(result.startIndex..., in: result),
++                withTemplate: NSRegularExpression.escapedTemplate(for: pair.to))
++        }
++    }
++}
+ 
+ /// User preferences. Keys deliberately mirror the Mac app's localStorage keys
+ /// (librarian-typography-preset, librarian-line-height, accentPreset,
+--- a/ios-native/FieldTheory/Sources/Core/SyncEngine.swift
++++ b/ios-native/FieldTheory/Sources/Core/SyncEngine.swift
+@@ -322,10 +322,13 @@
+     private let settings: AppSettings
+     private let library: LibraryStore
+     private let river: RiverStore
++    let wordSubstitutions = WordSubstitutionSettings()
++    private(set) var wordSubstitutionSyncError: String?
+     private let transcripts: TranscriptStore
+     private let voiceTransport: VoiceSyncTransport
+     private let backgroundTasks: VoiceSyncBackgroundTaskManaging
+     private let retryDelaySeconds: Double
++    private let wordSubstitutionRequest: ([WordSubstitutionChange]) async throws -> [WordSubstitution]
+ 
+     private(set) var status: SyncStatus = .idle
+     private(set) var lastSyncAt: Date?
+@@ -350,6 +353,7 @@
+ 
+     init(client: SupabaseClient, db: Database, settings: AppSettings,
+          library: LibraryStore, river: RiverStore, transcripts: TranscriptStore,
++         wordSubstitutionRequest: (([WordSubstitutionChange]) async throws -> [WordSubstitution])? = nil,
+          voiceTransport: VoiceSyncTransport? = nil,
+          backgroundTasks: VoiceSyncBackgroundTaskManaging? = nil,
+          retryDelaySeconds: Double = 10) {
+@@ -362,17 +366,23 @@
+         self.voiceTransport = voiceTransport ?? SupabaseVoiceSyncTransport(client: client)
+         self.backgroundTasks = backgroundTasks ?? ApplicationVoiceSyncBackgroundTasks()
+         self.retryDelaySeconds = retryDelaySeconds
+-
+-        // Voice is the only account-synced content in this release. Starting
+-        // immediately also acquires finite background time before a user locks
++        self.wordSubstitutionRequest = wordSubstitutionRequest ?? { changes in
++            struct Parameters: Encodable { let changes: [WordSubstitutionChange] }
++            return try await client.rpc("sync_word_substitutions",
++                params: Parameters(changes: changes)).execute().value
++        }
++
++        // Starting immediately acquires finite background time before a user locks
+         // the phone after ending a recording.
+         transcripts.onLocalChange = { [weak self] in self?.scheduleDebounced(after: 0) }
++        wordSubstitutions.onChange = { [weak self] in self?.scheduleDebounced() }
+     }
+ 
+     func start(userId: UUID, email: String?) async {
+         await stopAndWait()
+         let normalizedUserID = userId.uuidString.lowercased()
+         foreground = UIApplication.shared.applicationState != .background
++        wordSubstitutions.selectUser(normalizedUserID)
+         self.userId = normalizedUserID
+         self.userEmail = email?.lowercased()
+         sessionFence.activate(userId: normalizedUserID)
+@@ -613,6 +623,16 @@
+         } catch {
+             if uploadError == nil { uploadError = error }
+         }
++        do {
++            try requireActive(lease)
++            try await syncWordSubstitutions(userId: lease.userId)
++            try requireActive(lease)
++            wordSubstitutionSyncError = nil
++        } catch is CancellationError {
++            return
++        } catch {
++            wordSubstitutionSyncError = "Saved on this iPhone. Sync unavailable; will retry."
++        }
+         guard isActive(lease) else { return }
+         if let uploadError {
+             status = .error("voice: \(uploadError.localizedDescription)")
+@@ -655,6 +675,13 @@
+     }
+ 
+     // MARK: - Library
++
++    private func syncWordSubstitutions(userId: String) async throws {
++        let revision = wordSubstitutions.revision
++        let pairs = try await wordSubstitutionRequest(wordSubstitutions.changes())
++        guard !Task.isCancelled, self.userId == userId else { return }
++        wordSubstitutions.accept(pairs, userId: userId, revision: revision)
++    }
+ 
+     private func normalizeSourcePath(_ sourcePath: String?, title: String) -> String? {
+         LibraryPaths.normalize(sourcePath, title: title)
+--- a/ios-native/FieldTheory/Sources/Settings/SettingsView.swift
++++ b/ios-native/FieldTheory/Sources/Settings/SettingsView.swift
+@@ -38,6 +38,12 @@
+                 Section {
+                     modelRow
+                     Toggle("Copy transcripts automatically", isOn: $settings.autoCopyTranscripts)
++                    NavigationLink("Word replacements") {
++                        WordReplacementsView(store: model.sync.wordSubstitutions)
++                    }
++                    if let error = model.sync.wordSubstitutionSyncError {
++                        Text(error).font(.caption).foregroundStyle(.secondary)
++                    }
+                 } header: {
+                     Text("Ambition")
+                 } footer: {
+@@ -338,3 +344,66 @@
+         }
+     }
+ }
++
++private struct WordReplacementsView: View {
++    let store: WordSubstitutionSettings
++    @State private var from = ""
++    @State private var to = ""
++    @State private var editingFrom: String?
++
++    var body: some View {
++        Form {
++            Section {
++                TextField("Heard word or phrase", text: $from)
++                    .textInputAutocapitalization(.never).autocorrectionDisabled()
++                TextField("Replace with", text: $to)
++                    .textInputAutocapitalization(.never).autocorrectionDisabled()
++                Button(editingFrom == nil ? "Add replacement" : "Save replacement") {
++                    let source = from.trimmingCharacters(in: .whitespacesAndNewlines)
++                    var pairs = store.pairs
++                    if let editingFrom, let index = pairs.firstIndex(where: { $0.from == editingFrom }) {
++                        pairs[index] = WordSubstitution(from: source, to: to)
++                    } else {
++                        pairs.append(WordSubstitution(from: source, to: to))
++                    }
++                    store.set(pairs)
++                    from = ""
++                    to = ""
++                    editingFrom = nil
++                }
++                .disabled(from.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
++                    || from.count > 500 || to.count > 2000
++                    || store.pairs.contains { $0.from == from.trimmingCharacters(in: .whitespacesAndNewlines) && $0.from != editingFrom })
++                if editingFrom != nil {
++                    Button("Cancel", role: .cancel) { editingFrom = nil; from = ""; to = "" }
++                }
++            } footer: {
++                Text("Replacements apply to new transcripts and sync with your Mac when online. Tap a replacement to edit it; swipe to delete.")
++            }
++            Section("Replacements") {
++                ForEach(store.pairs, id: \.from) { pair in
++                    Button {
++                        editingFrom = pair.from
++                        from = pair.from
++                        to = pair.to
++                    } label: {
++                        HStack {
++                            Text(pair.from)
++                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
++                            Text(pair.to.isEmpty ? "(remove)" : pair.to)
++                        }
++                    }
++                }
++                .onDelete { indices in
++                    var pairs = store.pairs
++                    pairs.remove(atOffsets: indices)
++                    store.set(pairs)
++                    editingFrom = nil
++                    from = ""
++                    to = ""
++                }
++            }
++        }
++        .navigationTitle("Word replacements")
++    }
++}
+--- a/ios-native/FieldTheory/Sources/Voice/RecorderController.swift
++++ b/ios-native/FieldTheory/Sources/Voice/RecorderController.swift
+@@ -68,6 +68,7 @@
+     /// (insert at cursor vs. save to Voice).
+     /// Returns true only after the destination accepted the transcript. Raw
+     /// audio stays queued when local persistence fails.
++    var replaceWords: ((String) -> String)?
+     var onTranscript: ((String) async -> Bool)?
+     /// Lightweight status line for toasts (queued audio, errors).
+     var onNotice: ((String, String) -> Void)?
+@@ -564,8 +565,9 @@
+             logger.info("Voice transcription finished for \(url.lastPathComponent, privacy: .public)")
+             if !text.isEmpty { parts.append(text) }
+         }
++        let text = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+         return (
+-            parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
++            replaceWords?(text) ?? text,
+             max(0, Timestamps.nowMs() - inferenceStartedAtMs)
+         )
+     }
+--- a/ios-native/FieldTheory/Tests/ProtocolTests.swift
++++ b/ios-native/FieldTheory/Tests/ProtocolTests.swift
+@@ -4,6 +4,22 @@
+ /// Tests for the pure functions that must agree byte-for-byte with the Mac's
+ /// librarySyncService.ts and the previous mobile app's sync code.
+ final class ProtocolTests: XCTestCase {
++
++    @MainActor
++    func testWordReplacementUsesWholeWordsAndLiteralReplacement() {
++        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "Maine", to: "main")],
++            to: "Maine, MAINE; maintained."), "main, main; maintained.")
++        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "price", to: "$1")],
++            to: "price"), "$1")
++        XCTAssertEqual(WordSubstitutionSettings.apply([.init(from: "remove", to: "")],
++            to: "remove this"), " this")
++    }
++
++    func testWordReplacementDeletionEncodesExplicitNull() throws {
++        let data = try JSONEncoder().encode(WordSubstitutionChange(from: "Maine", to: nil))
++        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
++        XCTAssertTrue(object["to"] is NSNull)
++    }
+ 
+     // MARK: client_id derivation
+ 
+--- a/ios-native/FieldTheory/Tests/VoiceSyncTests.swift
++++ b/ios-native/FieldTheory/Tests/VoiceSyncTests.swift
+@@ -130,6 +130,7 @@
+             library: LibraryStore(db: db, libraryRoot: libraryRoot),
+             river: RiverStore(db: db),
+             transcripts: transcripts ?? TranscriptStore(db: db),
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: transport,
+             backgroundTasks: backgroundTasks ?? RecordingVoiceBackgroundTasks(),
+             retryDelaySeconds: retryDelaySeconds
+@@ -367,6 +368,7 @@
+             library: LibraryStore(db: db),
+             river: RiverStore(db: db),
+             transcripts: TranscriptStore(db: db),
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: blockingTransport,
+             backgroundTasks: RecordingVoiceBackgroundTasks()
+         )
+@@ -470,6 +472,7 @@
+             library: LibraryStore(db: db),
+             river: RiverStore(db: db),
+             transcripts: store,
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: transport,
+             backgroundTasks: RecordingVoiceBackgroundTasks(),
+             retryDelaySeconds: 0.01
+@@ -539,6 +542,7 @@
+             library: LibraryStore(db: db),
+             river: RiverStore(db: db),
+             transcripts: TranscriptStore(db: db),
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: transport,
+             backgroundTasks: backgroundTasks,
+             retryDelaySeconds: 0.01
+@@ -573,6 +577,7 @@
+             library: LibraryStore(db: db),
+             river: RiverStore(db: db),
+             transcripts: TranscriptStore(db: db),
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: transport,
+             backgroundTasks: RecordingVoiceBackgroundTasks(),
+             retryDelaySeconds: 0.01
+--- a/ios-native/FieldTheory/Tests/VoicePrivacyAcceptanceTests.swift
++++ b/ios-native/FieldTheory/Tests/VoicePrivacyAcceptanceTests.swift
+@@ -88,6 +88,7 @@
+             library: LibraryStore(db: db),
+             river: RiverStore(db: db),
+             transcripts: store,
++            wordSubstitutionRequest: { _ in [] },
+             voiceTransport: transport,
+             backgroundTasks: PrivacyAcceptanceBackgroundTasks(),
+             retryDelaySeconds: retryDelaySeconds
+--- a/mac-app/electron/main/hotMicManager.ts
++++ b/mac-app/electron/main/hotMicManager.ts
+@@ -3312,7 +3312,7 @@
+     for (const { from, to } of substitutions) {
+       if (!from || from === to) continue;
+       const regex = new RegExp(`\\b${this.escapeRegex(from)}\\b`, 'gi');
+-      result = result.replace(regex, to);
++      result = result.replace(regex, () => to);
+     }
+     return result;
+   }
+--- a/mac-app/electron/main/index.ts
++++ b/mac-app/electron/main/index.ts
+@@ -1,3 +1,4 @@
++import { WordSubstitutionSync } from './wordSubstitutionSync';
+ import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
+ import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
+ import { VoiceWorkManager } from './voiceWorkManager';
+@@ -2701,6 +2702,7 @@
+ let diarizationManager: DiarizationManager | null = null;
+ let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
+ let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
++let wordSubstitutionSync: WordSubstitutionSync | null = null;
+ let commandSyncService: CommandSyncService | null = null;
+ let runNativeLocalCommand = async (_rawRequest: unknown): Promise<LocalCommandRunResult> => ({
+   success: false,
+@@ -4957,6 +4959,10 @@
+ }
+ 
+ function refreshFieldTheorySyncServices(): void {
++  if (authManager && preferencesManager) {
++    wordSubstitutionSync ??= new WordSubstitutionSync(authManager, preferencesManager);
++    void wordSubstitutionSync.sync();
++  }
+   getRiverTeamService();
+   if (!canUseSharedFeatures()) {
+     clearPendingSharedFilesSync();
+@@ -12178,6 +12184,8 @@
+   // Word Substitutions - correction pairs for transcription
+   // =========================================================================
+ 
++  ipcMain.handle('clipboard:getWordSubstitutionSyncStatus', () => wordSubstitutionSync?.status ?? 'Waiting to sync');
++
+   ipcMain.handle('clipboard:getWordSubstitutions', async () => {
+     if (!preferencesManager) {
+       return [];
+@@ -12185,11 +12193,12 @@
+     return preferencesManager.getPreference('wordSubstitutions') ?? [];
+   });
+ 
+-  ipcMain.handle('clipboard:setWordSubstitutions', async (_event, substitutions: Array<{ from: string; to: string }>) => {
++  ipcMain.handle('clipboard:setWordSubstitutions', async (_event, substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => {
+     if (!preferencesManager) {
+       return false;
+     }
+-    await preferencesManager.save({ wordSubstitutions: substitutions });
++    if (wordSubstitutionSync) await wordSubstitutionSync.set(substitutions, base);
++    else await preferencesManager.save({ wordSubstitutions: substitutions });
+     return true;
+   });
+ 
+@@ -15542,6 +15551,7 @@
+     notifyVoiceInboxChanged();
+     void voiceWorkManager!.authChanged().then(async () => {
+       await voicePreferencesReady;
++      wordSubstitutionSync?.resume();
+       if (requestedOwner !== authManager?.getSession()?.user.id) return;
+       if (requestedOwner) {
+         while (voiceInboxStore!.migrateLegacyNotes(requestedOwner).remaining > 0) {
+@@ -15598,10 +15608,12 @@
+   // Register event handlers BEFORE authManager.init().
+   // init() restores session and may emit 'userChanged' synchronously.
+   authManager.on('userChanged', async (userId: string) => {
++    wordSubstitutionSync?.pause();
+     // Reinitialize all managers with user-specific data
+     if (preferencesManager) {
+       voicePreferencesReady = preferencesManager.load();
+       await voicePreferencesReady;
++      wordSubstitutionSync?.resume();
+ 
+       // Reload hotkeys from freshly loaded preferences
+       const prefs = preferencesManager.get();
+--- a/mac-app/electron/main/preferences.ts
++++ b/mac-app/electron/main/preferences.ts
+@@ -308,6 +308,7 @@
+ 
+   // Word substitutions - pairs of [from, to] for transcription correction.
+   // Example: ["main", "main"] for correcting "main" state to "main" branch.
++  wordSubstitutionsSynced?: Array<{ from: string; to: string }>;
+   wordSubstitutions?: Array<{ from: string; to: string }>;
+ 
+   // Data retention - how long to keep clipboard history items.
+@@ -681,7 +682,7 @@
+    * Save preferences to disk.
+    * Serialized to prevent race conditions when multiple saves occur during user switch.
+    */
+-  async save(prefs: Partial<Preferences>): Promise<void> {
++  async save(prefs: Partial<Preferences>, isCurrent: () => boolean = () => true): Promise<void> {
+     // Serialize save operations to prevent race conditions
+     const previousLock = this.saveLock;
+     let releaseLock: () => void;
+@@ -691,7 +692,7 @@
+ 
+     try {
+       await previousLock;  // Wait for previous save to complete
+-      await this.saveInternal(prefs);
++      if (isCurrent()) await this.saveInternal(prefs);
+     } finally {
+       releaseLock!();
+     }
+--- a/mac-app/electron/main/transcriberManager.ts
++++ b/mac-app/electron/main/transcriberManager.ts
+@@ -3763,7 +3763,7 @@
+       const matches = result.match(regex);
+       
+       if (matches) {
+-        result = result.replace(regex, to);
++        result = result.replace(regex, () => to);
+         totalReplacements += matches.length;
+       }
+     }
+--- /dev/null
++++ b/mac-app/electron/main/wordSubstitutionSync.ts
+@@ -0,0 +1,78 @@
++import type { AuthManager } from './authManager';
++import type { PreferencesManager } from './preferences';
++
++export type WordSubstitution = { from: string; to: string };
++export type WordChange = { from: string; to: string | null };
++
++export function substitutionChanges(base: WordSubstitution[], current: WordSubstitution[]): WordChange[] {
++  const before = new Map(base.map(pair => [pair.from, pair.to]));
++  const after = new Map(current.map(pair => [pair.from, pair.to]));
++  return [
++    ...base.filter(pair => !after.has(pair.from)).map(pair => ({ from: pair.from, to: null })),
++    ...current.filter(pair => before.get(pair.from) !== pair.to),
++  ];
++}
++
++export class WordSubstitutionSync {
++  private generation = 0;
++  private running = false;
++  private paused = false;
++  status = 'Waiting to sync';
++
++  constructor(private auth: AuthManager, private preferences: PreferencesManager) {
++    const timer = setInterval(() => { void this.sync(); }, 30_000);
++    timer.unref();
++  }
++
++  invalidate(): void { this.generation++; }
++  pause(): void { this.paused = true; this.invalidate(); }
++  resume(): void { this.paused = false; }
++
++  async set(pairs: WordSubstitution[], base?: WordSubstitution[]): Promise<void> {
++    if (base) pairs = mergeSubstitutionChanges(this.preferences.getPreference('wordSubstitutions') ?? [], substitutionChanges(base, pairs));
++    this.invalidate();
++    const userId = this.auth.getSession()?.user.id;
++    await this.preferences.save({ wordSubstitutions: pairs }, () => this.auth.getSession()?.user.id === userId);
++    this.invalidate();
++    void this.sync();
++  }
++
++  async sync(): Promise<void> {
++    const userId = this.auth.getSession()?.user.id;
++    const client = this.auth.getSupabaseClient();
++    if (!userId || !client || this.running || this.paused) return;
++    this.running = true;
++    const generation = this.generation;
++    const current = this.preferences.getPreference('wordSubstitutions') ?? [];
++    const base = this.preferences.getPreference('wordSubstitutionsSynced') ?? [];
++    try {
++      const { data, error } = await client.rpc('sync_word_substitutions', {
++        changes: substitutionChanges(base, current),
++      });
++      if (error) {
++        this.status = 'Saved on this Mac. Sync unavailable; will retry.';
++        return;
++      }
++      if (generation !== this.generation || this.auth.getSession()?.user.id !== userId) return;
++      if (!Array.isArray(data) || !data.every(pair => typeof pair.from === 'string' && typeof pair.to === 'string')) return;
++      await this.preferences.save({ wordSubstitutions: data, wordSubstitutionsSynced: data },
++        () => generation === this.generation && this.auth.getSession()?.user.id === userId);
++      if (generation === this.generation && this.auth.getSession()?.user.id === userId) {
++        this.status = 'Synced with your account';
++      }
++    } catch {
++      this.status = 'Saved on this Mac. Sync unavailable; will retry.';
++    } finally {
++      this.running = false;
++    }
++  }
++}
++
++export function mergeSubstitutionChanges(pairs: WordSubstitution[], changes: WordChange[]): WordSubstitution[] {
++  const result = new Map(pairs.map(pair => [pair.from, pair.to]));
++  for (const change of changes) {
++    if (change.to === null) result.delete(change.from);
++    else result.set(change.from, change.to);
++  }
++  return [...result].map(([from, to]) => ({ from, to }));
++}
+--- /dev/null
++++ b/mac-app/electron/main/wordSubstitutionSync.test.ts
+@@ -0,0 +1,78 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { mergeSubstitutionChanges, substitutionChanges, WordSubstitutionSync } from './wordSubstitutionSync';
++import type { AuthManager } from './authManager';
++import type { PreferencesManager } from './preferences';
++
++afterEach(() => vi.useRealTimers());
++
++describe('word substitution sync', () => {
++  const maine = { from: 'Maine', to: 'main' };
++  const codex = { from: 'codec', to: 'Codex' };
++
++  it('migrates local words and preserves independent remote additions', () => {
++    expect(mergeSubstitutionChanges([codex], substitutionChanges([], [maine]))).toEqual([codex, maine]);
++  });
++
++  it('sends explicit deletions, including an empty list, without deleting unseen words', () => {
++    expect(mergeSubstitutionChanges([maine, codex], substitutionChanges([maine], []))).toEqual([codex]);
++  });
++
++  it('distinguishes removal of a rule from replacement with empty text', () => {
++    expect(substitutionChanges([maine], [{ from: 'Maine', to: '' }])).toEqual([{ from: 'Maine', to: '' }]);
++  });
++
++  it('retains ordering while editing a replacement', () => {
++    expect(mergeSubstitutionChanges([maine, codex], [{ from: 'Maine', to: 'MAIN' }]))
++      .toEqual([{ from: 'Maine', to: 'MAIN' }, codex]);
++  });
++
++  function fixture() {
++    vi.useFakeTimers();
++    let user = 'alice';
++    let state = { wordSubstitutions: [maine], wordSubstitutionsSynced: [] as typeof maine[] };
++    const rpc = vi.fn();
++    const auth = {
++      getSession: () => ({ user: { id: user } }),
++      getSupabaseClient: () => ({ rpc }),
++    } as unknown as AuthManager;
++    const save = vi.fn(async (patch, guard = () => true) => { if (guard()) state = { ...state, ...patch }; });
++    const preferences = {
++      getPreference: (key: keyof typeof state) => state[key], save,
++    } as unknown as PreferencesManager;
++    return { service: new WordSubstitutionSync(auth, preferences), rpc, save,
++      state: () => state, switchUser: () => { user = 'bob'; } };
++  }
++
++  it('keeps edits durable when offline and retries them', async () => {
++    const f = fixture();
++    f.rpc.mockResolvedValueOnce({ error: new Error('offline') });
++    await f.service.sync();
++    expect(f.state().wordSubstitutions).toEqual([maine]);
++    expect(f.state().wordSubstitutionsSynced).toEqual([]);
++    f.rpc.mockResolvedValueOnce({ data: [codex, maine] });
++    await f.service.sync();
++    expect(f.state().wordSubstitutionsSynced).toEqual([codex, maine]);
++  });
++
++  it('discards responses after an account switch', async () => {
++    const f = fixture();
++    let resolve!: (value: unknown) => void;
++    f.rpc.mockImplementation(() => new Promise(done => { resolve = done; }));
++    const pending = f.service.sync();
++    f.switchUser();
++    resolve({ data: [codex] });
++    await pending;
++    expect(f.save).not.toHaveBeenCalled();
++  });
++
++  it('does not overwrite an edit made during a request', async () => {
++    const f = fixture();
++    let resolve!: (value: unknown) => void;
++    f.rpc.mockImplementation(() => new Promise(done => { resolve = done; }));
++    const pending = f.service.sync();
++    await f.service.set([codex]);
++    resolve({ data: [maine] });
++    await pending;
++    expect(f.state().wordSubstitutions).toEqual([codex]);
++  });
++});
+--- a/mac-app/electron/preload.ts
++++ b/mac-app/electron/preload.ts
+@@ -1141,7 +1141,8 @@
+ 
+   // Word substitutions - correction pairs for transcription
+   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
+-  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
++  getWordSubstitutionSyncStatus?: () => Promise<string>;
++  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => Promise<boolean>;
+ 
+   // App voice aliases - custom voice trigger words for app switching
+   getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
+@@ -2228,8 +2229,9 @@
+     return ipcRenderer.invoke('clipboard:getWordSubstitutions');
+   },
+ 
+-  setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>): Promise<boolean> => {
+-    return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions);
++  getWordSubstitutionSyncStatus: async (): Promise<string> => ipcRenderer.invoke('clipboard:getWordSubstitutionSyncStatus'),
++  setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>): Promise<boolean> => {
++    return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions, base);
+   },
+ 
+   // App voice aliases - custom voice trigger words for app switching.
+--- a/mac-app/package.json
++++ b/mac-app/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "fieldtheory-mac",
+-  "version": "0.3.65",
++  "version": "0.3.66",
+   "description": "Field Theory local-first macOS app.",
+   "private": true,
+   "license": "AGPL-3.0-or-later",
+--- a/mac-app/package-lock.json
++++ b/mac-app/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "fieldtheory-mac",
+-  "version": "0.3.65",
++  "version": "0.3.66",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "fieldtheory-mac",
+-      "version": "0.3.65",
++      "version": "0.3.66",
+       "hasInstallScript": true,
+       "license": "AGPL-3.0-or-later",
+       "dependencies": {
+--- a/mac-app/src/components/ReleaseNotesPopup.tsx
++++ b/mac-app/src/components/ReleaseNotesPopup.tsx
+@@ -60,6 +60,10 @@
+ ));
+ 
+ const RELEASE_NOTES: Record<string, string[]> = {
++  '0.3.66': [
++    'Word replacements can sync between your Mac and iPhone once account sync is enabled.',
++    'Offline word edits stay on your device and sync when connectivity returns.',
++  ],
+   '0.3.65': [
+     'Fixed speech engine setup failing on Macs with custom Python installation settings',
+     'Improved shutdown of speech engines and background services when quitting',
+@@ -645,6 +649,7 @@
+ 
+ // Release dates for each version (format: 'Jan 10 2026')
+ const RELEASE_DATES: Record<string, string> = {
++  '0.3.66': 'September 11, 2026',
+   '0.3.65': 'September 10, 2026',
+   '0.3.64': 'September 10, 2026',
+   '0.3.63': 'September 10, 2026',
+--- a/mac-app/src/components/SettingsPanel.tsx
++++ b/mac-app/src/components/SettingsPanel.tsx
+@@ -651,15 +651,32 @@
+     }
+   };
+ 
++  const [wordSyncStatus, setWordSyncStatus] = useState('Waiting to sync');
++  useEffect(() => {
++    let active = true;
++    const refresh = async () => {
++      const [pairs, status] = await Promise.all([
++        window.clipboardAPI?.getWordSubstitutions?.(),
++        window.clipboardAPI?.getWordSubstitutionSyncStatus?.(),
++      ]);
++      if (!active) return;
++      if (pairs) setWordSubstitutions(pairs);
++      if (status) setWordSyncStatus(status);
++    };
++    void refresh();
++    const timer = setInterval(() => { void refresh(); }, 5000);
++    return () => { active = false; clearInterval(timer); };
++  }, []);
++
+   // Handler for adding a word substitution pair.
+   const handleAddWordSubstitution = async () => {
+     if (!window.clipboardAPI?.setWordSubstitutions || !newSubFrom.trim()) return;
+ 
+-    const updated = [...wordSubstitutions, { from: newSubFrom.trim(), to: newSubTo.trim() }];
++    const updated = [...wordSubstitutions.filter(pair => pair.from !== newSubFrom.trim()), { from: newSubFrom.trim(), to: newSubTo.trim() }];
+     try {
+-      const success = await window.clipboardAPI.setWordSubstitutions(updated);
++      const success = await window.clipboardAPI.setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
+       if (success) {
+-        setWordSubstitutions(updated);
++        setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
+         setNewSubFrom('');
+         setNewSubTo('');
+       }
+@@ -674,9 +691,9 @@
+ 
+     const updated = wordSubstitutions.filter((_, i) => i !== index);
+     try {
+-      const success = await window.clipboardAPI.setWordSubstitutions(updated);
++      const success = await window.clipboardAPI.setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
+       if (success) {
+-        setWordSubstitutions(updated);
++        setWordSubstitutions(await window.clipboardAPI.getWordSubstitutions?.() ?? updated);
+       }
+     } catch (err) {
+       console.error('Failed to remove word substitution:', err);
+@@ -1983,6 +2000,7 @@
+           </p>
+ 
+           {/* Existing substitutions list */}
++          <p className="text-xs text-muted-foreground">{wordSyncStatus}</p>
+           {wordSubstitutions.length > 0 && (
+             <div style={{
+               marginBottom: '12px',
+--- a/mac-app/src/types/window.d.ts
++++ b/mac-app/src/types/window.d.ts
+@@ -638,7 +638,8 @@
+ 
+   // Word substitutions - correction pairs for transcription
+   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
+-  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
++  getWordSubstitutionSyncStatus?: () => Promise<string>;
++  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>, base?: Array<{ from: string; to: string }>) => Promise<boolean>;
+ 
+   // App voice aliases - custom voice trigger words for app switching
+   getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
+--- /dev/null
++++ b/supabase/migrations/20260911100000_word_substitutions.sql
+@@ -0,0 +1,48 @@
++-- Apply only edited keys, under a row lock, to preserve independent offline edits.
++create table public.user_word_substitutions (
++  user_id uuid primary key references auth.users(id) on delete cascade,
++  pairs jsonb not null default '[]'::jsonb check (jsonb_typeof(pairs) = 'array')
++);
++alter table public.user_word_substitutions enable row level security;
++create policy own_word_substitutions on public.user_word_substitutions
++  for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
++grant select, insert, update on public.user_word_substitutions to authenticated;
++
++create function public.sync_word_substitutions(changes jsonb)
++returns jsonb language plpgsql security invoker set search_path = public as $$
++declare
++  account_id uuid := auth.uid();
++  result jsonb;
++  change jsonb;
++begin
++  if account_id is null then raise exception 'Authentication required'; end if;
++  if jsonb_typeof(changes) is distinct from 'array' or jsonb_array_length(changes) > 2000 then
++    raise exception 'Invalid word substitutions';
++  end if;
++  insert into public.user_word_substitutions(user_id) values (account_id) on conflict do nothing;
++  select pairs into result from public.user_word_substitutions where user_id = account_id for update;
++  for change in select value from jsonb_array_elements(changes) loop
++    if jsonb_typeof(change->'from') is distinct from 'string' or length(change->>'from') = 0
++      or length(change->>'from') > 500 or not (change ? 'to')
++      or jsonb_typeof(change->'to') not in ('string', 'null')
++      or length(change->>'to') > 2000 then
++      raise exception 'Invalid word substitution';
++    end if;
++    if change->'to' = 'null'::jsonb then
++      select coalesce(jsonb_agg(value order by ordinal), '[]'::jsonb) into result
++        from jsonb_array_elements(result) with ordinality as entries(value, ordinal)
++        where value->>'from' <> change->>'from';
++    elsif exists (select 1 from jsonb_array_elements(result) pair where pair->>'from' = change->>'from') then
++      select jsonb_agg(case when value->>'from' = change->>'from'
++        then jsonb_build_object('from', change->>'from', 'to', change->>'to') else value end order by ordinal)
++        into result from jsonb_array_elements(result) with ordinality as entries(value, ordinal);
++    else
++      result := result || jsonb_build_array(jsonb_build_object('from', change->>'from', 'to', change->>'to'));
++    end if;
++  end loop;
++  update public.user_word_substitutions set pairs = result where user_id = account_id;
++  return result;
++end;
++$$;
++revoke all on function public.sync_word_substitutions(jsonb) from public, anon;
++grant execute on function public.sync_word_substitutions(jsonb) to authenticated;
+--- /dev/null
++++ b/supabase/tests/word-substitutions/package.json
+@@ -0,0 +1,7 @@
++{
++  "name": "field-theory-word-substitution-tests",
++  "private": true,
++  "type": "module",
++  "scripts": { "test": "node --test word_substitutions.test.mjs" },
++  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
++}
+--- /dev/null
++++ b/supabase/tests/word-substitutions/word_substitutions.test.mjs
+@@ -0,0 +1,41 @@
++import { PGlite } from '@electric-sql/pglite';
++import { readFile } from 'node:fs/promises';
++import assert from 'node:assert/strict';
++import test from 'node:test';
++
++test('account list merges edits, deletes explicitly, and isolates users', async () => {
++  const db = new PGlite();
++  try {
++    await db.exec(`
++      create role authenticated; create role anon;
++      create schema auth;
++      create table auth.users (id uuid primary key);
++      create function auth.uid() returns uuid language sql stable as
++        $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
++      grant usage on schema auth to authenticated, anon;
++      grant execute on function auth.uid() to authenticated, anon;
++      insert into auth.users values ('00000000-0000-0000-0000-000000000001'),
++        ('00000000-0000-0000-0000-000000000002');
++    `);
++    await db.exec(await readFile(new URL('../../migrations/20260911100000_word_substitutions.sql', import.meta.url), 'utf8'));
++    await db.exec(`set role authenticated; set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001'`);
++    const sync = async changes => (await db.query('select public.sync_word_substitutions($1::jsonb) as pairs', [JSON.stringify(changes)])).rows[0].pairs;
++    const maine = { from: 'Maine', to: 'main' };
++    const codex = { from: 'codec', to: 'Codex' };
++    assert.deepEqual(await sync([maine]), [maine]);
++    assert.deepEqual(await sync([codex]), [maine, codex]);
++    assert.deepEqual(await sync([]), [maine, codex]);
++    assert.deepEqual(await sync([{ from: 'Maine', to: '' }]), [{ from: 'Maine', to: '' }, codex]);
++    assert.deepEqual(await sync([{ from: 'Maine', to: null }]), [codex]);
++    assert.deepEqual(await sync([{ from: 'codec', to: null }]), []);
++    await sync([maine]);
++    await assert.rejects(sync([{ from: '', to: 'invalid' }]), /Invalid word substitution/);
++    await assert.rejects(sync([{ from: 'missing target' }]), /Invalid word substitution/);
++    await db.exec(`set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002'`);
++    assert.deepEqual(await sync([]), []);
++    assert.equal((await db.query('select * from public.user_word_substitutions')).rows.length, 1);
++    assert.equal((await db.query("update public.user_word_substitutions set pairs = '[]' where user_id = '00000000-0000-0000-0000-000000000001' returning *")).rows.length, 0);
++    await db.exec('reset role; set role anon');
++    await assert.rejects(sync([]), /permission denied/);
++  } finally { await db.close(); }
++});
+--- /dev/null
++++ b/docs/WORD_REPLACEMENT_SYNC.md
+@@ -0,0 +1,42 @@
++# Field Theory - Shared word replacements
++
++Prepared locally for Mac 0.3.66 and the native iPhone app. The database migration was applied to the Field Theory project (cighxaroptskntwbrctl) on September 11, 2026 after explicit approval. Mac 0.3.66 is now packaged, signed, Apple-notarized, and verified as a local-only DMG. It has not been installed or published. The iPhone build is still deferred; cross-device runtime verification remains outstanding.
++
++## Behavior
++
++- Mac settings and iPhone Settings → Word replacements edit the same account list.
++- Existing Mac replacements migrate on the first successful sync. Local copies remain usable offline.
++- Clients send only edits relative to their last acknowledged list. Independent word edits merge; for competing edits to the same source word, the last server-applied edit wins. Deleting all rules sends explicit deletions rather than treating an empty list as missing data.
++- Rules retain their order. Source strings identify rules; changing a source removes the old rule and adds the new one. Matching is case-insensitive and uses whole-word regex boundaries, preserving the existing Mac behavior.
++- New iPhone transcriptions apply replacements before persistence, routing, and automatic copy, including recordings waiting for the speech model. Existing transcripts are unchanged.
++- Cached iPhone lists are keyed by account. Late sync responses cannot replace edits made during a request or populate a different active account.
++- Mac settings show sync availability. The phone reports replacement sync failures separately from voice upload failures.
++
++## Source preservation
++
++The supplied root checkout was older than the installed Mac application. This worktree uses commit `200d94856` plus an isolated copy of the existing local 0.3.65 changes from `/Users/afar/dev/fieldtheory-parakeet-pip-user`. That original worktree and the root's unrelated editor changes were not modified.
++
++The final branch is `codex/word-substitution-sync-current`. Source changes are preserved locally on that branch, including the copied 0.3.65 baseline. The earlier Git-index permission restriction was lifted. `word-replacement-sync.patch` contains only this feature's delta against the copied 0.3.65 source, excluding inherited changes.
++
++## Verification
++
++- Mac renderer and Electron TypeScript checks passed.
++- 255 Mac tests passed across substitutions, preferences, transcription, and hot mic.
++- The SQL migration ran in local PGlite tests: merges, edits, explicit null deletion, empty text replacement, malformed input rejection, account isolation, and anonymous access denial passed.
++- Changed Swift files passed syntax parsing. Four host-side checks of the extracted Swift replacement logic passed, including Maine → main, literal replacement text, empty replacements, and explicit JSON null encoding. This harness excluded the Observation macro; it is not an iPhone application build.
++- Native XCTest coverage was added for replacement behavior and deletion encoding. Existing voice test fixtures use an injected replacement transport so they cannot contact the live service. The iPhone build and native test run remain deferred at the user's request.
++
++## Activation and builds
++
++1. Applied `supabase/migrations/20260911100000_word_substitutions.sql` to Field Theory (cighxaroptskntwbrctl), including migration history, in one transaction. Verified RLS, the authenticated account policy, invoker security, authenticated execution, and anonymous execution denial. Live transactional checks passed for merging independent edits, explicit deletion, malformed input rejection, and account-filtered reads. All test writes rolled back; zero test rows remained. Transcript data was not altered.
++2. Completed the local packaging workflow using the preapproved 0.3.66 notes, real local dependencies, `FIELD_THEORY_RELEASE_BRANCH_OVERRIDE=true`, and `--publish never`. No GitHub token was passed to the build.
++3. After permissions were updated, signing identities and notarization credentials became available. Both app and final DMG pass signature, stapling, and Gatekeeper checks. Apple accepted the DMG request `d3715f03-a63d-4cbd-ac02-61eb95dd6b1e`. Disk integrity passed; the mounted DMG contains version 0.3.66 with an identical app archive and passing packaged SQLite/terminal probes. The verification mount was detached. The installed application remains 0.3.65.
++4. When the phone is available, follow the project's normal iOS local-device build process. Verify Mac → phone and phone → Mac edits, offline edits followed by reconnection, deletion propagation, and Maine → main in an actual new recording.
++
++The database migration and the two installed clients must all be present before cross-device sync can be claimed as working.
++
++## Local artifact
++
++- DMG: [Field-Theory-0.3.66-arm64-local.dmg](../mac-app/release/Field-Theory-0.3.66-arm64-local.dmg)
++- SHA-256: `d581e5c74a32d85248108c88bac2d4fd024e4a7c7e5097c5399f7a4a7332f171`
++- Receipt: `mac-app/release/local-verification-0.3.66.json`

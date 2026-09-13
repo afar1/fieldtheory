@@ -111,7 +111,7 @@ struct VoiceView: View {
                 }
             }
             .background(Theme.background(colorScheme))
-            .navigationTitle("Ambition")
+            .navigationTitle("Field Theory")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic))
             .refreshable { await model.sync.syncNow() }
             .onChange(of: scenePhase) { _, phase in
@@ -390,7 +390,7 @@ struct VoiceView: View {
                     .foregroundStyle(.secondary)
             }
         case .preparing:
-            engineProgressBanner(message: "Preparing Parakeet…", progress: nil)
+            engineProgressBanner(message: "Preparing voice model…", progress: nil)
         case .notDownloaded:
             engineBanner(
                 title: "Parakeet needs downloading",
@@ -606,7 +606,7 @@ struct VoiceView: View {
                         // including at the exact countdown expiry boundary.
                         keepPrivacyOfferLocal(privacyItem.id)
                     } else if pending != nil {
-                        Task { await recorder.resumePendingWork() }
+                        Task { await recorder.transcribeUserInitiated() }
                     } else {
                         recorder.toggle()
                     }

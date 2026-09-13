@@ -34,7 +34,7 @@ struct RootView: View {
             if model.isSigningOut {
                 ProgressView("Signing out…")
             } else if model.isPreparingStorage {
-                ProgressView("Preparing Ambition…")
+                ProgressView("Preparing Field Theory…")
             } else if model.storageAccessBlocked {
                 storageRecovery
             } else if model.showMainUI {
@@ -77,7 +77,7 @@ struct RootView: View {
         ContentUnavailableView {
             Label("Local storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
         } description: {
-            Text("Your existing files were left unchanged. Check available device storage, then try again or relaunch Ambition.")
+            Text("Your existing files were left unchanged. Check available device storage, then try again or relaunch Field Theory.")
         } actions: {
             Button("Try again") {
                 Task { await model.retryStoragePreparation() }

@@ -45,10 +45,10 @@ struct SettingsView: View {
                         Text(error).font(.caption).foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Ambition")
+                    Text("Field Theory")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Parakeet downloads only when you choose Download. Download continues when Ambition is in the background. Reopen the app if you force quit it.")
+                        Text("Parakeet downloads only when you choose Download. Download continues when Field Theory is in the background. Reopen the app if you force quit it.")
                         Text("The model is NVIDIA Parakeet, converted to Core ML by Fluid Inference, under CC BY 4.0.")
                         Link("Parakeet model attribution", destination: URL(string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")!)
                             .accessibilityIdentifier("ParakeetModelAttributionLink")
@@ -79,7 +79,7 @@ struct SettingsView: View {
 
                 Section {
                     HStack {
-                        Text("Ambition · Made by Field Theory")
+                        Text("Field Theory")
                     }
                     HStack {
                         Text("Version")
@@ -279,13 +279,13 @@ struct SettingsView: View {
                 Text("\(Int(progress * 100))%")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("You can leave the app or lock your phone. If you force-quit Ambition, reopen it and retry to continue the download.")
+                Text("You can leave the app or lock your phone. If you force-quit Field Theory, reopen it and retry to continue the download.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         case .preparing:
             HStack {
-                Text("Preparing Parakeet…")
+                Text("Preparing voice model…")
                 Spacer()
                 ProgressView()
             }
