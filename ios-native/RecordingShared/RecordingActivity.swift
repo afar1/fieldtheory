@@ -28,7 +28,7 @@ struct StartFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent
 }
 
 struct StopFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
-    static var title: LocalizedStringResource = "Finish recording"
+    static var title: LocalizedStringResource = "Stop recording"
     static var openAppWhenRun: Bool = false
     @Parameter(title: "Recording") var recordingID: String
     init() { recordingID = "" }
@@ -36,7 +36,7 @@ struct StopFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent 
     @MainActor
     func perform() async throws -> some IntentResult {
 #if !WIDGET_EXTENSION
-        await BackgroundRecordingSession.shared.stop(recordingID: recordingID)
+        await BackgroundRecordingSession.shared.stop(recordingID: recordingID, action: .stop)
 #endif
         return .result()
     }
@@ -61,23 +61,8 @@ struct DiscardFieldTheoryRecordingIntent: LiveActivityIntent {
     }
 }
 
-struct CopyFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
-    static var title: LocalizedStringResource = "Finish and copy"
-    static var openAppWhenRun: Bool = false
-    @Parameter(title: "Recording") var recordingID: String
-    init() { recordingID = "" }
-    init(recordingID: String) { self.recordingID = recordingID }
-    @MainActor
-    func perform() async throws -> some IntentResult {
-#if !WIDGET_EXTENSION
-        await BackgroundRecordingSession.shared.stop(recordingID: recordingID, action: .copy)
-#endif
-        return .result()
-    }
-}
-
 struct SendFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
-    static var title: LocalizedStringResource = "Finish and send"
+    static var title: LocalizedStringResource = "Stop and send"
     static var openAppWhenRun: Bool = false
     @Parameter(title: "Recording") var recordingID: String
     init() { recordingID = "" }

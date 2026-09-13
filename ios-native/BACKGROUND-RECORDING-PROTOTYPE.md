@@ -134,3 +134,18 @@ the Island to expand, choose Copy, wait for transcription, then paste into Notes
 without opening Field Theory first. Compare exact spoken content. Test unlocked
 first; repeat with the screen locked only after the unlocked path works. Background
 clipboard success remains unverified until this paste test.
+
+## Build 23: replace failed background copy with Stop
+
+User device test: background Copy did not copy the transcript. Remove that action
+and its background UIPasteboard write. Keep existing foreground automatic copying.
+Explicit Stop saves/transcribes without agent dispatch even when Auto-send is ON;
+Stop + Send explicitly dispatches. Legacy queued Copy choices resolve to Stop to
+preserve their No action policy through retry. The discard control is unchanged.
+
+The expanded header now uses the full-width bottom region below the camera cutout,
+rather than squeezing Field Theory and status into the narrow leading region.
+Buttons use explicit text rather than Label rendering: X, square + Stop, and
+square + Stop + Send with paperplane right-aligned. Updated phone layout needs user
+visual confirmation. Signed device build and 137 unit tests passed (one physical
+acceptance test skipped). No background clipboard success is claimed.

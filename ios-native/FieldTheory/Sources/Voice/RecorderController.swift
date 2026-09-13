@@ -5,7 +5,7 @@ import os
 import UIKit
 
 enum RecordingFinishAction: String {
-    case copy, send
+    case stop, send
 }
 
 enum RecorderPhase: Equatable {
@@ -429,7 +429,8 @@ final class RecorderController {
     func finishAction(for sessionID: String?) -> RecordingFinishAction? {
         guard let sessionID,
               let value = defaults.dictionary(forKey: Self.finishActionsKey)?[sessionID] as? String else { return nil }
-        return RecordingFinishAction(rawValue: value)
+        // Preserve No action for recordings queued by the earlier Copy experiment.
+        return value == "copy" ? .stop : RecordingFinishAction(rawValue: value)
     }
 
     func setFinishAction(_ action: RecordingFinishAction, expectedID: String) {

@@ -443,14 +443,8 @@ final class AppModel {
             recorder.associateCurrentDelivery(transcriptID: item.id)
             guard self.workspaceGeneration == workspace, !self.isSigningOut,
                   self.auth.userId == userID else { return false }
-            if finishAction == .copy || (finishAction == nil && self.settings.autoCopyTranscripts
-                && UIApplication.shared.applicationState == .active) {
-                let before = UIPasteboard.general.changeCount
+            if self.settings.autoCopyTranscripts, UIApplication.shared.applicationState == .active {
                 UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true])
-                if finishAction == .copy {
-                    BackgroundRecordingSession.shared.recordCopyAttempt(
-                        changeCountChanged: UIPasteboard.general.changeCount != before)
-                }
             }
             // Keep the transcription's execution allowance until the upload attempt settles.
             // The durable dirty row remains retryable on network/auth failure.
