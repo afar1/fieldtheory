@@ -441,6 +441,10 @@ final class AppModel {
                 ?? self.settings.shouldAutoSend(sessionID: recorder.currentDeliverySessionID)
             guard let item = await self.transcripts.add(text: text, autoSend: shouldSend) else { return false }
             recorder.associateCurrentDelivery(transcriptID: item.id)
+            if !self.isReviewerDemoStorage, self === AppModel.shared {
+                BackgroundRecordingSession.shared.rememberCompletedTranscript(
+                    id: item.id, sessionID: recorder.currentDeliverySessionID, owner: userID, canSend: !shouldSend)
+            }
             guard self.workspaceGeneration == workspace, !self.isSigningOut,
                   self.auth.userId == userID else { return false }
             if self.settings.autoCopyTranscripts, UIApplication.shared.applicationState == .active {

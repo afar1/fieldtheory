@@ -149,3 +149,22 @@ Buttons use explicit text rather than Label rendering: X, square + Stop, and
 square + Stop + Send with paperplane right-aligned. Updated phone layout needs user
 visual confirmation. Signed device build and 137 unit tests passed (one physical
 acceptance test skipped). No background clipboard success is claimed.
+
+## Build 24: Copy appears only after transcription completes
+
+Recording controls remain X / Stop / Stop + Send. While transcribing no Copy is
+available. Once the transcript is persisted, the Live Activity stays interactive
+for five minutes with Copy and (if not already sent) Send. Copy invokes a fresh
+user-triggered LiveActivityIntent that requires device unlock and attempts the
+clipboard write immediately, rather than automatically after delayed inference.
+It still does not open Field Theory. Clipboard success requires external paste proof.
+
+A small preference stores only the activity ID, transcript ID, owner ID and send
+eligibility. A reawakened process resolves the text from the signed-in user's local
+store and rejects unavailable/deleted/other-account results. No transcript content
+is stored in these preferences or diagnostic logs. Duplicate Stop taps no longer
+end the result activity. Signed build and 137 unit tests passed, with one physical
+acceptance test skipped.
+
+Test: record via Action button; expand Island; choose Stop; wait for Transcribed
+and the Copy button; tap Copy; paste into Notes without opening Field Theory first.

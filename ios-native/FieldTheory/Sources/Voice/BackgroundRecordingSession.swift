@@ -72,6 +72,10 @@ final class BackgroundRecordingSession {
     }
 
     func attachToForegroundRecording() {
+        if let activity, !activity.content.state.recording {
+            self.activity = nil
+            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+        }
         guard activity == nil, UIApplication.shared.applicationState == .active,
               let startedAt = AppModel.shared.recorder.startedAt,
               ActivityAuthorizationInfo().areActivitiesEnabled else { return }
@@ -104,12 +108,8 @@ final class BackgroundRecordingSession {
     func stop(recordingID: String = "", action: RecordingFinishAction? = nil) async {
         if !recordingID.isEmpty, activity?.attributes.recordingID != recordingID { return }
         let model = AppModel.shared
-        guard model.recorder.phase == .recording else {
-            for old in Activity<RecordingActivityAttributes>.activities {
-                await old.end(nil, dismissalPolicy: .immediate)
-            }
-            return
-        }
+        // A duplicate tap while transcription starts must not end the result activity.
+        guard model.recorder.phase == .recording else { return }
         if let action, let id = model.recorder.activeRecordingID {
             model.recorder.setFinishAction(action, expectedID: id)
         }
@@ -122,15 +122,67 @@ final class BackgroundRecordingSession {
         Task { await activity.update(ActivityContent(state: .init(status: "Transcribing…", recording: false), staleDate: nil)) }
     }
 
+    private static let completedKey = "ft-live-activity-completed-transcript"
+
+    func rememberCompletedTranscript(id: String, sessionID: String?, owner: UUID?, canSend: Bool) {
+        guard let activity, let owner, let sessionID, sessionID == captureSessionID else { return }
+        UserDefaults.standard.set(["activity": activity.attributes.recordingID,
+            "transcript": id, "owner": owner.uuidString, "canSend": canSend ? "yes" : "no"],
+            forKey: Self.completedKey)
+    }
+
+    func useCompletedTranscript(recordingID: String, send: Bool) async throws {
+        let model = AppModel.shared
+        for _ in 0..<100 {
+            if !model.isPreparingStorage { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard model.showMainUI, !model.isSigningOut, !model.isReviewerDemoStorage,
+              let saved = UserDefaults.standard.dictionary(forKey: Self.completedKey) as? [String: String],
+              saved["activity"] == recordingID, saved["owner"] == model.auth.userId?.uuidString,
+              let id = saved["transcript"],
+              let live = Activity<RecordingActivityAttributes>.activities.first(where: {
+                  $0.attributes.recordingID == recordingID && $0.content.state.copyReady
+              }), let item = model.transcripts.items.first(where: { $0.id == id }) else {
+            throw SpeechTranscriptionEngineError(message: "Open Field Theory to access this transcript.")
+        }
+        if send {
+            guard live.content.state.sendReady else { return }
+            guard await model.transcripts.requestCloudSync(id: id) else {
+                throw SpeechTranscriptionEngineError(message: "The transcript could not be queued for sending.")
+            }
+            await live.update(ActivityContent(state: .init(status: "Transcribed", recording: false,
+                copyReady: true, sendReady: false), staleDate: Date().addingTimeInterval(300)))
+            await model.sync.syncNow()
+        } else {
+            let before = UIPasteboard.general.changeCount
+            UIPasteboard.general.setItems([["public.utf8-plain-text": item.text]], options: [.localOnly: true])
+            recordEvidence(UIPasteboard.general.changeCount != before
+                ? "explicit-copy-counter-changed" : "explicit-copy-counter-unchanged")
+        }
+    }
+
     private func finish() {
         guard let activity else { return }
-        self.activity = nil
         recordEvidence("processing-returned")
         let pending = AppModel.shared.recorder.pendingSessionCount > 0
         let transcribed = captureSessionID != nil && AppModel.shared.recorder.lastTranscribedSessionID == captureSessionID
+        let saved = UserDefaults.standard.dictionary(forKey: Self.completedKey) as? [String: String]
+        let ready = transcribed && saved?["activity"] == activity.attributes.recordingID
         let state = RecordingActivityAttributes.ContentState(
-            status: transcribed ? "Transcribed" : (pending ? "Audio saved — open to finish" : "No speech detected"), recording: false)
-        Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30))) }
+            status: transcribed ? "Transcribed" : (pending ? "Audio saved — open to finish" : "No speech detected"),
+            recording: false, copyReady: ready, sendReady: ready && saved?["canSend"] == "yes")
+        if ready {
+            // Ended Live Activities cannot run buttons. Keep this result interactive for five minutes.
+            Task {
+                await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(300)))
+                try? await Task.sleep(for: .seconds(300))
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        } else {
+            self.activity = nil
+            Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30))) }
+        }
     }
 
     /// Content-free device evidence; no audio or transcript is copied into diagnostics.

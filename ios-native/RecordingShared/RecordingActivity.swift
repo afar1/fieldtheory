@@ -7,6 +7,8 @@ struct RecordingActivityAttributes: ActivityAttributes {
         var status: String
         var recording: Bool
         var confirmDiscard: Bool = false
+        var copyReady: Bool = false
+        var sendReady: Bool = false
         var symbol: String { recording ? "mic.fill" : (status.hasPrefix("Transcribed") ? "checkmark" : "clock") }
     }
     var recordingID = UUID().uuidString
@@ -71,6 +73,38 @@ struct SendFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent 
     func perform() async throws -> some IntentResult {
 #if !WIDGET_EXTENSION
         await BackgroundRecordingSession.shared.stop(recordingID: recordingID, action: .send)
+#endif
+        return .result()
+    }
+}
+
+struct CopyCompletedTranscriptIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Copy transcript"
+    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
+    static var openAppWhenRun: Bool = false
+    @Parameter(title: "Recording") var recordingID: String
+    init() { recordingID = "" }
+    init(recordingID: String) { self.recordingID = recordingID }
+    @MainActor
+    func perform() async throws -> some IntentResult {
+#if !WIDGET_EXTENSION
+        try await BackgroundRecordingSession.shared.useCompletedTranscript(recordingID: recordingID, send: false)
+#endif
+        return .result()
+    }
+}
+
+struct SendCompletedTranscriptIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Send transcript"
+    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
+    static var openAppWhenRun: Bool = false
+    @Parameter(title: "Recording") var recordingID: String
+    init() { recordingID = "" }
+    init(recordingID: String) { self.recordingID = recordingID }
+    @MainActor
+    func perform() async throws -> some IntentResult {
+#if !WIDGET_EXTENSION
+        try await BackgroundRecordingSession.shared.useCompletedTranscript(recordingID: recordingID, send: true)
 #endif
         return .result()
     }

@@ -128,6 +128,27 @@ struct RecordingLiveActivity: Widget {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
+        } else if context.state.copyReady {
+            HStack(spacing: 8) {
+                Button(intent: CopyCompletedTranscriptIntent(recordingID: context.attributes.recordingID)) {
+                    HStack {
+                        Text("Copy")
+                        Spacer(minLength: 8)
+                        Image(systemName: "doc.on.doc")
+                    }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44)
+                        .background(.white.opacity(0.14), in: Capsule())
+                }.accessibilityLabel("Copy completed transcript")
+                if context.state.sendReady {
+                    Button(intent: SendCompletedTranscriptIntent(recordingID: context.attributes.recordingID)) {
+                        HStack {
+                            Text("Send")
+                            Spacer(minLength: 8)
+                            Image(systemName: "paperplane")
+                        }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44)
+                            .background(.white, in: Capsule()).foregroundStyle(.black)
+                    }.accessibilityLabel("Send completed transcript to computer")
+                }
+            }.font(.subheadline.weight(.semibold)).buttonStyle(.plain).foregroundStyle(.white)
         }
     }
 }
