@@ -21,3 +21,9 @@ Cross-Mac ordering uses destination registration order, not recording creation t
 - Packaged artifact verification is recorded in mac-app/release/local-verification-0.3.67.json after notarization.
 
 These checks do not establish installed-app, real phone burst, cross-Mac runtime, locked-screen, or sleep/reconnect acceptance. The user will install the delivered DMG. This release does not add a new stop/interrupt control or explicit iPhone reply-target UI.
+
+## Delivered artifact
+
+`mac-app/release/Field-Theory-0.3.67-arm64-local.dmg` (157,564,416 bytes).
+
+SHA-256: `bfc24b98f1fb01b24968c602370774e8994e56f326e7d35c46538749df7c14b0`. App and DMG signatures, notarization tickets, Gatekeeper assessment, and DMG integrity passed. The three packaged Voice modules matched compiled source from `6e03d5918048f239115373409742261706afaa88`. Native SQLite and terminal probes passed using Electron as Node. No app installation or normal application launch occurred.
