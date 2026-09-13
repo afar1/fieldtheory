@@ -436,13 +436,21 @@ final class AppModel {
                   self.showMainUI, !self.isSigningOut else { return false }
             let workspace = self.workspaceGeneration
             let userID = self.auth.userId
-            guard let item = await self.transcripts.add(text: text,
-                autoSend: self.settings.shouldAutoSend(sessionID: recorder.currentDeliverySessionID)) else { return false }
+            let finishAction = recorder.finishAction(for: recorder.currentDeliverySessionID)
+            let shouldSend = finishAction.map { $0 == .send }
+                ?? self.settings.shouldAutoSend(sessionID: recorder.currentDeliverySessionID)
+            guard let item = await self.transcripts.add(text: text, autoSend: shouldSend) else { return false }
             recorder.associateCurrentDelivery(transcriptID: item.id)
             guard self.workspaceGeneration == workspace, !self.isSigningOut,
                   self.auth.userId == userID else { return false }
-            if self.settings.autoCopyTranscripts, UIApplication.shared.applicationState == .active {
+            if finishAction == .copy || (finishAction == nil && self.settings.autoCopyTranscripts
+                && UIApplication.shared.applicationState == .active) {
+                let before = UIPasteboard.general.changeCount
                 UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true])
+                if finishAction == .copy {
+                    BackgroundRecordingSession.shared.recordCopyAttempt(
+                        changeCountChanged: UIPasteboard.general.changeCount != before)
+                }
             }
             // Keep the transcription's execution allowance until the upload attempt settles.
             // The durable dirty row remains retryable on network/auth failure.

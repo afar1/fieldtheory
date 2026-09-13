@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class BackgroundRecordingTests: XCTestCase {
+    func testCopyChoiceSurvivesFailedDeliveryAndClearsAfterSuccessfulRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "CopyChoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["100": "copy"], forKey: "ft-recording-finish-actions")
+        try Data("audio fixture".utf8).write(to: root.appendingPathComponent("rec-100-0.wav"))
+        let recorder = RecorderController(pendingDirectory: root, defaults: defaults, transcribe: { _ in "test transcript" })
+        var accept = false
+        recorder.onTranscript = { _ in
+            XCTAssertEqual(recorder.finishAction(for: recorder.currentDeliverySessionID), .copy)
+            return accept
+        }
+        recorder.setWorkEnabled(true)
+        await recorder.drainPendingQueue()
+        XCTAssertEqual(recorder.pendingSessionCount, 1)
+        XCTAssertEqual(recorder.finishAction(for: "100"), .copy)
+        recorder.setFinishAction(.send, expectedID: "100")
+        XCTAssertEqual(recorder.finishAction(for: "100"), .copy, "An idle/stale action cannot change a queued recording's choice")
+        accept = true
+        await recorder.drainPendingQueue()
+        XCTAssertEqual(recorder.pendingSessionCount, 0)
+        XCTAssertNil(recorder.finishAction(for: "100"))
+    }
+
     func testIntentStartRejectsDisabledRecorderWithoutActivatingMicrophone() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

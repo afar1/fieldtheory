@@ -7,7 +7,7 @@ struct RecordingActivityAttributes: ActivityAttributes {
         var status: String
         var recording: Bool
         var confirmDiscard: Bool = false
-        var symbol: String { recording ? "mic.fill" : (status == "Transcribed" ? "checkmark" : "clock") }
+        var symbol: String { recording ? "mic.fill" : (status.hasPrefix("Transcribed") ? "checkmark" : "clock") }
     }
     var recordingID = UUID().uuidString
     let startedAt: Date
@@ -56,6 +56,36 @@ struct DiscardFieldTheoryRecordingIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
 #if !WIDGET_EXTENSION
         await BackgroundRecordingSession.shared.discard(recordingID: recordingID, confirmed: confirmed, keep: keep)
+#endif
+        return .result()
+    }
+}
+
+struct CopyFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
+    static var title: LocalizedStringResource = "Finish and copy"
+    static var openAppWhenRun: Bool = false
+    @Parameter(title: "Recording") var recordingID: String
+    init() { recordingID = "" }
+    init(recordingID: String) { self.recordingID = recordingID }
+    @MainActor
+    func perform() async throws -> some IntentResult {
+#if !WIDGET_EXTENSION
+        await BackgroundRecordingSession.shared.stop(recordingID: recordingID, action: .copy)
+#endif
+        return .result()
+    }
+}
+
+struct SendFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
+    static var title: LocalizedStringResource = "Finish and send"
+    static var openAppWhenRun: Bool = false
+    @Parameter(title: "Recording") var recordingID: String
+    init() { recordingID = "" }
+    init(recordingID: String) { self.recordingID = recordingID }
+    @MainActor
+    func perform() async throws -> some IntentResult {
+#if !WIDGET_EXTENSION
+        await BackgroundRecordingSession.shared.stop(recordingID: recordingID, action: .send)
 #endif
         return .result()
     }

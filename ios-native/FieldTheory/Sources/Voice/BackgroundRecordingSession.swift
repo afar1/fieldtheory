@@ -19,6 +19,7 @@ final class BackgroundRecordingSession {
     private var activity: Activity<RecordingActivityAttributes>?
     private var starting = false
     private var captureSessionID: String?
+    private var finishAction: RecordingFinishAction?
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "BackgroundRecording")
 
     func start() async throws {
@@ -46,6 +47,7 @@ final class BackgroundRecordingSession {
         }
         let newActivity = try Activity.request(attributes: RecordingActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil), pushType: nil)
+        finishAction = nil
         activity = newActivity
         model.wireRecorderPersistence()
         model.recorder.onCaptureStopped = { [weak self] in self?.showProcessing() }
@@ -76,6 +78,7 @@ final class BackgroundRecordingSession {
               let startedAt = AppModel.shared.recorder.startedAt,
               ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         do {
+            finishAction = nil
             captureSessionID = AppModel.shared.recorder.activeRecordingID
             let oldActivities = Activity<RecordingActivityAttributes>.activities
             for old in oldActivities { Task { await old.end(nil, dismissalPolicy: .immediate) } }
@@ -101,7 +104,7 @@ final class BackgroundRecordingSession {
         }
     }
 
-    func stop(recordingID: String = "") async {
+    func stop(recordingID: String = "", action: RecordingFinishAction? = nil) async {
         if !recordingID.isEmpty, activity?.attributes.recordingID != recordingID { return }
         let model = AppModel.shared
         guard model.recorder.phase == .recording else {
@@ -109,6 +112,10 @@ final class BackgroundRecordingSession {
                 await old.end(nil, dismissalPolicy: .immediate)
             }
             return
+        }
+        finishAction = action
+        if let action, let id = model.recorder.activeRecordingID {
+            model.recorder.setFinishAction(action, expectedID: id)
         }
         await model.recorder.stopAndTranscribe()
     }
@@ -125,9 +132,14 @@ final class BackgroundRecordingSession {
         recordEvidence("processing-returned")
         let pending = AppModel.shared.recorder.pendingSessionCount > 0
         let transcribed = captureSessionID != nil && AppModel.shared.recorder.lastTranscribedSessionID == captureSessionID
+        let completedStatus = finishAction == .copy ? "Transcribed · copy requested" : "Transcribed"
         let state = RecordingActivityAttributes.ContentState(
-            status: transcribed ? "Transcribed" : (pending ? "Audio saved — open to finish" : "No speech detected"), recording: false)
+            status: transcribed ? completedStatus : (pending ? "Audio saved — open to finish" : "No speech detected"), recording: false)
         Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30))) }
+    }
+
+    func recordCopyAttempt(changeCountChanged: Bool) {
+        recordEvidence(changeCountChanged ? "clipboard-write-counter-changed" : "clipboard-write-counter-unchanged")
     }
 
     /// Content-free device evidence; no audio or transcript is copied into diagnostics.

@@ -111,3 +111,26 @@ authentication case should not. Finish or discard each recording using expanded
 Island controls before the next trial. Repeat locked/unlocked once if successful.
 Report whether authentication appeared, whether Field Theory opened, and whether
 actual speech was captured. An unlocked success does not establish locked success.
+
+## Build 22: explicit Copy / Send device experiment
+
+The expanded Live Activity now has the approved labelled X / Copy / Send layout.
+Copy stops capture, transcribes and attempts a local-only UIPasteboard write in the
+app process without requesting foreground. It explicitly marks that recording
+No action even when Auto-send is on. Send explicitly chooses agent delivery even
+when Auto-send is off. Neither changes the global settings. The per-recording choice
+persists across queued transcription retries and is cleared on delivery/discard.
+
+Copy completion says "Transcribed · copy requested", not "Copied": UIPasteboard
+setItems has no success return. Diagnostics record whether its changeCount changed,
+without reading clipboard text. That counter is not external paste proof.
+
+The prior Confirm before discarding preference (default ON) and stronger in-app X
+are included. Source suite: 137 unit tests, 1 physical-only skipped, 0 failures;
+record/keep/discard UI test passed. Signed build succeeded.
+
+Device acceptance: start via the Action button, say a distinctive sentence, hold
+the Island to expand, choose Copy, wait for transcription, then paste into Notes
+without opening Field Theory first. Compare exact spoken content. Test unlocked
+first; repeat with the screen locked only after the unlocked path works. Background
+clipboard success remains unverified until this paste test.

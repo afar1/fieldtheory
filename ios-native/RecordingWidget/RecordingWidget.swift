@@ -50,7 +50,7 @@ struct RecordingLiveActivity: Widget {
     }
 
     private func tint(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
-        context.state.status == "Transcribed" ? .green : .orange
+        context.state.status.hasPrefix("Transcribed") ? .green : .orange
     }
 
     private func title(_ context: ActivityViewContext<RecordingActivityAttributes>) -> some View {
@@ -58,7 +58,7 @@ struct RecordingLiveActivity: Widget {
             Image(systemName: context.state.symbol).foregroundStyle(tint(context))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Field Theory").font(.subheadline.weight(.semibold))
-                Text(context.state.recording ? "Recording" : context.state.status)
+                Text(context.state.recording ? "Finish recording" : context.state.status)
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -98,12 +98,18 @@ struct RecordingLiveActivity: Widget {
                                 .frame(width: 44, height: 44)
                                 .background(.white.opacity(0.14), in: Circle())
                         }.accessibilityLabel("Cancel recording")
-                        Button(intent: StopFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
-                            Label("Finish", systemImage: "stop.fill")
+                        Button(intent: CopyFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
+                            Label("Copy", systemImage: "doc.on.doc")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(.white.opacity(0.14), in: Capsule())
+                        }.accessibilityLabel("Finish recording and copy transcript")
+                        Button(intent: SendFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
+                            Label("Send", systemImage: "paperplane")
                                 .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(.white, in: Capsule()).foregroundStyle(.black)
-                        }.accessibilityLabel("Finish recording and transcribe")
+                        }.accessibilityLabel("Finish recording and send to computer")
                     }
                 }
             }

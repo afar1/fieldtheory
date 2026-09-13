@@ -4,6 +4,10 @@ import Observation
 import os
 import UIKit
 
+enum RecordingFinishAction: String {
+    case copy, send
+}
+
 enum RecorderPhase: Equatable {
     case idle
     case recording
@@ -372,6 +376,7 @@ final class RecorderController {
     /// Stop capture immediately, invalidate every suspended completion, then
     /// settle any delivery already in progress before AppModel wipes its stores.
     func discardRecordings() async throws {
+        defaults.removeObject(forKey: Self.finishActionsKey)
         onCaptureCancelled?()
         workEnabled = false
         workGeneration = UUID()
@@ -419,6 +424,27 @@ final class RecorderController {
         }
     }
 
+    private static let finishActionsKey = "ft-recording-finish-actions"
+
+    func finishAction(for sessionID: String?) -> RecordingFinishAction? {
+        guard let sessionID,
+              let value = defaults.dictionary(forKey: Self.finishActionsKey)?[sessionID] as? String else { return nil }
+        return RecordingFinishAction(rawValue: value)
+    }
+
+    func setFinishAction(_ action: RecordingFinishAction, expectedID: String) {
+        guard activeRecordingID == expectedID else { return }
+        var actions = defaults.dictionary(forKey: Self.finishActionsKey) ?? [:]
+        actions[expectedID] = action.rawValue
+        defaults.set(actions, forKey: Self.finishActionsKey)
+    }
+
+    private func clearFinishAction(for sessionID: String) {
+        var actions = defaults.dictionary(forKey: Self.finishActionsKey) ?? [:]
+        actions.removeValue(forKey: sessionID)
+        defaults.set(actions, forKey: Self.finishActionsKey)
+    }
+
     var activeRecordingID: String? { phase == .recording ? String(sessionId) : nil }
 
     /// Cancel only the capture represented by the confirmation; never delete older queued audio.
@@ -428,6 +454,7 @@ final class RecorderController {
         meterTimer = nil
         recorder?.stop()
         recorder = nil
+        clearFinishAction(for: expectedID)
         let files = segmentURLs
         segmentURLs = []
         phase = .idle
@@ -747,7 +774,10 @@ final class RecorderController {
                         in: pendingDirectory
                     )
                     let delivered = await task.value
-                    if delivered { lastTranscribedSessionID = session.id }
+                    if delivered {
+                        lastTranscribedSessionID = session.id
+                        clearFinishAction(for: session.id)
+                    }
                     currentDeliverySessionID = nil
                     guard workEnabled, workGeneration == generation else { return }
                     deliveryTask = nil
@@ -788,6 +818,7 @@ final class RecorderController {
                     publishMetrics(metrics)
                     logger.info("Voice pipeline delivered engine=\(engineIdentity, privacy: .public) cold=\(engineWasCold, privacy: .public) segments=\(metrics.segmentCount, privacy: .public) audio_bytes=\(metrics.audioBytes, privacy: .public) audio_ms=\(metrics.audioDurationMs, privacy: .public) queue_ms=\(metrics.queueWaitMs ?? -1, privacy: .public) inference_ms=\(metrics.inferenceMs, privacy: .public) delivery_ms=\(metrics.deliveryMs, privacy: .public) stop_to_delivery_ms=\(metrics.stopToDeliveryMs ?? -1, privacy: .public)")
                 }
+                clearFinishAction(for: session.id)
                 for url in session.files { try? FileManager.default.removeItem(at: url) }
                 try? FileManager.default.removeItem(
                     at: Self.engineBindingURL(forSessionID: session.id, in: pendingDirectory)
@@ -825,6 +856,7 @@ final class RecorderController {
             if FileManager.default.fileExists(atPath: binding.path) {
                 try FileManager.default.removeItem(at: binding)
             }
+            clearFinishAction(for: session.id)
             stoppedAtMsBySessionID.removeValue(forKey: session.id)
             lastError = nil
         } catch {
