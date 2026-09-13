@@ -10,68 +10,105 @@ struct RecordingWidgets: WidgetBundle {
 struct RecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
-            HStack {
-                Image(systemName: context.state.symbol)
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading) {
-                    Text("Field Theory").font(.headline)
-                    Text(context.state.status).font(.caption)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center) {
+                    title(context)
+                    Spacer(minLength: 12)
+                    timer(context)
                 }
-                Spacer()
-                if context.state.recording {
-                    Text(context.attributes.startedAt, style: .timer).monospacedDigit().frame(width: 70)
-                    recordingButtons(context)
-
-                }
-            }.padding().activityBackgroundTint(.black).activitySystemActionForegroundColor(.white)
-                .foregroundStyle(.white)
+                detail(context)
+            }
+            .padding(16)
+            .foregroundStyle(.white)
+            .activityBackgroundTint(.black)
+            .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label("Field Theory", systemImage: "mic.fill").foregroundStyle(.orange)
+                    title(context).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if context.state.recording {
-                        Text(context.attributes.startedAt, style: .timer).monospacedDigit()
-                    }
+                    timer(context).padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(context.state.status)
-                        Spacer()
-                        if context.state.recording {
-                            recordingButtons(context)
-                        }
-                    }
+                    detail(context).padding(.horizontal, 4).padding(.top, 8)
                 }
             } compactLeading: {
-                Image(systemName: context.state.symbol).foregroundStyle(.orange)
+                Image(systemName: context.state.symbol).foregroundStyle(tint(context))
             } compactTrailing: {
                 if context.state.recording {
-                    Text(context.attributes.startedAt, style: .timer).monospacedDigit().frame(width: 48)
-                } else { Image(systemName: context.state.symbol) }
+                    Text(context.attributes.startedAt, style: .timer)
+                        .monospacedDigit().font(.caption2).frame(width: 48)
+                } else {
+                    Image(systemName: context.state.symbol).foregroundStyle(tint(context))
+                }
             } minimal: {
-                Image(systemName: context.state.symbol).foregroundStyle(.orange)
+                Image(systemName: context.state.symbol).foregroundStyle(tint(context))
             }
-        }
-    }
-    @ViewBuilder
-    private func recordingButtons(_ context: ActivityViewContext<RecordingActivityAttributes>) -> some View {
-        if context.state.confirmDiscard {
-            Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID, keep: true)) {
-                Text("Keep")
-            }
-            Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID, confirmed: true)) {
-                Text("Discard")
-            }.tint(.red)
-        } else {
-            Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
-                Image(systemName: "xmark").frame(width: 32, height: 32)
-                    .background(.white.opacity(0.15), in: Circle())
-            }.buttonStyle(.plain).accessibilityLabel("Cancel recording")
-            Button(intent: StopFieldTheoryRecordingIntent()) { Image(systemName: "stop.fill") }
-                .tint(.red).accessibilityLabel("Stop recording")
+            .keylineTint(tint(context))
         }
     }
 
+    private func tint(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
+        context.state.status == "Transcribed" ? .green : .orange
+    }
+
+    private func title(_ context: ActivityViewContext<RecordingActivityAttributes>) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: context.state.symbol).foregroundStyle(tint(context))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Field Theory").font(.subheadline.weight(.semibold))
+                Text(context.state.recording ? "Recording" : context.state.status)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timer(_ context: ActivityViewContext<RecordingActivityAttributes>) -> some View {
+        if context.state.recording {
+            Text(context.attributes.startedAt, style: .timer)
+                .font(.system(.title3, design: .monospaced).weight(.medium))
+                .multilineTextAlignment(.trailing).frame(width: 90)
+                .accessibilityLabel("Recording time")
+        }
+    }
+
+    @ViewBuilder
+    private func detail(_ context: ActivityViewContext<RecordingActivityAttributes>) -> some View {
+        if context.state.recording {
+            VStack(alignment: .leading, spacing: 12) {
+                if context.state.confirmDiscard {
+                    Text("Are you sure you want to discard this audio?")
+                        .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 12) {
+                        Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID, keep: true)) {
+                            Text("Keep recording").frame(maxWidth: .infinity, minHeight: 44)
+                                .background(.white.opacity(0.14), in: Capsule())
+                        }
+                        Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID, confirmed: true)) {
+                            Text("Discard").frame(maxWidth: .infinity, minHeight: 44)
+                                .background(.red, in: Capsule())
+                        }
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        Button(intent: DiscardFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
+                            Image(systemName: "xmark").font(.body.weight(.semibold))
+                                .frame(width: 44, height: 44)
+                                .background(.white.opacity(0.14), in: Circle())
+                        }.accessibilityLabel("Cancel recording")
+                        Button(intent: StopFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
+                            Label("Finish", systemImage: "stop.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(.white, in: Capsule()).foregroundStyle(.black)
+                        }.accessibilityLabel("Finish recording and transcribe")
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+        }
+    }
 }

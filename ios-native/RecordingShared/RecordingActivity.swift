@@ -15,6 +15,7 @@ struct RecordingActivityAttributes: ActivityAttributes {
 
 struct StartFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Start recording in background"
+    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
     static var description = IntentDescription("Test recording with Field Theory while staying in your current app.")
     static var openAppWhenRun: Bool = false
     @MainActor
@@ -27,12 +28,15 @@ struct StartFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent
 }
 
 struct StopFieldTheoryRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
-    static var title: LocalizedStringResource = "Stop recording"
+    static var title: LocalizedStringResource = "Finish recording"
     static var openAppWhenRun: Bool = false
+    @Parameter(title: "Recording") var recordingID: String
+    init() { recordingID = "" }
+    init(recordingID: String) { self.recordingID = recordingID }
     @MainActor
     func perform() async throws -> some IntentResult {
 #if !WIDGET_EXTENSION
-        await BackgroundRecordingSession.shared.stop()
+        await BackgroundRecordingSession.shared.stop(recordingID: recordingID)
 #endif
         return .result()
     }

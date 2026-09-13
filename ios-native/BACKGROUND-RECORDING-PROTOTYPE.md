@@ -83,3 +83,31 @@ Validation: full unit suite and Auto-send UI regressions passed; a dedicated UI 
 started recording, kept it through cancellation confirmation, then discarded it
 and confirmed no pending retry audio. Real phone Live Activity controls, start-on-open,
 and end-to-end background delivery remain device acceptance checks.
+
+## Build 21: authenticate on device before background start
+
+The Start intent explicitly requiresLocalDeviceAuthentication. This delegates
+unlock to iOS (Face ID/passcode when locked) without intentionally foregrounding
+Field Theory. The compiled App Intents metadata confirms explicit authentication
+policy 2 and openAppWhenRun false. This is an unlock requirement, not a guarantee
+of microphone access or a forced Face ID scan on every unlocked invocation.
+
+The expanded Island/Lock Screen layout now uses a compact title/timer header and
+one horizontal control row: separate 44-point circular X and a wide Finish button.
+Confirmation uses a separate multiline question above Keep recording / Discard.
+Finish means stop and transcribe; it honors Auto-send. Finish carries the activity
+identifier so a stale control cannot stop a newer capture. The compact Island's
+standard iOS gestures remain: tap opens app, touch-and-hold expands controls.
+Apple supplies no supported first-tap-expand override.
+
+Diagnostics include build, protected-data availability and uptime; protected-data
+availability is not an exact screen-lock or Face ID authentication signal.
+Interactive simulator visual inspection was blocked by the locked Mac.
+
+Acceptance: with Start recording on open OFF, keep the background recording shortcut
+assigned. Try unlocked Home Screen first, then locked with Face ID unobstructed,
+then cancel authentication while locked. The first two should record; the cancelled
+authentication case should not. Finish or discard each recording using expanded
+Island controls before the next trial. Repeat locked/unlocked once if successful.
+Report whether authentication appeared, whether Field Theory opened, and whether
+actual speech was captured. An unlocked success does not establish locked success.

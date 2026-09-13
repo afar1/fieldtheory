@@ -101,7 +101,8 @@ final class BackgroundRecordingSession {
         }
     }
 
-    func stop() async {
+    func stop(recordingID: String = "") async {
+        if !recordingID.isEmpty, activity?.attributes.recordingID != recordingID { return }
         let model = AppModel.shared
         guard model.recorder.phase == .recording else {
             for old in Activity<RecordingActivityAttributes>.activities {
@@ -140,6 +141,9 @@ final class BackgroundRecordingSession {
             var entry: [String: Any] = ["event": event,
                 "timestamp": ISO8601DateFormatter().string(from: Date()),
                 "applicationState": UIApplication.shared.applicationState.rawValue,
+                "protectedDataAvailable": UIApplication.shared.isProtectedDataAvailable,
+                "systemUptimeSeconds": ProcessInfo.processInfo.systemUptime,
+                "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                 "elapsedSeconds": AppModel.shared.recorder.elapsed,
                 "pendingSessions": AppModel.shared.recorder.pendingSessionCount]
             if let error {
