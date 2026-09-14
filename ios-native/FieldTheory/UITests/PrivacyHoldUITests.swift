@@ -16,6 +16,13 @@ final class PrivacyHoldUITests: XCTestCase {
         XCTAssertTrue(alert.waitForExistence(timeout: 3))
         alert.buttons["Keep recording"].tap()
         XCTAssertTrue(cancel.exists)
+        XCTAssertLessThan(cancel.frame.maxX, record.frame.minX)
+        XCTAssertGreaterThanOrEqual(cancel.frame.width, 44)
+        XCTAssertLessThanOrEqual(record.frame.maxX, app.frame.maxX)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "porcelain-recording-control"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         cancel.tap()
         alert.buttons["Discard audio"].tap()
         XCTAssertTrue(app.buttons["VoiceRecordingControl"].waitForExistence(timeout: 3))

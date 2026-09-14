@@ -474,9 +474,9 @@ struct VoiceView: View {
                     } label: {
                         Image(systemName: "xmark").font(.body.weight(.semibold))
                             .foregroundStyle(Theme.text(colorScheme))
-                            .frame(width: 48, height: 48)
-                            .background(.regularMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(Theme.text(colorScheme).opacity(0.3), lineWidth: 1))
+                            .frame(width: 44, height: 44)
+                            .background(voiceControlSurface, in: Circle())
+                            .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
                             .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
                     }
                     .accessibilityLabel("Cancel recording")
@@ -489,9 +489,9 @@ struct VoiceView: View {
                     } label: {
                         Image(systemName: "xmark").font(.body.weight(.semibold))
                             .foregroundStyle(Theme.text(colorScheme))
-                            .frame(width: 48, height: 48)
-                            .background(.regularMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(Theme.text(colorScheme).opacity(0.3), lineWidth: 1))
+                            .frame(width: 44, height: 44)
+                            .background(voiceControlSurface, in: Circle())
+                            .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
                             .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
                     }
                     .accessibilityLabel("Discard audio")
@@ -526,12 +526,12 @@ struct VoiceView: View {
                             .padding(.horizontal, controlExpanded ? 16 : 22)
                             .padding(.vertical, controlExpanded ? 12 : 0)
                             .frame(minWidth: controlExpanded ? nil : 124)
-                            .frame(maxWidth: controlExpanded ? 340 : nil, minHeight: controlExpanded ? 64 : 52)
+                            .frame(maxWidth: controlExpanded ? .infinity : nil, minHeight: controlExpanded ? 68 : 52)
                             .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
                             .overlay {
                                 if controlExpanded {
                                     RoundedRectangle(cornerRadius: 32)
-                                        .strokeBorder(Theme.accent(model.settings.accentPreset, colorScheme), lineWidth: 1.5)
+                                        .strokeBorder(voiceControlOutline, lineWidth: 1)
                                 }
                             }
                             .foregroundStyle(controlForeground)
@@ -549,7 +549,7 @@ struct VoiceView: View {
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         }
-        .frame(maxWidth: 480).padding(.horizontal, 16)
+        .frame(maxWidth: controlExpanded ? 340 : 480).padding(.horizontal, 16)
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: controlExpanded)
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: recorder.phase)
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: showTranscribedConfirmation)
@@ -580,18 +580,38 @@ struct VoiceView: View {
         model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
     }
 
-    private var controlBackground: Color {
-        if model.recorder.phase == .recording { return Theme.unread }
-        if showTranscribedConfirmation || (showReadyConfirmation && model.recorder.phase == .idle) {
-            return Theme.backgroundAlt(colorScheme)
+    private var voiceControlSurface: Color {
+        colorScheme == .dark ? Color(red: 0.16, green: 0.20, blue: 0.20) : .white
+    }
+
+    private var voiceControlOutline: Color {
+        colorScheme == .dark ? Color(red: 0.39, green: 0.47, blue: 0.46)
+            : Color(red: 0.71, green: 0.76, blue: 0.75)
+    }
+
+    private var voiceControlIconSurface: Color {
+        colorScheme == .dark ? Color(red: 0.22, green: 0.29, blue: 0.26)
+            : Color(red: 0.91, green: 0.94, blue: 0.93)
+    }
+
+    private var voiceControlIconColor: Color {
+        if model.recorder.phase == .recording {
+            return colorScheme == .dark ? Color(red: 1, green: 0.69, blue: 0.64)
+                : Color(red: 0.68, green: 0.24, blue: 0.24)
         }
-        if controlExpanded { return Theme.backgroundAlt(colorScheme) }
+        if showReadyConfirmation || showTranscribedConfirmation {
+            return colorScheme == .dark ? Color(red: 0.64, green: 0.85, blue: 0.74)
+                : Color(red: 0.18, green: 0.41, blue: 0.32)
+        }
         return Theme.accent(model.settings.accentPreset, colorScheme)
     }
 
+    private var controlBackground: Color {
+        controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
+    }
+
     private var controlForeground: Color {
-        if model.recorder.phase == .recording || !controlExpanded { return .white }
-        return Theme.text(colorScheme)
+        controlExpanded ? Theme.text(colorScheme) : .white
     }
 
     private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
@@ -622,8 +642,22 @@ struct VoiceView: View {
     private var recordingControlLabel: some View {
         let text = controlText
         return HStack(spacing: 10) {
-            if text.busy { ProgressView().tint(controlForeground) }
-            else { Image(systemName: text.icon).font(.system(size: 17, weight: .medium)) }
+            if controlExpanded {
+                Group {
+                    if model.recorder.phase == .recording {
+                        VoiceMicrophoneWaveform(level: model.recorder.level)
+                    } else if text.busy {
+                        ProgressView().tint(voiceControlIconColor)
+                    } else {
+                        Image(systemName: text.icon).font(.system(size: 17, weight: .medium))
+                    }
+                }
+                .foregroundStyle(voiceControlIconColor)
+                .frame(width: 32, height: 32)
+                .background(voiceControlIconSurface, in: RoundedRectangle(cornerRadius: 11))
+            } else {
+                Image(systemName: text.icon).font(.system(size: 17, weight: .medium))
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(text.title).font(.system(size: controlExpanded ? 14 : 16, weight: .semibold))
                 if !text.detail.isEmpty {
@@ -1500,4 +1534,26 @@ private final class VoiceConfettiEmitterView: UIView {
             }.cgImage
         }
     }()
+}
+
+/// A short history of measured microphone levels, not a decorative animation.
+private struct VoiceMicrophoneWaveform: View {
+    let level: Float
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var samples: [Float] = Array(repeating: 0, count: 5)
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(samples.indices, id: \.self) { index in
+                Capsule().frame(width: 2, height: 3 + CGFloat(samples[index]) * 19)
+            }
+        }
+        .frame(width: 22, height: 24)
+        .animation(reduceMotion ? nil : .linear(duration: 0.08), value: samples)
+        .onChange(of: level, initial: true) { _, value in
+            samples.removeFirst()
+            samples.append(value.isFinite ? min(1, max(0, value)) : 0)
+        }
+        .accessibilityHidden(true)
+    }
 }
