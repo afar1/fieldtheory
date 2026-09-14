@@ -377,9 +377,11 @@ struct VoiceView: View {
     private var modelStatus: some View {
         switch model.recorder.engineState {
         case .ready:
-            EmptyView()
+            Label("Voice model ready", systemImage: "checkmark.circle.fill")
+                .font(.footnote).foregroundStyle(.secondary)
+                .accessibilityIdentifier("VoiceModelReady")
         case .checking:
-            engineProgressBanner(message: "Checking Parakeet…", progress: nil)
+            engineProgressBanner(message: "Verifying voice model files…", progress: nil)
         case .downloading(let progress):
             VStack(alignment: .leading, spacing: 6) {
                 engineProgressBanner(
@@ -391,7 +393,7 @@ struct VoiceView: View {
                     .foregroundStyle(.secondary)
             }
         case .preparing:
-            engineProgressBanner(message: "Preparing voice model…", progress: nil)
+            engineProgressBanner(message: model.recorder.preparationMessage, progress: nil)
         case .notDownloaded:
             engineBanner(
                 title: "Parakeet needs downloading",
@@ -563,7 +565,8 @@ struct VoiceView: View {
                         .background(recorder.phase == .recording ? Theme.unread : Theme.accent(model.settings.accentPreset, colorScheme), in: Capsule())
                         .foregroundStyle(.white)
                 }
-                .allowsHitTesting(recorder.phase != .transcribing)
+                .disabled(recorder.phase == .transcribing || (recorder.phase == .idle && pending == nil && !recorder.canStartRecording))
+                .opacity(recorder.phase == .idle && pending == nil && !recorder.canStartRecording ? 0.45 : 1)
                 .accessibilityIdentifier("VoiceRecordingControl")
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }

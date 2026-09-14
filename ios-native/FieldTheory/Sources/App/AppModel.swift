@@ -145,6 +145,13 @@ final class AppModel {
               settings.startRecordingOnOpen, showMainUI, !isSigningOut,
               !isReviewerDemoStorage, recorder.phase == .idle,
               recorder.pendingSessionCount == 0 else { return }
+        let openingRecorder = recorder
+        guard await openingRecorder.prepareVoiceModelInBackground(),
+              openingRecorder === recorder, !Task.isCancelled,
+              UIApplication.shared.applicationState == .active,
+              settings.startRecordingOnOpen, showMainUI, !isSigningOut,
+              !isReviewerDemoStorage, recorder.phase == .idle,
+              recorder.pendingSessionCount == 0 else { return }
         recorder.start()
     }
 

@@ -289,7 +289,7 @@ struct SettingsView: View {
             }
         case .preparing:
             HStack {
-                Text("Preparing voice model…")
+                Text(model.recorder.preparationMessage)
                 Spacer()
                 ProgressView()
             }
@@ -297,7 +297,7 @@ struct SettingsView: View {
             HStack {
                 Text("Transcription model")
                 Spacer()
-                Label("Parakeet ready", systemImage: "checkmark.circle.fill")
+                Label("Voice model ready", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(Theme.markRead)
                     .font(.system(size: 14))
             }

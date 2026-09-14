@@ -14,6 +14,7 @@ protocol SpeechTranscriptionEngine: AnyObject {
     /// Stable implementation/model identity included in runtime evidence.
     var runtimeIdentity: String { get }
     var state: SpeechEngineState { get }
+    var preparationMessage: String { get }
     /// Fired when readiness changes. RecorderController uses this to warm a
     /// verified local runtime and resume engine-bound queued recordings.
     var onStateChange: (() -> Void)? { get set }
@@ -28,6 +29,7 @@ protocol SpeechTranscriptionEngine: AnyObject {
 }
 
 extension SpeechTranscriptionEngine {
+    var preparationMessage: String { "Preparing voice model…" }
     func transcribe(audioURL: URL, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> String {
         let text = try await transcribe(audioURL: audioURL)
         progress(1)
@@ -54,6 +56,7 @@ final class ParakeetSpeechTranscriptionEngine: SpeechTranscriptionEngine {
         case failed(String)
     }
 
+    private(set) var preparationMessage = "Preparing voice model…"
     private var runtimeState = RuntimeState.unloaded
     private var preparationTask: Task<Void, Error>?
     private var preparationGeneration = UUID()
@@ -122,7 +125,21 @@ final class ParakeetSpeechTranscriptionEngine: SpeechTranscriptionEngine {
         preparationGeneration = generation
         let service = service
         let task = Task {
-            _ = try await service.prepare(modelDirectory: modelDirectory)
+            _ = try await service.prepare(modelDirectory: modelDirectory) { [weak self] stage in
+                guard let self, self.preparationGeneration == generation,
+                      case .preparing = self.runtimeState else { return }
+                switch stage {
+                case .validatingAssets: self.preparationMessage = "Checking model files…"
+                case .loadingPreprocessor: self.preparationMessage = "Loading audio preprocessor…"
+                case .loadingEncoder: self.preparationMessage = "Loading speech encoder…"
+                case .loadingDecoder: self.preparationMessage = "Loading speech decoder…"
+                case .loadingJoint: self.preparationMessage = "Loading token prediction model…"
+                case .loadingVocabulary: self.preparationMessage = "Loading vocabulary…"
+                case .assemblingRuntime: self.preparationMessage = "Initializing transcription runtime…"
+                case .warmingInference: self.preparationMessage = "Warming Core ML…"
+                }
+                self.onStateChange?()
+            }
         }
         preparationTask = task
         do {

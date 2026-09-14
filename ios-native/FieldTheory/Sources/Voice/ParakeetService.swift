@@ -280,8 +280,14 @@ actor ParakeetService {
     private var runtime: ParakeetLoadedRuntime?
     private var loadedModelDirectory: URL?
     private var preparationFlight: ParakeetPreparationFlight?
-    private let runtimeLoader: RuntimeLoader
+    private let runtimeLoader: RuntimeLoader?
     private let diagnosticsURL: URL?
+    private var stageObserver: (@MainActor @Sendable (ParakeetPreparationStage) -> Void)?
+
+    private func reportStage(_ stage: ParakeetPreparationStage) async {
+        await stageObserver?(stage)
+    }
+
     private let inferenceGate = ParakeetInferenceGate()
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "ParakeetService")
     private(set) var latestPreparationDiagnostics: ParakeetPreparationDiagnostics?
@@ -293,9 +299,7 @@ actor ParakeetService {
     }
 
     init() {
-        runtimeLoader = { directory in
-            try await ParakeetService.loadRuntime(from: directory)
-        }
+        runtimeLoader = nil
         diagnosticsURL = Self.preparationDiagnosticsURL
     }
 
@@ -307,7 +311,8 @@ actor ParakeetService {
     /// Loads and runs one synthetic-silence prediction. Calls for the same
     /// directory share both the model load and prediction warmup.
     @discardableResult
-    func prepare(modelDirectory: URL) async throws -> ParakeetPreparationDiagnostics {
+    func prepare(modelDirectory: URL, onStage: (@MainActor @Sendable (ParakeetPreparationStage) -> Void)? = nil) async throws -> ParakeetPreparationDiagnostics {
+        if let onStage { stageObserver = onStage }
         let (_, diagnostics, cacheHit) = try await ensureRuntime(modelDirectory: modelDirectory)
         if cacheHit {
             // Keep the full first-preparation report available on device rather
@@ -373,7 +378,11 @@ actor ParakeetService {
         if let existing = preparationFlight, existing.directory == directory {
             flight = existing
         } else {
-            let loader = runtimeLoader
+            let loader: RuntimeLoader = runtimeLoader ?? { [weak self] directory in
+                try await Self.loadRuntime(from: directory, onStage: { stage in
+                    await self?.reportStage(stage)
+                })
+            }
             flight = ParakeetPreparationFlight(directory: directory) {
                 try await loader(directory)
             }
@@ -413,13 +422,15 @@ actor ParakeetService {
     }
 
     private nonisolated static func loadRuntime(
-        from directory: URL
+        from directory: URL,
+        onStage: @Sendable (ParakeetPreparationStage) async -> Void
     ) async throws -> ParakeetLoadedRuntimeResult {
         let clock = ContinuousClock()
         let totalStart = clock.now
         var timings: [ParakeetPreparationStageTiming] = []
         var currentStage = ParakeetPreparationStage.validatingAssets
         var stageStart = totalStart
+        await onStage(currentStage)
 
         func finishStage() {
             timings.append(.init(
@@ -442,6 +453,7 @@ actor ParakeetService {
             inferenceConfig.computeUnits = .cpuAndNeuralEngine
 
             currentStage = .loadingPreprocessor
+            await onStage(currentStage)
             stageStart = clock.now
             let preprocessor = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent("Preprocessor.mlmodelc"),
@@ -450,6 +462,7 @@ actor ParakeetService {
             try Task.checkCancellation()
 
             currentStage = .loadingEncoder
+            await onStage(currentStage)
             stageStart = clock.now
             let encoder = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent("Encoder.mlmodelc"),
@@ -458,6 +471,7 @@ actor ParakeetService {
             try Task.checkCancellation()
 
             currentStage = .loadingDecoder
+            await onStage(currentStage)
             stageStart = clock.now
             let decoder = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent("Decoder.mlmodelc"),
@@ -466,6 +480,7 @@ actor ParakeetService {
             try Task.checkCancellation()
 
             currentStage = .loadingJoint
+            await onStage(currentStage)
             stageStart = clock.now
             let joint = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent("JointDecision.mlmodelc"),
@@ -474,12 +489,14 @@ actor ParakeetService {
             try Task.checkCancellation()
 
             currentStage = .loadingVocabulary
+            await onStage(currentStage)
             stageStart = clock.now
             let vocabulary = try loadVocabulary(
                 from: directory.appendingPathComponent("parakeet_vocab.json"))
             finishStage()
 
             currentStage = .assemblingRuntime
+            await onStage(currentStage)
             stageStart = clock.now
             let models = AsrModels(
                 encoder: encoder,
@@ -500,6 +517,7 @@ actor ParakeetService {
             // AsrManager.init warms allocation caches only. This content-free
             // minimum-duration prediction forces deferred Core ML compilation.
             currentStage = .warmingInference
+            await onStage(currentStage)
             stageStart = clock.now
             var warmupState = try TdtDecoderState(decoderLayers: 2)
             _ = try await manager.transcribe(

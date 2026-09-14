@@ -70,6 +70,28 @@ private func waitForRecorderCondition(
 
 final class RecorderControllerTests: XCTestCase {
     @MainActor
+    func testRecordingRequiresReadyVoiceModelIncludingIntent() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = RecorderTestSpeechEngine(state: .notDownloaded)
+        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine)
+        recorder.setWorkEnabled(true)
+        XCTAssertFalse(recorder.canStartRecording)
+        recorder.start()
+        XCTAssertEqual(recorder.phase, .idle)
+        do {
+            try await recorder.startFromIntent()
+            XCTFail("Intent must not activate the microphone before the model is ready")
+        } catch {}
+        XCTAssertEqual(recorder.phase, .idle)
+        XCTAssertNil(recorder.startedAt)
+        engine.state = .ready
+        engine.onStateChange?()
+        XCTAssertTrue(recorder.canStartRecording)
+    }
+
+
+    @MainActor
     func testBackgroundPreparationDoesNotDownloadOrRecord() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

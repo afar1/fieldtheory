@@ -101,6 +101,12 @@ final class RecorderController {
     private(set) var lastTranscribedSessionID: String?
     private(set) var currentDeliverySessionID: String?
 
+    var canStartRecording: Bool { engineState == .ready && !isStartingCapture }
+    var preparationMessage: String {
+        _ = engineStateRevision
+        return speechEngine.preparationMessage
+    }
+
     var engineIdentity: String { speechEngine.runtimeIdentity }
 
     var engineState: SpeechEngineState {
@@ -500,12 +506,12 @@ final class RecorderController {
     }
 
     func start() {
-        guard workEnabled, phase == .idle, !isStartingCapture else { return }
+        guard workEnabled, phase == .idle, canStartRecording else { return }
         let generation = workGeneration
         lastError = nil
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
-                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else { return }
+                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle, self.canStartRecording else { return }
                 guard granted else {
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     return
@@ -520,6 +526,9 @@ final class RecorderController {
         guard workEnabled, phase == .idle, !isStartingCapture else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
         }
+        guard engineReady else {
+            throw SpeechTranscriptionEngineError(message: "The voice model is preparing. Wait until it is ready before recording.")
+        }
         guard AVAudioApplication.shared.recordPermission == .granted else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
@@ -531,7 +540,7 @@ final class RecorderController {
     }
 
     private func beginSession() async {
-        guard workEnabled, phase == .idle, !isStartingCapture else { return }
+        guard workEnabled, phase == .idle, canStartRecording else { return }
         isStartingCapture = true
         defer { isStartingCapture = false }
         let generation = workGeneration
