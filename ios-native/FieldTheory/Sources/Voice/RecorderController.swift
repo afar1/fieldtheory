@@ -514,8 +514,11 @@ final class RecorderController {
             // A background intent must not request interruption of the foreground app's audio.
             var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
             if mixWithOtherAudio { options.insert(.mixWithOthers) }
+            BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
             try session.setCategory(.playAndRecord, mode: .default, options: options)
+            BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
             try session.setActive(true)
+            BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
             segmentURLs = []
             sessionId = Timestamps.nowMs()
             try startNewSegment()
@@ -526,6 +529,7 @@ final class RecorderController {
             onCaptureStarted?()
         } catch {
             lastStartFailure = error
+            BackgroundRecordingSession.shared.recordEvidence("audio-start-failed-before-cleanup", error: error)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
@@ -544,11 +548,15 @@ final class RecorderController {
             AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
         ]
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating")
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-starting")
         guard recorder.record() else {
+            BackgroundRecordingSession.shared.recordEvidence("audio-recorder-returned-false")
             throw SpeechTranscriptionEngineError(message: "The microphone did not start recording.")
         }
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-started")
         self.recorder = recorder
         segmentURLs.append(url)
     }
@@ -573,6 +581,7 @@ final class RecorderController {
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
 
+        BackgroundRecordingSession.shared.recordEvidence("audio-interruption-\(type.rawValue)")
         switch type {
         case .began:
             // A call (or Siri) took the mic. Seal this segment; we resume after.

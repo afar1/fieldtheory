@@ -1,3 +1,4 @@
+import AVFoundation
 import ActivityKit
 import AppIntents
 import Foundation
@@ -17,6 +18,8 @@ struct RecordingShortcuts: AppShortcutsProvider {
 final class BackgroundRecordingSession {
     static let shared = BackgroundRecordingSession()
     private var activity: Activity<RecordingActivityAttributes>?
+    private var diagnosticAttempt = UUID().uuidString
+    private var diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
     private var starting = false
     private var captureSessionID: String?
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "BackgroundRecording")
@@ -24,6 +27,9 @@ final class BackgroundRecordingSession {
     func start() async throws {
         guard !starting else { return }
         starting = true
+        diagnosticAttempt = UUID().uuidString
+        diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
+        recordEvidence("intent-entered")
         defer { starting = false }
         let model = AppModel.shared
         // Cold launches prepare the account's local storage before allowing microphone access.
@@ -44,9 +50,11 @@ final class BackgroundRecordingSession {
         for old in Activity<RecordingActivityAttributes>.activities {
             await old.end(nil, dismissalPolicy: .immediate)
         }
+        recordEvidence("live-activity-requesting")
         let newActivity = try Activity.request(attributes: RecordingActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil), pushType: nil)
         activity = newActivity
+        recordEvidence("live-activity-created")
         model.wireRecorderPersistence()
         model.recorder.onCaptureStopped = { [weak self] in self?.showProcessing() }
         model.recorder.onCaptureCancelled = { [weak self] in self?.cancelActivity() }
@@ -196,14 +204,30 @@ final class BackgroundRecordingSession {
     }
 
     /// Content-free device evidence; no audio or transcript is copied into diagnostics.
-    private func recordEvidence(_ event: String, error: Error? = nil) {
+    func recordEvidence(_ event: String, error: Error? = nil) {
         let directory = RecorderController.voiceDiagnosticsDir
         let url = directory.appendingPathComponent("background-recording.json")
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var events = (try? Data(contentsOf: url))
                 .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+            let audio = AVAudioSession.sharedInstance()
             var entry: [String: Any] = ["event": event,
+                "attemptID": diagnosticAttempt,
+                "attemptElapsedSeconds": ProcessInfo.processInfo.systemUptime - diagnosticStartedAt,
+                "microphonePermission": AVAudioApplication.shared.recordPermission.rawValue,
+                "audioCategory": audio.category.rawValue,
+                "audioMode": audio.mode.rawValue,
+                "audioOptions": audio.categoryOptions.rawValue,
+                "inputAvailable": audio.isInputAvailable,
+                "sampleRate": audio.sampleRate,
+                "inputChannels": audio.inputNumberOfChannels,
+                "otherAudioPlaying": audio.isOtherAudioPlaying,
+                "secondaryAudioSilenced": audio.secondaryAudioShouldBeSilencedHint,
+                "inputPortTypes": audio.currentRoute.inputs.map { $0.portType.rawValue },
+                "outputPortTypes": audio.currentRoute.outputs.map { $0.portType.rawValue },
+                "liveActivitiesEnabled": ActivityAuthorizationInfo().areActivitiesEnabled,
+                "liveActivityStates": Activity<RecordingActivityAttributes>.activities.map { String(describing: $0.activityState) },
                 "timestamp": ISO8601DateFormatter().string(from: Date()),
                 "applicationState": UIApplication.shared.applicationState.rawValue,
                 "protectedDataAvailable": UIApplication.shared.isProtectedDataAvailable,
@@ -218,7 +242,7 @@ final class BackgroundRecordingSession {
                 entry["errorCode"] = nsError.code
             }
             events.append(entry)
-            try JSONSerialization.data(withJSONObject: Array(events.suffix(30)), options: [.prettyPrinted, .sortedKeys])
+            try JSONSerialization.data(withJSONObject: Array(events.suffix(150)), options: [.prettyPrinted, .sortedKeys])
                 .write(to: url, options: .atomic)
         } catch { logger.error("Could not write recording diagnostics") }
     }
