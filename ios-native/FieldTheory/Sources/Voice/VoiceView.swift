@@ -22,7 +22,7 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var confettiBurst: UUID?
+    @State private var confettiBursts: [VoiceConfettiBurst] = []
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -508,7 +508,7 @@ struct VoiceView: View {
                 } else {
                     Button {
                         guard !recordingActionUnavailable else {
-                            if !reduceMotion { confettiBurst = UUID() }
+                            if !reduceMotion { confettiBursts.append(VoiceConfettiBurst(count: min(72, 32 + confettiBursts.count * 8))) }
                             return
                         }
                         if modelNeedsAttention { showSettings = true }
@@ -522,19 +522,26 @@ struct VoiceView: View {
                             .frame(minWidth: controlExpanded ? nil : 124)
                             .frame(maxWidth: controlExpanded ? 340 : nil, minHeight: controlExpanded ? 64 : 52)
                             .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
+                            .overlay {
+                                if controlExpanded {
+                                    RoundedRectangle(cornerRadius: 32)
+                                        .strokeBorder(Theme.accent(model.settings.accentPreset, colorScheme), lineWidth: 1.5)
+                                }
+                            }
                             .foregroundStyle(controlForeground)
                     }
                     .buttonStyle(VoiceStatusButtonStyle())
                     .overlay {
-                        if let confettiBurst {
-                            VoiceButtonConfetti().id(confettiBurst)
-                                .allowsHitTesting(false).accessibilityHidden(true)
+                        ZStack {
+                            ForEach(confettiBursts) { burst in
+                                VoiceButtonConfetti(burst: burst)
+                                    .task {
+                                        do { try await Task.sleep(for: .milliseconds(1500)) } catch { return }
+                                        confettiBursts.removeAll { $0.id == burst.id }
+                                    }
+                            }
                         }
-                    }
-                    .task(id: confettiBurst) {
-                        guard confettiBurst != nil else { return }
-                        do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
-                        confettiBurst = nil
+                        .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
@@ -578,7 +585,7 @@ struct VoiceView: View {
     private var controlBackground: Color {
         if model.recorder.phase == .recording { return Theme.unread }
         if showTranscribedConfirmation || (showReadyConfirmation && model.recorder.phase == .idle) {
-            return Theme.markRead.opacity(0.15)
+            return Theme.backgroundAlt(colorScheme)
         }
         if controlExpanded { return Theme.backgroundAlt(colorScheme) }
         return Theme.accent(model.settings.accentPreset, colorScheme)
@@ -622,7 +629,7 @@ struct VoiceView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(text.title).font(.system(size: controlExpanded ? 14 : 16, weight: .semibold))
                 if !text.detail.isEmpty {
-                    Text(text.detail).font(.system(size: 12)).opacity(0.8)
+                    Text(text.detail).font(.system(size: 12))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1386,30 +1393,52 @@ private struct VoiceStatusButtonStyle: ButtonStyle {
     }
 }
 
-private struct VoiceButtonConfetti: View {
-    private struct Particle: Identifiable {
-        let id: Int
-        let x = CGFloat.random(in: -110...110)
-        let y = CGFloat.random(in: -115 ... -40)
-        let rotation = Double.random(in: -240...240)
+private struct VoiceConfettiBurst: Identifiable {
+    struct Particle {
+        let x = Double.random(in: -125...125)
+        let vx = Double.random(in: -115...115)
+        let vy = Double.random(in: -290 ... -145)
+        let spin = Double.random(in: -9...9)
+        let size = Double.random(in: 4...9)
+        let kind = Int.random(in: 0...2)
+        let color = Int.random(in: 0..<5)
     }
-    private let particles = (0..<16).map { Particle(id: $0) }
+    let id = UUID()
+    let started = Date()
+    let particles: [Particle]
+    init(count: Int) { particles = (0..<count).map { _ in Particle() } }
+}
+
+/// Independent, time-based bursts let repeated taps build a little firework fountain.
+private struct VoiceButtonConfetti: View {
+    let burst: VoiceConfettiBurst
     private let colors: [Color] = [.pink, .orange, .cyan, .purple, .green]
-    @State private var expanded = false
 
     var body: some View {
-        ZStack {
-            ForEach(particles) { particle in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(colors[particle.id % colors.count])
-                    .frame(width: 5, height: 9)
-                    .rotationEffect(.degrees(expanded ? particle.rotation : 0))
-                    .offset(x: expanded ? particle.x : 0, y: expanded ? particle.y : 0)
-                    .opacity(expanded ? 0 : 1)
+        TimelineView(.animation) { timeline in
+            Canvas { context, size in
+                let age = max(0, timeline.date.timeIntervalSince(burst.started))
+                guard age < 1.5 else { return }
+                for particle in burst.particles {
+                    var layer = context
+                    layer.opacity = min(1, max(0, (1.5 - age) / 0.35))
+                    layer.translateBy(x: size.width / 2 + particle.x + particle.vx * age,
+                                      y: size.height / 2 + particle.vy * age + 130 * age * age)
+                    layer.rotate(by: .radians(particle.spin * age))
+                    let rect = CGRect(x: -particle.size / 2, y: -particle.size / 2,
+                                      width: particle.size, height: particle.size)
+                    if particle.kind == 0 {
+                        layer.draw(Text("✦").font(.system(size: particle.size * 1.8, weight: .bold))
+                            .foregroundColor(colors[particle.color]), at: .zero)
+                    } else if particle.kind == 1 {
+                        layer.fill(Path(ellipseIn: rect), with: .color(colors[particle.color]))
+                    } else {
+                        layer.fill(Path(roundedRect: rect.insetBy(dx: 1, dy: -3), cornerRadius: 1),
+                                   with: .color(colors[particle.color]))
+                    }
+                }
             }
-        }
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.85)) { expanded = true }
+            .frame(width: 620, height: 620)
         }
     }
 }
