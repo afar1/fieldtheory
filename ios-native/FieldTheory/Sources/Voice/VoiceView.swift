@@ -22,7 +22,7 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var confettiBursts: [VoiceConfettiBurst] = []
+    @State private var confettiTrigger = 0
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -252,12 +252,18 @@ struct VoiceView: View {
 
     private var autoSendControl: some View {
         Button { model.settings.autoSendTranscriptions.toggle() } label: {
-            Text("Auto-send")
-                .font(.system(size: 11, weight: .medium))
-                .strikethrough(!model.settings.autoSendTranscriptions)
-                .foregroundStyle(model.settings.autoSendTranscriptions ? Theme.text(colorScheme) : Theme.textMuted(colorScheme))
-                .frame(minWidth: 70, minHeight: 44, alignment: .trailing)
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                ZStack {
+                    Circle().strokeBorder(lineWidth: 1).frame(width: 13, height: 13)
+                    if model.settings.autoSendTranscriptions {
+                        Image(systemName: "checkmark").font(.system(size: 8, weight: .semibold))
+                    }
+                }
+                Text("Auto-send").font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(Theme.text(colorScheme))
+            .frame(minHeight: 44, alignment: .trailing)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("AutoSendTranscriptions")
@@ -508,7 +514,7 @@ struct VoiceView: View {
                 } else {
                     Button {
                         guard !recordingActionUnavailable else {
-                            if !reduceMotion { confettiBursts.append(VoiceConfettiBurst(count: min(72, 32 + confettiBursts.count * 8))) }
+                            if !reduceMotion { confettiTrigger &+= 1 }
                             return
                         }
                         if modelNeedsAttention { showSettings = true }
@@ -532,16 +538,8 @@ struct VoiceView: View {
                     }
                     .buttonStyle(VoiceStatusButtonStyle())
                     .overlay {
-                        ZStack {
-                            ForEach(confettiBursts) { burst in
-                                VoiceButtonConfetti(burst: burst)
-                                    .task {
-                                        do { try await Task.sleep(for: .milliseconds(1500)) } catch { return }
-                                        confettiBursts.removeAll { $0.id == burst.id }
-                                    }
-                            }
-                        }
-                        .allowsHitTesting(false).accessibilityHidden(true)
+                        VoiceButtonConfetti(trigger: confettiTrigger, enabled: !reduceMotion)
+                            .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
@@ -1393,52 +1391,113 @@ private struct VoiceStatusButtonStyle: ButtonStyle {
     }
 }
 
-private struct VoiceConfettiBurst: Identifiable {
-    struct Particle {
-        let x = Double.random(in: -125...125)
-        let vx = Double.random(in: -115...115)
-        let vy = Double.random(in: -290 ... -145)
-        let spin = Double.random(in: -9...9)
-        let size = Double.random(in: 4...9)
-        let kind = Int.random(in: 0...2)
-        let color = Int.random(in: 0..<5)
+/// Core Animation owns particle motion; taps only briefly open one emitter.
+/// A fixed birth rate and lifetime bound live particles even under continuous tapping.
+private struct VoiceButtonConfetti: UIViewRepresentable {
+    let trigger: Int
+    let enabled: Bool
+
+    func makeUIView(context: Context) -> VoiceConfettiEmitterView {
+        let view = VoiceConfettiEmitterView()
+        view.lastTrigger = trigger
+        return view
     }
-    let id = UUID()
-    let started = Date()
-    let particles: [Particle]
-    init(count: Int) { particles = (0..<count).map { _ in Particle() } }
+
+    func updateUIView(_ view: VoiceConfettiEmitterView, context: Context) {
+        guard enabled else { view.stop(); view.lastTrigger = trigger; return }
+        guard view.lastTrigger != trigger else { return }
+        view.lastTrigger = trigger
+        view.burst()
+    }
+
+    static func dismantleUIView(_ view: VoiceConfettiEmitterView, coordinator: ()) { view.stop() }
 }
 
-/// Independent, time-based bursts let repeated taps build a little firework fountain.
-private struct VoiceButtonConfetti: View {
-    let burst: VoiceConfettiBurst
-    private let colors: [Color] = [.pink, .orange, .cyan, .purple, .green]
+private final class VoiceConfettiEmitterView: UIView {
+    private let emitter = CAEmitterLayer()
+    private var shutoff: DispatchWorkItem?
+    var lastTrigger = 0
 
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                let age = max(0, timeline.date.timeIntervalSince(burst.started))
-                guard age < 1.5 else { return }
-                for particle in burst.particles {
-                    var layer = context
-                    layer.opacity = min(1, max(0, (1.5 - age) / 0.35))
-                    layer.translateBy(x: size.width / 2 + particle.x + particle.vx * age,
-                                      y: size.height / 2 + particle.vy * age + 130 * age * age)
-                    layer.rotate(by: .radians(particle.spin * age))
-                    let rect = CGRect(x: -particle.size / 2, y: -particle.size / 2,
-                                      width: particle.size, height: particle.size)
-                    if particle.kind == 0 {
-                        layer.draw(Text("✦").font(.system(size: particle.size * 1.8, weight: .bold))
-                            .foregroundColor(colors[particle.color]), at: .zero)
-                    } else if particle.kind == 1 {
-                        layer.fill(Path(ellipseIn: rect), with: .color(colors[particle.color]))
-                    } else {
-                        layer.fill(Path(roundedRect: rect.insetBy(dx: 1, dy: -3), cornerRadius: 1),
-                                   with: .color(colors[particle.color]))
-                    }
-                }
-            }
-            .frame(width: 620, height: 620)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        emitter.emitterShape = .line
+        emitter.birthRate = 0
+        emitter.emitterCells = Self.sprites.map { sprite in
+            let cell = CAEmitterCell()
+            cell.contents = sprite
+            cell.birthRate = 30 // Three cells: at most about 108 living particles.
+            cell.lifetime = 1.2
+            cell.velocity = 150
+            cell.velocityRange = 45
+            cell.emissionLongitude = -.pi / 2
+            cell.emissionRange = .pi * 0.65
+            cell.yAcceleration = 180
+            cell.spin = 3
+            cell.spinRange = 4
+            cell.scale = 0.7
+            cell.scaleRange = 0.25
+            cell.alphaSpeed = -0.65
+            return cell
         }
+        layer.addSublayer(emitter)
     }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        emitter.frame = bounds
+        emitter.emitterPosition = CGPoint(x: bounds.midX, y: bounds.midY)
+        emitter.emitterSize = CGSize(width: max(0, min(250, bounds.width - 32)), height: 1)
+        CATransaction.commit()
+    }
+
+    func burst() {
+        shutoff?.cancel()
+        setBirthRate(1)
+        let task = DispatchWorkItem { [weak self] in self?.setBirthRate(0) }
+        shutoff = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: task)
+    }
+
+    func stop() {
+        shutoff?.cancel()
+        shutoff = nil
+        setBirthRate(0)
+        emitter.removeAllAnimations()
+    }
+
+    private func setBirthRate(_ rate: Float) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        emitter.birthRate = rate
+        CATransaction.commit()
+    }
+
+    // Rasterize once, never draw paths or text on each animation frame.
+    private static let sprites: [CGImage] = {
+        [UIColor.systemPink, .systemTeal, .systemOrange].enumerated().compactMap { index, color in
+            UIGraphicsImageRenderer(size: CGSize(width: 12, height: 12)).image { _ in
+                color.setFill()
+                if index == 0 {
+                    let star = UIBezierPath()
+                    for point in 0..<8 {
+                        let angle = Double(point) * .pi / 4 - .pi / 2
+                        let radius = point.isMultiple(of: 2) ? 6.0 : 2.0
+                        let position = CGPoint(x: 6 + cos(angle) * radius, y: 6 + sin(angle) * radius)
+                        if point == 0 { star.move(to: position) } else { star.addLine(to: position) }
+                    }
+                    star.close(); star.fill()
+                } else if index == 1 {
+                    UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 6, height: 6)).fill()
+                } else {
+                    UIBezierPath(roundedRect: CGRect(x: 4, y: 1, width: 4, height: 10), cornerRadius: 1).fill()
+                }
+            }.cgImage
+        }
+    }()
 }
