@@ -287,6 +287,21 @@ final class RecorderController {
         }
     }
 
+    /// Joins foreground preparation without downloading models or accessing the microphone.
+    func prepareVoiceModelInBackground() async -> Bool {
+        guard workEnabled, !Task.isCancelled else { return false }
+        let generation = workGeneration
+        switch speechEngine.state {
+        case .notDownloaded, .downloading, .failed: return false
+        case .ready: return true
+        case .checking, .preparing: break
+        }
+        do {
+            try await speechEngine.prepare()
+            return workEnabled && workGeneration == generation && !Task.isCancelled && engineReady
+        } catch { return false }
+    }
+
     private func requestPreparationIfNeeded() {
         guard workEnabled else { return }
         guard enginePreparationTask == nil else { return }
@@ -301,6 +316,8 @@ final class RecorderController {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             guard let engine = self?.speechEngine else { return }
+            let allowance = VoiceModelPreparationAllowance()
+            defer { allowance.end() }
             do {
                 try await engine.prepare()
             } catch is CancellationError {

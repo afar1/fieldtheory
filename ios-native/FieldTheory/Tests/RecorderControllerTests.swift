@@ -70,6 +70,34 @@ private func waitForRecorderCondition(
 
 final class RecorderControllerTests: XCTestCase {
     @MainActor
+    func testBackgroundPreparationDoesNotDownloadOrRecord() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = RecorderTestSpeechEngine(state: .notDownloaded)
+        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine)
+        recorder.setWorkEnabled(true)
+        let result = await recorder.prepareVoiceModelInBackground()
+        XCTAssertFalse(result)
+        XCTAssertEqual(engine.downloadCalls, 0)
+        XCTAssertEqual(engine.prepareCalls, 0)
+        XCTAssertEqual(engine.transcribeCalls, 0)
+        XCTAssertEqual(recorder.phase, .idle)
+        XCTAssertNil(recorder.startedAt)
+    }
+
+    @MainActor
+    func testBackgroundPreparationHonorsDisabledWorkspace() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = RecorderTestSpeechEngine(state: .preparing)
+        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine)
+        let result = await recorder.prepareVoiceModelInBackground()
+        XCTAssertFalse(result)
+        XCTAssertEqual(engine.prepareCalls, 0)
+    }
+
+
+    @MainActor
     func testDiscardOnlyConfirmedSessionAndRejectStaleConfirmation() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

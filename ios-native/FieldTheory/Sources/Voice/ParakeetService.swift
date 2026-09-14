@@ -587,7 +587,11 @@ actor ParakeetService {
             try mutableDirectory.setResourceValues(values)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(diagnostics).write(to: diagnosticsURL, options: .atomic)
+            var report = try JSONSerialization.jsonObject(with: encoder.encode(diagnostics)) as! [String: Any]
+            report["recordedAt"] = ISO8601DateFormatter().string(from: Date())
+            report["build"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                .write(to: diagnosticsURL, options: .atomic)
         } catch {
             logger.error(
                 "Parakeet preparation diagnostics could not be persisted: \(error.localizedDescription, privacy: .public)")

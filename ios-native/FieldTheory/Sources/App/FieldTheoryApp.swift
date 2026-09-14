@@ -2,6 +2,11 @@ import SwiftUI
 import UIKit
 
 final class FieldTheoryAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        VoiceModelPreparation.shared.register()
+        return true
+    }
+
     func application(
         _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
@@ -16,7 +21,7 @@ final class FieldTheoryAppDelegate: NSObject, UIApplicationDelegate {
 struct FieldTheoryApp: App {
     @UIApplicationDelegateAdaptor(FieldTheoryAppDelegate.self) private var appDelegate
     @State private var model = AppModel.shared
-    @State private var recordingOnNextOpen = true
+    @State private var recordingOnNextOpen = !ProcessInfo.processInfo.arguments.contains("--prepare-voice-model")
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -26,7 +31,10 @@ struct FieldTheoryApp: App {
                 .tint(.accentColor)
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     model.sync.setForeground(phase == .active)
-                    if phase == .background { recordingOnNextOpen = true }
+                    if phase == .background {
+                        recordingOnNextOpen = true
+                        VoiceModelPreparation.shared.schedule()
+                    }
                     if phase == .active {
                         model.handleDidBecomeActive()
                         if recordingOnNextOpen {
