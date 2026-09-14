@@ -496,21 +496,6 @@ struct VoiceView: View {
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")
                 }
-                if let completed = completedTranscript, !showTranscribedConfirmation, recorder.phase == .idle, !recorder.isStartingCapture {
-                    Button { copy(completed); completedTranscriptID = nil } label: {
-                        Label("Copy", systemImage: "doc.on.doc").padding(.horizontal, 16).frame(height: 52)
-                    }.background(.regularMaterial, in: Capsule())
-                    Button {
-                        syncRequest = TranscriptSyncRequest(item: completed, workspace: model.workspaceGeneration, sendToAgent: true)
-                    } label: {
-                        Label("Send", systemImage: "paperplane").padding(.horizontal, 16).frame(height: 52)
-                    }.background(.regularMaterial, in: Capsule())
-                    Button { completedTranscriptID = nil; recorder.start() } label: {
-                        Image(systemName: "mic.fill").frame(width: 52, height: 52)
-                    }.background(Theme.accent(model.settings.accentPreset, colorScheme), in: Circle())
-                        .foregroundStyle(.white).disabled(!recorder.canStartRecording)
-                        .accessibilityLabel("Start another recording")
-                } else {
                     Button {
                         guard !recordingActionUnavailable else { return }
                         if modelNeedsAttention { showSettings = true }
@@ -536,7 +521,6 @@ struct VoiceView: View {
                     .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-                }
             }
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
@@ -552,11 +536,6 @@ struct VoiceView: View {
         return recorder.phase == .transcribing
             || (recorder.phase == .idle && recorder.nextPendingSession == nil
                 && ((!recorder.canStartRecording && !modelNeedsAttention) || showReadyConfirmation))
-    }
-
-    private var completedTranscript: TranscriptItem? {
-        guard let id = completedTranscriptID else { return nil }
-        return model.transcripts.items.first { $0.id == id }
     }
 
     private var modelNeedsAttention: Bool {
@@ -627,7 +606,7 @@ struct VoiceView: View {
             return ("Audio saved", recorder.lastError ?? "Tap to retry transcription", "arrow.clockwise", false)
         }
         if let error = recorder.lastError { return ("Recording needs attention", error, "exclamationmark.triangle", false) }
-        if showTranscribedConfirmation { return ("Transcribed", "Ready to copy or send", "checkmark", false) }
+        if showTranscribedConfirmation { return ("Transcribed", "Saved to transcripts", "checkmark", false) }
         if showReadyConfirmation { return ("Voice model ready", "Ready to record", "checkmark", false) }
         return ("Record", "", "mic.fill", false)
     }
