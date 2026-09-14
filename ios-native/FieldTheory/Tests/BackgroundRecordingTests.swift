@@ -1,8 +1,48 @@
 import XCTest
+import AVFoundation
+import FluidAudio
 @testable import FieldTheory
 
 @MainActor
 final class BackgroundRecordingTests: XCTestCase {
+    func testNegotiatedCaptureRatesConvertForTranscription() throws {
+        for rate in [24_000.0, 48_000.0] {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("capture-\(UUID()).wav")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let settings = try RecorderController.captureSettings(sampleRate: rate)
+            do {
+                let file = try AVAudioFile(forWriting: url, settings: settings)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(rate)))
+                buffer.frameLength = buffer.frameCapacity
+                let samples = try XCTUnwrap(buffer.floatChannelData)[0]
+                for index in 0..<Int(buffer.frameLength) {
+                    samples[index] = Float(sin(2 * Double.pi * 440 * Double(index) / rate) * 0.25)
+                }
+                try file.write(from: buffer)
+            }
+            let recorded = try AVAudioFile(forReading: url)
+            XCTAssertEqual(recorded.processingFormat.sampleRate, rate)
+            let converted = try AudioSourceFactory().makeDiskBackedSource(from: url, targetSampleRate: 16_000).source
+            defer { converted.cleanup() }
+            XCTAssertEqual(Double(converted.sampleCount), 16_000, accuracy: 32)
+        }
+        for invalid in [0.0, -1.0, Double.nan, Double.infinity] {
+            XCTAssertThrowsError(try RecorderController.captureSettings(sampleRate: invalid))
+        }
+    }
+
+    func testPreparationFailureKeepsItsDistinctErrorAfterBoundedRetries() async {
+        var attempts = 0
+        do {
+            try await RecorderController.startMicrophoneWithRetry {
+                attempts += 1
+                throw MicrophoneStartError.preparationFailed
+            } wait: { _ in }
+            XCTFail("Must report preparation failure")
+        } catch MicrophoneStartError.preparationFailed {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(attempts, 4)
+    }
+
     func testMicrophoneRetryRecoversAndStopsAfterSuccess() async throws {
         var attempts = 0
         var delays: [Duration] = []

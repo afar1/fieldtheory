@@ -6,7 +6,13 @@ import UIKit
 
 enum MicrophoneStartError: LocalizedError {
     case notStarted
-    var errorDescription: String? { "The microphone did not start recording." }
+    case preparationFailed
+    var errorDescription: String? {
+        switch self {
+        case .notStarted: "The microphone did not start recording."
+        case .preparationFailed: "The microphone could not prepare for recording."
+        }
+    }
 }
 
 enum RecordingFinishAction: String {
@@ -29,7 +35,7 @@ private struct PendingAudioEngineBinding: Codable {
     let engine: String
 }
 
-/// Records 16 kHz mono WAV with the audio background mode keeping the
+/// Records mono WAV at the activated input sample rate with the audio background mode keeping the
 /// session alive while the screen is locked. Call interruptions finalize the
 /// current segment and auto-resume into a new one when the system hands the
 /// mic back, so one tap can capture an arbitrarily long session.
@@ -548,6 +554,27 @@ final class RecorderController {
         defer { isStartingCapture = false }
         let generation = workGeneration
         lastStartFailure = nil
+        BackgroundRecordingSession.shared.beginCaptureDiagnostics()
+        // Observe the entire handoff, including format changes during preparation.
+        // Capture notification metadata before hopping to the main actor.
+        let routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main
+        ) { notification in
+            let notifiedAt = ProcessInfo.processInfo.systemUptime
+            let notifiedRate = AVAudioSession.sharedInstance().sampleRate
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+            let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            let inputs = previous?.inputs.map { $0.portType.rawValue } ?? []
+            let outputs = previous?.outputs.map { $0.portType.rawValue } ?? []
+            Task { @MainActor in
+                BackgroundRecordingSession.shared.recordEvidence("audio-route-changed", details: [
+                    "notificationUptime": notifiedAt, "notificationSampleRate": notifiedRate,
+                    "routeChangeReason": reason, "previousInputPortTypes": inputs,
+                    "previousOutputPortTypes": outputs])
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(routeObserver) }
         do {
             let session = AVAudioSession.sharedInstance()
             // Capture exclusively: interrupt competing playback for the entire recording.
@@ -563,7 +590,9 @@ final class RecorderController {
             // Pin the selected input, rather than silently falling back to the phone mic.
             let selectedInput = session.currentRoute.inputs.first
             if let selectedInput, selectedInput.portType == .bluetoothHFP {
+                BackgroundRecordingSession.shared.recordEvidence("audio-preferred-input-setting")
                 try session.setPreferredInput(selectedInput)
+                BackgroundRecordingSession.shared.recordEvidence("audio-preferred-input-set")
             }
             try await Self.startMicrophoneWithRetry {
                 try Task.checkCancellation()
@@ -598,7 +627,7 @@ final class RecorderController {
         }
     }
 
-    /// Retry only the recorder's transient refusal, never permission, route, or file errors.
+    /// Retry preparation/start refusals, never permission, route, or thrown file errors.
     static func startMicrophoneWithRetry(
         start: () throws -> Void,
         wait: (Duration) async throws -> Void
@@ -609,8 +638,8 @@ final class RecorderController {
             do {
                 try start()
                 return
-            } catch MicrophoneStartError.notStarted {
-                guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
+            } catch let error as MicrophoneStartError {
+                guard attempt < delays.count else { throw error }
                 try await wait(delays[attempt])
             }
         }
@@ -619,17 +648,21 @@ final class RecorderController {
     private func startNewSegment() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(sessionId)-\(segmentURLs.count).wav")
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating")
+        let settings = try Self.captureSettings(sampleRate: AVAudioSession.sharedInstance().sampleRate)
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating", details: [
+            "requestedSampleRate": settings[AVSampleRateKey] as? Double ?? 0])
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-preparing")
+        guard recorder.prepareToRecord() else {
+            BackgroundRecordingSession.shared.recordEvidence("audio-recorder-prepare-failed")
+            recorder.stop()
+            recorder.deleteRecording()
+            throw MicrophoneStartError.preparationFailed
+        }
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-prepared", details: [
+            "recorderSampleRate": recorder.format.sampleRate,
+            "recorderChannels": recorder.format.channelCount])
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-starting")
         guard recorder.record() else {
             BackgroundRecordingSession.shared.recordEvidence("audio-recorder-returned-false")
@@ -640,6 +673,22 @@ final class RecorderController {
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-started")
         self.recorder = recorder
         segmentURLs.append(url)
+    }
+
+    /// Keep capture at the negotiated rate; FluidAudio converts the saved WAV
+    /// to 16 kHz when preparing transcription input.
+    static func captureSettings(sampleRate: Double) throws -> [String: Any] {
+        guard sampleRate.isFinite, sampleRate > 0 else {
+            throw SpeechTranscriptionEngineError(message: "The microphone has no usable audio format. Try recording again.")
+        }
+        return [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
     }
 
     private func startMetering() {

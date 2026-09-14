@@ -217,7 +217,16 @@ final class BackgroundRecordingSession {
     }
 
     /// Content-free device evidence; no audio or transcript is copied into diagnostics.
-    func recordEvidence(_ event: String, error: Error? = nil) {
+    func beginCaptureDiagnostics() {
+        // Intent starts already have an attempt ID; in-app starts need their own.
+        if !starting {
+            diagnosticAttempt = UUID().uuidString
+            diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
+        }
+        recordEvidence("capture-start-entered")
+    }
+
+    func recordEvidence(_ event: String, error: Error? = nil, details: [String: Any] = [:]) {
         let directory = RecorderController.voiceDiagnosticsDir
         let url = directory.appendingPathComponent("background-recording.json")
         do {
@@ -248,6 +257,7 @@ final class BackgroundRecordingSession {
                 "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                 "elapsedSeconds": AppModel.shared.recorder.elapsed,
                 "pendingSessions": AppModel.shared.recorder.pendingSessionCount]
+            entry.merge(details) { existing, _ in existing }
             if let error {
                 let nsError = error as NSError
                 entry["error"] = nsError.localizedDescription
