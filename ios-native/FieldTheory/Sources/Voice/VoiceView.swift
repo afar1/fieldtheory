@@ -511,9 +511,10 @@ struct VoiceView: View {
                         else { recorder.toggle() }
                     } label: {
                         recordingControlLabel
+                            .fixedSize(horizontal: !controlExpanded, vertical: false)
                             .padding(.horizontal, controlExpanded ? 16 : 22)
                             .padding(.vertical, controlExpanded ? 12 : 0)
-                            .frame(width: controlExpanded ? nil : 124)
+                            .frame(minWidth: controlExpanded ? nil : 124)
                             .frame(maxWidth: controlExpanded ? 340 : nil, minHeight: controlExpanded ? 64 : 52)
                             .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
                             .foregroundStyle(controlForeground)
