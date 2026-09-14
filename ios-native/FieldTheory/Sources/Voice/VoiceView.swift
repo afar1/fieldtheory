@@ -22,7 +22,6 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var confettiTrigger = 0
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -497,7 +496,7 @@ struct VoiceView: View {
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")
                 }
-                if let completed = completedTranscript, !showTranscribedConfirmation, recorder.phase == .idle {
+                if let completed = completedTranscript, !showTranscribedConfirmation, recorder.phase == .idle, !recorder.isStartingCapture {
                     Button { copy(completed); completedTranscriptID = nil } label: {
                         Label("Copy", systemImage: "doc.on.doc").padding(.horizontal, 16).frame(height: 52)
                     }.background(.regularMaterial, in: Capsule())
@@ -513,10 +512,7 @@ struct VoiceView: View {
                         .accessibilityLabel("Start another recording")
                 } else {
                     Button {
-                        guard !recordingActionUnavailable else {
-                            if !reduceMotion { confettiTrigger &+= 1 }
-                            return
-                        }
+                        guard !recordingActionUnavailable else { return }
                         if modelNeedsAttention { showSettings = true }
                         else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
                         else { recorder.toggle() }
@@ -537,10 +533,6 @@ struct VoiceView: View {
                             .foregroundStyle(controlForeground)
                     }
                     .buttonStyle(VoiceStatusButtonStyle())
-                    .overlay {
-                        VoiceButtonConfetti(trigger: confettiTrigger, enabled: !reduceMotion)
-                            .allowsHitTesting(false).accessibilityHidden(true)
-                    }
                     .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
                     .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -575,7 +567,7 @@ struct VoiceView: View {
     }
 
     private var controlExpanded: Bool {
-        model.recorder.phase != .idle || model.recorder.engineState != .ready ||
+        model.recorder.isStartingCapture || model.recorder.phase != .idle || model.recorder.engineState != .ready ||
         showReadyConfirmation || showTranscribedConfirmation ||
         model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
     }
@@ -616,6 +608,7 @@ struct VoiceView: View {
 
     private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
         let recorder = model.recorder
+        if recorder.isStartingCapture { return ("Starting recording…", "Connecting to microphone…", "", true) }
         if recorder.phase == .recording { return ("Recording", "Tap to stop and transcribe", "stop.fill", false) }
         if recorder.phase == .transcribing {
             let detail = recorder.engineState != .ready ? recorder.preparationMessage :
@@ -1423,117 +1416,6 @@ private struct VoiceStatusButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
     }
-}
-
-/// Core Animation owns particle motion; taps only briefly open one emitter.
-/// A fixed birth rate and lifetime bound live particles even under continuous tapping.
-private struct VoiceButtonConfetti: UIViewRepresentable {
-    let trigger: Int
-    let enabled: Bool
-
-    func makeUIView(context: Context) -> VoiceConfettiEmitterView {
-        let view = VoiceConfettiEmitterView()
-        view.lastTrigger = trigger
-        return view
-    }
-
-    func updateUIView(_ view: VoiceConfettiEmitterView, context: Context) {
-        guard enabled else { view.stop(); view.lastTrigger = trigger; return }
-        guard view.lastTrigger != trigger else { return }
-        view.lastTrigger = trigger
-        view.burst()
-    }
-
-    static func dismantleUIView(_ view: VoiceConfettiEmitterView, coordinator: ()) { view.stop() }
-}
-
-private final class VoiceConfettiEmitterView: UIView {
-    private let emitter = CAEmitterLayer()
-    private var shutoff: DispatchWorkItem?
-    var lastTrigger = 0
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        backgroundColor = .clear
-        emitter.emitterShape = .line
-        emitter.birthRate = 0
-        emitter.emitterCells = Self.sprites.map { sprite in
-            let cell = CAEmitterCell()
-            cell.contents = sprite
-            cell.birthRate = 30 // Three cells: at most about 108 living particles.
-            cell.lifetime = 1.2
-            cell.velocity = 150
-            cell.velocityRange = 45
-            cell.emissionLongitude = -.pi / 2
-            cell.emissionRange = .pi * 0.65
-            cell.yAcceleration = 180
-            cell.spin = 3
-            cell.spinRange = 4
-            cell.scale = 0.7
-            cell.scaleRange = 0.25
-            cell.alphaSpeed = -0.65
-            return cell
-        }
-        layer.addSublayer(emitter)
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        emitter.frame = bounds
-        emitter.emitterPosition = CGPoint(x: bounds.midX, y: bounds.midY)
-        emitter.emitterSize = CGSize(width: max(0, min(250, bounds.width - 32)), height: 1)
-        CATransaction.commit()
-    }
-
-    func burst() {
-        shutoff?.cancel()
-        setBirthRate(1)
-        let task = DispatchWorkItem { [weak self] in self?.setBirthRate(0) }
-        shutoff = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: task)
-    }
-
-    func stop() {
-        shutoff?.cancel()
-        shutoff = nil
-        setBirthRate(0)
-        emitter.removeAllAnimations()
-    }
-
-    private func setBirthRate(_ rate: Float) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        emitter.birthRate = rate
-        CATransaction.commit()
-    }
-
-    // Rasterize once, never draw paths or text on each animation frame.
-    private static let sprites: [CGImage] = {
-        [UIColor.systemPink, .systemTeal, .systemOrange].enumerated().compactMap { index, color in
-            UIGraphicsImageRenderer(size: CGSize(width: 12, height: 12)).image { _ in
-                color.setFill()
-                if index == 0 {
-                    let star = UIBezierPath()
-                    for point in 0..<8 {
-                        let angle = Double(point) * .pi / 4 - .pi / 2
-                        let radius = point.isMultiple(of: 2) ? 6.0 : 2.0
-                        let position = CGPoint(x: 6 + cos(angle) * radius, y: 6 + sin(angle) * radius)
-                        if point == 0 { star.move(to: position) } else { star.addLine(to: position) }
-                    }
-                    star.close(); star.fill()
-                } else if index == 1 {
-                    UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 6, height: 6)).fill()
-                } else {
-                    UIBezierPath(roundedRect: CGRect(x: 4, y: 1, width: 4, height: 10), cornerRadius: 1).fill()
-                }
-            }.cgImage
-        }
-    }()
 }
 
 /// A short history of measured microphone levels, not a decorative animation.

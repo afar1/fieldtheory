@@ -51,7 +51,7 @@ final class RecorderController {
     var lastError: String?
 
     private var lastStartFailure: Error?
-    private var isStartingCapture = false
+    private(set) var isStartingCapture = false
     private var recorder: AVAudioRecorder?
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
@@ -518,15 +518,21 @@ final class RecorderController {
         guard workEnabled, phase == .idle, canStartRecording else { return }
         let generation = workGeneration
         lastError = nil
-        AVAudioApplication.requestRecordPermission { [weak self] granted in
-            Task { @MainActor in
-                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle, self.canStartRecording else { return }
-                guard granted else {
-                    self.lastError = "Microphone access is off. Enable it in Settings."
-                    return
-                }
-                await self.beginSession()
+        // Claim startup synchronously so the UI responds to the tap and a second
+        // tap cannot enqueue another permission/start callback.
+        isStartingCapture = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isStartingCapture = false }
+            let granted = await withCheckedContinuation { continuation in
+                AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
             }
+            guard self.workEnabled, self.workGeneration == generation, self.phase == .idle else { return }
+            guard granted else {
+                self.lastError = "Microphone access is off. Enable it in Settings."
+                return
+            }
+            await self.beginSession()
         }
     }
 
@@ -542,6 +548,8 @@ final class RecorderController {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
         lastError = nil
+        isStartingCapture = true
+        defer { isStartingCapture = false }
         await beginSession()
         guard phase == .recording else {
             throw lastStartFailure ?? SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
@@ -549,9 +557,7 @@ final class RecorderController {
     }
 
     private func beginSession() async {
-        guard workEnabled, phase == .idle, canStartRecording else { return }
-        isStartingCapture = true
-        defer { isStartingCapture = false }
+        guard workEnabled, phase == .idle, engineReady, isStartingCapture else { return }
         let generation = workGeneration
         lastStartFailure = nil
         BackgroundRecordingSession.shared.beginCaptureDiagnostics()
@@ -576,11 +582,15 @@ final class RecorderController {
         }
         defer { NotificationCenter.default.removeObserver(routeObserver) }
         do {
+            // Give the published Starting state a frame before synchronous audio APIs.
+            try await Task.sleep(for: .milliseconds(20))
+            guard workEnabled, workGeneration == generation, phase == .idle else { throw CancellationError() }
             let session = AVAudioSession.sharedInstance()
-            // Capture exclusively: interrupt competing playback for the entire recording.
-            // Input-only recording keeps Bluetooth capture enabled without mixing media.
+            // Keep Bluetooth's input/output route available while capturing only input.
+            // No playback is created, and omitting mixWithOthers interrupts other media.
+            // Input-only .record activated HFP but repeatedly refused capture on device.
             BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
-            try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
             try session.setActive(true)
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
@@ -621,7 +631,7 @@ final class RecorderController {
                     "Open Field Theory to interrupt other audio and start recording.")
             }
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            lastError = "Could not start recording: \(error.localizedDescription)"
+            lastError = "Could not start recording: \((lastStartFailure ?? error).localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
         }
