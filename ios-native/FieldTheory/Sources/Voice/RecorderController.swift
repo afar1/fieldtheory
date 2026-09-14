@@ -507,13 +507,13 @@ final class RecorderController {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
         lastError = nil
-        await beginSession(mixWithOtherAudio: true)
+        await beginSession()
         guard phase == .recording else {
             throw lastStartFailure ?? SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
         }
     }
 
-    private func beginSession(mixWithOtherAudio: Bool = false) async {
+    private func beginSession() async {
         guard workEnabled, phase == .idle, !isStartingCapture else { return }
         isStartingCapture = true
         defer { isStartingCapture = false }
@@ -521,11 +521,10 @@ final class RecorderController {
         lastStartFailure = nil
         do {
             let session = AVAudioSession.sharedInstance()
-            // A background intent must not request interruption of the foreground app's audio.
-            var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-            if mixWithOtherAudio { options.insert(.mixWithOthers) }
+            // Capture exclusively: interrupt competing playback for the entire recording.
+            // Input-only recording keeps Bluetooth capture enabled without mixing media.
             BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
-            try session.setCategory(.playAndRecord, mode: .default, options: options)
+            try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
             try session.setActive(true)
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
@@ -557,6 +556,12 @@ final class RecorderController {
         } catch {
             lastStartFailure = error
             BackgroundRecordingSession.shared.recordEvidence("audio-start-failed-before-cleanup", error: error)
+            let audioError = error as NSError
+            if audioError.domain == NSOSStatusErrorDomain,
+               audioError.code == AVAudioSession.ErrorCode.cannotInterruptOthers.rawValue {
+                lastStartFailure = SpeechTranscriptionEngineError(message:
+                    "Open Field Theory to interrupt other audio and start recording.")
+            }
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
