@@ -99,6 +99,7 @@ final class RecorderController {
     /// Non-nil only while onTranscript is persisting this recording. The UI
     /// can associate it with the new transcript ID and later mark row display.
     private(set) var lastTranscribedSessionID: String?
+    private(set) var lastSavedTranscriptID: String?
     private(set) var currentDeliverySessionID: String?
 
     var canStartRecording: Bool { engineState == .ready && !isStartingCapture }
@@ -111,6 +112,7 @@ final class RecorderController {
 
     var engineState: SpeechEngineState {
         _ = engineStateRevision
+        if transcribeOverride != nil { return .ready }
         return speechEngine.state
     }
 
@@ -212,6 +214,7 @@ final class RecorderController {
     /// RootView calls this immediately after TranscriptStore.add succeeds.
     func associateCurrentDelivery(transcriptID: String) {
         guard let sessionID = currentDeliverySessionID else { return }
+        lastSavedTranscriptID = transcriptID
         if let visibleAtMs = earlyVisibilityByTranscriptID.removeValue(forKey: transcriptID) {
             recordVisibility(sessionID: sessionID, visibleAtMs: visibleAtMs)
             return

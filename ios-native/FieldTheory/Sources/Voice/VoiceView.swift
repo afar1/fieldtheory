@@ -21,6 +21,12 @@ struct VoiceView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showReadyConfirmation = false
+    @State private var showTranscribedConfirmation = false
+    @State private var completedTranscriptID: String?
+    @State private var sessionBeforeTranscription: String?
+    @State private var preparationStartedAt = Date()
     @State private var searchText = ""
     @State private var recordingToDiscard: String?
     @State private var audioToDiscard: PendingAudioSession?
@@ -72,6 +78,33 @@ struct VoiceView: View {
 
     var body: some View {
         mainContent
+            .task(id: model.recorder.engineState) {
+                showReadyConfirmation = model.recorder.engineState == .ready
+                if model.recorder.engineState == .checking { preparationStartedAt = Date() }
+                guard showReadyConfirmation else { return }
+                do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
+                showReadyConfirmation = false
+            }
+            .onChange(of: model.recorder.phase) { old, new in
+                if new == .recording { completedTranscriptID = nil }
+                if new == .transcribing {
+                    completedTranscriptID = nil
+                    sessionBeforeTranscription = model.recorder.lastTranscribedSessionID
+                }
+                if old == .transcribing, new == .idle,
+                   model.recorder.nextPendingSession == nil,
+                   model.recorder.lastTranscribedSessionID != nil,
+                   model.recorder.lastTranscribedSessionID != sessionBeforeTranscription {
+                    completedTranscriptID = model.recorder.lastSavedTranscriptID
+                }
+            }
+            .task(id: completedTranscriptID) {
+                showTranscribedConfirmation = completedTranscriptID != nil
+                guard showTranscribedConfirmation else { return }
+                do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
+                showTranscribedConfirmation = false
+            }
+            .onChange(of: model.workspaceGeneration) { _, _ in completedTranscriptID = nil }
             .confirmationDialog("Send feedback to support?", isPresented: Binding(
                 get: { feedbackRequest != nil },
                 set: { if !$0 { feedbackRequest = nil } }
@@ -247,7 +280,6 @@ struct VoiceView: View {
         let snapshot = items
         return ScrollView {
             LazyVStack(spacing: 12, pinnedViews: []) {
-                modelStatus
                 if snapshot.isEmpty { dateHeading("", showAutoSend: true) }
                 ForEach(Array(snapshot.enumerated()), id: \.element.id) { index, item in
                     if showsDateHeader(at: index, in: snapshot) {
@@ -267,10 +299,6 @@ struct VoiceView: View {
     private var regularGrid: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
-                VStack(spacing: 10) {
-                    modelStatus
-                }
-
                 ForEach(dayGroups) { group in
                     VStack(alignment: .leading, spacing: 10) {
                         dateHeading(Self.dateHeader(for: group.items[0].createdAtMs), showAutoSend: group.id == dayGroups.first?.id)
@@ -373,96 +401,8 @@ struct VoiceView: View {
         return formatter.string(from: date)
     }
 
-    @ViewBuilder
-    private var modelStatus: some View {
-        switch model.recorder.engineState {
-        case .ready:
-            Label("Voice model ready", systemImage: "checkmark.circle.fill")
-                .font(.footnote).foregroundStyle(.secondary)
-                .accessibilityIdentifier("VoiceModelReady")
-        case .checking:
-            engineProgressBanner(message: "Verifying voice model files…", progress: nil)
-        case .downloading(let progress):
-            VStack(alignment: .leading, spacing: 6) {
-                engineProgressBanner(
-                    message: "Downloading Parakeet \(Int(progress * 100))%",
-                    progress: progress
-                )
-                Text("Download continues in the background. If you force-quit the app, reopen it and retry.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        case .preparing:
-            engineProgressBanner(message: model.recorder.preparationMessage, progress: nil)
-        case .notDownloaded:
-            engineBanner(
-                title: "Parakeet needs downloading",
-                message: "Open Settings to download Parakeet.",
-                systemImage: "arrow.down.circle",
-                tint: Theme.link,
-                actionTitle: "Open Settings"
-            )
-        case .failed(let message):
-            engineBanner(
-                title: "Parakeet needs attention",
-                message: message,
-                systemImage: "exclamationmark.triangle",
-                tint: Theme.unread,
-                actionTitle: "Open Settings"
-            )
-        }
-    }
-
-    private func engineProgressBanner(message: String, progress: Double?) -> some View {
-        HStack(spacing: 10) {
-            if let progress {
-                ProgressView(value: progress).frame(maxWidth: .infinity)
-            } else {
-                ProgressView()
-            }
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .fixedSize()
-        }
-        .padding(12)
-        .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("SpeechEngineStatus")
-    }
-
-    private func engineBanner(
-        title: String,
-        message: String,
-        systemImage: String,
-        tint: Color,
-        actionTitle: String? = nil
-    ) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-                .font(.system(size: 17, weight: .semibold))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text(colorScheme))
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textMuted(colorScheme))
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            if let actionTitle {
-                Button(actionTitle) { showSettings = true }
-                    .font(.system(size: 12, weight: .semibold))
-            }
-        }
-        .padding(12)
-        .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
-    }
-
     private var emptyState: some View {
         VStack(spacing: 10) {
-            modelStatus.padding(.horizontal, 16)
             Image(systemName: "waveform")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
@@ -479,7 +419,6 @@ struct VoiceView: View {
 
     private var regularEmptyState: some View {
         VStack(spacing: 12) {
-            modelStatus.frame(maxWidth: 680)
             Image(systemName: "waveform")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
@@ -519,10 +458,6 @@ struct VoiceView: View {
         let recorder = model.recorder
         let pending = recorder.phase == .idle ? recorder.nextPendingSession : nil
         return VStack(spacing: 8) {
-            if recorder.phase == .idle, let error = recorder.lastError {
-                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 20)
-            }
             HStack(spacing: 10) {
                 if recorder.phase == .recording {
                     Button {
@@ -555,60 +490,130 @@ struct VoiceView: View {
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")
                 }
-                Button {
-                    guard recorder.phase != .transcribing else { return }
-                    if pending != nil { Task { await recorder.transcribeUserInitiated() } }
-                    else { recorder.toggle() }
-                } label: {
-                    recordingControlLabel
-                        .padding(.horizontal, 22).frame(height: 52)
-                        .background(recorder.phase == .recording ? Theme.unread : Theme.accent(model.settings.accentPreset, colorScheme), in: Capsule())
-                        .foregroundStyle(.white)
+                if let completed = completedTranscript, !showTranscribedConfirmation, recorder.phase == .idle {
+                    Button { copy(completed); completedTranscriptID = nil } label: {
+                        Label("Copy", systemImage: "doc.on.doc").padding(.horizontal, 16).frame(height: 52)
+                    }.background(.regularMaterial, in: Capsule())
+                    Button {
+                        syncRequest = TranscriptSyncRequest(item: completed, workspace: model.workspaceGeneration, sendToAgent: true)
+                    } label: {
+                        Label("Send", systemImage: "paperplane").padding(.horizontal, 16).frame(height: 52)
+                    }.background(.regularMaterial, in: Capsule())
+                    Button { completedTranscriptID = nil; recorder.start() } label: {
+                        Image(systemName: "mic.fill").frame(width: 52, height: 52)
+                    }.background(Theme.accent(model.settings.accentPreset, colorScheme), in: Circle())
+                        .foregroundStyle(.white).disabled(!recorder.canStartRecording)
+                        .accessibilityLabel("Start another recording")
+                } else {
+                    Button {
+                        if modelNeedsAttention { showSettings = true }
+                        else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
+                        else { recorder.toggle() }
+                    } label: {
+                        recordingControlLabel
+                            .padding(.horizontal, controlExpanded ? 16 : 22)
+                            .padding(.vertical, controlExpanded ? 12 : 0)
+                            .frame(width: controlExpanded ? nil : 124)
+                            .frame(maxWidth: controlExpanded ? 340 : nil, minHeight: controlExpanded ? 64 : 52)
+                            .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
+                            .foregroundStyle(controlForeground)
+                    }
+                    .disabled(recorder.phase == .transcribing || (recorder.phase == .idle && pending == nil && !recorder.canStartRecording && !modelNeedsAttention))
+                    .accessibilityIdentifier("VoiceRecordingControl")
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
                 }
-                .disabled(recorder.phase == .transcribing || (recorder.phase == .idle && pending == nil && !recorder.canStartRecording))
-                .opacity(recorder.phase == .idle && pending == nil && !recorder.canStartRecording ? 0.45 : 1)
-                .accessibilityIdentifier("VoiceRecordingControl")
-                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         }
-        .animation(.spring(duration: 0.3), value: recorder.phase)
+        .frame(maxWidth: 480).padding(.horizontal, 16)
+        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: controlExpanded)
+        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: recorder.phase)
+        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: showTranscribedConfirmation)
     }
 
-    @ViewBuilder
-    private var recordingControlLabel: some View {
+    private var completedTranscript: TranscriptItem? {
+        guard let id = completedTranscriptID else { return nil }
+        return model.transcripts.items.first { $0.id == id }
+    }
+
+    private var modelNeedsAttention: Bool {
+        switch model.recorder.engineState {
+        case .notDownloaded, .failed: return true
+        default: return false
+        }
+    }
+
+    private var controlExpanded: Bool {
+        model.recorder.phase != .idle || model.recorder.engineState != .ready ||
+        showReadyConfirmation || showTranscribedConfirmation ||
+        model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
+    }
+
+    private var controlBackground: Color {
+        if model.recorder.phase == .recording { return Theme.unread }
+        if showTranscribedConfirmation || (showReadyConfirmation && model.recorder.phase == .idle) {
+            return Theme.markRead.opacity(0.15)
+        }
+        if controlExpanded { return Theme.backgroundAlt(colorScheme) }
+        return Theme.accent(model.settings.accentPreset, colorScheme)
+    }
+
+    private var controlForeground: Color {
+        if model.recorder.phase == .recording || !controlExpanded { return .white }
+        return Theme.text(colorScheme)
+    }
+
+    private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
         let recorder = model.recorder
-        switch recorder.phase {
-        case .idle:
-            if recorder.nextPendingSession != nil {
-                HStack(spacing: 9) {
-                    Image(systemName: "arrow.clockwise")
-                    VStack(spacing: 2) {
-                        Text(recorder.lastError == nil ? "Audio saved" : "Transcription failed")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Retry transcription?").font(.system(size: 12))
-                    }
+        if recorder.phase == .recording { return ("Recording", "Tap to stop and transcribe", "stop.fill", false) }
+        if recorder.phase == .transcribing {
+            let detail = recorder.engineState != .ready ? recorder.preparationMessage :
+                (recorder.currentDeliverySessionID != nil ? "Saving transcript…" : "Converting audio to text…")
+            return ("Transcribing", detail, "", true)
+        }
+        switch recorder.engineState {
+        case .checking: return ("Preparing voice model", "Verifying model files…", "", true)
+        case .preparing: return ("Preparing voice model", recorder.preparationMessage, "", true)
+        case .downloading(let fraction): return ("Downloading voice model", "\(Int(fraction * 100))% · Continues in background", "", true)
+        case .notDownloaded: return ("Voice model needed", "Tap to download in Settings", "arrow.down.circle", false)
+        case .failed(let error): return ("Voice model needs attention", error + " · Tap for Settings", "exclamationmark.triangle", false)
+        case .ready: break
+        }
+        if recorder.nextPendingSession != nil {
+            return ("Audio saved", recorder.lastError ?? "Tap to retry transcription", "arrow.clockwise", false)
+        }
+        if let error = recorder.lastError { return ("Recording needs attention", error, "exclamationmark.triangle", false) }
+        if showTranscribedConfirmation { return ("Transcribed", "Ready to copy or send", "checkmark", false) }
+        if showReadyConfirmation { return ("Voice model ready", "Ready to record", "checkmark", false) }
+        return ("Record", "", "mic.fill", false)
+    }
+
+    private var recordingControlLabel: some View {
+        let text = controlText
+        return HStack(spacing: 10) {
+            if text.busy { ProgressView().tint(controlForeground) }
+            else { Image(systemName: text.icon).font(.system(size: 17, weight: .medium)) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text.title).font(.system(size: controlExpanded ? 14 : 16, weight: .semibold))
+                if !text.detail.isEmpty {
+                    Text(text.detail).font(.system(size: 12)).opacity(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            } else {
-                Label("Record", systemImage: "mic.fill")
-                    .font(.system(size: 16, weight: .semibold))
             }
-        case .recording:
-            HStack(spacing: 12) {
-                WaveformBars(level: recorder.level, tint: .white)
-                Text(recorder.elapsed.clockString)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                Image(systemName: "stop.fill")
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Stop recording")
-        case .transcribing:
-            HStack(spacing: 10) {
-                ProgressView().tint(.white)
-                Text("Transcribing…").font(.system(size: 15, weight: .medium))
+            if controlExpanded {
+                Spacer(minLength: 0)
+                if model.recorder.phase == .recording {
+                    Text(model.recorder.elapsed.clockString).monospacedDigit().font(.system(size: 13))
+                } else if model.recorder.engineState == .preparing || model.recorder.engineState == .checking {
+                    TimelineView(.periodic(from: preparationStartedAt, by: 1)) { context in
+                        Text("\(max(0, Int(context.date.timeIntervalSince(preparationStartedAt))))s")
+                            .monospacedDigit().font(.system(size: 12))
+                    }.accessibilityHidden(true)
+                }
             }
         }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Selection bar — Back | Stack | Unstack | Edit | Delete

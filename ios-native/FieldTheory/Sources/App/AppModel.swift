@@ -357,6 +357,12 @@ final class AppModel {
                 try await enterReviewerDemo { _, _, transcripts, db in
                     await PreviewFixtures.seed(transcripts: transcripts, db: db)
                 }
+                if ProcessInfo.processInfo.arguments.contains("ft-recording-controls-preview") {
+                    recorder = RecorderController(
+                        pendingDirectory: reviewerDemoRoot.appendingPathComponent("control-preview-audio"),
+                        transcribe: { _ in "Preview transcript" })
+                    recorder.setWorkEnabled(true)
+                }
             } catch {
                 previewMode = false
                 presentStorageError("Preview storage could not be prepared. Production data was left unchanged. (\(error.localizedDescription))")

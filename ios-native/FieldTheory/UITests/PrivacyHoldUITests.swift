@@ -4,7 +4,7 @@ import XCTest
 final class PrivacyHoldUITests: XCTestCase {
     func testActiveRecordingCanBeKeptThenDiscarded() {
         let app = XCUIApplication()
-        app.launchArguments = ["ft-preview"]
+        app.launchArguments = ["ft-preview", "ft-recording-controls-preview"]
         app.launch()
         let record = app.buttons["VoiceRecordingControl"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15))
