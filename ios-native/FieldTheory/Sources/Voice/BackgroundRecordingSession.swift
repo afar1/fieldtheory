@@ -177,6 +177,16 @@ final class BackgroundRecordingSession {
             UIPasteboard.general.setItems([["public.utf8-plain-text": item.text]], options: [.localOnly: true])
             recordEvidence(UIPasteboard.general.changeCount != before
                 ? "explicit-copy-counter-changed" : "explicit-copy-counter-unchanged")
+            guard UIPasteboard.general.changeCount != before else {
+                throw SpeechTranscriptionEngineError(message: "The transcript could not be copied. Try copying it in Field Theory.")
+            }
+            await live.end(nil, dismissalPolicy: .immediate)
+            if activity?.id == live.id { activity = nil }
+            if let current = UserDefaults.standard.dictionary(forKey: Self.completedKey) as? [String: String],
+               current["activity"] == recordingID {
+                UserDefaults.standard.removeObject(forKey: Self.completedKey)
+            }
+            recordEvidence("copied-activity-dismissed")
         }
     }
 
