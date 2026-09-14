@@ -144,8 +144,8 @@ struct RecordingLiveActivity: Widget {
                 Button(intent: CopyCompletedTranscriptIntent(recordingID: context.attributes.recordingID)) {
                     HStack(spacing: 6) {
                         Image(systemName: "doc.on.doc")
-                        Text("Open to copy")
-                    }.frame(width: 108, height: 44)
+                        Text("Open to copy").fixedSize(horizontal: true, vertical: false)
+                    }.frame(width: 144, height: 44)
                         .background(.white.opacity(0.14), in: Capsule())
                 }.accessibilityLabel("Open Field Theory and copy completed transcript")
                 if context.state.sendReady {
