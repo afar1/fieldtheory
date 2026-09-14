@@ -22,6 +22,7 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var confettiBurst: UUID?
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -506,6 +507,10 @@ struct VoiceView: View {
                         .accessibilityLabel("Start another recording")
                 } else {
                     Button {
+                        guard !recordingActionUnavailable else {
+                            if !reduceMotion { confettiBurst = UUID() }
+                            return
+                        }
                         if modelNeedsAttention { showSettings = true }
                         else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
                         else { recorder.toggle() }
@@ -519,7 +524,19 @@ struct VoiceView: View {
                             .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
                             .foregroundStyle(controlForeground)
                     }
-                    .disabled(recorder.phase == .transcribing || (recorder.phase == .idle && pending == nil && !recorder.canStartRecording && !modelNeedsAttention))
+                    .buttonStyle(VoiceStatusButtonStyle())
+                    .overlay {
+                        if let confettiBurst {
+                            VoiceButtonConfetti().id(confettiBurst)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+                    .task(id: confettiBurst) {
+                        guard confettiBurst != nil else { return }
+                        do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
+                        confettiBurst = nil
+                    }
+                    .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                 }
@@ -531,6 +548,13 @@ struct VoiceView: View {
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: controlExpanded)
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: recorder.phase)
         .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: showTranscribedConfirmation)
+    }
+
+    private var recordingActionUnavailable: Bool {
+        let recorder = model.recorder
+        return recorder.phase == .transcribing
+            || (recorder.phase == .idle && recorder.nextPendingSession == nil
+                && ((!recorder.canStartRecording && !modelNeedsAttention) || showReadyConfirmation))
     }
 
     private var completedTranscript: TranscriptItem? {
@@ -1351,6 +1375,41 @@ struct TranscriptEditSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 .background(Theme.background(colorScheme))
+        }
+    }
+}
+
+/// Status remains readable while taps are handled without invoking recording.
+private struct VoiceStatusButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
+private struct VoiceButtonConfetti: View {
+    private struct Particle: Identifiable {
+        let id: Int
+        let x = CGFloat.random(in: -110...110)
+        let y = CGFloat.random(in: -115 ... -40)
+        let rotation = Double.random(in: -240...240)
+    }
+    private let particles = (0..<16).map { Particle(id: $0) }
+    private let colors: [Color] = [.pink, .orange, .cyan, .purple, .green]
+    @State private var expanded = false
+
+    var body: some View {
+        ZStack {
+            ForEach(particles) { particle in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(colors[particle.id % colors.count])
+                    .frame(width: 5, height: 9)
+                    .rotationEffect(.degrees(expanded ? particle.rotation : 0))
+                    .offset(x: expanded ? particle.x : 0, y: expanded ? particle.y : 0)
+                    .opacity(expanded ? 0 : 1)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.85)) { expanded = true }
         }
     }
 }
