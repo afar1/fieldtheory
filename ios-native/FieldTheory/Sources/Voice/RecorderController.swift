@@ -549,6 +549,7 @@ final class RecorderController {
 
     private func beginSession(mixWithOtherAudio: Bool = false) async {
         guard workEnabled, phase == .idle, engineReady, !isStartingCapture else { return }
+        BackgroundRecordingSession.shared.beginCaptureDiagnostics()
         isStartingCapture = true
         defer { isStartingCapture = false }
         let generation = workGeneration
@@ -588,6 +589,14 @@ final class RecorderController {
             elapsed = 0
             startMetering()
             onCaptureStarted?()
+            let capturedRecorder = recorder
+            Task { @MainActor [weak self, weak capturedRecorder] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, let capturedRecorder, self.recorder === capturedRecorder else { return }
+                BackgroundRecordingSession.shared.recordEvidence("capture-progress", details: [
+                    "isRecording": capturedRecorder.isRecording,
+                    "recordedSeconds": capturedRecorder.currentTime])
+            }
         } catch {
             lastStartFailure = error
             BackgroundRecordingSession.shared.recordEvidence("audio-start-failed-before-cleanup", error: error)
@@ -683,6 +692,7 @@ final class RecorderController {
 
     func stopAndTranscribe() async {
         guard workEnabled, phase == .recording else { return }
+        BackgroundRecordingSession.shared.recordEvidence("stop-requested")
         onCaptureStopped?()
         defer { onCaptureFinished?() }
         let stoppedAtMs = Timestamps.nowMs()

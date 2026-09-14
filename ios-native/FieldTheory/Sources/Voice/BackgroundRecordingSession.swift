@@ -18,6 +18,8 @@ struct RecordingShortcuts: AppShortcutsProvider {
 final class BackgroundRecordingSession {
     static let shared = BackgroundRecordingSession()
     private var activity: Activity<RecordingActivityAttributes>?
+    private let processLaunchID = UUID().uuidString
+    private var diagnosticOrigin = "unknown"
     private var diagnosticAttempt = UUID().uuidString
     private var diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
     private var starting = false
@@ -27,6 +29,7 @@ final class BackgroundRecordingSession {
     func start() async throws {
         guard !starting else { return }
         starting = true
+        diagnosticOrigin = "intent"
         diagnosticAttempt = UUID().uuidString
         diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
         recordEvidence("intent-entered")
@@ -84,6 +87,8 @@ final class BackgroundRecordingSession {
     }
 
     func attachToForegroundRecording() {
+        // The intent owns its Starting activity until capture and its update complete.
+        guard !starting, UIApplication.shared.applicationState == .active else { return }
         if let activity, !activity.content.state.recording {
             self.activity = nil
             Task { await activity.end(nil, dismissalPolicy: .immediate) }
@@ -221,6 +226,7 @@ final class BackgroundRecordingSession {
     func beginCaptureDiagnostics() {
         // Intent starts already have an attempt ID; in-app starts need their own.
         if !starting {
+            diagnosticOrigin = "in-app"
             diagnosticAttempt = UUID().uuidString
             diagnosticStartedAt = ProcessInfo.processInfo.systemUptime
         }
@@ -237,6 +243,11 @@ final class BackgroundRecordingSession {
             let audio = AVAudioSession.sharedInstance()
             var entry: [String: Any] = ["event": event,
                 "attemptID": diagnosticAttempt,
+                "origin": diagnosticOrigin,
+                "processID": ProcessInfo.processInfo.processIdentifier,
+                "processLaunchID": processLaunchID,
+                "phase": String(describing: AppModel.shared.recorder.phase),
+                "ownedActivityID": activity?.id ?? "none",
                 "attemptElapsedSeconds": ProcessInfo.processInfo.systemUptime - diagnosticStartedAt,
                 "microphonePermission": AVAudioApplication.shared.recordPermission.rawValue,
                 "audioCategory": audio.category.rawValue,
