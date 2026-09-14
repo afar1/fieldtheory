@@ -587,10 +587,11 @@ final class RecorderController {
             guard workEnabled, workGeneration == generation, phase == .idle else { throw CancellationError() }
             let session = AVAudioSession.sharedInstance()
             // Keep Bluetooth's input/output route available while capturing only input.
-            // No playback is created, and omitting mixWithOthers interrupts other media.
+            // Mixing avoids requesting interruption of other sessions from the background.
+            // The user permits other audio to continue; no playback is created here.
             // Input-only .record activated HFP but repeatedly refused capture on device.
             BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
-            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .mixWithOthers])
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
             try session.setActive(true)
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
