@@ -6,13 +6,7 @@ import UIKit
 
 enum MicrophoneStartError: LocalizedError {
     case notStarted
-    case preparationFailed
-    var errorDescription: String? {
-        switch self {
-        case .notStarted: "The microphone did not start recording."
-        case .preparationFailed: "The microphone could not prepare for recording."
-        }
-    }
+    var errorDescription: String? { "The microphone did not start recording." }
 }
 
 enum RecordingFinishAction: String {
@@ -35,7 +29,7 @@ private struct PendingAudioEngineBinding: Codable {
     let engine: String
 }
 
-/// Records mono WAV at the activated input sample rate with the audio background mode keeping the
+/// Records 16 kHz mono WAV with the audio background mode keeping the
 /// session alive while the screen is locked. Call interruptions finalize the
 /// current segment and auto-resume into a new one when the system hands the
 /// mic back, so one tap can capture an arbitrarily long session.
@@ -52,6 +46,8 @@ final class RecorderController {
 
     private var lastStartFailure: Error?
     private(set) var isStartingCapture = false
+    private var isRequestingRecordPermission = false
+    var isStartingRecording: Bool { isStartingCapture || isRequestingRecordPermission }
     private var recorder: AVAudioRecorder?
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
@@ -108,7 +104,7 @@ final class RecorderController {
     private(set) var lastSavedTranscriptID: String?
     private(set) var currentDeliverySessionID: String?
 
-    var canStartRecording: Bool { engineState == .ready && !isStartingCapture }
+    var canStartRecording: Bool { engineState == .ready && !isStartingRecording }
     var preparationMessage: String {
         _ = engineStateRevision
         return speechEngine.preparationMessage
@@ -518,27 +514,24 @@ final class RecorderController {
         guard workEnabled, phase == .idle, canStartRecording else { return }
         let generation = workGeneration
         lastError = nil
-        // Claim startup synchronously so the UI responds to the tap and a second
-        // tap cannot enqueue another permission/start callback.
-        isStartingCapture = true
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.isStartingCapture = false }
-            let granted = await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
+        isRequestingRecordPermission = true
+        AVAudioApplication.requestRecordPermission { [weak self] granted in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isRequestingRecordPermission = false
+                guard self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else { return }
+                guard granted else {
+                    self.lastError = "Microphone access is off. Enable it in Settings."
+                    return
+                }
+                await self.beginSession()
             }
-            guard self.workEnabled, self.workGeneration == generation, self.phase == .idle else { return }
-            guard granted else {
-                self.lastError = "Microphone access is off. Enable it in Settings."
-                return
-            }
-            await self.beginSession()
         }
     }
 
     /// An intent must finish starting the microphone before returning to the system.
     func startFromIntent() async throws {
-        guard workEnabled, phase == .idle, !isStartingCapture else {
+        guard workEnabled, phase == .idle, !isStartingCapture, !isRequestingRecordPermission else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
         }
         guard engineReady else {
@@ -548,50 +541,25 @@ final class RecorderController {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
         lastError = nil
-        isStartingCapture = true
-        defer { isStartingCapture = false }
-        await beginSession()
+        await beginSession(mixWithOtherAudio: true)
         guard phase == .recording else {
             throw lastStartFailure ?? SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
         }
     }
 
-    private func beginSession() async {
-        guard workEnabled, phase == .idle, engineReady, isStartingCapture else { return }
+    private func beginSession(mixWithOtherAudio: Bool = false) async {
+        guard workEnabled, phase == .idle, engineReady, !isStartingCapture else { return }
+        isStartingCapture = true
+        defer { isStartingCapture = false }
         let generation = workGeneration
         lastStartFailure = nil
-        BackgroundRecordingSession.shared.beginCaptureDiagnostics()
-        // Observe the entire handoff, including format changes during preparation.
-        // Capture notification metadata before hopping to the main actor.
-        let routeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification,
-            object: AVAudioSession.sharedInstance(), queue: .main
-        ) { notification in
-            let notifiedAt = ProcessInfo.processInfo.systemUptime
-            let notifiedRate = AVAudioSession.sharedInstance().sampleRate
-            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
-            let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
-            let inputs = previous?.inputs.map { $0.portType.rawValue } ?? []
-            let outputs = previous?.outputs.map { $0.portType.rawValue } ?? []
-            Task { @MainActor in
-                BackgroundRecordingSession.shared.recordEvidence("audio-route-changed", details: [
-                    "notificationUptime": notifiedAt, "notificationSampleRate": notifiedRate,
-                    "routeChangeReason": reason, "previousInputPortTypes": inputs,
-                    "previousOutputPortTypes": outputs])
-            }
-        }
-        defer { NotificationCenter.default.removeObserver(routeObserver) }
         do {
-            // Give the published Starting state a frame before synchronous audio APIs.
-            try await Task.sleep(for: .milliseconds(20))
-            guard workEnabled, workGeneration == generation, phase == .idle else { throw CancellationError() }
             let session = AVAudioSession.sharedInstance()
-            // Keep Bluetooth's input/output route available while capturing only input.
-            // Mixing avoids requesting interruption of other sessions from the background.
-            // The user permits other audio to continue; no playback is created here.
-            // Input-only .record activated HFP but repeatedly refused capture on device.
+            // A background intent must not request interruption of the foreground app's audio.
+            var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+            if mixWithOtherAudio { options.insert(.mixWithOthers) }
             BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
-            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .mixWithOthers])
+            try session.setCategory(.playAndRecord, mode: .default, options: options)
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
             try session.setActive(true)
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
@@ -601,9 +569,7 @@ final class RecorderController {
             // Pin the selected input, rather than silently falling back to the phone mic.
             let selectedInput = session.currentRoute.inputs.first
             if let selectedInput, selectedInput.portType == .bluetoothHFP {
-                BackgroundRecordingSession.shared.recordEvidence("audio-preferred-input-setting")
                 try session.setPreferredInput(selectedInput)
-                BackgroundRecordingSession.shared.recordEvidence("audio-preferred-input-set")
             }
             try await Self.startMicrophoneWithRetry {
                 try Task.checkCancellation()
@@ -625,20 +591,14 @@ final class RecorderController {
         } catch {
             lastStartFailure = error
             BackgroundRecordingSession.shared.recordEvidence("audio-start-failed-before-cleanup", error: error)
-            let audioError = error as NSError
-            if audioError.domain == NSOSStatusErrorDomain,
-               audioError.code == AVAudioSession.ErrorCode.cannotInterruptOthers.rawValue {
-                lastStartFailure = SpeechTranscriptionEngineError(message:
-                    "Open Field Theory to interrupt other audio and start recording.")
-            }
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            lastError = "Could not start recording: \((lastStartFailure ?? error).localizedDescription)"
+            lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
         }
     }
 
-    /// Retry preparation/start refusals, never permission, route, or thrown file errors.
+    /// Retry only the recorder's transient refusal, never permission, route, or file errors.
     static func startMicrophoneWithRetry(
         start: () throws -> Void,
         wait: (Duration) async throws -> Void
@@ -649,8 +609,8 @@ final class RecorderController {
             do {
                 try start()
                 return
-            } catch let error as MicrophoneStartError {
-                guard attempt < delays.count else { throw error }
+            } catch MicrophoneStartError.notStarted {
+                guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
                 try await wait(delays[attempt])
             }
         }
@@ -659,21 +619,17 @@ final class RecorderController {
     private func startNewSegment() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(sessionId)-\(segmentURLs.count).wav")
-        let settings = try Self.captureSettings(sampleRate: AVAudioSession.sharedInstance().sampleRate)
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating", details: [
-            "requestedSampleRate": settings[AVSampleRateKey] as? Double ?? 0])
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating")
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-preparing")
-        guard recorder.prepareToRecord() else {
-            BackgroundRecordingSession.shared.recordEvidence("audio-recorder-prepare-failed")
-            recorder.stop()
-            recorder.deleteRecording()
-            throw MicrophoneStartError.preparationFailed
-        }
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-prepared", details: [
-            "recorderSampleRate": recorder.format.sampleRate,
-            "recorderChannels": recorder.format.channelCount])
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-starting")
         guard recorder.record() else {
             BackgroundRecordingSession.shared.recordEvidence("audio-recorder-returned-false")
@@ -684,22 +640,6 @@ final class RecorderController {
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-started")
         self.recorder = recorder
         segmentURLs.append(url)
-    }
-
-    /// Keep capture at the negotiated rate; FluidAudio converts the saved WAV
-    /// to 16 kHz when preparing transcription input.
-    static func captureSettings(sampleRate: Double) throws -> [String: Any] {
-        guard sampleRate.isFinite, sampleRate > 0 else {
-            throw SpeechTranscriptionEngineError(message: "The microphone has no usable audio format. Try recording again.")
-        }
-        return [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
     }
 
     private func startMetering() {

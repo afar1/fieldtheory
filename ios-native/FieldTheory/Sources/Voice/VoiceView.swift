@@ -546,7 +546,7 @@ struct VoiceView: View {
     }
 
     private var controlExpanded: Bool {
-        model.recorder.isStartingCapture || model.recorder.phase != .idle || model.recorder.engineState != .ready ||
+        model.recorder.isStartingRecording || model.recorder.phase != .idle || model.recorder.engineState != .ready ||
         showReadyConfirmation || showTranscribedConfirmation ||
         model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
     }
@@ -587,7 +587,7 @@ struct VoiceView: View {
 
     private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
         let recorder = model.recorder
-        if recorder.isStartingCapture { return ("Starting recording…", "Connecting to microphone…", "", true) }
+        if recorder.isStartingRecording { return ("Starting recording…", "Connecting to microphone…", "", true) }
         if recorder.phase == .recording { return ("Recording", "Tap to stop and transcribe", "stop.fill", false) }
         if recorder.phase == .transcribing {
             let detail = recorder.engineState != .ready ? recorder.preparationMessage :

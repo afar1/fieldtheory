@@ -64,7 +64,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "43"
+        CURRENT_PROJECT_VERSION: "44"
         FT_BUILD_COMMIT: development
         DEVELOPMENT_TEAM: 3244UJ94D8
         CODE_SIGN_STYLE: Automatic
@@ -112,7 +112,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory.recording
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "43"
+        CURRENT_PROJECT_VERSION: "44"
         DEVELOPMENT_TEAM: 3244UJ94D8
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"

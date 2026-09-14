@@ -55,7 +55,7 @@ final class BackgroundRecordingSession {
         }
         recordEvidence("live-activity-requesting")
         let newActivity = try Activity.request(attributes: RecordingActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil), pushType: nil)
+            content: ActivityContent(state: .init(status: "Starting recording…", recording: false), staleDate: nil), pushType: nil)
         activity = newActivity
         recordEvidence("live-activity-created")
         model.wireRecorderPersistence()
@@ -66,6 +66,7 @@ final class BackgroundRecordingSession {
             try await model.recorder.startFromIntent()
             captureSessionID = model.recorder.activeRecordingID
             recordEvidence("microphone-started")
+            await newActivity.update(ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil))
             logger.notice("Microphone started; applicationState=\(UIApplication.shared.applicationState.rawValue)")
         } catch {
             activity = nil
