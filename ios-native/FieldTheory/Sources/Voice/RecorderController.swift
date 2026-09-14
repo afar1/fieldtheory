@@ -4,6 +4,11 @@ import Observation
 import os
 import UIKit
 
+enum MicrophoneStartError: LocalizedError {
+    case notStarted
+    var errorDescription: String? { "The microphone did not start recording." }
+}
+
 enum RecordingFinishAction: String {
     case stop, send
 }
@@ -40,6 +45,7 @@ final class RecorderController {
     var lastError: String?
 
     private var lastStartFailure: Error?
+    private var isStartingCapture = false
     private var recorder: AVAudioRecorder?
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
@@ -477,37 +483,41 @@ final class RecorderController {
     }
 
     func start() {
-        guard workEnabled, phase == .idle else { return }
+        guard workEnabled, phase == .idle, !isStartingCapture else { return }
         let generation = workGeneration
         lastError = nil
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
-                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle else { return }
+                guard let self, self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else { return }
                 guard granted else {
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     return
                 }
-                self.beginSession()
+                await self.beginSession()
             }
         }
     }
 
     /// An intent must finish starting the microphone before returning to the system.
-    func startFromIntent() throws {
-        guard workEnabled, phase == .idle else {
+    func startFromIntent() async throws {
+        guard workEnabled, phase == .idle, !isStartingCapture else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
         }
         guard AVAudioApplication.shared.recordPermission == .granted else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
         lastError = nil
-        beginSession(mixWithOtherAudio: true)
+        await beginSession(mixWithOtherAudio: true)
         guard phase == .recording else {
             throw lastStartFailure ?? SpeechTranscriptionEngineError(message: lastError ?? "Recording could not start.")
         }
     }
 
-    private func beginSession(mixWithOtherAudio: Bool = false) {
+    private func beginSession(mixWithOtherAudio: Bool = false) async {
+        guard workEnabled, phase == .idle, !isStartingCapture else { return }
+        isStartingCapture = true
+        defer { isStartingCapture = false }
+        let generation = workGeneration
         lastStartFailure = nil
         do {
             let session = AVAudioSession.sharedInstance()
@@ -521,7 +531,24 @@ final class RecorderController {
             BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
             segmentURLs = []
             sessionId = Timestamps.nowMs()
-            try startNewSegment()
+            // Keep the activated audio session alive while Bluetooth capture settles.
+            // Pin the selected input, rather than silently falling back to the phone mic.
+            let selectedInput = session.currentRoute.inputs.first
+            if let selectedInput, selectedInput.portType == .bluetoothHFP {
+                try session.setPreferredInput(selectedInput)
+            }
+            try await Self.startMicrophoneWithRetry {
+                try Task.checkCancellation()
+                guard self.workEnabled, self.workGeneration == generation, self.phase == .idle else { throw CancellationError() }
+                if let selectedInput, selectedInput.portType == .bluetoothHFP,
+                   session.currentRoute.inputs.first?.uid != selectedInput.uid {
+                    throw SpeechTranscriptionEngineError(message: "The Bluetooth microphone disconnected. Try recording again.")
+                }
+                try self.startNewSegment()
+            } wait: { delay in
+                BackgroundRecordingSession.shared.recordEvidence("audio-recorder-retry-wait")
+                try await Task.sleep(for: delay)
+            }
             phase = .recording
             startedAt = Date()
             elapsed = 0
@@ -534,6 +561,24 @@ final class RecorderController {
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
+        }
+    }
+
+    /// Retry only the recorder's transient refusal, never permission, route, or file errors.
+    static func startMicrophoneWithRetry(
+        start: () throws -> Void,
+        wait: (Duration) async throws -> Void
+    ) async throws {
+        let delays: [Duration] = [.milliseconds(250), .milliseconds(500), .seconds(1)]
+        for attempt in 0...delays.count {
+            try Task.checkCancellation()
+            do {
+                try start()
+                return
+            } catch MicrophoneStartError.notStarted {
+                guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
+                try await wait(delays[attempt])
+            }
         }
     }
 
@@ -554,7 +599,9 @@ final class RecorderController {
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-starting")
         guard recorder.record() else {
             BackgroundRecordingSession.shared.recordEvidence("audio-recorder-returned-false")
-            throw SpeechTranscriptionEngineError(message: "The microphone did not start recording.")
+            recorder.stop()
+            recorder.deleteRecording()
+            throw MicrophoneStartError.notStarted
         }
         BackgroundRecordingSession.shared.recordEvidence("audio-recorder-started")
         self.recorder = recorder
@@ -724,7 +771,7 @@ final class RecorderController {
     /// so one long capture stays one transcript.
     func drainPendingQueue(continued: Bool = false, hasContinuedRuntime: Bool = false) async {
         refreshPendingAudioStatus()
-        guard workEnabled, !draining, (!userTranscriptionPending || continued), phase != .recording, pendingSessionCount > 0 else { return }
+        guard workEnabled, !isStartingCapture, !draining, (!userTranscriptionPending || continued), phase != .recording, pendingSessionCount > 0 else { return }
         requestPreparationIfNeeded()
         let generation = workGeneration
         guard onTranscript != nil else {

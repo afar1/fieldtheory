@@ -60,7 +60,7 @@ final class BackgroundRecordingSession {
         model.recorder.onCaptureCancelled = { [weak self] in self?.cancelActivity() }
         model.recorder.onCaptureFinished = { [weak self] in self?.finish() }
         do {
-            try model.recorder.startFromIntent()
+            try await model.recorder.startFromIntent()
             captureSessionID = model.recorder.activeRecordingID
             recordEvidence("microphone-started")
             logger.notice("Microphone started; applicationState=\(UIApplication.shared.applicationState.rawValue)")

@@ -3,6 +3,55 @@ import XCTest
 
 @MainActor
 final class BackgroundRecordingTests: XCTestCase {
+    func testMicrophoneRetryRecoversAndStopsAfterSuccess() async throws {
+        var attempts = 0
+        var delays: [Duration] = []
+        try await RecorderController.startMicrophoneWithRetry {
+            attempts += 1
+            if attempts < 3 { throw MicrophoneStartError.notStarted }
+        } wait: { delays.append($0) }
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(delays, [.milliseconds(250), .milliseconds(500)])
+    }
+
+    func testMicrophoneRetryIsBounded() async throws {
+        var attempts = 0
+        var waits = 0
+        do {
+            try await RecorderController.startMicrophoneWithRetry {
+                attempts += 1
+                throw MicrophoneStartError.notStarted
+            } wait: { _ in waits += 1 }
+            XCTFail("Must report exhaustion")
+        } catch MicrophoneStartError.notStarted {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(attempts, 4)
+        XCTAssertEqual(waits, 3)
+    }
+
+    func testMicrophoneRetryDoesNotRetryOtherFailures() async throws {
+        var attempts = 0
+        do {
+            try await RecorderController.startMicrophoneWithRetry {
+                attempts += 1
+                throw CocoaError(.fileWriteNoPermission)
+            } wait: { _ in XCTFail("Must not retry file or permission failures") }
+            XCTFail("Must propagate failure")
+        } catch {}
+        XCTAssertEqual(attempts, 1)
+    }
+
+    func testMicrophoneRetryHonorsCancellationDuringWait() async throws {
+        var attempts = 0
+        do {
+            try await RecorderController.startMicrophoneWithRetry {
+                attempts += 1
+                throw MicrophoneStartError.notStarted
+            } wait: { _ in throw CancellationError() }
+            XCTFail("Must propagate cancellation")
+        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(attempts, 1)
+    }
+
     func testLegacyCopyMigratesToStopAndSurvivesFailedDeliveryUntilRetry() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -30,11 +79,14 @@ final class BackgroundRecordingTests: XCTestCase {
         XCTAssertNil(recorder.finishAction(for: "100"))
     }
 
-    func testIntentStartRejectsDisabledRecorderWithoutActivatingMicrophone() throws {
+    func testIntentStartRejectsDisabledRecorderWithoutActivatingMicrophone() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let recorder = RecorderController(pendingDirectory: root, transcribe: { _ in "test" })
-        XCTAssertThrowsError(try recorder.startFromIntent())
+        do {
+            try await recorder.startFromIntent()
+            XCTFail("Disabled recorder must reject startup")
+        } catch {}
         XCTAssertEqual(recorder.phase, .idle)
         XCTAssertNil(recorder.startedAt)
     }
