@@ -60,6 +60,9 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.68': [
+    'Fixed a connection cleanup error that could show repeated JavaScript error dialogs.',
+  ],
   '0.3.67': [
     'Independent Voice requests can run concurrently while new recordings continue arriving.',
     'Follow-ups wait for their conversation, without holding up unrelated work.',
@@ -654,6 +657,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.68': 'September 14, 2026',
   '0.3.67': 'September 13, 2026',
   '0.3.66': 'September 11, 2026',
   '0.3.65': 'September 10, 2026',

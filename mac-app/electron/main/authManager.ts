@@ -12,7 +12,7 @@
 
 import { createClient, SupabaseClient, Session, SupportedStorage } from '@supabase/supabase-js';
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
+import { realtimeTransport } from './realtimeWebSocket';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -462,7 +462,7 @@ export class AuthManager extends EventEmitter {
         // Now we control ALL refresh timing via scheduleTokenRefresh().
       },
       realtime: {
-        transport: WebSocket as any,
+        transport: realtimeTransport,
       },
     });
 
