@@ -23,3 +23,11 @@ A busy inbox or persistent decision that exceeds 15 seconds falls back once to a
 The original runner change passed 178 focused tests, Electron TypeScript compilation, and independent review. This release source needs its own verification, normal packaging, signing, Apple notarization, stapling, and Gatekeeper checks before installation. The local-install command also requires healthy Secure Keyboard Entry, a clean application quit with no remaining child processes, a recoverable backup, and installed-app launch/quit/hotkey verification.
 
 Record final package and runtime evidence after those steps. Preparing this file does not establish installation or successful end-to-end delivery.
+
+## Local release validation
+
+The exact installed 0.3.68 source was recovered at 2c0124bc3 and used as this release base. All 240 test files passed (3,614 tests passed, three skipped), both TypeScript checks passed, production audit reported zero vulnerabilities, package/source/channel guards passed, and Electron require verification passed.
+
+The strict quality summary remains nonzero on pre-existing installed-app traces: launcher load 298.2 ms, hotkey-to-hidden 21,726 ms, first-input-to-close 20,458 ms, invoke-to-success 2,841 ms, filter 100.9 ms, clipboard results 658.9 ms, and recording paste 640 ms exceed their budgets. This candidate had not been launched when those historical samples were read. No thresholds or evidence were altered. The authorized local runner recovery proceeds with these existing performance limitations explicitly retained; this is not a public release or performance qualification.
+
+Verification log: /tmp/fieldtheory-0369-verify.log. Native helper and diarizer release builds also passed.
