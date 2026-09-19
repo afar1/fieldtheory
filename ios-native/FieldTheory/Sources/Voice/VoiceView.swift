@@ -602,24 +602,10 @@ struct VoiceView: View {
             : Color(red: 0.71, green: 0.76, blue: 0.75)
     }
 
-    private var statusTone: VoiceControlStatusTone {
-        let recorder = model.recorder
-        if recorder.phase == .transcribing {
-            if recorder.currentDeliverySessionID != nil { return .saving }
-            return recorder.engineState == .ready ? .transcribing : .preparing
-        }
-        switch recorder.engineState {
-        case .checking, .preparing, .downloading: return .preparing
-        case .notDownloaded, .failed: return .attention
-        case .ready: break
-        }
-        if recorder.nextPendingSession != nil || recorder.lastError != nil { return .attention }
-        if showReadyConfirmation || showTranscribedConfirmation { return .success }
-        return .preparing
-    }
-
     private var statusPalette: (surface: Color, foreground: Color) {
-        statusTone.palette(dark: colorScheme == .dark)
+        colorScheme == .dark
+            ? (Color(red: 0.25, green: 0.16, blue: 0.39), Color(red: 0.95, green: 0.90, blue: 1))
+            : (Color(red: 0.84, green: 0.78, blue: 0.98), Color(red: 0.20, green: 0.10, blue: 0.34))
     }
 
     private var voiceControlIconSurface: Color {
@@ -1500,37 +1486,6 @@ struct TranscriptEditSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 .background(Theme.background(colorScheme))
-        }
-    }
-}
-
-/// Dedicated status colors keep processing stages recognizable in both appearances.
-/// Light surfaces use dark ink; dark surfaces use pale ink from the same hue.
-private enum VoiceControlStatusTone {
-    case transcribing, saving, success, attention, preparing
-
-    func palette(dark: Bool) -> (surface: Color, foreground: Color) {
-        switch (self, dark) {
-        case (.transcribing, false):
-            return (Color(red: 0.84, green: 0.78, blue: 0.98), Color(red: 0.20, green: 0.10, blue: 0.34))
-        case (.transcribing, true):
-            return (Color(red: 0.25, green: 0.16, blue: 0.39), Color(red: 0.95, green: 0.90, blue: 1))
-        case (.saving, false):
-            return (Color(red: 0.66, green: 0.91, blue: 0.87), Color(red: 0.03, green: 0.24, blue: 0.22))
-        case (.saving, true):
-            return (Color(red: 0.07, green: 0.30, blue: 0.28), Color(red: 0.82, green: 0.99, blue: 0.96))
-        case (.success, false):
-            return (Color(red: 0.73, green: 0.89, blue: 0.75), Color(red: 0.08, green: 0.25, blue: 0.11))
-        case (.success, true):
-            return (Color(red: 0.12, green: 0.30, blue: 0.17), Color(red: 0.87, green: 0.99, blue: 0.88))
-        case (.attention, false):
-            return (Color(red: 0.99, green: 0.85, blue: 0.55), Color(red: 0.34, green: 0.20, blue: 0.03))
-        case (.attention, true):
-            return (Color(red: 0.36, green: 0.25, blue: 0.08), Color(red: 1, green: 0.91, blue: 0.70))
-        case (.preparing, false):
-            return (Color(red: 0.71, green: 0.83, blue: 0.99), Color(red: 0.07, green: 0.22, blue: 0.43))
-        case (.preparing, true):
-            return (Color(red: 0.10, green: 0.22, blue: 0.39), Color(red: 0.85, green: 0.93, blue: 1))
         }
     }
 }
