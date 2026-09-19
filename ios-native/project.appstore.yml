@@ -4,6 +4,12 @@ include:
 name: FieldTheoryAppStore
 targets:
   FieldTheory:
+    sources:REPLACE:
+      - path: RecordingShared
+      - path: FieldTheory/Sources
+        excludes: [Goals]
+      - path: FieldTheory/Resources
+        excludes: [goals-cards.json, Info.plist]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.littleai
@@ -17,6 +23,10 @@ targets:
     info:
       path: .app-store/FieldTheory-Info.plist
   RecordingWidget:
+    sources:REPLACE:
+      - path: RecordingWidget
+        excludes: [Info.plist]
+      - path: RecordingShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.littleai.recording
