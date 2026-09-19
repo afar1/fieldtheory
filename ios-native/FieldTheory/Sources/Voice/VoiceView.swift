@@ -597,26 +597,20 @@ struct VoiceView: View {
     }
 
     private var voiceControlOutline: Color {
-        if controlExpanded { return statusPalette.foreground.opacity(colorScheme == .dark ? 0.30 : 0.20) }
         return colorScheme == .dark ? Color(red: 0.39, green: 0.47, blue: 0.46)
             : Color(red: 0.71, green: 0.76, blue: 0.75)
     }
 
-    private var statusPalette: (surface: Color, foreground: Color) {
-        colorScheme == .dark
-            ? (Color(red: 0.25, green: 0.16, blue: 0.39), Color(red: 0.95, green: 0.90, blue: 1))
-            : (Color(red: 0.84, green: 0.78, blue: 0.98), Color(red: 0.20, green: 0.10, blue: 0.34))
-    }
-
     private var voiceControlIconSurface: Color {
-        statusPalette.foreground.opacity(colorScheme == .dark ? 0.12 : 0.09)
+        colorScheme == .dark ? Color(red: 0.22, green: 0.29, blue: 0.26)
+            : Color(red: 0.91, green: 0.94, blue: 0.93)
     }
 
-    private var voiceControlIconColor: Color { statusPalette.foreground }
+    private var voiceControlIconColor: Color { Theme.text(colorScheme) }
 
     private var controlBackground: Color {
         if model.recorder.phase == .recording { return Theme.unread }
-        return controlExpanded ? statusPalette.surface : Theme.accent(model.settings.accentPreset, colorScheme)
+        return controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
     }
 
     private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
@@ -671,7 +665,7 @@ struct VoiceView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     expandedControlContentHeight = max(44, height)
                 }
-                .foregroundStyle(statusPalette.foreground)
+                .foregroundStyle(Theme.text(colorScheme))
                 .modifier(VoiceControlContentFade(visibility: controlExpanded ? 1 : 0))
                 .accessibilityHidden(!controlExpanded)
         }
