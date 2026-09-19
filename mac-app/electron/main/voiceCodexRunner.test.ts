@@ -684,10 +684,10 @@ describe('Voice recovery never dispatches again', () => {
 });
 
 describe('persistent Voice inbox turns', () => {
-  function inboxSetup(history: Message[] = []) {
+  function inboxSetup(history: Message[] = [], active = false) {
     return setup((message, process) => {
       if (message.method === 'thread/start' || message.method === 'thread/resume') {
-        process.reply(message, { ...threadResult(process), thread: { id: 'thread-1', ephemeral: false, status: { type: 'idle' }, section: history.length ? { id: 'pinned-section', name: 'Pinned' } : null } });
+        process.reply(message, { ...threadResult(process), thread: { id: 'thread-1', ephemeral: false, status: { type: active ? 'active' : 'idle' }, section: history.length ? { id: 'pinned-section', name: 'Pinned' } : null } });
       } else if (message.method === 'threadSection/list') process.reply(message, { data: [{ id: 'pinned-section', name: 'Pinned' }] });
       else if (message.method === 'thread/section/move') process.reply(message, {});
       else if (message.method === 'thread/read') process.reply(message, { thread: { id: 'thread-1', turns: history } });
@@ -723,6 +723,14 @@ describe('persistent Voice inbox turns', () => {
     expect(process.messages.some(m => m.method === 'thread/section/move')).toBe(false);
     expect(process.messages.some(m => m.method === 'thread/resume')).toBe(true);
     expect(process.messages.some(m => m.method === 'thread/start' || m.method === 'turn/start')).toBe(false);
+  });
+
+  it('classifies a busy inbox as an active writer without starting or interrupting its turn', async () => {
+    const { process, options } = inboxSetup([], true);
+    await expect(withVoiceCodexClient(os.tmpdir(), client => runVoiceInternalTurn(client, {
+      ...receipt, inbox: { threadId: 'thread-1', onThread: () => {}, receiptKey: 'receipt-intake' },
+    }), options)).rejects.toMatchObject({ code: 'active_writer' });
+    expect(process.messages.some(m => ['turn/start', 'turn/interrupt'].includes(m.method))).toBe(false);
   });
 
   it('preserves an interrupted receipt for review instead of replaying it', async () => {

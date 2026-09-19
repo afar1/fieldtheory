@@ -485,7 +485,8 @@ export async function runVoiceInternalTurn(client: VoiceCodexClient, input: Voic
     });
     const thread = object(result.thread);
     threadId = string(thread.id);
-    if (!threadId || object(thread.status).type === 'active' || thread.ephemeral !== !input.inbox) throw new RunnerError('protocol_error', 'Codex did not create a private internal decision task.');
+    if (!threadId || thread.ephemeral !== !input.inbox) throw new RunnerError('protocol_error', 'Codex did not create a private internal decision task.');
+    if (object(thread.status).type === 'active') throw new RunnerError('active_writer', 'The internal decision inbox already has an active writer.');
     if (input.inbox) {
       await input.inbox.onThread(threadId);
       if (!input.inbox.threadId) await client.request('thread/name/set', { threadId, name: 'Field Theory - Voice inbox' });
@@ -499,7 +500,7 @@ export async function runVoiceInternalTurn(client: VoiceCodexClient, input: Voic
       const matches = (Array.isArray(object(history.thread).turns) ? object(history.thread).turns as unknown[] : []).map(object)
         .filter(turn => (Array.isArray(turn.items) ? turn.items : []).some(value => object(value).clientId === input.inbox!.receiptKey));
       if (matches.length) {
-        if (matches.length !== 1 || matches[0].status !== 'completed') throw new RunnerError('protocol_error', 'An earlier inbox receipt still needs review. No work was repeated.');
+        if (matches.length !== 1 || matches[0].status !== 'completed') throw new RunnerError('inbox_receipt_uncertain', 'An earlier inbox receipt still needs review. No work was repeated.');
         terminal = true;
         return { text: finalText((matches[0].items as unknown[]).map(object)), threadId };
       }

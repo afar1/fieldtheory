@@ -65,7 +65,7 @@ interface LocalAttempt {
   route?: VoiceRoute;
   failure?: { stage: 'routing'; code: string };
   workspaceHistory?: Array<{ threadId: string; workspacePath: string }>;
-  inboxReceipts?: Array<{ input: VoiceInboxReceipt; delivered?: boolean }>;
+  inboxReceipts?: Array<{ input: VoiceInboxReceipt; delivered?: boolean; failures?: number; abandoned?: { code: string; at: string } }>;
 }
 
 interface WorkerSnapshot {
@@ -147,6 +147,10 @@ export class VoiceWorkManager extends EventEmitter {
   private readonly active = new Map<string, { controller: AbortController; timer?: ReturnType<typeof setTimeout> }>();
   private readonly receiptControllers = new Set<AbortController>();
   private inboxChain: Promise<unknown> = Promise.resolve();
+  private routingChain: Promise<unknown> = Promise.resolve();
+  private readonly receiptFlushes = new Map<LocalAttempt, Promise<void>>();
+  private receiptRetryAt = 0;
+  private receiptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private executionCount = 0;
   private readonly executionKeys = new Set<string>();
   private readonly executionWaiters = new Set<() => void>();
@@ -535,7 +539,7 @@ export class VoiceWorkManager extends EventEmitter {
       this.ensureCurrent(epoch);
       if (!attempt.route && !attempt.outcome) {
         try {
-          attempt.route = await this.withInbox(epoch, () => (this.options.routeRequest ?? routeVoiceRequest)({
+          attempt.route = await this.withRouting(epoch, () => (this.options.routeRequest ?? routeVoiceRequest)({
             text: job.text, inboxPath: inboxPath!, projectlessVoiceTasks: this.projectlessVoiceTasks(), inboxInstructions: snapshot.settings.inboxInstructions,
             inbox: { threadId: snapshot.inboxThreadId, receiptKey: `${job.dispatch_key}:intake`, onThread: id => {
               this.ensureCurrent(epoch);
@@ -551,6 +555,14 @@ export class VoiceWorkManager extends EventEmitter {
           const failure = new VoiceRoutingFailure(error);
           attempt.failure = { stage: 'routing', code: failure.code };
           this.persist();
+          if (failure.code === 'classification_timeout') {
+            attempt.outcome = { status: 'needs_user', summary: 'Your recording is saved, but Codex could not choose a destination. Retry this request or open it on your Mac. No task was started.',
+              finalResponse: '', errorCode: failure.code };
+            this.persist();
+            await this.publishOutcome(job.job_id, attempt, epoch);
+            this.setStatus('error', attempt.outcome.summary);
+            return;
+          }
           throw failure;
         }
         this.ensureCurrent(epoch);
@@ -629,7 +641,7 @@ export class VoiceWorkManager extends EventEmitter {
         this.setStatus('working', 'Codex is working on your voice request.');
         this.queueInboxReceipt(attempt, `${job.dispatch_key}:started`, { title: route?.title ?? 'Voice request',
           status: 'working', summary: 'Codex confirmed that the task started.', threadId });
-        await this.flushInboxReceipts(attempt, epoch);
+        this.flushInboxReceipts(attempt, epoch);
       };
       let outcome: VoiceCodexOutcome;
       if (attempt.outcome) {
@@ -719,7 +731,7 @@ export class VoiceWorkManager extends EventEmitter {
       this.queueInboxReceipt(attempt, `${job.dispatch_key}:outcome`, { title: outcome.title ?? route?.title ?? 'Voice request',
         status: outcome.recoveryUncertain ? 'needs_user' : outcome.status, summary: outcome.summary, threadId });
       await this.publishOutcome(job.job_id, attempt, epoch);
-      await this.flushInboxReceipts(attempt, epoch);
+      this.flushInboxReceipts(attempt, epoch);
       if (outcome.errorCode === 'sign_in_required') {
         this.disconnect();
         this.state.codex.signedIn = false;
@@ -741,26 +753,66 @@ export class VoiceWorkManager extends EventEmitter {
     this.persist();
   }
 
-  private async flushInboxReceipts(attempt: LocalAttempt, epoch: number): Promise<void> {
+  // Inbox narration is optional. It must never hold a job lease or delay routing,
+  // dispatch, or publishing the durable result back to the phone.
+  private flushInboxReceipts(attempt: LocalAttempt, epoch: number): void {
+    if (this.receiptFlushes.has(attempt) || this.now() < this.receiptRetryAt
+      || !attempt.inboxReceipts?.some(receipt => !receipt.delivered && !receipt.abandoned)) return;
+    const pending = this.writePendingInboxReceipts(attempt, epoch).catch(() => {}).finally(() => {
+      if (this.receiptFlushes.get(attempt) === pending) this.receiptFlushes.delete(attempt);
+    });
+    this.receiptFlushes.set(attempt, pending);
+  }
+
+  private async writePendingInboxReceipts(attempt: LocalAttempt, epoch: number): Promise<void> {
     const controller = new AbortController();
     this.receiptControllers.add(controller);
     try {
       await this.withInbox(epoch, async () => {
+        if (this.now() < this.receiptRetryAt) return;
         for (const receipt of attempt.inboxReceipts ?? []) {
           this.ensureCurrent(epoch);
-          if (receipt.delivered) continue;
+          if (receipt.delivered || receipt.abandoned) continue;
           try {
             await (this.options.writeInboxReceipt ?? writeVoiceInboxReceipt)({ ...receipt.input, signal: controller.signal });
             this.ensureCurrent(epoch);
             receipt.delivered = true;
             this.persist();
-          } catch {
-            if (this.current(epoch)) this.scheduleWake(30_000, epoch);
+          } catch (error) {
+            this.ensureCurrent(epoch);
+            const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'receipt_failed';
+            receipt.failures = (receipt.failures ?? 0) + 1;
+            // Keep uncertain narration for inspection without appending a duplicate.
+            // Optional receipt failure must not starve later receipts indefinitely.
+            if (['classification_timeout', 'inbox_receipt_uncertain'].includes(code) || receipt.failures >= 3) {
+              receipt.abandoned = { code: ['classification_timeout', 'inbox_receipt_uncertain'].includes(code) ? code : 'receipt_failed',
+                at: new Date(this.now()).toISOString() };
+              this.persist();
+              continue;
+            }
+            this.persist();
+            if (this.current(epoch)) {
+              this.receiptRetryAt = this.now() + 60_000;
+              if (this.receiptRetryTimer) clearTimeout(this.receiptRetryTimer);
+              this.receiptRetryTimer = setTimeout(() => {
+                this.receiptRetryTimer = null;
+                if (this.current(epoch) && this.snapshot) {
+                  for (const pending of Object.values(this.snapshot.attempts)) this.flushInboxReceipts(pending, epoch);
+                }
+              }, 60_000);
+              this.receiptRetryTimer.unref?.();
+            }
             return;
           }
         }
       });
     } finally { this.receiptControllers.delete(controller); }
+  }
+
+  private withRouting<T>(epoch: number, work: () => Promise<T>): Promise<T> {
+    const pending = this.routingChain.then(() => { this.ensureCurrent(epoch); return work(); });
+    this.routingChain = pending.catch(() => {});
+    return pending;
   }
 
   private withInbox<T>(epoch: number, work: () => Promise<T>): Promise<T> {
@@ -838,7 +890,7 @@ export class VoiceWorkManager extends EventEmitter {
     for (const [jobId, attempt] of Object.entries(this.snapshot.attempts)) {
       if (this.active.has(jobId)) continue;
       if (attempt.outcome && !attempt.published && !attempt.needsReconciliation) await this.publishOutcome(jobId, attempt, epoch);
-      await this.flushInboxReceipts(attempt, epoch);
+      this.flushInboxReceipts(attempt, epoch);
     }
   }
 
@@ -1012,6 +1064,11 @@ export class VoiceWorkManager extends EventEmitter {
     this.active.clear();
     for (const controller of this.receiptControllers) controller.abort();
     this.inboxChain = Promise.resolve();
+    this.routingChain = Promise.resolve();
+    this.receiptFlushes.clear();
+    this.receiptRetryAt = 0;
+    if (this.receiptRetryTimer) clearTimeout(this.receiptRetryTimer);
+    this.receiptRetryTimer = null;
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
     this.wakeTimer = null;
     this.wakePending = false;

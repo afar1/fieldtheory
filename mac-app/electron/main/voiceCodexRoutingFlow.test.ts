@@ -2,15 +2,16 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocked = vi.hoisted(() => ({ request: vi.fn(), decide: vi.fn() }));
+const mocked = vi.hoisted(() => ({ request: vi.fn(), decide: vi.fn(), connect: vi.fn() }));
 vi.mock('./voiceCodexRunner', () => ({
-  withVoiceCodexClient: (_path: string, callback: (client: unknown) => unknown) => callback({ request: mocked.request }),
+  withVoiceCodexClient: (...args: unknown[]) => mocked.connect(...args),
   runVoiceInternalTurn: mocked.decide,
 }));
 import { routeVoiceRequest, refreshVoiceRouteWorkspace } from './voiceCodexRouter';
 const cwd = fs.realpathSync(os.tmpdir());
 beforeEach(() => {
   vi.resetAllMocks();
+  mocked.connect.mockImplementation((_path: string, callback: (client: unknown) => unknown) => callback({ request: mocked.request }));
   mocked.request.mockImplementation(async (method: string, args: Record<string, unknown>) => {
     if (method === 'thread/read') return { thread: { id: args.threadId, cwd, name: 'Personal - Penguin' } };
     if (method === 'thread/list') return { data: [{ id: 'task', cwd, name: 'Personal - Penguin' }] };
@@ -81,9 +82,9 @@ describe('persistent inbox routing decisions', () => {
     expect(inboxInput.instructions).toContain('Watercolor preference');
     expect(inboxInput.outputSchema).toBeUndefined();
   });
-  it('routes privately with retained history when Desktop owns the routing inbox', async () => {
+  it.each(['active_writer', 'inbox_receipt_uncertain'])('routes privately with retained history when the inbox cannot accept a turn: %s', async code => {
     mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: ['task'] })
-      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'active_writer' }))
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code }))
       .mockResolvedValueOnce({ decision: 'continue', threadId: 'task' });
     const route = await routeVoiceRequest({ text: 'Make it blue.', inboxPath: cwd,
       inbox: { threadId: 'inbox', receiptKey: 'intake', onThread: () => {} } });
@@ -125,4 +126,29 @@ it('passes custom instructions to the inbox decision instead of the default rout
   const instructions = mocked.decide.mock.calls[1][1].instructions;
   expect(instructions.startsWith(custom + '\nRouting evidence')).toBe(true);
   expect(instructions).not.toContain('If essential routing intent is ambiguous');
+});
+
+
+it('recovers a timed-out persistent inbox on a fresh client with retained routing evidence', async () => {
+  mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: ['task'] })
+    .mockRejectedValueOnce(Object.assign(new Error('inbox stalled'), { code: 'classification_timeout' }))
+    .mockResolvedValueOnce({ decision: 'continue', threadId: 'task' });
+  const route = await routeVoiceRequest({ text: 'Make it blue.', inboxPath: cwd,
+    inbox: { threadId: 'inbox', receiptKey: 'intake', onThread: () => {} } });
+  expect(route.threadId).toBe('task');
+  expect(mocked.connect).toHaveBeenCalledTimes(2);
+  expect(mocked.decide.mock.calls[1][1].timeoutMs).toBe(15_000);
+  const recovery = mocked.decide.mock.calls[2][1];
+  expect(recovery.inbox).toBeUndefined();
+  expect(recovery.input).toContain('Watercolor preference');
+  expect(recovery.outputSchema).toBeDefined();
+});
+
+it('does not fall back after the request is cancelled during an inbox timeout', async () => {
+  const controller = new AbortController();
+  mocked.decide.mockResolvedValueOnce({ queries: [], threadIds: [] })
+    .mockImplementationOnce(async () => { controller.abort(); throw Object.assign(new Error('timed out'), { code: 'classification_timeout' }); });
+  await expect(routeVoiceRequest({ text: 'Make it blue.', inboxPath: cwd, signal: controller.signal,
+    inbox: { threadId: 'inbox', receiptKey: 'intake', onThread: () => {} } })).rejects.toMatchObject({ code: 'classification_timeout' });
+  expect(mocked.connect).toHaveBeenCalledTimes(1);
 });

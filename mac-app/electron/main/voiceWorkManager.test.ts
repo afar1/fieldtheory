@@ -635,6 +635,7 @@ describe('bundled Voice push worker', () => {
 
 describe('persistent inbox delivery receipts', () => {
   it('saves one inbox identity and retries receipts without repeating work', async () => {
+    vi.useFakeTimers();
     const h = harness();
     h.routeRequest.mockImplementation(async input => {
       await input.inbox?.onThread('inbox-thread');
@@ -648,6 +649,8 @@ describe('persistent inbox delivery receipts', () => {
     expect(snapshot.attempts['job-1'].outcome.status).toBe('completed');
     expect(h.runRequest).toHaveBeenCalledTimes(1);
     h.push(); await settle();
+    expect(h.writeInboxReceipt).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000); await settle();
     expect(h.runRequest).toHaveBeenCalledTimes(1);
     expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ inboxThreadId: 'inbox-thread', status: 'working' }));
     expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
@@ -672,12 +675,14 @@ describe('inbox account boundaries', () => {
     });
     await h.enable(); h.jobs.push(h.job()); h.push(); await settle();
     expect(h.manager.canOpenTask(inboxId)).toBe(true);
+    const completionsBeforeSignout = h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete').length;
+    expect(completionsBeforeSignout).toBe(1);
     h.setOwner(null); await h.manager.authChanged();
     expect(signal?.aborted).toBe(true);
     expect(h.manager.canOpenTask(inboxId)).toBe(false);
     expect(h.manager.getState().inboxThreadId).toBeUndefined();
     release(); await settle();
-    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(0);
+    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(completionsBeforeSignout);
   });
 });
 
@@ -890,4 +895,66 @@ it('keeps queued observers alive without spending execution capacity and retains
   expect(h.runRequest.mock.calls.some(([request]) => request.dispatchKey === 'voice:same-workspace')).toBe(false);
   expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_accept_submission')).toHaveLength(1);
   expect(h.manager.getState().activeTasks).toContainEqual(expect.objectContaining({ jobId: 'queued', status: 'queued' }));
+});
+
+
+describe('stalled routing inbox recovery', () => {
+  it('dispatches and publishes another job while an older optional inbox receipt never resolves', async () => {
+    const h = harness();
+    h.routeRequest.mockImplementation(async input => {
+      input.inbox?.onThread('inbox-thread');
+      return { decision: 'new', workspacePath: input.inboxPath };
+    });
+    h.writeInboxReceipt.mockImplementation(() => new Promise<void>(() => {}));
+    await h.enable(); h.jobs.push(h.job('first')); h.push(); await settle();
+    expect(h.writeInboxReceipt).toHaveBeenCalledTimes(1);
+    h.jobs.push(h.job('second')); h.push(); await settle();
+    expect(h.routeRequest).toHaveBeenCalledTimes(2);
+    expect(h.runRequest).toHaveBeenCalledTimes(2);
+    expect(h.rpc.mock.calls.filter(([name]) => name === 'voice_jobs_complete')).toHaveLength(2);
+    // Repeated wakes must not enqueue duplicate receipt attempts behind the stall.
+    h.push(); h.push(); await settle();
+    expect(h.writeInboxReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes an actionable outcome after routing recovery times out and never dispatches on redelivery', async () => {
+    const h = harness();
+    h.routeRequest.mockRejectedValue(Object.assign(new Error('timed out'), { code: 'classification_timeout' }));
+    await h.enable(); h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.runRequest).not.toHaveBeenCalled();
+    expect(h.rpc).toHaveBeenCalledWith('voice_jobs_complete', expect.objectContaining({
+      p_job_id: 'job-1', p_status: 'needs_user', p_summary: expect.stringContaining('No task was started'),
+    }));
+    h.jobs.push(h.job()); h.push(); await settle();
+    expect(h.routeRequest).toHaveBeenCalledTimes(1);
+    expect(h.runRequest).not.toHaveBeenCalled();
+  });
+});
+
+
+it.each(['classification_timeout', 'inbox_receipt_uncertain'])('quarantines an uncertain optional receipt and delivers later receipts without replay: %s', async code => {
+  const h = harness();
+  h.routeRequest.mockImplementation(async input => { input.inbox?.onThread('inbox-thread'); return { decision: 'new', workspacePath: input.inboxPath }; });
+  h.writeInboxReceipt.mockRejectedValueOnce(Object.assign(new Error('uncertain'), { code }));
+  await h.enable(); h.jobs.push(h.job()); h.push(); await settle();
+  const saved = JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8'));
+  expect(saved.attempts['job-1'].inboxReceipts[0].abandoned.code).toBe(code);
+  expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+  h.push(); await settle();
+  expect((h.writeInboxReceipt.mock.calls as unknown as Array<[{ status: string }]>).filter(args => args[0].status === 'working')).toHaveLength(1);
+  expect(h.runRequest).toHaveBeenCalledTimes(1);
+});
+
+it('bounds repeated optional receipt failures while preserving later delivery', async () => {
+  vi.useFakeTimers();
+  const h = harness();
+  h.routeRequest.mockImplementation(async input => { input.inbox?.onThread('inbox-thread'); return { decision: 'new', workspacePath: input.inboxPath }; });
+  h.writeInboxReceipt.mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'));
+  await h.enable(); h.jobs.push(h.job()); h.push(); await settle();
+  await vi.advanceTimersByTimeAsync(60_000); await settle();
+  await vi.advanceTimersByTimeAsync(60_000); await settle();
+  const receipts = JSON.parse(fs.readFileSync(path.join(h.directory, 'account-a.json'), 'utf8')).attempts['job-1'].inboxReceipts;
+  expect(receipts[0]).toMatchObject({ failures: 3, abandoned: { code: 'receipt_failed' } });
+  expect(receipts[1].delivered).toBe(true);
+  expect(h.runRequest).toHaveBeenCalledTimes(1);
 });
