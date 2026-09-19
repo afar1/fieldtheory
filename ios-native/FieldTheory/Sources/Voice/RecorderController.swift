@@ -59,6 +59,10 @@ final class RecorderController {
     private var sessionId: Int64 = 0
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private var capturePreparationVisible = false
+    private var capturePreparationRevision = 0
+    private var capturePreparationTask: Task<Void, Never>?
     private var interruptionTask: Task<Void, Never>?
     private var draining = false
     private var transcriptionProgress: Progress?
@@ -179,6 +183,17 @@ final class RecorderController {
             queue: .main
         ) { [weak self] notification in
             Task { @MainActor in self?.handleInterruption(notification) }
+        }
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main
+        ) { [weak self] notification in
+            // Our own setCategory causes a notification; only actual route loss
+            // or connection changes invalidate an idle recorder.
+            guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: raw),
+                  reason != .categoryChange else { return }
+            Task { @MainActor in await self?.captureOwner.invalidatePreparation() }
         }
         wireEngineStateCallback()
     }
@@ -368,11 +383,29 @@ final class RecorderController {
         speechEngine.cancelPreparation()
     }
 
+    /// Voice calls this only while visible, foregrounded, and outside Settings.
+    func setCapturePreparationVisible(_ visible: Bool) {
+        capturePreparationVisible = visible
+        updateCapturePreparation()
+    }
+
+    private func updateCapturePreparation() {
+        capturePreparationRevision += 1
+        let revision = capturePreparationRevision
+        let enabled = capturePreparationVisible && workEnabled
+            && AVAudioApplication.shared.recordPermission == .granted
+        let owner = captureOwner
+        capturePreparationTask = Task {
+            await owner.setPreparationEnabled(enabled, revision: revision)
+        }
+    }
+
     /// Offline identity is sufficient; explicit sign-out disables all work.
     /// A persisted cleanup marker makes an interrupted/failed sign-out fail closed.
     func setWorkEnabled(_ enabled: Bool) {
         guard enabled else {
             workEnabled = false
+            updateCapturePreparation()
             workGeneration = UUID()
             cancelPreparationWaiters()
             if isStartingCapture, phase == .idle, let token = captureToken {
@@ -391,6 +424,7 @@ final class RecorderController {
             }
         }
         workEnabled = true
+        updateCapturePreparation()
         requestPreparationIfNeeded()
     }
 
@@ -400,6 +434,8 @@ final class RecorderController {
     /// stores, and queued production recordings remain available afterward.
     func suspendAndWait() async {
         workEnabled = false
+        updateCapturePreparation()
+        await capturePreparationTask?.value
         workGeneration = UUID()
         cancelPreparationWaiters()
         let cancelsActiveCapture = captureToken != nil && !stopActionInFlight && captureFinalizationTask == nil
@@ -431,6 +467,8 @@ final class RecorderController {
         defaults.removeObject(forKey: Self.finishActionsKey)
         onCaptureCancelled?()
         workEnabled = false
+        updateCapturePreparation()
+        await capturePreparationTask?.value
         workGeneration = UUID()
         cancelPreparationWaiters()
         defaults.set(true, forKey: Self.cleanupKey)
@@ -528,6 +566,7 @@ final class RecorderController {
                 elapsed = 0
                 level = 0
                 segmentURLs = []
+                updateCapturePreparation()
             }
             let queued: [URL]
             if discard || captureDeletionGeneration != deletionGeneration {
@@ -558,6 +597,13 @@ final class RecorderController {
         guard workEnabled, phase == .idle, canStartRecording else { return }
         let generation = workGeneration
         lastError = nil
+        if AVAudioApplication.shared.recordPermission == .granted {
+            Task { @MainActor in
+                guard self.workEnabled, self.workGeneration == generation else { return }
+                await self.beginSession()
+            }
+            return
+        }
         isRequestingRecordPermission = true
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
@@ -568,6 +614,7 @@ final class RecorderController {
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     return
                 }
+                self.updateCapturePreparation()
                 await self.beginSession()
             }
         }
@@ -616,6 +663,7 @@ final class RecorderController {
                 await RecordingEvidenceWriter.shared.flush()
                 return
             }
+            sessionId = started.sessionID
             segmentURLs = started.files
             phase = .recording
             startedAt = started.startedAt
@@ -683,8 +731,11 @@ final class RecorderController {
     private func handleInterruption(_ notification: Notification) {
         guard let info = notification.userInfo,
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue),
-              let token = captureToken else { return }
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+        guard let token = captureToken else {
+            if type == .began { Task { await captureOwner.invalidatePreparation() } }
+            return
+        }
         BackgroundRecordingSession.shared.recordEvidence("audio-interruption-\(type.rawValue)")
         let options = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
             .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []

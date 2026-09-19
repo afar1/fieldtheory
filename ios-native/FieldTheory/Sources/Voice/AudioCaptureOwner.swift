@@ -6,6 +6,7 @@ actor AudioCaptureOwner {
     typealias Evidence = @Sendable (String, Error?, [String: Any]) -> Void
 
     struct Started: Sendable {
+        let sessionID: Int64
         let startedAt: Date
         let files: [URL]
     }
@@ -25,6 +26,66 @@ actor AudioCaptureOwner {
     private var files: [URL] = []
     private var evidence: Evidence = { _, _, _ in }
     private var interrupted = false
+    private var preparationRevision = 0
+    private var preparationEnabled = false
+    private var preparedURL: URL?
+    private var preparedSessionID: Int64?
+    private var lastPreparedSessionID: Int64 = 0
+    private var configuredMix: Bool?
+
+    /// Revisions reject an older lifecycle task arriving after a newer one.
+    /// Allocating the recorder is safe before a tap; prepareToRecord is deferred
+    /// until the user has explicitly activated the audio session.
+    func setPreparationEnabled(_ enabled: Bool, revision: Int) {
+        guard revision >= preparationRevision else { return }
+        preparationRevision = revision
+        preparationEnabled = enabled
+        guard token == nil else { return } // Never disturb active/background capture.
+        if enabled { prepareNextRecorder() } else { releaseIdleResources() }
+    }
+
+    func invalidatePreparation() {
+        configuredMix = nil
+        guard token == nil else { return }
+        releaseIdleResources()
+    }
+
+    private func releaseIdleResources() {
+        discardPreparedRecorder()
+        device?.deactivate()
+        configuredMix = nil
+        device = nil
+    }
+
+    private func discardPreparedRecorder() {
+        guard let url = preparedURL else { return }
+        device?.stop()
+        try? FileManager.default.removeItem(at: url)
+        preparedURL = nil
+        preparedSessionID = nil
+    }
+
+    private func prepareNextRecorder() {
+        guard preparationEnabled, token == nil, preparedURL == nil else { return }
+        let device = self.device ?? makeDevice()
+        self.device = device
+        let nextSessionID = max(Timestamps.nowMs(), max(lastPreparedSessionID, sessionID) + 1)
+        lastPreparedSessionID = nextSessionID
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rec-\(nextSessionID)-0.wav")
+        do {
+            try device.prepare(url: url, readyToRecord: configuredMix != nil, evidence: evidence)
+            preparedURL = url
+            preparedSessionID = nextSessionID
+            evidence(configuredMix == nil ? "audio-recorder-staged" : "audio-recorder-prepared", nil, [:])
+        } catch {
+            device.stop()
+            try? FileManager.default.removeItem(at: url)
+            device.deactivate()
+            configuredMix = nil
+            evidence("audio-preparation-failed-cold-fallback", error, [:])
+        }
+    }
 
     init(makeDevice: @escaping @Sendable () -> any AudioCaptureDevice = { LiveAudioCaptureDevice() }) {
         self.makeDevice = makeDevice
@@ -34,14 +95,19 @@ actor AudioCaptureOwner {
                evidence: @escaping Evidence) async throws -> Started {
         guard !cancelledTokens.contains(requestedToken), token == nil else { throw CancellationError() }
         token = requestedToken
-        self.sessionID = sessionID
+        self.sessionID = preparedSessionID ?? sessionID
         self.evidence = evidence
         files = []
         interrupted = false
         let device = self.device ?? makeDevice()
         self.device = device
         do {
-            try device.configure(mixWithOtherAudio: mixWithOtherAudio, evidence: evidence)
+            if configuredMix != mixWithOtherAudio {
+                try device.configure(mixWithOtherAudio: mixWithOtherAudio, evidence: evidence)
+                configuredMix = mixWithOtherAudio
+            } else {
+                evidence("audio-session-reused", nil, [:])
+            }
             let delays: [Duration] = [.milliseconds(250), .milliseconds(500), .seconds(1)]
             for attempt in 0...delays.count {
                 try Task.checkCancellation()
@@ -50,7 +116,7 @@ actor AudioCaptureOwner {
                 }
                 do {
                     try startSegment(using: device)
-                    return Started(startedAt: Date(), files: files)
+                    return Started(sessionID: self.sessionID, startedAt: Date(), files: files)
                 } catch MicrophoneStartError.notStarted {
                     guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
                     evidence("audio-recorder-retry-wait", nil, [:])
@@ -63,6 +129,8 @@ actor AudioCaptureOwner {
                 evidence("audio-start-failed-before-cleanup", error, [:])
                 device.stop()
                 device.deactivate()
+                configuredMix = nil
+                discardPreparedRecorder()
                 token = nil
                 files = []
             }
@@ -75,11 +143,13 @@ actor AudioCaptureOwner {
         cancelledTokens.insert(expectedToken)
         guard token == expectedToken else { return [] }
         device?.stop()
-        device?.deactivate()
         token = nil
         interrupted = false
         let result = files
         files = []
+        if !preparationEnabled || configuredMix == nil { releaseIdleResources() }
+        // The controller requests the next preparation after publishing idle,
+        // so sealing/closing never waits for the next microphone preparation.
         return result
     }
 
@@ -91,6 +161,7 @@ actor AudioCaptureOwner {
     func interruptionBegan(token expectedToken: UUID) {
         guard token == expectedToken else { return }
         interrupted = true
+        configuredMix = nil
         device?.stop()
     }
 
@@ -104,15 +175,25 @@ actor AudioCaptureOwner {
     }
 
     private func startSegment(using device: any AudioCaptureDevice) throws {
-        let url = FileManager.default.temporaryDirectory
+        let url = preparedURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(sessionID)-\(files.count).wav")
-        try device.start(url: url, evidence: evidence)
-        files.append(url)
+        if preparedURL != nil { evidence("audio-prepared-recorder-consumed", nil, [:]) }
+        preparedURL = nil
+        preparedSessionID = nil
+        do {
+            try device.start(url: url, evidence: evidence)
+            files.append(url)
+        } catch {
+            device.stop()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 }
 
 /// Injectable at the actor boundary so cancellation/retry ownership can be tested without a microphone.
 protocol AudioCaptureDevice: AnyObject {
+    func prepare(url: URL, readyToRecord: Bool, evidence: AudioCaptureOwner.Evidence) throws
     func configure(mixWithOtherAudio: Bool, evidence: AudioCaptureOwner.Evidence) throws
     func activate() throws
     func start(url: URL, evidence: AudioCaptureOwner.Evidence) throws
@@ -124,6 +205,7 @@ protocol AudioCaptureDevice: AnyObject {
 private final class LiveAudioCaptureDevice: AudioCaptureDevice {
     private var recorder: AVAudioRecorder?
     private var bluetoothInputUID: String?
+    private var recorderPrepared = false
 
     func configure(mixWithOtherAudio: Bool, evidence: AudioCaptureOwner.Evidence) throws {
         let session = AVAudioSession.sharedInstance()
@@ -146,14 +228,12 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
            AVAudioSession.sharedInstance().currentRoute.inputs.first?.uid != bluetoothInputUID {
             throw SpeechTranscriptionEngineError(message: "The Bluetooth microphone disconnected. Try recording again.")
         }
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
-            AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
-        ]
-        evidence("audio-recorder-creating", nil, [:])
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.isMeteringEnabled = true
+        if recorder?.url != url { try prepare(url: url, readyToRecord: true, evidence: evidence) }
+        guard let recorder else { throw MicrophoneStartError.notStarted }
+        if !recorderPrepared {
+            guard recorder.prepareToRecord() else { throw MicrophoneStartError.notStarted }
+            recorderPrepared = true
+        }
         evidence("audio-recorder-starting", nil, [:])
         guard recorder.record() else {
             evidence("audio-recorder-returned-false", nil, [:])
@@ -165,7 +245,26 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
         evidence("audio-recorder-started", nil, [:])
     }
 
-    func stop() { recorder?.stop(); recorder = nil }
+    func prepare(url: URL, readyToRecord: Bool, evidence: AudioCaptureOwner.Evidence) throws {
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
+            AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
+        ]
+        evidence("audio-recorder-creating", nil, [:])
+        let recorder = try AVAudioRecorder(url: url, settings: settings)
+        recorder.isMeteringEnabled = true
+        self.recorder = recorder
+        recorderPrepared = false
+        // AVFoundation can activate sessions automatically. Never call this
+        // before the first explicit recording has activated our session.
+        if readyToRecord {
+            guard recorder.prepareToRecord() else { throw MicrophoneStartError.notStarted }
+            recorderPrepared = true
+        }
+    }
+
+    func stop() { recorder?.stop(); recorder = nil; recorderPrepared = false }
     func deactivate() { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     func sample() -> AudioCaptureOwner.Sample? {
         guard let recorder else { return nil }

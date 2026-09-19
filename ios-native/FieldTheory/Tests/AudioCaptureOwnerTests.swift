@@ -10,6 +10,20 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
     private(set) var startCalls = 0
     private(set) var configureCalls = 0
     private(set) var stopCalls = 0
+    private(set) var prepareCalls = 0
+    private(set) var fullyPreparedCalls = 0
+    private(set) var deactivateCalls = 0
+    private(set) var preparedURL: URL?
+    var preparationError: Error?
+
+    func prepare(url: URL, readyToRecord: Bool, evidence: AudioCaptureOwner.Evidence) throws {
+        XCTAssertFalse(Thread.isMainThread)
+        prepareCalls += 1
+        if readyToRecord { fullyPreparedCalls += 1 }
+        preparedURL = url
+        try Data().write(to: url)
+        if let preparationError { throw preparationError }
+    }
     private var currentURL: URL?
 
     func configure(mixWithOtherAudio: Bool, evidence: AudioCaptureOwner.Evidence) throws {
@@ -35,13 +49,160 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
         if let currentURL { try? Data("sealed".utf8).write(to: currentURL) }
         currentURL = nil
     }
-    func deactivate() { XCTAssertFalse(Thread.isMainThread) }
+    func deactivate() { XCTAssertFalse(Thread.isMainThread); deactivateCalls += 1 }
     func sample() -> AudioCaptureOwner.Sample? {
         .init(level: 0.5, isRecording: currentURL != nil, recordedSeconds: 1)
     }
 }
 
 final class AudioCaptureOwnerTests: XCTestCase {
+    func testPreparationNeverCapturesAndOnlyFullyPreparesAfterExplicitStart() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        XCTAssertEqual(device.prepareCalls, 1)
+        XCTAssertEqual(device.fullyPreparedCalls, 0)
+        XCTAssertEqual(device.configureCalls, 0)
+        XCTAssertEqual(device.startCalls, 0)
+        let firstToken = UUID()
+        let first = try await owner.start(token: firstToken, sessionID: 910_001,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        let firstFiles = await owner.stop(token: firstToken)
+        XCTAssertEqual(device.prepareCalls, 1, "Stop must return sealed files without waiting for preparation")
+        await owner.setPreparationEnabled(true, revision: 2)
+        XCTAssertEqual(device.fullyPreparedCalls, 1)
+        let secondToken = UUID()
+        let second = try await owner.start(token: secondToken, sessionID: 910_002,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        let secondFiles = await owner.stop(token: secondToken)
+        XCTAssertEqual(device.configureCalls, 1)
+        XCTAssertNotEqual(first.sessionID, second.sessionID)
+        XCTAssertEqual(firstFiles.first?.lastPathComponent, "rec-\(first.sessionID)-0.wav")
+        XCTAssertEqual(secondFiles.first?.lastPathComponent, "rec-\(second.sessionID)-0.wav")
+        await owner.setPreparationEnabled(false, revision: 3)
+        XCTAssertEqual(device.deactivateCalls, 1)
+        for file in firstFiles + secondFiles { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testStalePreparationCannotReopenReleasedResources() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let scratch = try XCTUnwrap(device.preparedURL)
+        await owner.setPreparationEnabled(false, revision: 3)
+        await owner.setPreparationEnabled(true, revision: 2)
+        XCTAssertEqual(device.prepareCalls, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
+        XCTAssertEqual(device.startCalls, 0)
+    }
+
+    func testBackgroundingPreservesActiveCaptureAndReleasesOnStop() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let token = UUID()
+        _ = try await owner.start(token: token, sessionID: 910_003,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        await owner.setPreparationEnabled(false, revision: 2)
+        let sample = await owner.sample(token: token)
+        XCTAssertEqual(sample?.isRecording, true)
+        XCTAssertEqual(device.deactivateCalls, 0)
+        let files = await owner.stop(token: token)
+        XCTAssertEqual(device.deactivateCalls, 1)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testWarmInterruptionSegmentsKeepAdoptedSessionIdentity() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let token = UUID()
+        let started = try await owner.start(token: token, sessionID: 910_004,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        await owner.interruptionBegan(token: token)
+        _ = try await owner.interruptionEnded(token: token, shouldResume: true)
+        let files = await owner.stop(token: token)
+        XCTAssertEqual(files.map(\.lastPathComponent), ["rec-\(started.sessionID)-0.wav", "rec-\(started.sessionID)-1.wav"])
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testPreparationFailureDeletesScratchAndFallsBackToColdStart() async throws {
+        let device = FakeCaptureDevice()
+        device.preparationError = NSError(domain: "prepare-test", code: 1)
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let scratch = try XCTUnwrap(device.preparedURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
+        let token = UUID()
+        let started = try await owner.start(token: token, sessionID: 910_005,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        XCTAssertEqual(started.sessionID, 910_005)
+        let files = await owner.stop(token: token)
+        await owner.setPreparationEnabled(false, revision: 2)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testRouteInvalidationAndMixChangeCannotReuseStaleSession() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let token = UUID()
+        _ = try await owner.start(token: token, sessionID: 910_006,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        var files = await owner.stop(token: token)
+        await owner.setPreparationEnabled(true, revision: 2)
+        await owner.invalidatePreparation()
+        let next = UUID()
+        _ = try await owner.start(token: next, sessionID: 910_007,
+            mixWithOtherAudio: true, evidence: { _, _, _ in })
+        files += await owner.stop(token: next)
+        XCTAssertEqual(device.configureCalls, 2)
+        await owner.setPreparationEnabled(false, revision: 3)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testIntentMixPolicyReconfiguresWarmForegroundSession() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let first = UUID()
+        _ = try await owner.start(token: first, sessionID: 910_008,
+            mixWithOtherAudio: false, evidence: { _, _, _ in })
+        var files = await owner.stop(token: first)
+        await owner.setPreparationEnabled(true, revision: 2)
+        let second = UUID()
+        _ = try await owner.start(token: second, sessionID: 910_009,
+            mixWithOtherAudio: true, evidence: { _, _, _ in })
+        files += await owner.stop(token: second)
+        XCTAssertEqual(device.configureCalls, 2)
+        await owner.setPreparationEnabled(false, revision: 3)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
+    func testCancelledWarmRetryDoesNotRestartOrLeakPreparedFile() async throws {
+        let device = FakeCaptureDevice()
+        device.refuseFirstStart = true
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let scratch = try XCTUnwrap(device.preparedURL)
+        let attempted = expectation(description: "prepared start refused")
+        device.onStart = { attempted.fulfill() }
+        let token = UUID()
+        let startup = Task {
+            try await owner.start(token: token, sessionID: 910_010,
+                mixWithOtherAudio: false, evidence: { _, _, _ in })
+        }
+        await fulfillment(of: [attempted], timeout: 2)
+        _ = await owner.stop(token: token)
+        await owner.setPreparationEnabled(false, revision: 2)
+        do {
+            _ = try await startup.value
+            XCTFail("Cancelled prepared capture restarted")
+        } catch is CancellationError { }
+        XCTAssertEqual(device.startCalls, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
+    }
+
     func testCancelledRetryCannotResurrectCapture() async throws {
         let device = FakeCaptureDevice()
         device.refuseFirstStart = true

@@ -78,6 +78,10 @@ struct VoiceView: View {
 
     var body: some View {
         mainContent
+            .onAppear { updateCapturePreparationVisibility() }
+            .onDisappear { model.recorder.setCapturePreparationVisible(false) }
+            .onChange(of: scenePhase) { _, _ in updateCapturePreparationVisibility() }
+            .onChange(of: showSettings) { _, _ in updateCapturePreparationVisibility() }
             .task(id: model.recorder.engineState) {
                 showReadyConfirmation = model.recorder.engineState == .ready
                 if model.recorder.engineState == .checking { preparationStartedAt = Date() }
@@ -121,6 +125,10 @@ struct VoiceView: View {
             .alert("Feedback could not be queued", isPresented: Binding(
                 get: { feedbackError != nil }, set: { if !$0 { feedbackError = nil } }
             )) { Button("OK") { feedbackError = nil } } message: { Text(feedbackError ?? "") }
+    }
+
+    private func updateCapturePreparationVisibility() {
+        model.recorder.setCapturePreparationVisible(scenePhase == .active && !showSettings)
     }
 
     private var mainContent: some View {
