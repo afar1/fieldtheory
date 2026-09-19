@@ -26,14 +26,7 @@ struct RecordingLiveActivity: Widget {
             DynamicIsland {
                 // The bottom region spans the Island's full width below the camera.
                 // Long titles do not fit in the narrow leading region beside the cutout.
-                DynamicIslandExpandedRegion(.center) {
-                    if !context.state.recording && !context.state.copyReady {
-                        title(context)
-                            .frame(maxWidth: .infinity, minHeight: 64, alignment: .center)
-                    }
-                }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if context.state.recording || context.state.copyReady {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .center, spacing: 8) {
                             title(context).layoutPriority(1)
@@ -42,7 +35,6 @@ struct RecordingLiveActivity: Widget {
                         }
                         detail(context)
                     }.padding(.horizontal, 4).padding(.top, 4)
-                    }
                 }
             } compactLeading: {
                 Image(systemName: context.state.symbol).foregroundStyle(tint(context))
