@@ -1210,4 +1210,37 @@ final class RecorderController {
         guard parts.count >= 3, parts.first == "rec" else { return 0 }
         return Int(parts[2]) ?? 0
     }
+#if targetEnvironment(simulator)
+    /// Isolated UI fixture; only the explicit simulator performance launch calls it.
+    func applyRecordingControlsPreview(_ state: RecordingControlsPerformancePreview.State, cycle: Int) {
+        workEnabled = false
+        isRequestingRecordPermission = false
+        isStartingCapture = state == .starting
+        isStoppingCapture = state == .stopping
+        lastError = nil
+        currentDeliverySessionID = state == .saving ? "preview-\(cycle)" : nil
+        switch state {
+        case .idle, .starting, .error:
+            phase = .idle
+            if state == .error { lastError = "Preview error: tap to try recording again" }
+        case .recording, .stopping:
+            phase = .recording
+            startedAt = Date()
+            elapsed = 0
+            level = 0.25
+        case .transcribing, .saving:
+            phase = .transcribing
+        case .completed:
+            lastTranscribedSessionID = "preview-\(cycle)"
+            lastSavedTranscriptID = "preview-\(cycle)"
+            phase = .idle
+        }
+    }
+
+    func updateRecordingControlsPreviewMeter(tick: Int) {
+        level = Float((tick * 7) % 13) / 13
+        elapsed = Double(tick) * 0.08
+    }
+#endif
+
 }

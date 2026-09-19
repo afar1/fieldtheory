@@ -361,7 +361,12 @@ final class AppModel {
                     recorder = RecorderController(
                         pendingDirectory: reviewerDemoRoot.appendingPathComponent("control-preview-audio"),
                         transcribe: { _ in "Preview transcript" })
-                    recorder.setWorkEnabled(true)
+                    if ProcessInfo.processInfo.arguments.contains("ft-recording-controls-perf") {
+                        recorder.setWorkEnabled(false)
+                        RecordingControlsPerformancePreview.shared.run(recorder: recorder)
+                    } else {
+                        recorder.setWorkEnabled(true)
+                    }
                 }
             } catch {
                 previewMode = false
