@@ -157,6 +157,21 @@ final class AudioCaptureOwnerTests: XCTestCase {
         for file in files { try? FileManager.default.removeItem(at: file) }
     }
 
+    func testPolicyBoundarySurvivesPreparationFailureForImmediateColdStart() async throws {
+        let device = FakeCaptureDevice()
+        device.preparationError = NSError(domain: "prepare-test", code: 1)
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        let boundary: Int64 = 920_000
+        await owner.setPreparationEnabled(true, revision: 1, afterPolicyChangeAt: boundary)
+        let token = UUID()
+        let started = try await owner.start(token: token, sessionID: boundary,
+            mixWithOtherAudio: false)
+        XCTAssertEqual(started.sessionID, boundary + 1)
+        let files = await owner.stop(token: token)
+        await owner.setPreparationEnabled(false, revision: 2)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
     func testPreparationFailureDeletesScratchAndFallsBackToColdStart() async throws {
         let device = FakeCaptureDevice()
         device.preparationError = NSError(domain: "prepare-test", code: 1)

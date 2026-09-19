@@ -30,6 +30,7 @@ actor AudioCaptureOwner {
     private var preparedURL: URL?
     private var preparedSessionID: Int64?
     private var lastPreparedSessionID: Int64 = 0
+    private var deliveryPolicyBoundary: Int64?
     private var configuredMix: Bool?
 
     /// Revisions reject an older lifecycle task arriving after a newer one.
@@ -43,6 +44,7 @@ actor AudioCaptureOwner {
         if let boundary {
             discardPreparedRecorder()
             lastPreparedSessionID = max(lastPreparedSessionID, boundary)
+            deliveryPolicyBoundary = max(deliveryPolicyBoundary ?? boundary, boundary)
         }
         if enabled { prepareNextRecorder() } else { releaseIdleResources() }
     }
@@ -96,7 +98,10 @@ actor AudioCaptureOwner {
     func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool) async throws -> Started {
         guard !cancelledTokens.contains(requestedToken), token == nil else { throw CancellationError() }
         token = requestedToken
-        self.sessionID = preparedSessionID ?? max(sessionID, lastPreparedSessionID + 1)
+        // A failed preparation must not replace the caller's cold-start identity.
+        // Only an explicit policy change can require advancing that identity.
+        let coldSessionID = deliveryPolicyBoundary.map { max(sessionID, $0 + 1) } ?? sessionID
+        self.sessionID = preparedSessionID ?? coldSessionID
         files = []
         interrupted = false
         let device = self.device ?? makeDevice()
