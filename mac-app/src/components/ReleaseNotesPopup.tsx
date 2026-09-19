@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.3.69': [
+    'Voice requests can keep starting when inbox delivery updates stall.',
+    'Improved recovery when the Voice inbox is busy or stops responding.',
+    'Requests that cannot be routed now show that they need attention instead of staying at Received by Mac.',
+  ],
   '0.3.68': [
     'Fixed a connection cleanup error that could show repeated JavaScript error dialogs.',
   ],
@@ -657,6 +662,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.3.69': 'September 19, 2026',
   '0.3.68': 'September 14, 2026',
   '0.3.67': 'September 13, 2026',
   '0.3.66': 'September 11, 2026',

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { VoiceWorkManager, type VoiceJob, type VoiceWorkManagerOptions } from './voiceWorkManager';
 import type { VoiceCodexRequest, VoiceCodexRecoveryRequest, VoiceCodexOutcome, VoiceCodexRuntimeStatus } from './voiceCodexRunner';
-import type { VoiceRoute, VoiceRouteRequest } from './voiceCodexRouter';
+import type { VoiceRoute, VoiceRouteRequest, VoiceInboxReceipt } from './voiceCodexRouter';
 
 const directories: string[] = [];
 const managers: VoiceWorkManager[] = [];
@@ -65,7 +65,7 @@ function harness(existingDirectory?: string, folderOptions: Pick<VoiceWorkManage
   const recoverRequest = vi.fn(async (_request: VoiceCodexRecoveryRequest) => outcome);
   const inspectRuntime = vi.fn<() => Promise<VoiceCodexRuntimeStatus>>(async () => ({ status: 'ready', message: 'Codex is ready.' }));
   const routeRequest = vi.fn(async (input: VoiceRouteRequest): Promise<VoiceRoute> => ({ decision: 'new', workspacePath: input.inboxPath }));
-  const writeInboxReceipt = vi.fn(async () => {});
+  const writeInboxReceipt = vi.fn(async (_input: VoiceInboxReceipt) => {});
   const onTranscript = vi.fn();
   const onDispatched = vi.fn();
   const manager = new VoiceWorkManager({
@@ -941,7 +941,7 @@ it.each(['classification_timeout', 'inbox_receipt_uncertain'])('quarantines an u
   expect(saved.attempts['job-1'].inboxReceipts[0].abandoned.code).toBe(code);
   expect(h.writeInboxReceipt).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
   h.push(); await settle();
-  expect((h.writeInboxReceipt.mock.calls as unknown as Array<[{ status: string }]>).filter(args => args[0].status === 'working')).toHaveLength(1);
+  expect(h.writeInboxReceipt.mock.calls.filter(([receipt]) => receipt.status === 'working')).toHaveLength(1);
   expect(h.runRequest).toHaveBeenCalledTimes(1);
 });
 
