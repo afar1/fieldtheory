@@ -23,6 +23,7 @@ struct VoiceView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedControlContentHeight: CGFloat = 44
+    @State private var recordingControlAvailableWidth: CGFloat = 340
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -528,7 +529,11 @@ struct VoiceView: View {
             }
         }
         .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
-        .frame(maxWidth: 480).padding(.horizontal, 16)
+        .frame(maxWidth: 480)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            recordingControlAvailableWidth = width
+        }
+        .padding(.horizontal, 16)
         .animation(controlMorphAnimation, value: controlExpanded)
         .animation(controlMorphAnimation, value: recorder.phase)
         .animation(controlMorphAnimation, value: showTranscribedConfirmation)
@@ -641,27 +646,33 @@ struct VoiceView: View {
         return ("Record", "", "mic.fill", false)
     }
 
+    private var expandedControlWidth: CGFloat {
+        let hasAccessory = model.recorder.phase == .idle && model.recorder.nextPendingSession != nil
+        return max(168, min(340, recordingControlAvailableWidth - (hasAccessory ? 108 : 0)))
+    }
+
     private var recordingControlLabel: some View {
         let recorder = model.recorder
-        return VoiceRecordingControlLayout(
-            expanded: controlExpanded ? 1 : 0,
-            capturing: recorder.isStartingRecording || recorder.phase == .recording ? 1 : 0,
-            accessorySpace: recorder.phase == .idle && recorder.nextPendingSession != nil ? 108 : 0,
-            expandedContentHeight: expandedControlContentHeight
-        ) {
+        let capturing = recorder.isStartingRecording || recorder.phase == .recording
+        return ZStack {
             compactRecordingControlLabel
                 .foregroundStyle(.white)
-                .opacity(controlExpanded ? 0 : 1)
+                .modifier(VoiceControlContentFade(visibility: controlExpanded ? 0 : 1))
                 .accessibilityHidden(controlExpanded)
             expandedRecordingControlLabel
+                .frame(width: expandedControlWidth - 32)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     expandedControlContentHeight = max(44, height)
                 }
                 .foregroundStyle(Theme.text(colorScheme))
-                .opacity(controlExpanded ? 1 : 0)
+                .modifier(VoiceControlContentFade(visibility: controlExpanded ? 1 : 0))
                 .accessibilityHidden(!controlExpanded)
         }
+        // Native frame interpolation keeps the center anchored while width and
+        // height change. Labels retain their identity inside this one frame.
+        .frame(width: controlExpanded ? expandedControlWidth : (capturing ? 168 : 124),
+               height: controlExpanded ? expandedControlContentHeight + 24 : 52)
     }
 
     private var compactRecordingControlLabel: some View {
@@ -682,7 +693,7 @@ struct VoiceView: View {
             }
             .font(.system(size: 16, weight: .semibold))
             .fixedSize()
-            .opacity(recording ? 0 : 1)
+            .modifier(VoiceControlContentFade(visibility: recording ? 0 : 1))
 
             HStack(spacing: 12) {
                 VoiceMicrophoneWaveform(level: recorder.level)
@@ -692,7 +703,7 @@ struct VoiceView: View {
                     .font(.system(size: 17, weight: .semibold))
             }
             .fixedSize()
-            .opacity(recording ? 1 : 0)
+            .modifier(VoiceControlContentFade(visibility: recording ? 1 : 0))
         }
         // Begin widening during startup; capture readiness reveals the live controls.
         .frame(width: recording || recorder.isStartingRecording ? 124 : 80, height: 52)
@@ -1473,41 +1484,17 @@ struct TranscriptEditSheet: View {
     }
 }
 
-/// Both labels stay mounted. Interpolating the container's measured geometry
-/// avoids replacing fixed-width and flexible layouts at the state boundary.
-private struct VoiceRecordingControlLayout: Layout {
-    var expanded: CGFloat
-    var capturing: CGFloat
-    var accessorySpace: CGFloat
-    var expandedContentHeight: CGFloat
-
-    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
-        get { .init(.init(expanded, capturing), .init(accessorySpace, expandedContentHeight)) }
-        set {
-            expanded = newValue.first.first
-            capturing = newValue.first.second
-            accessorySpace = newValue.second.first
-            expandedContentHeight = newValue.second.second
-        }
+/// Fade the outgoing words away before introducing the incoming layer, so
+/// Record and the timer never form a ghosted, overlapping line mid-transition.
+private struct VoiceControlContentFade: AnimatableModifier {
+    var visibility: Double
+    var animatableData: Double {
+        get { visibility }
+        set { visibility = newValue }
     }
 
-    private func expandedSize(proposal: ProposedViewSize, subviews: Subviews) -> CGSize {
-        let width = max(168, min(340, (proposal.width ?? 340) - accessorySpace))
-        return .init(width: width, height: max(68, expandedContentHeight + 24))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let target = expandedSize(proposal: proposal, subviews: subviews)
-        let compactWidth = 124 + 44 * capturing
-        return .init(width: compactWidth + (target.width - compactWidth) * expanded,
-                     height: 52 + (target.height - 52) * expanded)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let target = expandedSize(proposal: proposal, subviews: subviews)
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        subviews[0].place(at: center, anchor: .center, proposal: .init(width: 80 + 44 * capturing, height: 52))
-        subviews[1].place(at: center, anchor: .center, proposal: .init(width: target.width - 32, height: nil))
+    func body(content: Content) -> some View {
+        content.opacity(max(0, min(1, visibility * 2 - 1)))
     }
 }
 
