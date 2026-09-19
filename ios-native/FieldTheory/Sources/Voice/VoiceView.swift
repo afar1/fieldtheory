@@ -501,7 +501,18 @@ struct VoiceView: View {
                             .padding(.vertical, controlExpanded ? 12 : 0)
                             .frame(minWidth: controlExpanded ? nil : 124)
                             .frame(maxWidth: controlExpanded ? .infinity : nil, minHeight: controlExpanded ? 68 : 52)
-                            .background(controlBackground, in: RoundedRectangle(cornerRadius: 32))
+                            .background {
+                                // Switch the fill immediately, then let the existing
+                                // width animation expand the acknowledged tap.
+                                // Separate branches avoid animating blue through red.
+                                if recorder.isStartingRecording || recorder.phase == .recording {
+                                    RoundedRectangle(cornerRadius: 32).fill(Theme.unread)
+                                        .transition(.identity)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 32).fill(controlBackground)
+                                        .transition(.identity)
+                                }
+                            }
                             .overlay {
                                 if controlExpanded {
                                     RoundedRectangle(cornerRadius: 32)

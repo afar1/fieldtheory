@@ -597,14 +597,17 @@ final class RecorderController {
         guard workEnabled, phase == .idle, canStartRecording else { return }
         let generation = workGeneration
         lastError = nil
+        // Acknowledge an accepted tap before scheduling audio work. This pending
+        // state never claims that the microphone is already capturing.
+        isRequestingRecordPermission = true
         if AVAudioApplication.shared.recordPermission == .granted {
             Task { @MainActor in
+                self.isRequestingRecordPermission = false
                 guard self.workEnabled, self.workGeneration == generation else { return }
                 await self.beginSession()
             }
             return
         }
-        isRequestingRecordPermission = true
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
