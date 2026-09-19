@@ -87,7 +87,7 @@ final class RecordingControlsPerformancePreview: NSObject {
 
     private func startSampling() {
         frames.removeAll(keepingCapacity: true)
-        frames.reserveCapacity(3_000)
+        frames.reserveCapacity(10_000)
         transitions.removeAll(keepingCapacity: true)
         lastCallback = nil
         startedAt = CACurrentMediaTime()

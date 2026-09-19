@@ -498,8 +498,11 @@ struct VoiceView: View {
                             .opacity(controlExpanded ? 1 : 0)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 32))
+                    .contentShape(RoundedRectangle(cornerRadius: 32))
+                    .accessibilityElement(children: .ignore)
             }
             .buttonStyle(VoiceStatusButtonStyle())
+            .accessibilityLabel(recordingControlAccessibilityLabel)
             .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
             .accessibilityIdentifier("VoiceRecordingControl")
             .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -644,6 +647,13 @@ struct VoiceView: View {
         if showTranscribedConfirmation { return ("Transcribed", "Saved to transcripts", "checkmark", false) }
         if showReadyConfirmation { return ("Voice model ready", "Ready to record", "checkmark", false) }
         return ("Record", "", "mic.fill", false)
+    }
+
+    private var recordingControlAccessibilityLabel: String {
+        if model.recorder.phase == .recording { return "Stop recording" }
+        if model.recorder.isStartingRecording { return "Starting recording" }
+        let text = controlText
+        return controlExpanded && !text.detail.isEmpty ? "\(text.title), \(text.detail)" : text.title
     }
 
     private var expandedControlWidth: CGFloat {
