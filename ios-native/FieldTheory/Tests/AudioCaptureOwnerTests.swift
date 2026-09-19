@@ -56,6 +56,37 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
 }
 
 final class AudioCaptureOwnerTests: XCTestCase {
+    func testOrderedPolicyChangeRestagesBeforeImmediateStart() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        let oldURL = try XCTUnwrap(device.preparedURL)
+        let boundary = Timestamps.nowMs() + 100
+        // Match the controller queue: later lifecycle work waits for policy work,
+        // and immediate Record waits for the latest queued task.
+        let policy = Task {
+            await owner.setPreparationEnabled(true, revision: 2, afterPolicyChangeAt: boundary)
+        }
+        let lifecycle = Task {
+            await policy.value
+            await owner.setPreparationEnabled(true, revision: 3)
+        }
+        await lifecycle.value
+        let token = UUID()
+        let started = try await owner.start(token: token, sessionID: boundary,
+            mixWithOtherAudio: false)
+        XCTAssertGreaterThan(started.sessionID, boundary)
+        XCTAssertNotEqual(started.files.first, oldURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldURL.path))
+        // A preference change during capture must preserve that recording.
+        await owner.setPreparationEnabled(true, revision: 4, afterPolicyChangeAt: boundary + 1_000)
+        let sample = await owner.sample(token: token)
+        XCTAssertEqual(sample?.isRecording, true)
+        let files = await owner.stop(token: token)
+        await owner.setPreparationEnabled(false, revision: 5)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
     func testPreparationNeverCapturesAndOnlyFullyPreparesAfterExplicitStart() async throws {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })

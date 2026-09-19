@@ -35,11 +35,15 @@ actor AudioCaptureOwner {
     /// Revisions reject an older lifecycle task arriving after a newer one.
     /// Allocating the recorder is safe before a tap; prepareToRecord is deferred
     /// until the user has explicitly activated the audio session.
-    func setPreparationEnabled(_ enabled: Bool, revision: Int) {
+    func setPreparationEnabled(_ enabled: Bool, revision: Int, afterPolicyChangeAt boundary: Int64? = nil) {
         guard revision >= preparationRevision else { return }
         preparationRevision = revision
         preparationEnabled = enabled
         guard token == nil else { return } // Never disturb active/background capture.
+        if let boundary {
+            discardPreparedRecorder()
+            lastPreparedSessionID = max(lastPreparedSessionID, boundary)
+        }
         if enabled { prepareNextRecorder() } else { releaseIdleResources() }
     }
 
@@ -92,7 +96,7 @@ actor AudioCaptureOwner {
     func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool) async throws -> Started {
         guard !cancelledTokens.contains(requestedToken), token == nil else { throw CancellationError() }
         token = requestedToken
-        self.sessionID = preparedSessionID ?? sessionID
+        self.sessionID = preparedSessionID ?? max(sessionID, lastPreparedSessionID + 1)
         files = []
         interrupted = false
         let device = self.device ?? makeDevice()

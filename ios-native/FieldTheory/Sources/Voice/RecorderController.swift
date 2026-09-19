@@ -389,14 +389,21 @@ final class RecorderController {
         updateCapturePreparation()
     }
 
-    private func updateCapturePreparation() {
+    /// Call synchronously after a delivery preference changes, before another Record tap.
+    func capturePolicyDidChange() {
+        updateCapturePreparation(afterPolicyChangeAt: Timestamps.nowMs())
+    }
+
+    private func updateCapturePreparation(afterPolicyChangeAt boundary: Int64? = nil) {
         capturePreparationRevision += 1
         let revision = capturePreparationRevision
         let enabled = capturePreparationVisible && workEnabled
             && AVAudioApplication.shared.recordPermission == .granted
         let owner = captureOwner
+        let precedingPreparation = capturePreparationTask
         capturePreparationTask = Task {
-            await owner.setPreparationEnabled(enabled, revision: revision)
+            await precedingPreparation?.value
+            await owner.setPreparationEnabled(enabled, revision: revision, afterPolicyChangeAt: boundary)
         }
     }
 
@@ -652,6 +659,7 @@ final class RecorderController {
         sessionId = Timestamps.nowMs()
         lastStartFailure = nil
         do {
+            await capturePreparationTask?.value
             let started = try await captureOwner.start(token: token, sessionID: sessionId,
                 mixWithOtherAudio: mixWithOtherAudio)
             guard !Task.isCancelled, workEnabled, workGeneration == generation, captureToken == token, phase == .idle else {
