@@ -6,3 +6,7 @@ build-simulator/
 verification/
 
 build-timeline/
+
+# Generated distribution project and generated Info plists.
+FieldTheoryAppStore.xcodeproj/
+.app-store/
