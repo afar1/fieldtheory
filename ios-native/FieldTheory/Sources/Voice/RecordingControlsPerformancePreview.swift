@@ -21,6 +21,7 @@ final class RecordingControlsPerformancePreview: NSObject {
 
     enum State: String, CaseIterable {
         case idle, starting, recording, stopping, transcribing, saving, completed, error
+        case longError, shortError, pending, pendingLong
     }
     private struct Frame: Codable {
         let elapsedMs: Double
@@ -36,6 +37,8 @@ final class RecordingControlsPerformancePreview: NSObject {
     }
     private struct Report: Codable {
         let measurement: String
+        let extendedFixture: Bool
+        let reduceMotionEnabled: Bool
         let requestedFramesPerSecond: Int
         let simulatorScreenMaximumFramesPerSecond: Int
         let durationMs: Double
@@ -54,8 +57,11 @@ final class RecordingControlsPerformancePreview: NSObject {
             // Let the preview mount and its initial ready confirmation settle.
             try? await Task.sleep(for: .seconds(3))
             startSampling()
+            let standardStates: [State] = [.idle, .starting, .recording, .stopping, .transcribing, .saving, .completed, .error]
+            let extended = ProcessInfo.processInfo.arguments.contains("ft-recording-controls-perf-extended")
+            let states = extended ? standardStates + [.longError, .shortError, .pending, .pendingLong, .pending] : standardStates
             for cycle in 0..<3 {
-                for next in State.allCases {
+                for next in states {
                     state = next.rawValue
                     transitions.append(.init(elapsedMs: (CACurrentMediaTime() - startedAt) * 1_000,
                                              state: state, cycle: cycle))
@@ -107,6 +113,8 @@ final class RecordingControlsPerformancePreview: NSObject {
         let intervals = frames.compactMap(\.callbackIntervalMs).sorted()
         let report = Report(
             measurement: "Simulator CADisplayLink callback cadence only; does not prove presented frames, physical-device FPS, or absence of render-server hitches. Pair with Instruments Animation Hitches.",
+            extendedFixture: ProcessInfo.processInfo.arguments.contains("ft-recording-controls-perf-extended"),
+            reduceMotionEnabled: UIAccessibility.isReduceMotionEnabled,
             requestedFramesPerSecond: 120,
             simulatorScreenMaximumFramesPerSecond: UIScreen.main.maximumFramesPerSecond,
             durationMs: (CACurrentMediaTime() - startedAt) * 1_000,
@@ -116,7 +124,8 @@ final class RecordingControlsPerformancePreview: NSObject {
             maxCallbackIntervalMs: intervals.last ?? 0,
             transitions: transitions, frames: frames)
         let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("recording-controls-performance.json")
+            .appendingPathComponent(ProcessInfo.processInfo.arguments.contains("ft-recording-controls-perf-extended")
+                                    ? "recording-controls-performance-extended.json" : "recording-controls-performance.json")
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

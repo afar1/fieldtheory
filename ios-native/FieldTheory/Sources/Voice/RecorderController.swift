@@ -1226,11 +1226,25 @@ final class RecorderController {
         isStartingCapture = state == .starting
         isStoppingCapture = state == .stopping
         lastError = nil
+        nextPendingSession = nil
+        pendingSessionCount = 0
         currentDeliverySessionID = state == .saving ? "preview-\(cycle)" : nil
         switch state {
         case .idle, .starting, .error:
             phase = .idle
             if state == .error { lastError = "Preview error: tap to try recording again" }
+        case .longError, .shortError:
+            phase = .idle
+            lastError = state == .longError
+                ? "The microphone disconnected before recording could begin. Reconnect your Bluetooth microphone, then tap Record to try again. Your previous recordings are saved."
+                : "Microphone disconnected. Try again."
+        case .pending, .pendingLong:
+            phase = .idle
+            nextPendingSession = PendingAudioSession(id: "preview-pending", files: [])
+            pendingSessionCount = 1
+            if state == .pendingLong {
+                lastError = "Your audio is saved on this device. The voice model could not finish this recording. Tap to retry transcription when the model is ready."
+            }
         case .recording, .stopping:
             phase = .recording
             startedAt = Date()
