@@ -172,7 +172,7 @@ struct VoiceView: View {
             )) {
                 Button("Keep recording", role: .cancel) { recordingToDiscard = nil }
                 Button("Discard audio", role: .destructive) {
-                    if let id = recordingToDiscard { model.recorder.discardActiveRecording(expectedID: id) }
+                    if let id = recordingToDiscard { Task { await model.recorder.discardActiveRecording(expectedID: id) } }
                     recordingToDiscard = nil
                 }
             } message: { Text("This cannot be undone.") }
@@ -534,7 +534,7 @@ struct VoiceView: View {
             guard model.recorder.phase == .recording,
                   let id = model.recorder.activeRecordingID else { return }
             if model.settings.confirmBeforeDiscarding { recordingToDiscard = id }
-            else { model.recorder.discardActiveRecording(expectedID: id) }
+            else { Task { await model.recorder.discardActiveRecording(expectedID: id) } }
         } label: {
             Image(systemName: "xmark").font(.body.weight(.semibold))
                 .foregroundStyle(Theme.text(colorScheme))

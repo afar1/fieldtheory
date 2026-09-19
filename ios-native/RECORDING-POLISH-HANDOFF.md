@@ -74,3 +74,11 @@ The pill now begins widening from the existing startup state. Red, live elapsed/
 Independent review found no blocking issues. Both recording UI tests passed, including stable pill geometry, keep/discard, and returning to Record after transcription: `/Users/afar/dev/fieldtheory-ios-local-build/Logs/Test/Test-FieldTheory-2026.09.19_10-28-10--0700.xcresult`.
 
 This removes post-readiness visual waiting; it does not prove physical frame pacing. Synchronous startup on the main actor can still prevent intermediate frames. Device animation acceptance awaits Andrew's feedback.
+
+## Main-thread startup correction for build 49
+
+Build 48 still felt visibly choppy on Focus. Capture startup now uses a single AudioCaptureOwner actor for audio-session changes, recorder creation/start/stop, retries, interruptions, and meter reads. The main actor publishes startup immediately and capture readiness when the owner succeeds. No fixed animation wait precedes microphone startup. Live Activity creation remains on main pending a measured follow-up.
+
+Diagnostics retain attempt identity and ordered event history through a serial utility writer. Audio events snapshot on the capture executor; UI event audio snapshots happen on the writer, with separate event/context/audio snapshot timestamps. Resume refreshes the diagnostic context. Draining the writer awaits attempted persistence; write failures remain logged.
+
+Independent review found lifecycle races and they were corrected: shared finalization seals files before consumption, suspension preserves queued audio, explicit discard/sign-out deletes it, Live Activity discard awaits shutdown, and a prior stop cannot finish a new session's activity. Nine new owner/controller tests plus the writer test cover off-main execution, retry behavior, stale cancellation, interruption segments, stop/suspend and sign-out races, and discard completion. The selected 35 unit and two recording UI tests passed; final unit rerun covers the last shared-finalizer correction. Phone frame pacing, Bluetooth, and Action Button runtime acceptance are not established by these tests.

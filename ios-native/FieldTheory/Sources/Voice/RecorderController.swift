@@ -48,11 +48,18 @@ final class RecorderController {
     private(set) var isStartingCapture = false
     private var isRequestingRecordPermission = false
     var isStartingRecording: Bool { isStartingCapture || isRequestingRecordPermission }
-    private var recorder: AVAudioRecorder?
+    private let captureOwner: AudioCaptureOwner
+    private var captureFinalizationTask: Task<[URL], Never>?
+    private var captureDeletionGeneration = UUID()
+    private var captureToken: UUID?
+    private var isStoppingCapture = false
+    private var stopActionInFlight = false
+    private var meterReadPending = false
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
     private var meterTimer: Timer?
     private var interruptionObserver: NSObjectProtocol?
+    private var interruptionTask: Task<Void, Never>?
     private var draining = false
     private var transcriptionProgress: Progress?
     private var userTranscriptionPending = false
@@ -104,7 +111,7 @@ final class RecorderController {
     private(set) var lastSavedTranscriptID: String?
     private(set) var currentDeliverySessionID: String?
 
-    var canStartRecording: Bool { engineState == .ready && !isStartingRecording }
+    var canStartRecording: Bool { engineState == .ready && !isStartingRecording && !isStoppingCapture && !stopActionInFlight }
     var preparationMessage: String {
         _ = engineStateRevision
         return speechEngine.preparationMessage
@@ -144,7 +151,9 @@ final class RecorderController {
          defaults: UserDefaults = .standard,
          transcribe: ((URL) async throws -> String)? = nil,
          speechEngine: (any SpeechTranscriptionEngine)? = nil,
-         continuedProcessing: VoiceContinuedProcessing? = nil) {
+         continuedProcessing: VoiceContinuedProcessing? = nil,
+         captureOwner: AudioCaptureOwner = AudioCaptureOwner()) {
+        self.captureOwner = captureOwner
         self.continuedProcessing = continuedProcessing ?? .shared
         self.pendingDirectory = pendingDirectory
         self.metricsDirectory = metricsDirectory
@@ -366,6 +375,9 @@ final class RecorderController {
             workEnabled = false
             workGeneration = UUID()
             cancelPreparationWaiters()
+            if isStartingCapture, phase == .idle, let token = captureToken {
+                _ = finalizeCapture(token: token, discard: false)
+            }
             return
         }
         if defaults.bool(forKey: Self.cleanupKey) {
@@ -390,6 +402,12 @@ final class RecorderController {
         workEnabled = false
         workGeneration = UUID()
         cancelPreparationWaiters()
+        let cancelsActiveCapture = captureToken != nil && !stopActionInFlight && captureFinalizationTask == nil
+        if let finalization = captureFinalizationTask { _ = await finalization.value }
+        if let token = captureToken {
+            _ = await finalizeCapture(token: token, discard: false).value
+        }
+        if cancelsActiveCapture { onCaptureCancelled?() }
         if let deliveryTask {
             let delivered = await deliveryTask.value
             if delivered {
@@ -416,17 +434,21 @@ final class RecorderController {
         workGeneration = UUID()
         cancelPreparationWaiters()
         defaults.set(true, forKey: Self.cleanupKey)
+        captureDeletionGeneration = UUID()
+        if let finalization = captureFinalizationTask { _ = await finalization.value }
         meterTimer?.invalidate()
         meterTimer = nil
-        recorder?.stop()
-        recorder = nil
+        if let token = captureToken {
+            captureToken = nil
+            let sealedFiles = await captureOwner.stop(token: token)
+            segmentURLs = Array(Set(segmentURLs + sealedFiles))
+        }
         phase = .idle
         startedAt = nil
         level = 0
         elapsed = 0
         draining = false
         for task in Array(backgroundTasks) { finishBackgroundTask(task) }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         _ = await deliveryTask?.value
         deliveryTask = nil
         deliveryFiles = []
@@ -483,23 +505,45 @@ final class RecorderController {
     var activeRecordingID: String? { phase == .recording ? String(sessionId) : nil }
 
     /// Cancel only the capture represented by the confirmation; never delete older queued audio.
-    func discardActiveRecording(expectedID: String) {
-        guard activeRecordingID == expectedID else { return }
+    func discardActiveRecording(expectedID: String) async {
+        guard activeRecordingID == expectedID, !isStoppingCapture, let token = captureToken else { return }
+        clearFinishAction(for: expectedID)
+        _ = await finalizeCapture(token: token, discard: true).value
+    }
+
+    /// Every caller shares the same seal operation. A suspension parks audio;
+    /// only an explicit discard/sign-out generation authorizes deleting it.
+    private func finalizeCapture(token: UUID, discard: Bool) -> Task<[URL], Never> {
+        if let existing = captureFinalizationTask { return existing }
+        isStoppingCapture = true
         meterTimer?.invalidate()
         meterTimer = nil
-        recorder?.stop()
-        recorder = nil
-        clearFinishAction(for: expectedID)
-        let files = segmentURLs
-        segmentURLs = []
-        phase = .idle
-        startedAt = nil
-        elapsed = 0
-        level = 0
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        do { for file in files { try FileManager.default.removeItem(at: file) } }
-        catch { lastError = "Could not remove discarded audio: \(error.localizedDescription)" }
-        onCaptureCancelled?()
+        let deletionGeneration = captureDeletionGeneration
+        let task = Task { @MainActor in
+            let files = await captureOwner.stop(token: token)
+            if captureToken == token {
+                captureToken = nil
+                phase = .idle
+                startedAt = nil
+                elapsed = 0
+                level = 0
+                segmentURLs = []
+            }
+            let queued: [URL]
+            if discard || captureDeletionGeneration != deletionGeneration {
+                do { for file in files { try FileManager.default.removeItem(at: file) } }
+                catch { lastError = "Could not remove discarded audio: \(error.localizedDescription)" }
+                queued = []
+                if discard { onCaptureCancelled?() }
+            } else {
+                queued = queueForRetry(files)
+            }
+            isStoppingCapture = false
+            captureFinalizationTask = nil
+            return queued
+        }
+        captureFinalizationTask = task
+        return task
     }
 
     func toggle() {
@@ -531,7 +575,7 @@ final class RecorderController {
 
     /// An intent must finish starting the microphone before returning to the system.
     func startFromIntent() async throws {
-        guard workEnabled, phase == .idle, !isStartingCapture, !isRequestingRecordPermission else {
+        guard workEnabled, phase == .idle, !isStartingCapture, !isRequestingRecordPermission, !stopActionInFlight else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
         }
         guard engineReady else {
@@ -547,63 +591,58 @@ final class RecorderController {
         }
     }
 
-    private func beginSession(mixWithOtherAudio: Bool = false) async {
-        guard workEnabled, phase == .idle, engineReady, !isStartingCapture else { return }
+    func beginSession(mixWithOtherAudio: Bool = false) async {
+        guard workEnabled, phase == .idle, engineReady, !isStartingCapture, !isStoppingCapture, !stopActionInFlight else { return }
         BackgroundRecordingSession.shared.beginCaptureDiagnostics()
         isStartingCapture = true
         defer { isStartingCapture = false }
         let generation = workGeneration
+        let deletionGeneration = captureDeletionGeneration
+        let token = UUID()
+        captureToken = token
+        sessionId = Timestamps.nowMs()
         lastStartFailure = nil
+        let evidence = BackgroundRecordingSession.shared.makeCaptureEvidenceRecorder()
         do {
-            let session = AVAudioSession.sharedInstance()
-            // A background intent must not request interruption of the foreground app's audio.
-            var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-            if mixWithOtherAudio { options.insert(.mixWithOthers) }
-            BackgroundRecordingSession.shared.recordEvidence("audio-category-setting")
-            try session.setCategory(.playAndRecord, mode: .default, options: options)
-            BackgroundRecordingSession.shared.recordEvidence("audio-session-activating")
-            try session.setActive(true)
-            BackgroundRecordingSession.shared.recordEvidence("audio-session-activated")
-            segmentURLs = []
-            sessionId = Timestamps.nowMs()
-            // Keep the activated audio session alive while Bluetooth capture settles.
-            // Pin the selected input, rather than silently falling back to the phone mic.
-            let selectedInput = session.currentRoute.inputs.first
-            if let selectedInput, selectedInput.portType == .bluetoothHFP {
-                try session.setPreferredInput(selectedInput)
-            }
-            try await Self.startMicrophoneWithRetry {
-                try Task.checkCancellation()
-                guard self.workEnabled, self.workGeneration == generation, self.phase == .idle else { throw CancellationError() }
-                if let selectedInput, selectedInput.portType == .bluetoothHFP,
-                   session.currentRoute.inputs.first?.uid != selectedInput.uid {
-                    throw SpeechTranscriptionEngineError(message: "The Bluetooth microphone disconnected. Try recording again.")
+            let started = try await captureOwner.start(token: token, sessionID: sessionId,
+                mixWithOtherAudio: mixWithOtherAudio, evidence: evidence)
+            guard !Task.isCancelled, workEnabled, workGeneration == generation, captureToken == token, phase == .idle else {
+                if captureToken == token {
+                    _ = await finalizeCapture(token: token,
+                        discard: captureDeletionGeneration != deletionGeneration || Task.isCancelled).value
+                } else if let finalization = captureFinalizationTask {
+                    _ = await finalization.value
                 }
-                try self.startNewSegment()
-            } wait: { delay in
-                BackgroundRecordingSession.shared.recordEvidence("audio-recorder-retry-wait")
-                try await Task.sleep(for: delay)
+                await RecordingEvidenceWriter.shared.flush()
+                return
             }
+            segmentURLs = started.files
             phase = .recording
-            startedAt = Date()
+            startedAt = started.startedAt
             elapsed = 0
             startMetering()
             onCaptureStarted?()
-            let capturedRecorder = recorder
-            Task { @MainActor [weak self, weak capturedRecorder] in
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1))
-                guard let self, let capturedRecorder, self.recorder === capturedRecorder else { return }
+                guard let self, self.captureToken == token,
+                      let sample = await self.captureOwner.sample(token: token),
+                      self.captureToken == token else { return }
                 BackgroundRecordingSession.shared.recordEvidence("capture-progress", details: [
-                    "isRecording": capturedRecorder.isRecording,
-                    "recordedSeconds": capturedRecorder.currentTime])
+                    "isRecording": sample.isRecording, "recordedSeconds": sample.recordedSeconds])
             }
+            // Capture readiness is already visible; intent return still waits for durable evidence.
+            await RecordingEvidenceWriter.shared.flush()
         } catch {
+            guard captureToken == token, workGeneration == generation else {
+                await RecordingEvidenceWriter.shared.flush()
+                return
+            }
+            captureToken = nil
             lastStartFailure = error
-            BackgroundRecordingSession.shared.recordEvidence("audio-start-failed-before-cleanup", error: error)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
+            await RecordingEvidenceWriter.shared.flush()
         }
     }
 
@@ -625,43 +664,18 @@ final class RecorderController {
         }
     }
 
-    private func startNewSegment() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rec-\(sessionId)-\(segmentURLs.count).wav")
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-creating")
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.isMeteringEnabled = true
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-starting")
-        guard recorder.record() else {
-            BackgroundRecordingSession.shared.recordEvidence("audio-recorder-returned-false")
-            recorder.stop()
-            recorder.deleteRecording()
-            throw MicrophoneStartError.notStarted
-        }
-        BackgroundRecordingSession.shared.recordEvidence("audio-recorder-started")
-        self.recorder = recorder
-        segmentURLs.append(url)
-    }
-
     private func startMetering() {
         meterTimer?.invalidate()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let recorder = self.recorder, self.phase == .recording else { return }
-                recorder.updateMeters()
-                let decibels = recorder.averagePower(forChannel: 0)
-                self.level = max(0, min(1, (decibels + 50) / 50))
-                if let startedAt = self.startedAt {
-                    self.elapsed = Date().timeIntervalSince(startedAt)
-                }
+                guard let self, self.phase == .recording, let token = self.captureToken,
+                      !self.meterReadPending else { return }
+                self.meterReadPending = true
+                defer { self.meterReadPending = false }
+                guard let sample = await self.captureOwner.sample(token: token),
+                      self.captureToken == token, self.phase == .recording else { return }
+                self.level = sample.level
+                if let startedAt = self.startedAt { self.elapsed = Date().timeIntervalSince(startedAt) }
             }
         }
     }
@@ -669,49 +683,41 @@ final class RecorderController {
     private func handleInterruption(_ notification: Notification) {
         guard let info = notification.userInfo,
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+              let token = captureToken else { return }
         BackgroundRecordingSession.shared.recordEvidence("audio-interruption-\(type.rawValue)")
-        switch type {
-        case .began:
-            // A call (or Siri) took the mic. Seal this segment; we resume after.
-            recorder?.stop()
-            recorder = nil
-        case .ended:
-            guard phase == .recording else { return }
-            let options = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
-                .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
-            if options.contains(.shouldResume) || UIApplication.shared.applicationState != .background {
-                try? AVAudioSession.sharedInstance().setActive(true)
-                try? startNewSegment()
+        let options = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
+            .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+        let shouldResume = options.contains(.shouldResume) || UIApplication.shared.applicationState != .background
+        let previousInterruption = interruptionTask
+        interruptionTask = Task { @MainActor in
+            await previousInterruption?.value
+            switch type {
+            case .began:
+                await captureOwner.interruptionBegan(token: token)
+            case .ended:
+                guard phase == .recording, captureToken == token else { return }
+                let evidence = BackgroundRecordingSession.shared.makeCaptureEvidenceRecorder()
+                if let files = try? await captureOwner.interruptionEnded(token: token, shouldResume: shouldResume, evidence: evidence),
+                   captureToken == token { segmentURLs = files }
+            @unknown default: break
             }
-        @unknown default:
-            break
         }
     }
 
     func stopAndTranscribe() async {
-        guard workEnabled, phase == .recording else { return }
+        guard workEnabled, phase == .recording, !isStoppingCapture, !stopActionInFlight, let token = captureToken else { return }
+        stopActionInFlight = true
+        defer {
+            onCaptureFinished?()
+            stopActionInFlight = false
+        }
+        let generation = workGeneration
         BackgroundRecordingSession.shared.recordEvidence("stop-requested")
         onCaptureStopped?()
-        defer { onCaptureFinished?() }
         let stoppedAtMs = Timestamps.nowMs()
-        meterTimer?.invalidate()
-        recorder?.stop()
-        recorder = nil
-        level = 0
-
-        let urls = segmentURLs
-        segmentURLs = []
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        logger.info("Voice recording stopped with \(urls.count, privacy: .public) segment(s)")
-
-        let queued = queueForRetry(urls)
-        guard !queued.isEmpty else {
-            phase = .idle
-            startedAt = nil
-            return
-        }
+        let queued = await finalizeCapture(token: token, discard: false).value
+        guard workEnabled, workGeneration == generation, phase == .idle, captureToken == nil, !queued.isEmpty else { return }
 
         if let first = queued.first {
             stoppedAtMsBySessionID[Self.pendingSessionID(for: first)] = stoppedAtMs

@@ -128,7 +128,7 @@ final class BackgroundRecordingSession {
               let captureID = AppModel.shared.recorder.activeRecordingID else { return }
         if confirmed || (!keep && !AppModel.shared.settings.confirmBeforeDiscarding) {
             self.activity = nil
-            AppModel.shared.recorder.discardActiveRecording(expectedID: captureID)
+            await AppModel.shared.recorder.discardActiveRecording(expectedID: captureID)
             await activity.end(nil, dismissalPolicy: .immediate)
         } else {
             await activity.update(ActivityContent(state: .init(
@@ -250,53 +250,118 @@ final class BackgroundRecordingSession {
         recordEvidence("capture-start-entered")
     }
 
-    func recordEvidence(_ event: String, error: Error? = nil, details: [String: Any] = [:]) {
-        let directory = RecorderController.voiceDiagnosticsDir
-        let url = directory.appendingPathComponent("background-recording.json")
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            var events = (try? Data(contentsOf: url))
-                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
-            let audio = AVAudioSession.sharedInstance()
-            var entry: [String: Any] = ["event": event,
-                "attemptID": diagnosticAttempt,
-                "origin": diagnosticOrigin,
-                "processID": ProcessInfo.processInfo.processIdentifier,
-                "processLaunchID": processLaunchID,
-                "phase": String(describing: AppModel.shared.recorder.phase),
-                "ownedActivityID": activity?.id ?? "none",
-                "attemptElapsedSeconds": ProcessInfo.processInfo.systemUptime - diagnosticStartedAt,
-                "microphonePermission": AVAudioApplication.shared.recordPermission.rawValue,
-                "audioCategory": audio.category.rawValue,
-                "audioMode": audio.mode.rawValue,
-                "audioOptions": audio.categoryOptions.rawValue,
-                "inputAvailable": audio.isInputAvailable,
-                "sampleRate": audio.sampleRate,
-                "inputChannels": audio.inputNumberOfChannels,
-                "otherAudioPlaying": audio.isOtherAudioPlaying,
-                "secondaryAudioSilenced": audio.secondaryAudioShouldBeSilencedHint,
-                "inputPortTypes": audio.currentRoute.inputs.map { $0.portType.rawValue },
-                "outputPortTypes": audio.currentRoute.outputs.map { $0.portType.rawValue },
-                "liveActivitiesEnabled": ActivityAuthorizationInfo().areActivitiesEnabled,
-                "liveActivityStates": Activity<RecordingActivityAttributes>.activities.map { String(describing: $0.activityState) },
-                "timestamp": ISO8601DateFormatter().string(from: Date()),
-                "applicationState": UIApplication.shared.applicationState.rawValue,
-                "protectedDataAvailable": UIApplication.shared.isProtectedDataAvailable,
-                "systemUptimeSeconds": ProcessInfo.processInfo.systemUptime,
-                "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-                "elapsedSeconds": AppModel.shared.recorder.elapsed,
-                "pendingSessions": AppModel.shared.recorder.pendingSessionCount]
-            entry.merge(details) { existing, _ in existing }
-            if let error {
-                let nsError = error as NSError
-                entry["error"] = nsError.localizedDescription
-                entry["errorDomain"] = nsError.domain
-                entry["errorCode"] = nsError.code
-            }
-            events.append(entry)
-            try JSONSerialization.data(withJSONObject: Array(events.suffix(150)), options: [.prettyPrinted, .sortedKeys])
-                .write(to: url, options: .atomic)
-        } catch { logger.error("Could not write recording diagnostics") }
+    /// Capture UI/attempt identity before audio work leaves the main actor.
+    /// Each invocation snapshots audio state on the capture owner's executor.
+    func makeCaptureEvidenceRecorder() -> @Sendable (String, Error?, [String: Any]) -> Void {
+        let context = RecordingEvidenceContext(base: diagnosticContext(), startedAt: diagnosticStartedAt)
+        return { event, error, details in
+            RecordingEvidenceWriter.shared.append(context.entry(event, error: error, details: details))
+        }
     }
 
+    func recordEvidence(_ event: String, error: Error? = nil, details: [String: Any] = [:]) {
+        let context = RecordingEvidenceContext(base: diagnosticContext(), startedAt: diagnosticStartedAt)
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let date = Date()
+        // Give queued writes a finite allowance when the app moves to the background.
+        let allowance = VoiceModelPreparationAllowance(name: "Recording diagnostics")
+        RecordingEvidenceWriter.shared.append(makeEntry: {
+            context.entry(event, error: error, details: details, uptime: uptime, date: date)
+        }) {
+            DispatchQueue.main.async {
+                allowance.end()
+            }
+        }
+    }
+
+    private func diagnosticContext() -> [String: Any] {
+        ["contextCapturedAtUptimeSeconds": ProcessInfo.processInfo.systemUptime,
+         "attemptID": diagnosticAttempt,
+         "origin": diagnosticOrigin,
+         "processID": ProcessInfo.processInfo.processIdentifier,
+         "processLaunchID": processLaunchID,
+         "phase": String(describing: AppModel.shared.recorder.phase),
+         "ownedActivityID": activity?.id ?? "none",
+         "liveActivitiesEnabled": ActivityAuthorizationInfo().areActivitiesEnabled,
+         "liveActivityStates": Activity<RecordingActivityAttributes>.activities.map { String(describing: $0.activityState) },
+         "applicationState": UIApplication.shared.applicationState.rawValue,
+         "protectedDataAvailable": UIApplication.shared.isProtectedDataAvailable,
+         "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+         "elapsedSeconds": AppModel.shared.recorder.elapsed,
+         "pendingSessions": AppModel.shared.recorder.pendingSessionCount]
+    }
+}
+
+/// Immutable JSON-compatible values captured before crossing executors.
+/// No UIKit or mutable model references are carried into the writer.
+private struct RecordingEvidenceContext: @unchecked Sendable {
+    let base: [String: Any]
+    let startedAt: TimeInterval
+
+    func entry(_ event: String, error: Error?, details: [String: Any],
+               uptime: TimeInterval = ProcessInfo.processInfo.systemUptime, date: Date = Date()) -> [String: Any] {
+        let audio = AVAudioSession.sharedInstance()
+        var entry = base
+        entry.merge([
+            "event": event,
+            "attemptElapsedSeconds": uptime - startedAt,
+            "systemUptimeSeconds": uptime,
+            "timestamp": ISO8601DateFormatter().string(from: date),
+            "audioSnapshotUptimeSeconds": ProcessInfo.processInfo.systemUptime,
+            "microphonePermission": AVAudioApplication.shared.recordPermission.rawValue,
+            "audioCategory": audio.category.rawValue,
+            "audioMode": audio.mode.rawValue,
+            "audioOptions": audio.categoryOptions.rawValue,
+            "inputAvailable": audio.isInputAvailable,
+            "sampleRate": audio.sampleRate,
+            "inputChannels": audio.inputNumberOfChannels,
+            "otherAudioPlaying": audio.isOtherAudioPlaying,
+            "secondaryAudioSilenced": audio.secondaryAudioShouldBeSilencedHint,
+            "inputPortTypes": audio.currentRoute.inputs.map { $0.portType.rawValue },
+            "outputPortTypes": audio.currentRoute.outputs.map { $0.portType.rawValue },
+        ]) { _, new in new }
+        entry.merge(details) { existing, _ in existing }
+        if let error {
+            let nsError = error as NSError
+            entry["error"] = nsError.localizedDescription
+            entry["errorDomain"] = nsError.domain
+            entry["errorCode"] = nsError.code
+        }
+        return entry
+    }
+}
+
+/// A single queue preserves event order without JSON reads/writes on the UI thread.
+final class RecordingEvidenceWriter: @unchecked Sendable {
+    static let shared = RecordingEvidenceWriter(url: RecorderController.voiceDiagnosticsDir.appendingPathComponent("background-recording.json"))
+    private let queue = DispatchQueue(label: "com.afar1.fieldtheory.recording-evidence", qos: .utility)
+    private let url: URL
+    private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "RecordingEvidence")
+
+    init(url: URL) { self.url = url }
+
+    func flush() async {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume() }
+        }
+    }
+
+    func append(_ entry: [String: Any], completion: @escaping @Sendable () -> Void = {}) {
+        append(makeEntry: { entry }, completion: completion)
+    }
+
+    func append(makeEntry: @escaping @Sendable () -> [String: Any], completion: @escaping @Sendable () -> Void = {}) {
+        queue.async { [self] in
+            defer { completion() }
+            let entry = makeEntry()
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                var events = (try? Data(contentsOf: url))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+                events.append(entry)
+                try JSONSerialization.data(withJSONObject: Array(events.suffix(150)), options: [.prettyPrinted, .sortedKeys])
+                    .write(to: url, options: .atomic)
+            } catch { logger.error("Could not write recording diagnostics") }
+        }
+    }
 }
