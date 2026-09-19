@@ -1,10 +1,9 @@
 import AVFoundation
 import Foundation
+import os
 
 /// No AVAudioRecorder or mutable AV state leaves this executor.
 actor AudioCaptureOwner {
-    typealias Evidence = @Sendable (String, Error?, [String: Any]) -> Void
-
     struct Started: Sendable {
         let sessionID: Int64
         let startedAt: Date
@@ -24,7 +23,7 @@ actor AudioCaptureOwner {
     private var cancelledTokens = Set<UUID>()
     private var sessionID: Int64 = 0
     private var files: [URL] = []
-    private var evidence: Evidence = { _, _, _ in }
+    private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "AudioCapture")
     private var interrupted = false
     private var preparationRevision = 0
     private var preparationEnabled = false
@@ -74,16 +73,15 @@ actor AudioCaptureOwner {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(nextSessionID)-0.wav")
         do {
-            try device.prepare(url: url, readyToRecord: configuredMix != nil, evidence: evidence)
+            try device.prepare(url: url, readyToRecord: configuredMix != nil)
             preparedURL = url
             preparedSessionID = nextSessionID
-            evidence(configuredMix == nil ? "audio-recorder-staged" : "audio-recorder-prepared", nil, [:])
         } catch {
             device.stop()
             try? FileManager.default.removeItem(at: url)
             device.deactivate()
             configuredMix = nil
-            evidence("audio-preparation-failed-cold-fallback", error, [:])
+            logger.error("Recorder preparation failed; using cold start: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -91,22 +89,18 @@ actor AudioCaptureOwner {
         self.makeDevice = makeDevice
     }
 
-    func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool,
-               evidence: @escaping Evidence) async throws -> Started {
+    func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool) async throws -> Started {
         guard !cancelledTokens.contains(requestedToken), token == nil else { throw CancellationError() }
         token = requestedToken
         self.sessionID = preparedSessionID ?? sessionID
-        self.evidence = evidence
         files = []
         interrupted = false
         let device = self.device ?? makeDevice()
         self.device = device
         do {
             if configuredMix != mixWithOtherAudio {
-                try device.configure(mixWithOtherAudio: mixWithOtherAudio, evidence: evidence)
+                try device.configure(mixWithOtherAudio: mixWithOtherAudio)
                 configuredMix = mixWithOtherAudio
-            } else {
-                evidence("audio-session-reused", nil, [:])
             }
             let delays: [Duration] = [.milliseconds(250), .milliseconds(500), .seconds(1)]
             for attempt in 0...delays.count {
@@ -119,14 +113,12 @@ actor AudioCaptureOwner {
                     return Started(sessionID: self.sessionID, startedAt: Date(), files: files)
                 } catch MicrophoneStartError.notStarted {
                     guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
-                    evidence("audio-recorder-retry-wait", nil, [:])
                     try await Task.sleep(for: delays[attempt])
                 }
             }
             throw MicrophoneStartError.notStarted
         } catch {
             if token == requestedToken {
-                evidence("audio-start-failed-before-cleanup", error, [:])
                 device.stop()
                 device.deactivate()
                 configuredMix = nil
@@ -165,9 +157,8 @@ actor AudioCaptureOwner {
         device?.stop()
     }
 
-    func interruptionEnded(token expectedToken: UUID, shouldResume: Bool, evidence: Evidence? = nil) throws -> [URL] {
+    func interruptionEnded(token expectedToken: UUID, shouldResume: Bool) throws -> [URL] {
         guard token == expectedToken, interrupted, shouldResume, let device else { return files }
-        if let evidence { self.evidence = evidence }
         try device.activate()
         try startSegment(using: device)
         interrupted = false
@@ -177,11 +168,10 @@ actor AudioCaptureOwner {
     private func startSegment(using device: any AudioCaptureDevice) throws {
         let url = preparedURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(sessionID)-\(files.count).wav")
-        if preparedURL != nil { evidence("audio-prepared-recorder-consumed", nil, [:]) }
         preparedURL = nil
         preparedSessionID = nil
         do {
-            try device.start(url: url, evidence: evidence)
+            try device.start(url: url)
             files.append(url)
         } catch {
             device.stop()
@@ -193,10 +183,10 @@ actor AudioCaptureOwner {
 
 /// Injectable at the actor boundary so cancellation/retry ownership can be tested without a microphone.
 protocol AudioCaptureDevice: AnyObject {
-    func prepare(url: URL, readyToRecord: Bool, evidence: AudioCaptureOwner.Evidence) throws
-    func configure(mixWithOtherAudio: Bool, evidence: AudioCaptureOwner.Evidence) throws
+    func prepare(url: URL, readyToRecord: Bool) throws
+    func configure(mixWithOtherAudio: Bool) throws
     func activate() throws
-    func start(url: URL, evidence: AudioCaptureOwner.Evidence) throws
+    func start(url: URL) throws
     func stop()
     func deactivate()
     func sample() -> AudioCaptureOwner.Sample?
@@ -207,15 +197,12 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
     private var bluetoothInputUID: String?
     private var recorderPrepared = false
 
-    func configure(mixWithOtherAudio: Bool, evidence: AudioCaptureOwner.Evidence) throws {
+    func configure(mixWithOtherAudio: Bool) throws {
         let session = AVAudioSession.sharedInstance()
         var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         if mixWithOtherAudio { options.insert(.mixWithOthers) }
-        evidence("audio-category-setting", nil, [:])
         try session.setCategory(.playAndRecord, mode: .default, options: options)
-        evidence("audio-session-activating", nil, [:])
         try session.setActive(true)
-        evidence("audio-session-activated", nil, [:])
         let input = session.currentRoute.inputs.first
         bluetoothInputUID = input?.portType == .bluetoothHFP ? input?.uid : nil
         if let input, bluetoothInputUID != nil { try session.setPreferredInput(input) }
@@ -223,35 +210,31 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
 
     func activate() throws { try AVAudioSession.sharedInstance().setActive(true) }
 
-    func start(url: URL, evidence: AudioCaptureOwner.Evidence) throws {
+    func start(url: URL) throws {
         if let bluetoothInputUID,
            AVAudioSession.sharedInstance().currentRoute.inputs.first?.uid != bluetoothInputUID {
             throw SpeechTranscriptionEngineError(message: "The Bluetooth microphone disconnected. Try recording again.")
         }
-        if recorder?.url != url { try prepare(url: url, readyToRecord: true, evidence: evidence) }
+        if recorder?.url != url { try prepare(url: url, readyToRecord: true) }
         guard let recorder else { throw MicrophoneStartError.notStarted }
         if !recorderPrepared {
             guard recorder.prepareToRecord() else { throw MicrophoneStartError.notStarted }
             recorderPrepared = true
         }
-        evidence("audio-recorder-starting", nil, [:])
         guard recorder.record() else {
-            evidence("audio-recorder-returned-false", nil, [:])
             recorder.stop()
             recorder.deleteRecording()
             throw MicrophoneStartError.notStarted
         }
         self.recorder = recorder
-        evidence("audio-recorder-started", nil, [:])
     }
 
-    func prepare(url: URL, readyToRecord: Bool, evidence: AudioCaptureOwner.Evidence) throws {
+    func prepare(url: URL, readyToRecord: Bool) throws {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
         ]
-        evidence("audio-recorder-creating", nil, [:])
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
         self.recorder = recorder

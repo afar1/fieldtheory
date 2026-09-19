@@ -643,7 +643,6 @@ final class RecorderController {
 
     func beginSession(mixWithOtherAudio: Bool = false) async {
         guard workEnabled, phase == .idle, engineReady, !isStartingCapture, !isStoppingCapture, !stopActionInFlight else { return }
-        BackgroundRecordingSession.shared.beginCaptureDiagnostics()
         isStartingCapture = true
         defer { isStartingCapture = false }
         let generation = workGeneration
@@ -652,10 +651,9 @@ final class RecorderController {
         captureToken = token
         sessionId = Timestamps.nowMs()
         lastStartFailure = nil
-        let evidence = BackgroundRecordingSession.shared.makeCaptureEvidenceRecorder()
         do {
             let started = try await captureOwner.start(token: token, sessionID: sessionId,
-                mixWithOtherAudio: mixWithOtherAudio, evidence: evidence)
+                mixWithOtherAudio: mixWithOtherAudio)
             guard !Task.isCancelled, workEnabled, workGeneration == generation, captureToken == token, phase == .idle else {
                 if captureToken == token {
                     _ = await finalizeCapture(token: token,
@@ -663,7 +661,6 @@ final class RecorderController {
                 } else if let finalization = captureFinalizationTask {
                     _ = await finalization.value
                 }
-                await RecordingEvidenceWriter.shared.flush()
                 return
             }
             sessionId = started.sessionID
@@ -673,27 +670,18 @@ final class RecorderController {
             elapsed = 0
             startMetering()
             onCaptureStarted?()
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, self.captureToken == token,
-                      let sample = await self.captureOwner.sample(token: token),
-                      self.captureToken == token else { return }
-                BackgroundRecordingSession.shared.recordEvidence("capture-progress", details: [
-                    "isRecording": sample.isRecording, "recordedSeconds": sample.recordedSeconds])
-            }
-            // Capture readiness is already visible; intent return still waits for durable evidence.
-            await RecordingEvidenceWriter.shared.flush()
         } catch {
             guard captureToken == token, workGeneration == generation else {
-                await RecordingEvidenceWriter.shared.flush()
                 return
+            }
+            if !(error is CancellationError) {
+                logger.error("Microphone start failed: \(error.localizedDescription, privacy: .public)")
             }
             captureToken = nil
             lastStartFailure = error
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")
             phase = .idle
-            await RecordingEvidenceWriter.shared.flush()
         }
     }
 
@@ -739,7 +727,6 @@ final class RecorderController {
             if type == .began { Task { await captureOwner.invalidatePreparation() } }
             return
         }
-        BackgroundRecordingSession.shared.recordEvidence("audio-interruption-\(type.rawValue)")
         let options = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
             .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
         let shouldResume = options.contains(.shouldResume) || UIApplication.shared.applicationState != .background
@@ -751,8 +738,7 @@ final class RecorderController {
                 await captureOwner.interruptionBegan(token: token)
             case .ended:
                 guard phase == .recording, captureToken == token else { return }
-                let evidence = BackgroundRecordingSession.shared.makeCaptureEvidenceRecorder()
-                if let files = try? await captureOwner.interruptionEnded(token: token, shouldResume: shouldResume, evidence: evidence),
+                if let files = try? await captureOwner.interruptionEnded(token: token, shouldResume: shouldResume),
                    captureToken == token { segmentURLs = files }
             @unknown default: break
             }
@@ -767,7 +753,6 @@ final class RecorderController {
             stopActionInFlight = false
         }
         let generation = workGeneration
-        BackgroundRecordingSession.shared.recordEvidence("stop-requested")
         onCaptureStopped?()
         let stoppedAtMs = Timestamps.nowMs()
         let queued = await finalizeCapture(token: token, discard: false).value
