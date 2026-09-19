@@ -22,6 +22,7 @@ struct VoiceView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expandedControlContentHeight: CGFloat = 44
     @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
@@ -258,7 +259,10 @@ struct VoiceView: View {
     }
 
     private var autoSendControl: some View {
-        Button { model.settings.autoSendTranscriptions.toggle() } label: {
+        Button {
+            model.settings.autoSendTranscriptions.toggle()
+            model.recorder.capturePolicyDidChange()
+        } label: {
             HStack(spacing: 6) {
                 ZStack {
                     Circle().strokeBorder(lineWidth: 1).frame(width: 13, height: 13)
@@ -471,81 +475,72 @@ struct VoiceView: View {
     private var recordingControls: some View {
         let recorder = model.recorder
         let pending = recorder.phase == .idle ? recorder.nextPendingSession : nil
-        return VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                if let pending {
-                    Button {
-                        if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
-                        else { recorder.discardPendingSession(pending) }
-                    } label: {
-                        Image(systemName: "xmark").font(.body.weight(.semibold))
-                            .foregroundStyle(Theme.text(colorScheme))
-                            .frame(width: 44, height: 44)
-                            .background(voiceControlSurface, in: Circle())
-                            .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
-                            .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
+        return ZStack(alignment: .leading) {
+            Button {
+                guard !recordingActionUnavailable else { return }
+                if modelNeedsAttention { showSettings = true }
+                else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
+                else { recorder.toggle() }
+            } label: {
+                recordingControlLabel
+                    .background {
+                        // Keep one shape hierarchy throughout the morph. Only the
+                        // acknowledgement layer switches immediately on a tap.
+                        RoundedRectangle(cornerRadius: 32).fill(controlBackground)
+                        RoundedRectangle(cornerRadius: 32).fill(Theme.unread)
+                            .opacity(recorder.isStartingRecording || recorder.phase == .recording ? 1 : 0)
+                            .animation(nil, value: recorder.isStartingRecording || recorder.phase == .recording)
                     }
-                    .accessibilityLabel("Discard audio")
-                    .accessibilityIdentifier("VoiceDiscardAudio")
-                }
-                ZStack(alignment: .leading) {
-                    Button {
-                        guard !recordingActionUnavailable else { return }
-                        if modelNeedsAttention { showSettings = true }
-                        else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
-                        else { recorder.toggle() }
-                    } label: {
-                        recordingControlLabel
-                            .fixedSize(horizontal: !controlExpanded, vertical: false)
-                            .padding(.horizontal, controlExpanded ? 16 : 22)
-                            .padding(.vertical, controlExpanded ? 12 : 0)
-                            .frame(minWidth: controlExpanded ? nil : 124)
-                            .frame(maxWidth: controlExpanded ? .infinity : nil, minHeight: controlExpanded ? 68 : 52)
-                            .background {
-                                // Switch the fill immediately, then let the existing
-                                // width animation expand the acknowledged tap.
-                                // Separate branches avoid animating blue through red.
-                                if recorder.isStartingRecording || recorder.phase == .recording {
-                                    RoundedRectangle(cornerRadius: 32).fill(Theme.unread)
-                                        .transition(.identity)
-                                } else {
-                                    RoundedRectangle(cornerRadius: 32).fill(controlBackground)
-                                        .transition(.identity)
-                                }
-                            }
-                            .overlay {
-                                if controlExpanded {
-                                    RoundedRectangle(cornerRadius: 32)
-                                        .strokeBorder(voiceControlOutline, lineWidth: 1)
-                                }
-                            }
-                            .foregroundStyle(controlForeground)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 32)
+                            .strokeBorder(voiceControlOutline, lineWidth: 1)
+                            .opacity(controlExpanded ? 1 : 0)
                     }
-                    .buttonStyle(VoiceStatusButtonStyle())
-                    .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
-                    .accessibilityIdentifier("VoiceRecordingControl")
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
-                    // A sibling, not part of the main button's layout or
-                    // accessibility element. Its offset never moves the pill.
-                    if recorder.phase == .recording {
-                        cancelRecordingButton
-                            .offset(x: -54)
-                            .transition(.opacity)
-                    }
-                }
+                    .clipShape(RoundedRectangle(cornerRadius: 32))
             }
-            .buttonStyle(.plain)
-            .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
+            .buttonStyle(VoiceStatusButtonStyle())
+            .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
+            .accessibilityIdentifier("VoiceRecordingControl")
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            // Accessory buttons never participate in the pill's centered layout.
+            if recorder.phase == .recording {
+                cancelRecordingButton
+                    .offset(x: -54)
+                    .transition(.opacity)
+            }
+            if let pending {
+                Button {
+                    if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
+                    else { recorder.discardPendingSession(pending) }
+                } label: {
+                    Image(systemName: "xmark").font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.text(colorScheme))
+                        .frame(width: 44, height: 44)
+                        .background(voiceControlSurface, in: Circle())
+                        .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Discard audio")
+                .accessibilityIdentifier("VoiceDiscardAudio")
+                .offset(x: -54)
+                .transition(.opacity)
+            }
         }
-        .frame(maxWidth: controlExpanded ? 340 : 480).padding(.horizontal, 16)
+        .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
+        .frame(maxWidth: 480).padding(.horizontal, 16)
         .animation(controlMorphAnimation, value: controlExpanded)
         .animation(controlMorphAnimation, value: recorder.phase)
         .animation(controlMorphAnimation, value: showTranscribedConfirmation)
         .animation(controlMorphAnimation, value: recorder.isStartingRecording)
+        .animation(controlMorphAnimation, value: pending?.id)
+        .animation(controlMorphAnimation, value: controlText.title)
+        .animation(controlMorphAnimation, value: controlText.detail)
+        .animation(controlMorphAnimation, value: expandedControlContentHeight)
     }
 
     private var controlMorphAnimation: Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.12)
+        reduceMotion ? nil : .easeInOut(duration: 0.22)
     }
 
     private var cancelRecordingButton: some View {
@@ -620,10 +615,6 @@ struct VoiceView: View {
         return controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
     }
 
-    private var controlForeground: Color {
-        controlExpanded ? Theme.text(colorScheme) : .white
-    }
-
     private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
         let recorder = model.recorder
         if recorder.isStartingRecording { return ("Starting recording…", "Connecting to microphone…", "", true) }
@@ -650,12 +641,26 @@ struct VoiceView: View {
         return ("Record", "", "mic.fill", false)
     }
 
-    @ViewBuilder
     private var recordingControlLabel: some View {
-        if controlExpanded {
-            expandedRecordingControlLabel
-        } else {
+        let recorder = model.recorder
+        return VoiceRecordingControlLayout(
+            expanded: controlExpanded ? 1 : 0,
+            capturing: recorder.isStartingRecording || recorder.phase == .recording ? 1 : 0,
+            accessorySpace: recorder.phase == .idle && recorder.nextPendingSession != nil ? 108 : 0,
+            expandedContentHeight: expandedControlContentHeight
+        ) {
             compactRecordingControlLabel
+                .foregroundStyle(.white)
+                .opacity(controlExpanded ? 0 : 1)
+                .accessibilityHidden(controlExpanded)
+            expandedRecordingControlLabel
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    expandedControlContentHeight = max(44, height)
+                }
+                .foregroundStyle(Theme.text(colorScheme))
+                .opacity(controlExpanded ? 1 : 0)
+                .accessibilityHidden(!controlExpanded)
         }
     }
 
@@ -698,39 +703,33 @@ struct VoiceView: View {
     private var expandedRecordingControlLabel: some View {
         let text = controlText
         return HStack(spacing: 10) {
-            if controlExpanded {
-                Group {
-                    if model.recorder.phase == .recording {
-                        VoiceMicrophoneWaveform(level: model.recorder.level)
-                    } else if text.busy {
-                        ProgressView().tint(voiceControlIconColor)
-                    } else {
-                        Image(systemName: text.icon).font(.system(size: 17, weight: .medium))
-                    }
-                }
-                .foregroundStyle(voiceControlIconColor)
-                .frame(width: 32, height: 32)
-                .background(voiceControlIconSurface, in: RoundedRectangle(cornerRadius: 11))
-            } else {
-                Image(systemName: text.icon).font(.system(size: 17, weight: .medium))
+            ZStack {
+                ProgressView().tint(voiceControlIconColor)
+                    .opacity(text.busy ? 1 : 0)
+                Image(systemName: text.icon.isEmpty ? "mic.fill" : text.icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .opacity(text.busy ? 0 : 1)
             }
+            .foregroundStyle(voiceControlIconColor)
+            .frame(width: 32, height: 32)
+            .background(voiceControlIconSurface, in: RoundedRectangle(cornerRadius: 11))
             VStack(alignment: .leading, spacing: 4) {
-                Text(text.title).font(.system(size: controlExpanded ? 14 : 16, weight: .semibold))
-                if !text.detail.isEmpty {
-                    Text(text.detail).font(.system(size: 12))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(text.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .contentTransition(.opacity)
+                Text(text.detail)
+                    .font(.system(size: 12))
+                    .contentTransition(.opacity)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if controlExpanded {
-                Spacer(minLength: 0)
-                if model.recorder.phase == .recording {
-                    Text(model.recorder.elapsed.clockString).monospacedDigit().font(.system(size: 13))
-                } else if model.recorder.engineState == .preparing || model.recorder.engineState == .checking {
-                    TimelineView(.periodic(from: preparationStartedAt, by: 1)) { context in
-                        Text("\(max(0, Int(context.date.timeIntervalSince(preparationStartedAt))))s")
-                            .monospacedDigit().font(.system(size: 12))
-                    }.accessibilityHidden(true)
-                }
+            Spacer(minLength: 0)
+            if model.recorder.engineState == .preparing || model.recorder.engineState == .checking {
+                TimelineView(.periodic(from: preparationStartedAt, by: 1)) { context in
+                    Text("\(max(0, Int(context.date.timeIntervalSince(preparationStartedAt))))s")
+                        .monospacedDigit().font(.system(size: 12))
+                        .contentTransition(.numericText())
+                }.accessibilityHidden(true)
             }
         }
         .accessibilityElement(children: .combine)
@@ -1471,6 +1470,44 @@ struct TranscriptEditSheet: View {
                 .padding(.vertical, 14)
                 .background(Theme.background(colorScheme))
         }
+    }
+}
+
+/// Both labels stay mounted. Interpolating the container's measured geometry
+/// avoids replacing fixed-width and flexible layouts at the state boundary.
+private struct VoiceRecordingControlLayout: Layout {
+    var expanded: CGFloat
+    var capturing: CGFloat
+    var accessorySpace: CGFloat
+    var expandedContentHeight: CGFloat
+
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
+        get { .init(.init(expanded, capturing), .init(accessorySpace, expandedContentHeight)) }
+        set {
+            expanded = newValue.first.first
+            capturing = newValue.first.second
+            accessorySpace = newValue.second.first
+            expandedContentHeight = newValue.second.second
+        }
+    }
+
+    private func expandedSize(proposal: ProposedViewSize, subviews: Subviews) -> CGSize {
+        let width = max(168, min(340, (proposal.width ?? 340) - accessorySpace))
+        return .init(width: width, height: max(68, expandedContentHeight + 24))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let target = expandedSize(proposal: proposal, subviews: subviews)
+        let compactWidth = 124 + 44 * capturing
+        return .init(width: compactWidth + (target.width - compactWidth) * expanded,
+                     height: 52 + (target.height - 52) * expanded)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let target = expandedSize(proposal: proposal, subviews: subviews)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        subviews[0].place(at: center, anchor: .center, proposal: .init(width: 80 + 44 * capturing, height: 52))
+        subviews[1].place(at: center, anchor: .center, proposal: .init(width: target.width - 32, height: nil))
     }
 }
 
