@@ -86,6 +86,21 @@ final class BackgroundRecordingSession {
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
 
+    /// An older build could leave its interactive result alive across suspension.
+    /// Only completed results qualify; Starting/Recording/Transcribing stay owned
+    /// by their current capture flow.
+    func dismissCompletedActivities() async {
+        for completed in Activity<RecordingActivityAttributes>.activities
+            where completed.content.state.copyReady && !completed.content.state.recording {
+            await completed.end(nil, dismissalPolicy: .immediate)
+            if activity?.id == completed.id {
+                activity = nil
+                captureSessionID = nil
+            }
+            clearCompletedTranscript(for: completed.attributes.recordingID)
+        }
+    }
+
     func attachToForegroundRecording() {
         // The intent owns its Starting activity until capture and its update complete.
         guard !starting, UIApplication.shared.applicationState == .active else { return }
@@ -168,9 +183,11 @@ final class BackgroundRecordingSession {
             guard await model.transcripts.requestCloudSync(id: id) else {
                 throw SpeechTranscriptionEngineError(message: "The transcript could not be queued for sending.")
             }
-            await live.update(ActivityContent(state: .init(status: "Transcribed", recording: false,
-                copyReady: true, sendReady: false), staleDate: Date().addingTimeInterval(300)))
             await model.sync.syncNow()
+            // Also clean up a result activity left by an older app build.
+            await live.end(nil, dismissalPolicy: .immediate)
+            if activity?.id == live.id { activity = nil }
+            clearCompletedTranscript(for: recordingID)
         } else {
             // The Copy intent opens the app because background clipboard writes fail on device.
             for _ in 0..<100 {
@@ -202,23 +219,23 @@ final class BackgroundRecordingSession {
     private func finish() {
         guard let activity else { return }
         recordEvidence("processing-returned")
-        let pending = AppModel.shared.recorder.pendingSessionCount > 0
-        let transcribed = captureSessionID != nil && AppModel.shared.recorder.lastTranscribedSessionID == captureSessionID
-        let saved = UserDefaults.standard.dictionary(forKey: Self.completedKey) as? [String: String]
-        let ready = transcribed && saved?["activity"] == activity.attributes.recordingID
-        let state = RecordingActivityAttributes.ContentState(
-            status: transcribed ? "Transcribed" : (pending ? "Audio saved — open to finish" : "No speech detected"),
-            recording: false, copyReady: ready, sendReady: ready && saved?["canSend"] == "yes")
-        if ready {
-            // Ended Live Activities cannot run buttons. Keep this result interactive for five minutes.
-            Task {
-                await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(300)))
-                try? await Task.sleep(for: .seconds(300))
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-        } else {
-            self.activity = nil
-            Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30))) }
+        self.activity = nil
+        captureSessionID = nil
+        clearCompletedTranscript(for: activity.attributes.recordingID)
+        // End both the Dynamic Island and Lock Screen presentation without a
+        // timer, which could stall when the app is suspended. Saved transcripts
+        // and retryable audio remain available in the app.
+        let allowance = VoiceModelPreparationAllowance(name: "Dismiss recording status")
+        Task {
+            defer { allowance.end() }
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+    }
+
+    private func clearCompletedTranscript(for recordingID: String) {
+        if let saved = UserDefaults.standard.dictionary(forKey: Self.completedKey) as? [String: String],
+           saved["activity"] == recordingID {
+            UserDefaults.standard.removeObject(forKey: Self.completedKey)
         }
     }
 

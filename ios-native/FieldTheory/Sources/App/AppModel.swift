@@ -466,7 +466,7 @@ final class AppModel {
             // Keep the transcription's execution allowance until the upload attempt settles.
             // The durable dirty row remains retryable on network/auth failure.
             if !self.isReviewerDemoStorage { await self.sync.syncNow() }
-            recorder.onNotice?("Saved to Field Theory", "waveform")
+            // The transcript is visible in Voice; no duplicate success banner.
             return true
         }
     }

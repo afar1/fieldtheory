@@ -66,12 +66,12 @@ final class VoiceModelPreparation {
     }
 }
 
-/// Gives an in-progress launch warmup finite time to finish when the user leaves.
+/// Finite runtime for model warmup or a final system-status cleanup.
 @MainActor
 final class VoiceModelPreparationAllowance {
     private var identifier: UIBackgroundTaskIdentifier = .invalid
-    init() {
-        identifier = UIApplication.shared.beginBackgroundTask(withName: "Prepare voice model") { [weak self] in
+    init(name: String = "Prepare voice model") {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
             Task { @MainActor in self?.end() }
         }
     }

@@ -36,6 +36,7 @@ struct FieldTheoryApp: App {
                         VoiceModelPreparation.shared.schedule()
                     }
                     if phase == .active {
+                        Task { await BackgroundRecordingSession.shared.dismissCompletedActivities() }
                         model.handleDidBecomeActive()
                         if recordingOnNextOpen {
                             recordingOnNextOpen = false

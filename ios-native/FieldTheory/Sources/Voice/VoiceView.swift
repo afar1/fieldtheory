@@ -526,9 +526,9 @@ struct VoiceView: View {
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         }
         .frame(maxWidth: controlExpanded ? 340 : 480).padding(.horizontal, 16)
-        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: controlExpanded)
-        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: recorder.phase)
-        .animation(reduceMotion ? nil : .spring(duration: 0.44, bounce: 0), value: showTranscribedConfirmation)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: controlExpanded)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: recorder.phase)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showTranscribedConfirmation)
     }
 
     private var recordingActionUnavailable: Bool {
@@ -546,7 +546,9 @@ struct VoiceView: View {
     }
 
     private var controlExpanded: Bool {
-        model.recorder.isStartingRecording || model.recorder.phase != .idle || model.recorder.engineState != .ready ||
+        // Keep startup and capture in the same compact pill as Record.
+        if model.recorder.isStartingRecording || model.recorder.phase == .recording { return false }
+        return model.recorder.phase != .idle || model.recorder.engineState != .ready ||
         showReadyConfirmation || showTranscribedConfirmation ||
         model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
     }
@@ -578,7 +580,8 @@ struct VoiceView: View {
     }
 
     private var controlBackground: Color {
-        controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
+        if model.recorder.phase == .recording { return Theme.unread }
+        return controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
     }
 
     private var controlForeground: Color {
@@ -611,7 +614,31 @@ struct VoiceView: View {
         return ("Record", "", "mic.fill", false)
     }
 
+    @ViewBuilder
     private var recordingControlLabel: some View {
+        if model.recorder.phase == .recording {
+            HStack(spacing: 12) {
+                VoiceMicrophoneWaveform(level: model.recorder.level)
+                Text(model.recorder.elapsed.clockString)
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Stop recording")
+        } else if model.recorder.isStartingRecording {
+            HStack(spacing: 10) {
+                ProgressView().tint(.white)
+                Text("Starting…").font(.system(size: 16, weight: .semibold))
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Starting recording")
+        } else {
+            expandedRecordingControlLabel
+        }
+    }
+
+    private var expandedRecordingControlLabel: some View {
         let text = controlText
         return HStack(spacing: 10) {
             if controlExpanded {

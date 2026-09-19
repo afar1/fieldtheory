@@ -11,22 +11,44 @@ final class PrivacyHoldUITests: XCTestCase {
         record.tap()
         let cancel = app.buttons["VoiceCancelRecording"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertEqual(record.label, "Stop recording")
+        XCTAssertLessThanOrEqual(record.frame.height, 56, "Recording stays in the compact Record pill")
         cancel.tap()
         let alert = app.alerts["Are you sure you want to discard this audio?"]
         XCTAssertTrue(alert.waitForExistence(timeout: 3))
         alert.buttons["Keep recording"].tap()
         XCTAssertTrue(cancel.exists)
         XCTAssertLessThan(cancel.frame.maxX, record.frame.minX)
-        XCTAssertGreaterThanOrEqual(cancel.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(cancel.frame.width, 44 - 0.01, "Allow floating-point rounding of the 44-point target")
         XCTAssertLessThanOrEqual(record.frame.maxX, app.frame.maxX)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "porcelain-recording-control"
+        screenshot.name = "red-stop-recording-control"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         cancel.tap()
         alert.buttons["Discard audio"].tap()
         XCTAssertTrue(app.buttons["VoiceRecordingControl"].waitForExistence(timeout: 3))
         XCTAssertFalse(cancel.exists)
+        XCTAssertFalse(app.buttons["VoiceDiscardAudio"].exists)
+    }
+
+    func testCompletedRecordingReturnsToRecordWithoutSuccessBanner() {
+        let app = XCUIApplication()
+        app.launchArguments = ["ft-preview", "ft-recording-controls-preview"]
+        app.launch()
+        let record = app.buttons["VoiceRecordingControl"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15))
+        record.tap()
+        let stop = app.buttons.matching(identifier: "VoiceRecordingControl")
+            .matching(NSPredicate(format: "label == %@", "Stop recording")).firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        XCTAssertTrue(app.buttons["Preview transcript"].firstMatch.waitForExistence(timeout: 10))
+        let ready = app.buttons.matching(identifier: "VoiceRecordingControl")
+            .matching(NSPredicate(format: "label == %@", "Record")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 5), "Completion must return to Record")
+        XCTAssertFalse(app.staticTexts["Saved to Field Theory"].exists)
+        XCTAssertFalse(app.buttons["VoiceCancelRecording"].exists)
         XCTAssertFalse(app.buttons["VoiceDiscardAudio"].exists)
     }
 

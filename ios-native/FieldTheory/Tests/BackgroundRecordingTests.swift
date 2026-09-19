@@ -108,9 +108,12 @@ final class BackgroundRecordingTests: XCTestCase {
         XCTAssertNotNil(recorder.onTranscript, "Cold launch must wire persistence before a scene appears")
         try await model.enterReviewerDemo { _, _, _, _ in }
         XCTAssertFalse(model.recorder === recorder)
+        var successNotices: [String] = []
+        model.recorder.onNotice = { message, _ in successNotices.append(message) }
         let save = try XCTUnwrap(model.recorder.onTranscript)
         let saved = await save("spoken without opening a screen")
         XCTAssertTrue(saved)
+        XCTAssertTrue(successNotices.isEmpty, "A saved transcript must not post a duplicate completion banner")
         XCTAssertEqual(model.transcripts.items.map(\.text), ["spoken without opening a screen"])
         let staleSave = try XCTUnwrap(recorder.onTranscript)
         let staleAccepted = await staleSave("old workspace")
