@@ -29,6 +29,7 @@ struct VoiceView: View {
     @State private var preparationStartedAt = Date()
     @State private var searchText = ""
     @State private var recordingToDiscard: String?
+    @State private var showRecordingCancel = false
     @State private var audioToDiscard: PendingAudioSession?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
@@ -465,22 +466,6 @@ struct VoiceView: View {
         let pending = recorder.phase == .idle ? recorder.nextPendingSession : nil
         return VStack(spacing: 8) {
             HStack(spacing: 10) {
-                if recorder.phase == .recording {
-                    Button {
-                        guard let id = recorder.activeRecordingID else { return }
-                        if model.settings.confirmBeforeDiscarding { recordingToDiscard = id }
-                        else { recorder.discardActiveRecording(expectedID: id) }
-                    } label: {
-                        Image(systemName: "xmark").font(.body.weight(.semibold))
-                            .foregroundStyle(Theme.text(colorScheme))
-                            .frame(width: 44, height: 44)
-                            .background(voiceControlSurface, in: Circle())
-                            .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
-                            .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
-                    }
-                    .accessibilityLabel("Cancel recording")
-                    .accessibilityIdentifier("VoiceCancelRecording")
-                }
                 if let pending {
                     Button {
                         if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
@@ -496,6 +481,7 @@ struct VoiceView: View {
                     .accessibilityLabel("Discard audio")
                     .accessibilityIdentifier("VoiceDiscardAudio")
                 }
+                ZStack(alignment: .leading) {
                     Button {
                         guard !recordingActionUnavailable else { return }
                         if modelNeedsAttention { showSettings = true }
@@ -521,14 +507,56 @@ struct VoiceView: View {
                     .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
                     .accessibilityIdentifier("VoiceRecordingControl")
                     .keyboardShortcut("r", modifiers: [.command, .shift])
+                    // A sibling, not part of the main button's layout or
+                    // accessibility element. Its offset never moves the pill.
+                    if showRecordingCancel && recorder.phase == .recording {
+                        cancelRecordingButton
+                            .offset(x: -54)
+                            .transition(.opacity)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         }
         .frame(maxWidth: controlExpanded ? 340 : 480).padding(.horizontal, 16)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: controlExpanded)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: recorder.phase)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showTranscribedConfirmation)
+        .animation(controlMorphAnimation, value: controlExpanded)
+        .animation(controlMorphAnimation, value: recorder.phase)
+        .animation(controlMorphAnimation, value: showTranscribedConfirmation)
+        .task(id: recorder.phase) {
+            showRecordingCancel = false
+            guard recorder.phase == .recording else { return }
+            if !reduceMotion {
+                do { try await Task.sleep(for: .milliseconds(320)) } catch { return }
+            }
+            guard !Task.isCancelled, recorder.phase == .recording else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+                showRecordingCancel = true
+            }
+        }
+    }
+
+    private var controlMorphAnimation: Animation? {
+        reduceMotion ? nil : .spring(duration: 0.32, bounce: 0)
+    }
+
+    private var cancelRecordingButton: some View {
+        Button {
+            guard model.recorder.phase == .recording,
+                  let id = model.recorder.activeRecordingID else { return }
+            if model.settings.confirmBeforeDiscarding { recordingToDiscard = id }
+            else { model.recorder.discardActiveRecording(expectedID: id) }
+        } label: {
+            Image(systemName: "xmark").font(.body.weight(.semibold))
+                .foregroundStyle(Theme.text(colorScheme))
+                .frame(width: 44, height: 44)
+                .background(voiceControlSurface, in: Circle())
+                .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
+                .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Cancel recording")
+        .accessibilityIdentifier("VoiceCancelRecording")
     }
 
     private var recordingActionUnavailable: Bool {
@@ -616,26 +644,49 @@ struct VoiceView: View {
 
     @ViewBuilder
     private var recordingControlLabel: some View {
-        if model.recorder.phase == .recording {
+        if controlExpanded {
+            expandedRecordingControlLabel
+        } else {
+            compactRecordingControlLabel
+        }
+    }
+
+    private var compactRecordingControlLabel: some View {
+        let recorder = model.recorder
+        let recording = recorder.phase == .recording
+        return ZStack {
+            // Keep both labels alive so the pill can resize continuously instead
+            // of replacing its layout at the start/end of the animation.
+            HStack(spacing: 9) {
+                ZStack {
+                    Image(systemName: "mic.fill")
+                        .opacity(recorder.isStartingRecording ? 0 : 1)
+                    ProgressView().tint(.white)
+                        .opacity(recorder.isStartingRecording ? 1 : 0)
+                }
+                .frame(width: 17, height: 20)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: recorder.isStartingRecording)
+                Text("Record")
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .fixedSize()
+            .opacity(recording ? 0 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.10).delay(recording ? 0 : 0.14), value: recording)
+
             HStack(spacing: 12) {
-                VoiceMicrophoneWaveform(level: model.recorder.level)
-                Text(model.recorder.elapsed.clockString)
+                VoiceMicrophoneWaveform(level: recorder.level)
+                Text(recorder.elapsed.clockString)
                     .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 Image(systemName: "stop.fill")
                     .font(.system(size: 17, weight: .semibold))
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Stop recording")
-        } else if model.recorder.isStartingRecording {
-            HStack(spacing: 10) {
-                ProgressView().tint(.white)
-                Text("Starting…").font(.system(size: 16, weight: .semibold))
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Starting recording")
-        } else {
-            expandedRecordingControlLabel
+            .fixedSize()
+            .opacity(recording ? 1 : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(recording ? 0.10 : 0), value: recording)
         }
+        .frame(width: recording ? 124 : 80, height: 52)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(recording ? "Stop recording" : (recorder.isStartingRecording ? "Starting recording" : "Record"))
     }
 
     private var expandedRecordingControlLabel: some View {

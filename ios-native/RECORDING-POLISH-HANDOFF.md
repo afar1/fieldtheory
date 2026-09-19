@@ -14,7 +14,7 @@ Prepared September 19, 2026 for a later authorized phone build/install.
 
 - Restored the compact red recording pill, elapsed time, measured waveform, and white stop square. VoiceOver announces “Stop recording”.
 - Startup remains a compact pill with “Starting…” until the microphone actually starts. The layout no longer expands to a 68-point status card before recording.
-- Shortened control transitions from 440 ms to 150 ms, preserving Reduce Motion support.
+- Reworked the initial 150 ms transition into a continuous 320 ms spring morph after phone feedback: the Record pill keeps its center and height, widens from 124 to 168 points, and changes to red. Label fades are staged to avoid overlapping text; the cancel control fades in separately after the morph. Reduce Motion skips animation and the reveal delay.
 - Recording Live Activities end with immediate dismissal when processing returns, instead of remaining interactive for five minutes or leaving an ended Lock Screen card for 30 seconds. A finite background allowance covers the asynchronous end call.
 - Completed activities left by older builds are dismissed when the app becomes active. Starting, recording, and transcribing activities are excluded from this cleanup.
 - Removed the duplicate “Saved to Field Theory” success toast. The existing brief in-control transcription confirmation still expires after 1.2 seconds.
@@ -56,3 +56,13 @@ Apple has approved external beta version 1.0.2 build 8. Live App Store Connect s
 Public invitation: https://testflight.apple.com/join/wNAvHVu2
 
 There were zero external testers at inspection. A real external install and runtime acceptance are still needed. The website continues to say it awaits Apple review and its live `invitation.json` has `acceptingTesters: false`. Updating that flag/site requires a separately authorized deployment. No new Apple submission is needed for build 8; these local polish changes are not part of that approved build.
+
+## Animation follow-up after build 46
+
+Build 46 was installed and launched on Focus on September 19. Andrew reported that the transition still felt abrupt and asked for Record to morph into the red pill before the cancel control appears.
+
+The revision preserves the same Button and compact label layers across idle/start/recording, removes the transient “Starting…” layout replacement, and positions cancel as a separate sibling that cannot shift the primary pill. Startup still shows an inline spinner and announces “Starting recording” to VoiceOver; actual microphone startup is unchanged. Cancel appears after 320 ms with a 120 ms opacity fade and is removed completely once recording ends.
+
+Both relevant UI tests passed (stop/keep/discard and completion returning to Record). Geometry assertions confirm identical horizontal and vertical pill center before/after recording and a wider stop pill. A final UI run also passed after staging the outgoing/incoming label fades: `/Users/afar/dev/fieldtheory-ios-local-build/Logs/Test/Test-FieldTheory-2026.09.19_10-06-45--0700.xcresult`.
+
+Simulator frame inspection: `/Users/afar/dev/fieldtheory-ios-local-evidence/morph-preview/transition-frames.jpg` (before the final label-fade adjustment). The final screenshot is in `/Users/afar/dev/fieldtheory-ios-local-evidence/morph-final/`. Physical animation feel still requires Andrew's feedback; simulator geometry and screenshots alone do not establish device frame pacing.

@@ -8,10 +8,17 @@ final class PrivacyHoldUITests: XCTestCase {
         app.launch()
         let record = app.buttons["VoiceRecordingControl"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15))
+        let idle = app.buttons.matching(identifier: "VoiceRecordingControl")
+            .matching(NSPredicate(format: "label == %@", "Record")).firstMatch
+        XCTAssertTrue(idle.waitForExistence(timeout: 5), "Wait for model-ready confirmation to finish")
+        let idleFrame = record.frame
         record.tap()
         let cancel = app.buttons["VoiceCancelRecording"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         XCTAssertEqual(record.label, "Stop recording")
+        XCTAssertEqual(record.frame.midX, idleFrame.midX, accuracy: 0.5, "The cancel control must not push the pill sideways")
+        XCTAssertEqual(record.frame.midY, idleFrame.midY, accuracy: 0.5, "The pill stays on the same baseline")
+        XCTAssertGreaterThan(record.frame.width, idleFrame.width, "Record morphs into a wider stop pill")
         XCTAssertLessThanOrEqual(record.frame.height, 56, "Recording stays in the compact Record pill")
         cancel.tap()
         let alert = app.alerts["Are you sure you want to discard this audio?"]
