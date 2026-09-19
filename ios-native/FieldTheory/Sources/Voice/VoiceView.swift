@@ -29,7 +29,6 @@ struct VoiceView: View {
     @State private var preparationStartedAt = Date()
     @State private var searchText = ""
     @State private var recordingToDiscard: String?
-    @State private var showRecordingCancel = false
     @State private var audioToDiscard: PendingAudioSession?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
@@ -509,7 +508,7 @@ struct VoiceView: View {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     // A sibling, not part of the main button's layout or
                     // accessibility element. Its offset never moves the pill.
-                    if showRecordingCancel && recorder.phase == .recording {
+                    if recorder.phase == .recording {
                         cancelRecordingButton
                             .offset(x: -54)
                             .transition(.opacity)
@@ -523,21 +522,11 @@ struct VoiceView: View {
         .animation(controlMorphAnimation, value: controlExpanded)
         .animation(controlMorphAnimation, value: recorder.phase)
         .animation(controlMorphAnimation, value: showTranscribedConfirmation)
-        .task(id: recorder.phase) {
-            showRecordingCancel = false
-            guard recorder.phase == .recording else { return }
-            if !reduceMotion {
-                do { try await Task.sleep(for: .milliseconds(320)) } catch { return }
-            }
-            guard !Task.isCancelled, recorder.phase == .recording else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
-                showRecordingCancel = true
-            }
-        }
+        .animation(controlMorphAnimation, value: recorder.isStartingRecording)
     }
 
     private var controlMorphAnimation: Animation? {
-        reduceMotion ? nil : .spring(duration: 0.32, bounce: 0)
+        reduceMotion ? nil : .easeOut(duration: 0.12)
     }
 
     private var cancelRecordingButton: some View {
@@ -665,13 +654,11 @@ struct VoiceView: View {
                         .opacity(recorder.isStartingRecording ? 1 : 0)
                 }
                 .frame(width: 17, height: 20)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: recorder.isStartingRecording)
                 Text("Record")
             }
             .font(.system(size: 16, weight: .semibold))
             .fixedSize()
             .opacity(recording ? 0 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.10).delay(recording ? 0 : 0.14), value: recording)
 
             HStack(spacing: 12) {
                 VoiceMicrophoneWaveform(level: recorder.level)
@@ -682,9 +669,9 @@ struct VoiceView: View {
             }
             .fixedSize()
             .opacity(recording ? 1 : 0)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(recording ? 0.10 : 0), value: recording)
         }
-        .frame(width: recording ? 124 : 80, height: 52)
+        // Begin widening during startup; capture readiness reveals the live controls.
+        .frame(width: recording || recorder.isStartingRecording ? 124 : 80, height: 52)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(recording ? "Stop recording" : (recorder.isStartingRecording ? "Starting recording" : "Record"))
     }

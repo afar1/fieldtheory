@@ -66,3 +66,11 @@ The revision preserves the same Button and compact label layers across idle/star
 Both relevant UI tests passed (stop/keep/discard and completion returning to Record). Geometry assertions confirm identical horizontal and vertical pill center before/after recording and a wider stop pill. A final UI run also passed after staging the outgoing/incoming label fades: `/Users/afar/dev/fieldtheory-ios-local-build/Logs/Test/Test-FieldTheory-2026.09.19_10-06-45--0700.xcresult`.
 
 Simulator frame inspection: `/Users/afar/dev/fieldtheory-ios-local-evidence/morph-preview/transition-frames.jpg` (before the final label-fade adjustment). The final screenshot is in `/Users/afar/dev/fieldtheory-ios-local-evidence/morph-final/`. Physical animation feel still requires Andrew's feedback; simulator geometry and screenshots alone do not establish device frame pacing.
+
+## Startup sequencing experiment for build 48
+
+The pill now begins widening from the existing startup state. Red, live elapsed/waveform, stop, and cancel remain gated on actual recording. Removed the fixed 320 ms cancel wait and independently delayed label fades; the shared control transition is a 120 ms ease-out with Reduce Motion respected. This also shortens expanded/confirmation transitions. No microphone, audio-session, or diagnostic code changed.
+
+Independent review found no blocking issues. Both recording UI tests passed, including stable pill geometry, keep/discard, and returning to Record after transcription: `/Users/afar/dev/fieldtheory-ios-local-build/Logs/Test/Test-FieldTheory-2026.09.19_10-28-10--0700.xcresult`.
+
+This removes post-readiness visual waiting; it does not prove physical frame pacing. Synchronous startup on the main actor can still prevent intermediate frames. Device animation acceptance awaits Andrew's feedback.
