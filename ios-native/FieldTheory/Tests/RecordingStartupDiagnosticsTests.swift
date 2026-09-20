@@ -2,6 +2,22 @@ import XCTest
 @testable import FieldTheory
 
 final class RecordingStartupDiagnosticsTests: XCTestCase {
+    func testAggregatesAreWhitelistedBoundedAndFreezeAtClose() {
+        let trace = RecordingStartupTrace()
+        trace.recordDuration(.transcriptCard, milliseconds: 2)
+        trace.recordDuration(.transcriptCard, milliseconds: 5)
+        for _ in 0..<10_002 { trace.recordDuration(.listEnumeration, milliseconds: 1) }
+        let first = trace.close()
+        XCTAssertEqual(first.aggregates["transcriptCard"]?.count, 2)
+        XCTAssertEqual(first.aggregates["transcriptCard"]?.totalMs, 7)
+        XCTAssertEqual(first.aggregates["transcriptCard"]?.maxMs, 5)
+        XCTAssertEqual(first.aggregates["listEnumeration"]?.count, 10_000)
+        XCTAssertEqual(first.droppedMeasurements, 2)
+        trace.recordDuration(.voiceBody, milliseconds: 9)
+        XCTAssertNil(trace.close().aggregates["voiceBody"])
+        XCTAssertTrue(first.events.isEmpty, "Repeated measurements must not flood stage events")
+    }
+
     func testStageAndGeometryStayTimingOnly() {
         let trace = RecordingStartupTrace()
         trace.mark("test.stage")

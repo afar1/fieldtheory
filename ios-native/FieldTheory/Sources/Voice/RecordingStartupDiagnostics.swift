@@ -7,6 +7,18 @@ import os
 /// Timing-only, bounded storage shared by the main actor and audio owner. No
 /// audio-session queries, serialization, disk writes, or main-actor hops here.
 final class RecordingStartupTrace: @unchecked Sendable {
+    enum AggregateStage: String, CaseIterable { case voiceBody, mainContent, listEnumeration, transcriptCard, rowDateFormatting }
+    struct Aggregate: Codable, Sendable {
+        var count = 0
+        var totalMs = 0.0
+        var maxMs = 0.0
+    }
+    struct Measurement {
+        let trace: RecordingStartupTrace
+        let stage: AggregateStage
+        let startedAt: Double
+        func finish() { trace.recordDuration(stage, milliseconds: (CACurrentMediaTime() - startedAt) * 1_000) }
+    }
     struct Event: Codable, Sendable {
         let milliseconds: Double
         let stage: String
@@ -14,16 +26,21 @@ final class RecordingStartupTrace: @unchecked Sendable {
         let threadID: UInt32
         let width: Double?
         let height: Double?
+        let sequence: Int?
     }
     struct Snapshot: Codable, Sendable {
         let events: [Event]
         let droppedEvents: Int
+        let aggregates: [String: Aggregate]
+        let droppedMeasurements: Int
     }
     private struct Storage {
         var events: [Event] = []
         var droppedEvents = 0
         var closed = false
-        init() { events.reserveCapacity(384) }
+        var aggregates: [String: Aggregate] = [:]
+        var droppedMeasurements = 0
+        init() { events.reserveCapacity(384); aggregates.reserveCapacity(AggregateStage.allCases.count) }
     }
     let id = UUID().uuidString
     let startedAt: Double
@@ -32,25 +49,42 @@ final class RecordingStartupTrace: @unchecked Sendable {
 
     init(startedAt: Double = CACurrentMediaTime()) { self.startedAt = startedAt }
 
-    func mark(_ stage: String, width: Double? = nil, height: Double? = nil) {
+    func mark(_ stage: String, width: Double? = nil, height: Double? = nil, sequence: Int? = nil) {
         let event = Event(milliseconds: (CACurrentMediaTime() - startedAt) * 1_000,
                           stage: stage, mainThread: Thread.isMainThread,
-                          threadID: pthread_mach_thread_np(pthread_self()), width: width, height: height)
+                          threadID: pthread_mach_thread_np(pthread_self()), width: width, height: height, sequence: sequence)
         let accepted = storage.withLock { state in
             guard !state.closed else { return false }
             guard state.events.count < 384 else { state.droppedEvents += 1; return false }
             state.events.append(event)
             return true
         }
-        if accepted, width == nil {
+        if accepted, width == nil, sequence == nil {
             signposter.emitEvent("RecordingStartupStage", "attempt=\(self.id, privacy: .public) stage=\(stage, privacy: .public)")
+        }
+    }
+
+    func startMeasurement(_ stage: AggregateStage) -> Measurement {
+        Measurement(trace: self, stage: stage, startedAt: CACurrentMediaTime())
+    }
+
+    func recordDuration(_ stage: AggregateStage, milliseconds: Double) {
+        storage.withLock { state in
+            guard !state.closed else { return }
+            var aggregate = state.aggregates[stage.rawValue] ?? Aggregate()
+            guard aggregate.count < 10_000 else { state.droppedMeasurements += 1; return }
+            aggregate.count += 1
+            aggregate.totalMs += milliseconds
+            aggregate.maxMs = max(aggregate.maxMs, milliseconds)
+            state.aggregates[stage.rawValue] = aggregate
         }
     }
 
     func close() -> Snapshot {
         storage.withLock { state in
             state.closed = true
-            return Snapshot(events: state.events, droppedEvents: state.droppedEvents)
+            return Snapshot(events: state.events, droppedEvents: state.droppedEvents,
+                            aggregates: state.aggregates, droppedMeasurements: state.droppedMeasurements)
         }
     }
 }
@@ -81,6 +115,15 @@ final class RecordingStartupDiagnostics: NSObject {
     static var activeTrace: RecordingStartupTrace? { enabled ? shared.trace : nil }
     static func acceptedTap() { if enabled { shared.begin() } }
     static func mark(_ stage: String) { activeTrace?.mark(stage) }
+    static func startMeasurement(_ stage: RecordingStartupTrace.AggregateStage) -> RecordingStartupTrace.Measurement? {
+        activeTrace?.startMeasurement(stage)
+    }
+    static func measure<T>(_ stage: RecordingStartupTrace.AggregateStage, _ operation: () -> T) -> T {
+        let measurement = startMeasurement(stage)
+        defer { measurement?.finish() }
+        return operation()
+    }
+    static func setTranscriptCount(_ count: Int) { if enabled { shared.transcriptCount = count } }
     static func geometry(_ size: CGSize) {
         activeTrace?.mark("ui.pill-geometry", width: size.width, height: size.height)
     }
@@ -112,6 +155,7 @@ final class RecordingStartupDiagnostics: NSObject {
     private struct Report: Encodable, Sendable {
         let measurement = "CADisplayLink callback cadence, main-queue heartbeat delay and SwiftUI layout observations; not presented-frame FPS or a call-stack profile. Timing only, no audio/transcript. Cross-thread events can append out of timestamp order; order by milliseconds. Conditions sampled at window end."
         let attemptID: String
+        let transcriptCount: Int?
         let metadata: Metadata
         let endReason: String
         let durationMs: Double
@@ -123,6 +167,7 @@ final class RecordingStartupDiagnostics: NSObject {
     }
     private struct PulseState { var active = true; var pending = false }
     private var trace: RecordingStartupTrace?
+    private var transcriptCount: Int?
     private var displayLink: CADisplayLink?
     private var watchdog: DispatchSourceTimer?
     private var pulseState: OSAllocatedUnfairLock<PulseState>?
@@ -229,7 +274,7 @@ final class RecordingStartupDiagnostics: NSObject {
                                   lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
                                   thermalState: ProcessInfo.processInfo.thermalState.rawValue,
                                   sampledAtUptimeSeconds: CACurrentMediaTime())
-        let report = Report(attemptID: attempt.id, metadata: conditions, endReason: reason,
+        let report = Report(attemptID: attempt.id, transcriptCount: transcriptCount, metadata: conditions, endReason: reason,
                             durationMs: (CACurrentMediaTime() - attempt.startedAt) * 1_000,
                             droppedFrames: droppedFrames, droppedHeartbeats: droppedHeartbeats,
                             stageEvents: attempt.close(), frames: frames, heartbeats: heartbeats)

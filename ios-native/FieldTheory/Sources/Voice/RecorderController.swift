@@ -55,6 +55,7 @@ final class RecorderController {
     private var isStoppingCapture = false
     private var stopActionInFlight = false
     private var meterReadPending = false
+    private var meterDiagnosticSamples = 0
     private var segmentURLs: [URL] = []
     private var sessionId: Int64 = 0
     private var meterTimer: Timer?
@@ -614,7 +615,11 @@ final class RecorderController {
         // state never claims that the microphone is already capturing.
         isRequestingRecordPermission = true
         RecordingStartupDiagnostics.mark("ui.pending-published")
-        if AVAudioApplication.shared.recordPermission == .granted {
+        startupTrace?.mark("main.permission-read-begin")
+        let permission = AVAudioApplication.shared.recordPermission
+        startupTrace?.mark("main.permission-read-end")
+        if permission == .granted {
+            startupTrace?.mark("main.start-task-enqueue")
             Task { @MainActor in
                 RecordingStartupDiagnostics.mark("main.start-task-entered")
                 self.isRequestingRecordPermission = false
@@ -730,6 +735,7 @@ final class RecorderController {
     }
 
     private func startMetering() {
+        meterDiagnosticSamples = 0
         meterTimer?.invalidate()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -739,8 +745,15 @@ final class RecorderController {
                 defer { self.meterReadPending = false }
                 guard let sample = await self.captureOwner.sample(token: token),
                       self.captureToken == token, self.phase == .recording else { return }
+                let trace = RecordingStartupDiagnostics.activeTrace
+                let sequence = self.meterDiagnosticSamples
+                if trace != nil, sequence < 40 {
+                    self.meterDiagnosticSamples += 1
+                    trace?.mark("main.meter-publish-begin", sequence: sequence)
+                }
                 self.level = sample.level
                 if let startedAt = self.startedAt { self.elapsed = Date().timeIntervalSince(startedAt) }
+                if sequence < 40 { trace?.mark("main.meter-publish-end", sequence: sequence) }
             }
         }
     }

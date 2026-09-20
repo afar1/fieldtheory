@@ -79,7 +79,9 @@ struct VoiceView: View {
     }
 
     var body: some View {
-        mainContent
+        let measurement = RecordingStartupDiagnostics.startMeasurement(.voiceBody)
+        defer { measurement?.finish() }
+        return mainContent
             .onAppear {
                 RecordingStartupDiagnostics.configureIfEnabled()
                 updateCapturePreparationVisibility()
@@ -141,7 +143,9 @@ struct VoiceView: View {
     }
 
     private var mainContent: some View {
-        NavigationStack {
+        let measurement = RecordingStartupDiagnostics.startMeasurement(.mainContent)
+        defer { measurement?.finish() }
+        return NavigationStack {
             Group {
                 if isRegularWidth {
                     regularContent
@@ -307,7 +311,7 @@ struct VoiceView: View {
         return ScrollView {
             LazyVStack(spacing: 12, pinnedViews: []) {
                 if snapshot.isEmpty { dateHeading("", showAutoSend: true) }
-                ForEach(Array(snapshot.enumerated()), id: \.element.id) { index, item in
+                ForEach(RecordingStartupDiagnostics.measure(.listEnumeration) { Array(snapshot.enumerated()) }, id: \.element.id) { index, item in
                     if showsDateHeader(at: index, in: snapshot) {
                         dateHeading(Self.dateHeader(for: item.createdAtMs), showAutoSend: index == 0)
                             .padding(.top, index == 0 ? 0 : 10)
@@ -351,7 +355,9 @@ struct VoiceView: View {
     }
 
     private func transcriptCard(_ item: TranscriptItem, wideLayout: Bool) -> some View {
-        FeedbackSwipeCard(status: model.transcripts.feedbackState(for: item), enabled: !selectionMode, onFeedback: {
+        let measurement = RecordingStartupDiagnostics.startMeasurement(.transcriptCard)
+        defer { measurement?.finish() }
+        return FeedbackSwipeCard(status: model.transcripts.feedbackState(for: item), enabled: !selectionMode, onFeedback: {
             feedbackRequest = TranscriptSyncRequest(item: item, workspace: model.workspaceGeneration, sendToAgent: false)
         }) {
         StackCard(
@@ -488,7 +494,10 @@ struct VoiceView: View {
                 guard !recordingActionUnavailable else { return }
                 if modelNeedsAttention { showSettings = true }
                 else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
-                else { recorder.toggle() }
+                else {
+                    RecordingStartupDiagnostics.setTranscriptCount(model.transcripts.items.count)
+                    recorder.toggle()
+                }
             } label: {
                 recordingControlLabel
                     .background {
@@ -1060,6 +1069,8 @@ struct StackCard: View {
     }
 
     private var timeLabel: String {
+        let measurement = RecordingStartupDiagnostics.startMeasurement(.rowDateFormatting)
+        defer { measurement?.finish() }
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: item.createdAtMs.msToDate)
