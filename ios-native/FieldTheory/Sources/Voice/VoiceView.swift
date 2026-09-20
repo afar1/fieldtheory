@@ -80,7 +80,10 @@ struct VoiceView: View {
 
     var body: some View {
         mainContent
-            .onAppear { updateCapturePreparationVisibility() }
+            .onAppear {
+                RecordingStartupDiagnostics.configureIfEnabled()
+                updateCapturePreparationVisibility()
+            }
             .onDisappear { model.recorder.setCapturePreparationVisible(false) }
             .onChange(of: scenePhase) { _, _ in updateCapturePreparationVisibility() }
             .onChange(of: showSettings) { _, _ in updateCapturePreparationVisibility() }
@@ -91,7 +94,11 @@ struct VoiceView: View {
                 do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
                 showReadyConfirmation = false
             }
+            .onChange(of: model.recorder.isStartingRecording) { _, starting in
+                RecordingStartupDiagnostics.mark(starting ? "ui.pending-observed" : "ui.pending-ended")
+            }
             .onChange(of: model.recorder.phase) { old, new in
+                RecordingStartupDiagnostics.mark(new == .recording ? "ui.recording-observed" : "ui.nonrecording-observed")
                 if new == .recording { completedTranscriptID = nil }
                 if new == .transcribing {
                     completedTranscriptID = nil
@@ -499,6 +506,7 @@ struct VoiceView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 32))
                     .contentShape(RoundedRectangle(cornerRadius: 32))
+                    .modifier(RecordingStartupGeometryObservation())
                     .accessibilityElement(children: .ignore)
             }
             .buttonStyle(VoiceStatusButtonStyle())

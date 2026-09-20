@@ -89,6 +89,9 @@ final class BackgroundRecordingSession {
     }
 
     func attachToForegroundRecording() {
+        let trace = RecordingStartupDiagnostics.activeTrace
+        trace?.mark("main.live-activity-attach-begin")
+        defer { trace?.mark("main.live-activity-attach-end") }
         // The intent owns its Starting activity until capture and its update complete.
         guard !starting, UIApplication.shared.applicationState == .active else { return }
         if let activity, !activity.content.state.recording {
@@ -102,6 +105,8 @@ final class BackgroundRecordingSession {
             captureSessionID = AppModel.shared.recorder.activeRecordingID
             let oldActivities = Activity<RecordingActivityAttributes>.activities
             for old in oldActivities { Task { await old.end(nil, dismissalPolicy: .immediate) } }
+            trace?.mark("main.live-activity-request-begin")
+            defer { trace?.mark("main.live-activity-request-end") }
             activity = try Activity.request(attributes: RecordingActivityAttributes(startedAt: startedAt),
                 content: ActivityContent(state: .init(status: "Recording", recording: true), staleDate: nil), pushType: nil)
             AppModel.shared.recorder.onCaptureStopped = { [weak self] in self?.showProcessing() }

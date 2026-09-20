@@ -564,8 +564,12 @@ final class RecorderController {
         meterTimer?.invalidate()
         meterTimer = nil
         let deletionGeneration = captureDeletionGeneration
+        let trace = RecordingStartupDiagnostics.activeTrace
+        trace?.mark(discard ? "main.discard-requested" : "main.stop-requested")
         let task = Task { @MainActor in
             let files = await captureOwner.stop(token: token)
+            trace?.mark("main.capture-sealed")
+            RecordingStartupDiagnostics.finish(discard ? "discarded" : "stopped", matching: trace)
             if captureToken == token {
                 captureToken = nil
                 phase = .idle
@@ -602,13 +606,17 @@ final class RecorderController {
 
     func start() {
         guard workEnabled, phase == .idle, canStartRecording else { return }
+        RecordingStartupDiagnostics.acceptedTap()
+        let startupTrace = RecordingStartupDiagnostics.activeTrace
         let generation = workGeneration
         lastError = nil
         // Acknowledge an accepted tap before scheduling audio work. This pending
         // state never claims that the microphone is already capturing.
         isRequestingRecordPermission = true
+        RecordingStartupDiagnostics.mark("ui.pending-published")
         if AVAudioApplication.shared.recordPermission == .granted {
             Task { @MainActor in
+                RecordingStartupDiagnostics.mark("main.start-task-entered")
                 self.isRequestingRecordPermission = false
                 guard self.workEnabled, self.workGeneration == generation else { return }
                 await self.beginSession()
@@ -622,6 +630,7 @@ final class RecorderController {
                 guard self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else { return }
                 guard granted else {
                     self.lastError = "Microphone access is off. Enable it in Settings."
+                    RecordingStartupDiagnostics.finish("permission-denied", matching: startupTrace)
                     return
                 }
                 self.updateCapturePreparation()
@@ -658,10 +667,15 @@ final class RecorderController {
         captureToken = token
         sessionId = Timestamps.nowMs()
         lastStartFailure = nil
+        let trace = RecordingStartupDiagnostics.activeTrace
+        trace?.mark("main.capture-start-entered")
         do {
+            trace?.mark("main.preparation-wait-begin")
             await capturePreparationTask?.value
+            trace?.mark("main.preparation-wait-end")
             let started = try await captureOwner.start(token: token, sessionID: sessionId,
-                mixWithOtherAudio: mixWithOtherAudio)
+                mixWithOtherAudio: mixWithOtherAudio, trace: trace)
+            trace?.mark("main.owner-returned")
             guard !Task.isCancelled, workEnabled, workGeneration == generation, captureToken == token, phase == .idle else {
                 if captureToken == token {
                     _ = await finalizeCapture(token: token,
@@ -674,10 +688,13 @@ final class RecorderController {
             sessionId = started.sessionID
             segmentURLs = started.files
             phase = .recording
+            trace?.mark("main.recording-phase-published")
             startedAt = started.startedAt
             elapsed = 0
             startMetering()
+            trace?.mark("main.capture-started-callback-begin")
             onCaptureStarted?()
+            trace?.mark("main.capture-started-callback-end")
         } catch {
             guard captureToken == token, workGeneration == generation else {
                 return
@@ -686,6 +703,7 @@ final class RecorderController {
                 logger.error("Microphone start failed: \(error.localizedDescription, privacy: .public)")
             }
             captureToken = nil
+            RecordingStartupDiagnostics.finish(error is CancellationError ? "cancelled" : "startup-failed", matching: trace)
             lastStartFailure = error
             lastError = "Could not start recording: \(error.localizedDescription)"
             onNotice?("Couldn't start recording", "exclamationmark.triangle")

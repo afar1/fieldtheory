@@ -95,7 +95,9 @@ actor AudioCaptureOwner {
         self.makeDevice = makeDevice
     }
 
-    func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool) async throws -> Started {
+    func start(token requestedToken: UUID, sessionID: Int64, mixWithOtherAudio: Bool,
+               trace: RecordingStartupTrace? = nil) async throws -> Started {
+        trace?.mark("audio.owner-entered")
         guard !cancelledTokens.contains(requestedToken), token == nil else { throw CancellationError() }
         token = requestedToken
         // A failed preparation must not replace the caller's cold-start identity.
@@ -108,9 +110,11 @@ actor AudioCaptureOwner {
         self.device = device
         do {
             if configuredMix != mixWithOtherAudio {
-                try device.configure(mixWithOtherAudio: mixWithOtherAudio)
+                trace?.mark("audio.configure-begin")
+                try device.configure(mixWithOtherAudio: mixWithOtherAudio, trace: trace)
+                trace?.mark("audio.configure-end")
                 configuredMix = mixWithOtherAudio
-            }
+            } else { trace?.mark("audio.session-reused") }
             let delays: [Duration] = [.milliseconds(250), .milliseconds(500), .seconds(1)]
             for attempt in 0...delays.count {
                 try Task.checkCancellation()
@@ -118,15 +122,18 @@ actor AudioCaptureOwner {
                     throw CancellationError()
                 }
                 do {
-                    try startSegment(using: device)
+                    try startSegment(using: device, trace: trace)
+                    trace?.mark("audio.capture-started")
                     return Started(sessionID: self.sessionID, startedAt: Date(), files: files)
                 } catch MicrophoneStartError.notStarted {
                     guard attempt < delays.count else { throw MicrophoneStartError.notStarted }
+                    trace?.mark("audio.retry-wait")
                     try await Task.sleep(for: delays[attempt])
                 }
             }
             throw MicrophoneStartError.notStarted
         } catch {
+            trace?.mark(error is CancellationError ? "audio.start-cancelled" : "audio.start-failed")
             if token == requestedToken {
                 device.stop()
                 device.deactivate()
@@ -174,13 +181,14 @@ actor AudioCaptureOwner {
         return files
     }
 
-    private func startSegment(using device: any AudioCaptureDevice) throws {
+    private func startSegment(using device: any AudioCaptureDevice, trace: RecordingStartupTrace? = nil) throws {
         let url = preparedURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("rec-\(sessionID)-\(files.count).wav")
+        if preparedURL != nil { trace?.mark("audio.staged-recorder-consumed") }
         preparedURL = nil
         preparedSessionID = nil
         do {
-            try device.start(url: url)
+            try device.start(url: url, trace: trace)
             files.append(url)
         } catch {
             device.stop()
@@ -194,11 +202,20 @@ actor AudioCaptureOwner {
 protocol AudioCaptureDevice: AnyObject {
     func prepare(url: URL, readyToRecord: Bool) throws
     func configure(mixWithOtherAudio: Bool) throws
+    func configure(mixWithOtherAudio: Bool, trace: RecordingStartupTrace?) throws
     func activate() throws
     func start(url: URL) throws
+    func start(url: URL, trace: RecordingStartupTrace?) throws
     func stop()
     func deactivate()
     func sample() -> AudioCaptureOwner.Sample?
+}
+
+extension AudioCaptureDevice {
+    func configure(mixWithOtherAudio: Bool, trace: RecordingStartupTrace?) throws {
+        try configure(mixWithOtherAudio: mixWithOtherAudio)
+    }
+    func start(url: URL, trace: RecordingStartupTrace?) throws { try start(url: url) }
 }
 
 private final class LiveAudioCaptureDevice: AudioCaptureDevice {
@@ -206,12 +223,18 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
     private var bluetoothInputUID: String?
     private var recorderPrepared = false
 
-    func configure(mixWithOtherAudio: Bool) throws {
+    func configure(mixWithOtherAudio: Bool) throws { try configure(mixWithOtherAudio: mixWithOtherAudio, trace: nil) }
+
+    func configure(mixWithOtherAudio: Bool, trace: RecordingStartupTrace?) throws {
         let session = AVAudioSession.sharedInstance()
         var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         if mixWithOtherAudio { options.insert(.mixWithOthers) }
+        trace?.mark("audio.category-begin")
         try session.setCategory(.playAndRecord, mode: .default, options: options)
+        trace?.mark("audio.category-end")
+        trace?.mark("audio.activation-begin")
         try session.setActive(true)
+        trace?.mark("audio.activation-end")
         let input = session.currentRoute.inputs.first
         bluetoothInputUID = input?.portType == .bluetoothHFP ? input?.uid : nil
         if let input, bluetoothInputUID != nil { try session.setPreferredInput(input) }
@@ -219,18 +242,26 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
 
     func activate() throws { try AVAudioSession.sharedInstance().setActive(true) }
 
-    func start(url: URL) throws {
+    func start(url: URL) throws { try start(url: url, trace: nil) }
+
+    func start(url: URL, trace: RecordingStartupTrace?) throws {
         if let bluetoothInputUID,
            AVAudioSession.sharedInstance().currentRoute.inputs.first?.uid != bluetoothInputUID {
             throw SpeechTranscriptionEngineError(message: "The Bluetooth microphone disconnected. Try recording again.")
         }
-        if recorder?.url != url { try prepare(url: url, readyToRecord: true) }
+        if recorder?.url != url { try prepare(url: url, readyToRecord: true, trace: trace) }
         guard let recorder else { throw MicrophoneStartError.notStarted }
         if !recorderPrepared {
-            guard recorder.prepareToRecord() else { throw MicrophoneStartError.notStarted }
+            trace?.mark("audio.prepare-to-record-begin")
+            let prepared = recorder.prepareToRecord()
+            trace?.mark("audio.prepare-to-record-end")
+            guard prepared else { throw MicrophoneStartError.notStarted }
             recorderPrepared = true
         }
-        guard recorder.record() else {
+        trace?.mark("audio.record-call-begin")
+        let recording = recorder.record()
+        trace?.mark("audio.record-call-end")
+        guard recording else {
             recorder.stop()
             recorder.deleteRecording()
             throw MicrophoneStartError.notStarted
@@ -238,20 +269,27 @@ private final class LiveAudioCaptureDevice: AudioCaptureDevice {
         self.recorder = recorder
     }
 
-    func prepare(url: URL, readyToRecord: Bool) throws {
+    func prepare(url: URL, readyToRecord: Bool) throws { try prepare(url: url, readyToRecord: readyToRecord, trace: nil) }
+
+    private func prepare(url: URL, readyToRecord: Bool, trace: RecordingStartupTrace?) throws {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
         ]
+        trace?.mark("audio.recorder-allocation-begin")
         let recorder = try AVAudioRecorder(url: url, settings: settings)
+        trace?.mark("audio.recorder-allocation-end")
         recorder.isMeteringEnabled = true
         self.recorder = recorder
         recorderPrepared = false
         // AVFoundation can activate sessions automatically. Never call this
         // before the first explicit recording has activated our session.
         if readyToRecord {
-            guard recorder.prepareToRecord() else { throw MicrophoneStartError.notStarted }
+            trace?.mark("audio.prepare-to-record-begin")
+            let prepared = recorder.prepareToRecord()
+            trace?.mark("audio.prepare-to-record-end")
+            guard prepared else { throw MicrophoneStartError.notStarted }
             recorderPrepared = true
         }
     }
