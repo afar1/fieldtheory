@@ -712,13 +712,7 @@ struct VoiceView: View {
             .fixedSize()
             .modifier(VoiceControlContentFade(visibility: recording ? 0 : 1))
 
-            HStack(spacing: 12) {
-                VoiceMicrophoneWaveform(level: recorder.level)
-                Text(recorder.elapsed.clockString)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 17, weight: .semibold))
-            }
+            VoiceRecordingTelemetryLabel(recorder: recorder)
             .fixedSize()
             .modifier(VoiceControlContentFade(visibility: recording ? 1 : 0))
         }
@@ -1525,6 +1519,22 @@ private struct VoiceStatusButtonStyle: ButtonStyle {
 }
 
 /// A short history of measured microphone levels, not a decorative animation.
+/// Keep frequent meter observations inside this subtree so they do not
+/// invalidate the transcript list and the rest of the Voice screen.
+private struct VoiceRecordingTelemetryLabel: View {
+    let recorder: RecorderController
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VoiceMicrophoneWaveform(level: recorder.level)
+            Text(recorder.elapsed.clockString)
+                .font(.system(size: 16, weight: .semibold, design: .monospaced))
+            Image(systemName: "stop.fill")
+                .font(.system(size: 17, weight: .semibold))
+        }
+    }
+}
+
 private struct VoiceMicrophoneWaveform: View {
     let level: Float
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
