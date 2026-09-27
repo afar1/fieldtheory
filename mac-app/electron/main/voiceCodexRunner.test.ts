@@ -78,6 +78,8 @@ function standard(message: Message, process: FakeProcess): void {
   switch (message.method) {
     case 'initialize': process.reply(message, { userAgent: 'test' }); break;
     case 'account/read': process.reply(message, { account: { type: 'chatgpt', email: 'private@example.invalid' }, requiresOpenaiAuth: true }); break;
+    case 'project/list': process.reply(message, { projects: [] }); break;
+    case 'thread/list': process.reply(message, { data: [] }); break;
     case 'config/read': process.reply(message, { config: { sandbox_mode: 'workspace-write', approval_policy: 'on-request' } }); break;
     case 'thread/start': process.reply(message, threadResult(process)); break;
     case 'thread/resume': process.reply(message, threadResult(process, { id: message.params.threadId, status: { type: 'idle' } })); break;
@@ -96,6 +98,11 @@ function setup(handler = standard) {
 }
 
 describe('bundled Codex discovery and account status', () => {
+  it('prefers the current nested ChatGPT CLI before an old PATH installation', () => {
+    const nested = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
+    expect(discoverVoiceCodexBinary({ applicationDirs: ['/Applications'], pathEnv: '/opt/homebrew/bin',
+      isExecutable: p => p === nested || p === '/opt/homebrew/bin/codex' })).toBe(nested);
+  });
   it('prefers a user Applications install and ignores relative PATH entries', () => {
     const calls: string[] = [];
     const found = discoverVoiceCodexBinary({ homeDir: '/Users/test', pathEnv: '.:/bin', isExecutable: p => { calls.push(p); return p === '/Users/test/Applications/ChatGPT.app/Contents/Resources/codex'; } });
@@ -105,7 +112,7 @@ describe('bundled Codex discovery and account status', () => {
 
   it('finds the system application before an optional CLI fallback', () => {
     const found = discoverVoiceCodexBinary({ homeDir: '/Users/test', pathEnv: '/usr/local/bin', isExecutable: p => p.startsWith('/Applications/ChatGPT.app/') || p === '/usr/local/bin/codex' });
-    expect(found).toBe('/Applications/ChatGPT.app/Contents/Resources/codex');
+    expect(found).toBe('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex');
     expect(discoverVoiceCodexBinary({ applicationDirs: [], pathEnv: '.:/usr/local/bin', isExecutable: p => p === '/usr/local/bin/codex' })).toBe('/usr/local/bin/codex');
   });
 
@@ -120,7 +127,7 @@ describe('bundled Codex discovery and account status', () => {
     const status = await inspectVoiceCodexRuntime(options);
     expect(status.status).toBe('ready');
     expect(JSON.stringify(status)).not.toContain('private@example');
-    expect(process.messages.map(m => m.method)).toEqual(['initialize', 'initialized', 'account/read']);
+    expect(process.messages.map(m => m.method)).toEqual(['initialize', 'initialized', 'account/read', 'project/list', 'thread/list']);
     expect(process.messages[0].params.capabilities).toEqual({ experimentalApi: true, requestAttestation: false });
     expect(process.kill).toHaveBeenCalledOnce();
   });
@@ -129,6 +136,14 @@ describe('bundled Codex discovery and account status', () => {
     const { options } = setup((message, process) => message.method === 'account/read' ? process.reply(message, { account: null, requiresOpenaiAuth: true }) : standard(message, process));
     expect((await inspectVoiceCodexRuntime(options)).status).toBe('sign_in_required');
     expect((await inspectVoiceCodexRuntime({ ...options, spawnFn: () => { throw new Error('private diagnostic'); } })).status).toBe('unavailable');
+  });
+
+  it('holds delivery when a signed-in CLI lacks the routing API', async () => {
+    const { input, options, process } = setup((message, p) => message.method === 'project/list'
+      ? p.send({ id: message.id, error: { code: -32600, message: 'unknown variant' } }) : standard(message, p));
+    expect((await inspectVoiceCodexRuntime(options))).toMatchObject({ status: 'unavailable', message: expect.stringContaining('cannot route') });
+    expect(await runVoiceRequest(input, options)).toMatchObject({ status: 'failed', errorCode: 'incompatible_codex' });
+    expect(process.messages.some(m => m.method === 'thread/start')).toBe(false);
   });
 
   it.each(['apiKey', 'amazonBedrock', 'unknown'])('requires ChatGPT sign-in instead of using a %s billing identity', async type => {
@@ -636,7 +651,7 @@ describe('Voice recovery never dispatches again', () => {
       ? p.reply(message, { thread: { id: 'thread-1', turns: [recordedTurn, { id: 'different', status: 'completed', items: [] }] } }) : standard(message, p));
     const result = await recoverVoiceRequest({ ...input, threadId: 'thread-1' }, options);
     expect(result).toMatchObject({ status: 'completed', turnId: 'turn-1', finalResponse: 'The answer is 4.' });
-    expect(process.messages.map(m => m.method)).toEqual(['initialize', 'initialized', 'account/read', 'thread/read']);
+    expect(process.messages.map(m => m.method)).toEqual(['initialize', 'initialized', 'account/read', 'project/list', 'thread/list', 'thread/read']);
   });
 
   it.each(['inProgress', 'unmatched'])('requires reconciliation for %s instead of replaying', async state => {

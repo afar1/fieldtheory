@@ -120,7 +120,10 @@ export function discoverVoiceCodexBinary(options: VoiceCodexRunnerOptions = {}):
   if (options.binaryPath) return path.isAbsolute(options.binaryPath) && check(options.binaryPath) ? options.binaryPath : null;
   const applicationDirs = options.applicationDirs ?? [path.join(options.homeDir ?? os.homedir(), 'Applications'), '/Applications'];
   const candidates = applicationDirs.flatMap(directory => ['Codex.app', 'ChatGPT.app']
-    .map(app => path.join(directory, app, 'Contents', 'Resources', 'codex')));
+    .flatMap(app => {
+      const resources = path.join(directory, app, 'Contents', 'Resources');
+      return [path.join(resources, 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'), path.join(resources, 'codex')];
+    }));
   const pathDirectories = (options.pathEnv ?? process.env.PATH ?? '').split(path.delimiter).filter(directory => path.isAbsolute(directory));
   candidates.push(...pathDirectories.map(directory => path.join(directory, 'codex')));
   return candidates.find(check) ?? null;
@@ -279,6 +282,16 @@ async function requireAccount(transport: VoiceCodexClient): Promise<void> {
   if (object(result.account).type !== 'chatgpt') throw new RunnerError('sign_in_required', 'Sign in to Codex with ChatGPT on this Mac, then try again.');
 }
 
+/** A signed-in older CLI may lack the catalog API needed before dispatch. */
+async function requireRoutingApi(transport: VoiceCodexClient): Promise<void> {
+  try {
+    await transport.request('project/list', {});
+    await transport.request('thread/list', { limit: 1 });
+  } catch {
+    throw new RunnerError('incompatible_codex', 'This Codex CLI cannot route Voice requests. Update Codex and restart Field Theory.');
+  }
+}
+
 /** Account-checked connection for bounded catalog reads and internal decisions. */
 export async function withVoiceCodexClient<T>(workspacePath: string, callback: (client: VoiceCodexClient) => Promise<T>, options: VoiceCodexRunnerOptions = {}): Promise<T> {
   validate({ workspacePath, dispatchKey: 'internal' });
@@ -288,6 +301,7 @@ export async function withVoiceCodexClient<T>(workspacePath: string, callback: (
   try {
     await client.connect();
     await requireAccount(client);
+    await requireRoutingApi(client);
     return await callback(client);
   } finally { await client.close(); }
 }
@@ -299,6 +313,7 @@ export async function inspectVoiceCodexRuntime(options: VoiceCodexRunnerOptions 
   try {
     await transport.connect();
     await requireAccount(transport);
+    await requireRoutingApi(transport);
     return { status: 'ready', binaryPath, message: 'Codex is installed and signed in.' };
   } catch (error) {
     return { status: error instanceof RunnerError && error.code === 'sign_in_required' ? 'sign_in_required' : 'unavailable', binaryPath, message: failure(error).summary };
@@ -772,6 +787,7 @@ export async function runVoiceRequest(input: VoiceCodexRequest, options: VoiceCo
     runTimer = setTimeout(() => requestStop(failure(new RunnerError('turn_timeout', 'Codex exceeded the run time limit. Check the existing task before continuing.'), { threadId, turnId })), options.turnTimeoutMs ?? 20 * 60_000);
     await activeTransport.connect();
     await requireAccount(activeTransport);
+    await requireRoutingApi(activeTransport);
     const effective = object((await activeTransport.request('config/read', { cwd: input.workspacePath, includeLayers: false })).config);
     const threadParams: JsonObject = {
       // Inspect the inherited response before applying a turn restriction. In
@@ -872,6 +888,7 @@ export async function recoverVoiceRequest(input: VoiceCodexRecoveryRequest, opti
     transport = new VoiceCodexClient(binary, input.workspacePath, options);
     await transport.connect();
     await requireAccount(transport);
+    await requireRoutingApi(transport);
     if (input.queueSubmission) return await observeVoiceQueue(transport, input, options);
     if (input.signal?.aborted) throw new RunnerError('aborted', 'Voice recovery was stopped.');
     const thread = object((await transport.request('thread/read', { threadId: input.threadId, includeTurns: true })).thread);
