@@ -24,7 +24,6 @@ struct VoiceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedControlContentHeight: CGFloat = 44
     @State private var recordingControlAvailableWidth: CGFloat = 340
-    @State private var showReadyConfirmation = false
     @State private var showTranscribedConfirmation = false
     @State private var completedTranscriptID: String?
     @State private var sessionBeforeTranscription: String?
@@ -90,11 +89,7 @@ struct VoiceView: View {
             .onChange(of: scenePhase) { _, _ in updateCapturePreparationVisibility() }
             .onChange(of: showSettings) { _, _ in updateCapturePreparationVisibility() }
             .task(id: model.recorder.engineState) {
-                showReadyConfirmation = model.recorder.engineState == .ready
                 if model.recorder.engineState == .checking { preparationStartedAt = Date() }
-                guard showReadyConfirmation else { return }
-                do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
-                showReadyConfirmation = false
             }
             .onChange(of: model.recorder.isStartingRecording) { _, starting in
                 RecordingStartupDiagnostics.mark(starting ? "ui.pending-observed" : "ui.pending-ended")
@@ -519,8 +514,10 @@ struct VoiceView: View {
                     .accessibilityElement(children: .ignore)
             }
             .buttonStyle(VoiceStatusButtonStyle())
+            .disabled(recordingActionUnavailable)
+            .opacity(recordingActionUnavailable ? 0.5 : 1)
             .accessibilityLabel(recordingControlAccessibilityLabel)
-            .accessibilityHint(recordingActionUnavailable ? "Please wait until the current operation finishes." : "")
+            .accessibilityHint(recordingActionUnavailable ? "Recording is unavailable until the voice model is ready." : "")
             .accessibilityIdentifier("VoiceRecordingControl")
             .keyboardShortcut("r", modifiers: [.command, .shift])
             // Accessory buttons never participate in the pill's centered layout.
@@ -591,7 +588,7 @@ struct VoiceView: View {
         let recorder = model.recorder
         return recorder.phase == .transcribing
             || (recorder.phase == .idle && recorder.nextPendingSession == nil
-                && ((!recorder.canStartRecording && !modelNeedsAttention) || showReadyConfirmation))
+                && !recorder.canStartRecording && !modelNeedsAttention)
     }
 
     private var modelNeedsAttention: Bool {
@@ -604,8 +601,7 @@ struct VoiceView: View {
     private var controlExpanded: Bool {
         // Keep startup and capture in the same compact pill as Record.
         if model.recorder.isStartingRecording || model.recorder.phase == .recording { return false }
-        return model.recorder.phase != .idle || model.recorder.engineState != .ready ||
-        showReadyConfirmation || showTranscribedConfirmation ||
+        return model.recorder.phase != .idle || modelNeedsAttention || showTranscribedConfirmation ||
         model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
     }
 
@@ -639,6 +635,12 @@ struct VoiceView: View {
                 (recorder.currentDeliverySessionID != nil ? "Saving transcript…" : "Converting audio to text…")
             return ("Transcribing", detail, "", true)
         }
+        if recorder.phase == .idle && recorder.nextPendingSession == nil && !modelNeedsAttention {
+            switch recorder.engineState {
+            case .checking, .preparing, .downloading: return ("Record", "", "mic.fill", false)
+            default: break
+            }
+        }
         switch recorder.engineState {
         case .checking: return ("Preparing voice model", "Verifying model files…", "", true)
         case .preparing: return ("Preparing voice model", recorder.preparationMessage, "", true)
@@ -652,7 +654,6 @@ struct VoiceView: View {
         }
         if let error = recorder.lastError { return ("Recording needs attention", error, "exclamationmark.triangle", false) }
         if showTranscribedConfirmation { return ("Transcribed", "Saved to transcripts", "checkmark", false) }
-        if showReadyConfirmation { return ("Voice model ready", "Ready to record", "checkmark", false) }
         return ("Record", "", "mic.fill", false)
     }
 

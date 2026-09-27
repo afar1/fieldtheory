@@ -297,7 +297,7 @@ struct SettingsView: View {
             HStack {
                 Text("Transcription model")
                 Spacer()
-                Label("Voice model ready", systemImage: "checkmark.circle.fill")
+                Text("Ready")
                     .foregroundStyle(Theme.markRead)
                     .font(.system(size: 14))
             }
