@@ -980,9 +980,10 @@ describe('recursive wiki tree scan', () => {
     expect(noWatcher.startWikiWatcher).not.toHaveBeenCalled();
   });
 
-  it('still receives external file edits when root-only access starts the wiki watcher', async () => {
+  it.each(['Note.md', 'nested/Note.mdx'])('receives external edits to %s when root-only access starts the wiki watcher', async (relPath) => {
     const root = makeTempDir();
-    const filePath = path.join(root, 'Note.md');
+    const filePath = path.join(root, relPath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, 'Before');
     const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
     Object.defineProperty(manager, 'wikiDir', { value: root });
@@ -994,7 +995,7 @@ describe('recursive wiki tree scan', () => {
       const changed = new Promise<unknown>((resolve) => manager.once('wiki:changed', resolve));
       fs.writeFileSync(filePath, 'After [[Target]]');
       await expect(changed).resolves.toEqual(expect.objectContaining({
-        type: 'file-changed', absPath: filePath, relPath: 'Note', source: 'watcher',
+        type: 'file-changed', absPath: filePath, relPath: relPath.replace(/\.(md|mdx)$/, ''), source: 'watcher',
       }));
     } finally {
       await manager.destroy();

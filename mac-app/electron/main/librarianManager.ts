@@ -2371,11 +2371,8 @@ export class LibrarianManager extends EventEmitter {
 
     this.scanDirectory(normalizedDir);
 
-    const watcher = chokidar.watch([
-      path.join(normalizedDir, '*.md'),
-      path.join(normalizedDir, '*.markdown'),
-      path.join(normalizedDir, '*.mdx'),
-    ], {
+    const watcher = chokidar.watch(normalizedDir, {
+      ignored: (inputPath, stats) => !!stats?.isFile() && !isMarkdownDocumentPath(inputPath),
       ignoreInitial: true,           // Don't fire for existing files
       awaitWriteFinish: {            // Wait for file to be fully written
         stabilityThreshold: 100,
@@ -3996,14 +3993,8 @@ export class LibrarianManager extends EventEmitter {
       return;
     }
 
-    this.wikiWatcher = chokidar.watch([
-      path.join(wikiRoot, '**/*.md'),
-      path.join(wikiRoot, '**/*.markdown'),
-      path.join(wikiRoot, '**/*.mdx'),
-      path.join(wikiRoot, '**/*.html'),
-      path.join(wikiRoot, '**/*.htm'),
-      path.join(wikiRoot, '**/*.css'),
-    ], {
+    this.wikiWatcher = chokidar.watch(wikiRoot, {
+      ignored: (inputPath, stats) => !!stats?.isFile() && !isLibraryTextDocumentPath(inputPath),
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
