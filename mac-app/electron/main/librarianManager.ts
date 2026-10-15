@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { EventEmitter } from 'events';
-import * as chokidar from 'chokidar';
+import * as directoryWatcher from './directoryWatcher';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
@@ -1759,15 +1759,15 @@ export class LibrarianManager extends EventEmitter {
   private oldDbPath: string;
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
-  private watchers: Map<string, chokidar.FSWatcher> = new Map();
+  private watchers: Map<string, directoryWatcher.FSWatcher> = new Map();
   private destroyed = false;
   private destroyPromise?: Promise<void>;
-  private wikiParentWatcher?: chokidar.FSWatcher;
+  private wikiParentWatcher?: directoryWatcher.FSWatcher;
   private discoveryWatcher?: fs.FSWatcher;
   private watcherClosures = new Set<Promise<void>>();
-  private closedWatchers = new WeakMap<chokidar.FSWatcher, Promise<void>>();
+  private closedWatchers = new WeakMap<directoryWatcher.FSWatcher, Promise<void>>();
 
-  private closeWatcher(watcher: chokidar.FSWatcher): Promise<void> {
+  private closeWatcher(watcher: directoryWatcher.FSWatcher): Promise<void> {
     this.closedWatchers ??= new WeakMap();
     const existing = this.closedWatchers.get(watcher);
     if (existing) return existing;
@@ -1780,7 +1780,7 @@ export class LibrarianManager extends EventEmitter {
     });
     return pending;
   }
-  private libraryRootWatchers: Map<string, chokidar.FSWatcher> = new Map();
+  private libraryRootWatchers: Map<string, directoryWatcher.FSWatcher> = new Map();
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
   private userDataManager: UserDataManager | null = null;
@@ -2371,7 +2371,7 @@ export class LibrarianManager extends EventEmitter {
 
     this.scanDirectory(normalizedDir);
 
-    const watcher = chokidar.watch(normalizedDir, {
+    const watcher = directoryWatcher.watch(normalizedDir, {
       ignored: (inputPath, stats) => !!stats?.isFile() && !isMarkdownDocumentPath(inputPath),
       ignoreInitial: true,           // Don't fire for existing files
       awaitWriteFinish: {            // Wait for file to be fully written
@@ -2520,7 +2520,7 @@ export class LibrarianManager extends EventEmitter {
       return;
     }
 
-    const watcher = chokidar.watch(normalizedDir, {
+    const watcher = directoryWatcher.watch(normalizedDir, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
@@ -2674,7 +2674,7 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  private wikiWatcher: chokidar.FSWatcher | null = null;
+  private wikiWatcher: directoryWatcher.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
   private parseWikiMetadata(content: string, filePath: string): WikiFileMetadata {
@@ -3976,7 +3976,7 @@ export class LibrarianManager extends EventEmitter {
       const parent = path.dirname(wikiRoot);
       if (!fs.existsSync(parent)) return;
       this.wikiWatcherPending = true;
-      const parentWatcher = chokidar.watch(parent, {
+      const parentWatcher = directoryWatcher.watch(parent, {
         ignoreInitial: true,
         depth: 0,
       });
@@ -3993,7 +3993,7 @@ export class LibrarianManager extends EventEmitter {
       return;
     }
 
-    this.wikiWatcher = chokidar.watch(wikiRoot, {
+    this.wikiWatcher = directoryWatcher.watch(wikiRoot, {
       ignored: (inputPath, stats) => !!stats?.isFile() && !isLibraryTextDocumentPath(inputPath),
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
@@ -7816,7 +7816,7 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     this.wikiWatcherPending = false;
     this.destroyPromise = (async () => {
       const results = await Promise.allSettled([
-        ...Array.from(watchers).filter((watcher): watcher is chokidar.FSWatcher => !!watcher).map((watcher) => this.closeWatcher(watcher)),
+        ...Array.from(watchers).filter((watcher): watcher is directoryWatcher.FSWatcher => !!watcher).map((watcher) => this.closeWatcher(watcher)),
         ...(this.watcherClosures ?? []),
         Promise.resolve().then(() => { this.discoveryWatcher?.close(); this.discoveryWatcher = undefined; }),
         Promise.resolve().then(() => { this.clearPendingRenameTimers(); this.libraryIndexStore?.close(); }),

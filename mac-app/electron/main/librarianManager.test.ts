@@ -989,7 +989,7 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     Object.assign(manager, { settings: { libraryRoots: [] }, watchers: new Map(), libraryRootWatchers: new Map() });
     expect(manager.getLibraryRootPaths({ ensureWatching: true })).toEqual([root]);
-    const watcher = (manager as unknown as { wikiWatcher: import('chokidar').FSWatcher }).wikiWatcher;
+    const watcher = (manager as unknown as { wikiWatcher: import('./directoryWatcher').FSWatcher }).wikiWatcher;
     try {
       await new Promise<void>((resolve) => watcher.once('ready', resolve));
       const changed = new Promise<unknown>((resolve) => manager.once('wiki:changed', resolve));
@@ -2293,7 +2293,7 @@ describe('librarian watcher cleanup', () => {
     Object.defineProperty(manager, 'wikiDir', { value: wiki });
     Object.assign(manager, { watchers: new Map(), libraryRootWatchers: new Map() });
     manager.startWikiWatcher();
-    const parent = (manager as unknown as { wikiParentWatcher: import('chokidar').FSWatcher }).wikiParentWatcher;
+    const parent = (manager as unknown as { wikiParentWatcher: import('./directoryWatcher').FSWatcher }).wikiParentWatcher;
     const callback = parent.listeners('addDir')[0];
     await manager.destroy();
     const restart = vi.spyOn(manager, 'startWikiWatcher');

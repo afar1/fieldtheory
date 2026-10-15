@@ -43,7 +43,25 @@ async function probe(archivePath) {
       else resolve();
     });
   });
-  return { electron: process.versions.electron, modules: process.versions.modules, arch: process.arch, sqlite: 'passed', terminal: 'passed' };
+  const watcher = require(path.join(archivePath, 'node_modules/@parcel/watcher'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-native-watch-'));
+  let subscription;
+  try {
+    const canonical = fs.realpathSync(directory);
+    let resolveChange, rejectChange;
+    const changed = new Promise((resolve, reject) => { resolveChange = resolve; rejectChange = reject; });
+    subscription = await watcher.subscribe(canonical, (error, events) => {
+      if (error) rejectChange(error);
+      else if (events.some(event => event.path === path.join(canonical, 'probe.txt'))) resolveChange();
+    }, { backend: 'fs-events' });
+    fs.writeFileSync(path.join(canonical, 'probe.txt'), 'native watcher works');
+    const timeout = setTimeout(() => rejectChange(new Error('Packaged directory watcher timed out.')), 5000);
+    try { await changed; } finally { clearTimeout(timeout); }
+  } finally {
+    await subscription?.unsubscribe();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  return { electron: process.versions.electron, modules: process.versions.modules, arch: process.arch, sqlite: 'passed', terminal: 'passed', watcher: 'passed' };
 }
 
 exports.restrictModuleResolution = restrictModuleResolution;

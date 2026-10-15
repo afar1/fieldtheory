@@ -13,7 +13,7 @@ function verifyPackagedNativeRuntime(appPath) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Packaged native runtime verification failed: ${result.stderr.trim() || result.signal || result.status}`);
   const receipt = JSON.parse(result.stdout.trim());
-  if (!receipt.electron || receipt.sqlite !== 'passed' || receipt.terminal !== 'passed') throw new Error('Packaged native runtime did not report successful checks.');
+  if (!receipt.electron || receipt.sqlite !== 'passed' || receipt.terminal !== 'passed' || receipt.watcher !== 'passed') throw new Error('Packaged native runtime did not report successful checks.');
   return receipt;
 }
 

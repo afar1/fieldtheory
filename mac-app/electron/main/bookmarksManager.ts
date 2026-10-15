@@ -3,7 +3,7 @@ import fs from 'fs';
 import http from 'http';
 import https from 'https';
 import { EventEmitter } from 'events';
-import * as chokidar from 'chokidar';
+import * as directoryWatcher from './directoryWatcher';
 import { createLogger } from './logger';
 import { bookmarkDataDir, libraryDir } from './fieldTheoryPaths';
 import {
@@ -586,14 +586,14 @@ async function fetchWebPageHtml(url: string, redirects = 0): Promise<string> {
 }
 
 export class BookmarksManager extends EventEmitter {
-  private watcher: chokidar.FSWatcher | null = null;
+  private watcher: directoryWatcher.FSWatcher | null = null;
   private watcherPending = false;
-  private parentWatcher: chokidar.FSWatcher | null = null;
+  private parentWatcher: directoryWatcher.FSWatcher | null = null;
   private destroyed = false;
   private destroyPromise?: Promise<void>;
   private pendingCloses = new Set<Promise<void>>();
 
-  private closeWatcher(watcher: chokidar.FSWatcher): Promise<void> {
+  private closeWatcher(watcher: directoryWatcher.FSWatcher): Promise<void> {
     const pending = Promise.resolve().then(() => watcher.close());
     this.pendingCloses.add(pending);
     void pending.then(() => this.pendingCloses.delete(pending), (error) => log.error('Bookmarks watcher close failed:', error));
@@ -809,7 +809,7 @@ export class BookmarksManager extends EventEmitter {
       this.watcherPending = true;
       const parent = path.dirname(dir);
       if (!fs.existsSync(parent)) return;
-      const parentWatcher = chokidar.watch(parent, { depth: 0, ignoreInitial: true });
+      const parentWatcher = directoryWatcher.watch(parent, { depth: 0, ignoreInitial: true });
       this.parentWatcher = parentWatcher;
       parentWatcher.on('addDir', (dirPath) => {
         if (this.destroyed || this.parentWatcher !== parentWatcher) return;
@@ -829,7 +829,7 @@ export class BookmarksManager extends EventEmitter {
       mediaDirectory: path.resolve(mediaDir()),
     };
 
-    this.watcher = chokidar.watch(
+    this.watcher = directoryWatcher.watch(
       dir,
       {
         depth: 2,

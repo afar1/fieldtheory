@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import * as chokidar from 'chokidar';
+import * as directoryWatcher from './directoryWatcher';
 import { createLogger } from './logger';
 import {
   SCAN_MAX_READ_BYTES,
@@ -143,7 +143,7 @@ export class TaggedDocsManager extends EventEmitter {
   private db: Database.Database | null = null;
   private dbPath: string | null = null;
   private roots: string[] = [];
-  private watcher: chokidar.FSWatcher | null = null;
+  private watcher: directoryWatcher.FSWatcher | null = null;
   private currentEmail: string | null = null;
   private rescanInProgress: Promise<TaggedDoc[]> | null = null;
   private watchEnabled: boolean;
@@ -550,7 +550,7 @@ export class TaggedDocsManager extends EventEmitter {
     void this.stopWatcher();
     if (!this.watchEnabled || !this.currentEmail || this.roots.length === 0) return;
 
-    this.watcher = chokidar.watch(this.roots, {
+    this.watcher = directoryWatcher.watch(this.roots, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
       ignorePermissionErrors: true,
