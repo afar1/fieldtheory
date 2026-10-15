@@ -3,6 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as nativeWatcher from '@parcel/watcher';
 
+// Serialize native subscription changes: a root removed during startup must not
+// tear down a shared backend while another subscription is being established.
+let subscriptionQueue: Promise<unknown> = Promise.resolve();
+function updateSubscriptions<T>(change: () => Promise<T>): Promise<T> {
+  const pending = subscriptionQueue.then(change);
+  subscriptionQueue = pending.catch(() => undefined);
+  return pending;
+}
+
 type WatchOptions = {
   depth?: number;
   ignoreInitial?: boolean;
@@ -70,12 +79,12 @@ export class FSWatcher extends EventEmitter {
       const queued: nativeWatcher.Event[] = [];
       let ready = false;
       const nativeRoot = await fs.promises.realpath(root);
-      const subscription = await nativeWatcher.subscribe(nativeRoot, (error, nativeEvents) => {
+      const subscription = await updateSubscriptions(() => nativeWatcher.subscribe(nativeRoot, (error, nativeEvents) => {
         const events = nativeEvents.map(event => ({ ...event, path: path.join(root, path.relative(nativeRoot, event.path)) }));
         if (error) { this.report(error); return; }
         if (!ready) queued.push(...events);
         else for (const event of events) this.schedule(root, event);
-      }, process.platform === 'darwin' ? { backend: 'fs-events' } : {});
+      }, process.platform === 'darwin' ? { backend: 'fs-events' } : {}));
       this.subscriptions.push(subscription);
       if (this.closed) return;
       await this.scan(root, root);
@@ -142,7 +151,7 @@ export class FSWatcher extends EventEmitter {
     this.timers.clear();
     this.known.clear();
     this.shutdown ??= this.initialization.then(async () => {
-      await Promise.all(this.subscriptions.map(subscription => subscription.unsubscribe()));
+      await Promise.all(this.subscriptions.map(subscription => updateSubscriptions(() => subscription.unsubscribe())));
       this.subscriptions = [];
       this.known.clear();
     });
