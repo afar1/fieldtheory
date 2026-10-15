@@ -10,7 +10,6 @@ struct RiverView: View {
     @State private var selectedItemID: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var handledOpenDirective = false
-    @State private var showSafetyPolicy = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -45,9 +44,6 @@ struct RiverView: View {
             .onChange(of: usesSplitLayout) { _, split in
                 transition(toSplitLayout: split)
             }
-        }
-        .sheet(isPresented: $showSafetyPolicy) {
-            RiverSafetyPolicyView()
         }
     }
 
@@ -105,14 +101,6 @@ struct RiverView: View {
     @ToolbarContentBuilder
     private var settingsToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Button { showSafetyPolicy = true } label: {
-                Image(systemName: "shield")
-            }
-            .help("River safety and support")
-            .accessibilityLabel("River safety and support")
-            .accessibilityIdentifier("RiverSafetyButton")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
@@ -150,7 +138,6 @@ struct RiverView: View {
                 RiverSidebarRow(
                     item: item,
                     unread: model.river.isUnread(item),
-                    selected: selectedItemID == item.id,
                     onToggleRead: { toggleRead(item) }
                 )
                 .tag(item.id)
@@ -281,19 +268,10 @@ struct RiverView: View {
 private struct RiverSidebarRow: View {
     let item: RiverItem
     let unread: Bool
-    let selected: Bool
     let onToggleRead: () -> Void
 
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
-
-    private var primaryText: Color {
-        selected ? Theme.background(colorScheme) : Theme.text(colorScheme)
-    }
-
-    private var secondaryText: Color {
-        selected ? Theme.background(colorScheme).opacity(0.85) : Theme.textMuted(colorScheme)
-    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -301,29 +279,29 @@ private struct RiverSidebarRow: View {
                 HStack(spacing: 8) {
                     CallsignBadge(
                         callsign: item.authorCallsign ?? item.authorInitials ?? "FT",
-                        accent: selected ? primaryText : Theme.accent(model.settings.accentPreset, colorScheme)
+                        accent: Theme.accent(model.settings.accentPreset, colorScheme)
                     )
                     if unread { UnreadDot() }
                     Spacer(minLength: 4)
                     Text(item.updatedAtMs.msToDate.relativeShort)
                         .font(.system(size: 12))
-                        .foregroundStyle(secondaryText)
+                        .foregroundStyle(.tertiary)
                 }
 
                 Text(item.title)
                     .font(.custom("Source Serif 4", size: 18).weight(unread ? .semibold : .medium))
-                    .foregroundStyle(primaryText)
+                    .foregroundStyle(Theme.text(colorScheme))
                     .lineLimit(2)
 
                 Text(item.preview)
                     .font(.custom("Source Sans 3", size: 14))
-                    .foregroundStyle(secondaryText)
+                    .foregroundStyle(Theme.textMuted(colorScheme))
                     .lineLimit(3)
                     .lineSpacing(2)
 
                 Text(item.fileName)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(secondaryText)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
 

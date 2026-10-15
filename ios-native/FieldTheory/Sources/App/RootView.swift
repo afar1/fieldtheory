@@ -1,13 +1,20 @@
 import SwiftUI
 
-/// Retained for dormant Library/River source compatibility. Voice-only
-/// navigation does not install an edge-swipe gesture or expose those routes.
+enum AppTab: Hashable, CaseIterable {
+    case voice, library, river
+}
+
+/// Screen-edge strips reserved for hopping between the sections.
+/// Content gestures (river card triage, etc.) must ignore drags that
+/// start inside these zones.
 enum EdgeSwipe {
     static let zoneWidth: CGFloat = 30
 }
 
-/// Tracks pushed reading surfaces retained by the underlying Library and River
-/// implementations. Voice-only navigation does not enter those surfaces.
+/// Tracks pushed reading surfaces so global edge-swipe tab switching steps
+/// aside (and the system back-swipe wins). A depth counter, not a Bool,
+/// because a push fires the new view's onAppear before the old one's
+/// onDisappear.
 @MainActor
 @Observable
 final class ReadingState {
@@ -22,8 +29,7 @@ struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    // These environment objects remain available to the retained underlying
-    // Library and River types, but no public route reaches those features.
+    @State private var selectedTab: AppTab = .voice
     @State private var editorFocus = EditorFocusBus()
     @State private var toast = ToastCenter()
     @State private var readingState = ReadingState()
@@ -33,12 +39,8 @@ struct RootView: View {
         Group {
             if model.isSigningOut {
                 ProgressView("Signing out…")
-            } else if model.isPreparingStorage {
-                ProgressView("Preparing Ambition…")
-            } else if model.storageAccessBlocked {
-                storageRecovery
             } else if model.showMainUI {
-                voiceWorkspace.id(model.workspaceGeneration)
+                mainTabs
             } else if model.auth.phase == .loading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -51,89 +53,95 @@ struct RootView: View {
         .environment(toast)
         .environment(readingState)
         .preferredColorScheme(model.settings.appearanceMode.colorScheme)
-        .onAppear { wireRecorder() }
-        .onChange(of: model.workspaceGeneration) { _, _ in
-            // Workspace-local callbacks must not survive an account or
-            // Reviewer Demo storage swap.
-            editorFocus = EditorFocusBus()
-            readingState = ReadingState()
-            showSettings = false
+        .onAppear {
             wireRecorder()
-        }
-        .onChange(of: ObjectIdentifier(model.recorder)) { _, _ in
-            wireRecorder()
-        }
-        .alert("Local storage needs attention", isPresented: Binding(
-            get: { model.storageAlert != nil },
-            set: { if !$0 { model.storageAlert = nil } }
-        )) {
-            Button("OK") { model.storageAlert = nil }
-        } message: {
-            Text(model.storageAlert?.message ?? "")
+            if model.launchDirectives.contains("ft-open-doc") || model.launchDirectives.contains("ft-edit-doc") {
+                selectedTab = .library
+            }
+            if model.launchDirectives.contains("ft-tab-river") { selectedTab = .river }
+            if model.launchDirectives.contains("ft-tab-voice") { selectedTab = .voice }
         }
     }
 
-    private var storageRecovery: some View {
-        ContentUnavailableView {
-            Label("Local storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
-        } description: {
-            Text("Your existing files were left unchanged. Check available device storage, then try again or relaunch Ambition.")
-        } actions: {
-            Button("Try again") {
-                Task { await model.retryStoragePreparation() }
+    private var mainTabs: some View {
+        GeometryReader { geometry in
+            TabView(selection: $selectedTab) {
+                Tab("Voice", systemImage: "waveform", value: AppTab.voice) {
+                    VoiceView(showSettings: $showSettings)
+                }
+                Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
+                    LibraryView(showSettings: $showSettings)
+                }
+                Tab("River", systemImage: "water.waves", value: AppTab.river) {
+                    RiverView(showSettings: $showSettings)
+                }
+                .badge(model.river.unreadCount)
             }
-            .buttonStyle(.borderedProminent)
-            if model.auth.hasIdentity {
-                Button("Sign out", role: .destructive) {
-                    Task { await model.signOutCompletely() }
+            // Compact windows keep the phone tab bar. Regular-width iPad
+            // windows gain a collapsible sidebar without duplicating routes.
+            .tabViewStyle(.sidebarAdaptable)
+            .tabBarMinimizeBehavior(.onScrollDown)
+            .accessibilityIdentifier("FieldTheoryTabView")
+            // Edge swipes remain a compact-width affordance. On iPad the
+            // sidebar owns section navigation, and the leading edge remains
+            // available to reveal it.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 25, coordinateSpace: .local)
+                    .onEnded { value in
+                        guard horizontalSizeClass == .compact, !readingState.isReading else { return }
+                        let width = geometry.size.width
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        guard abs(dx) > 55, abs(dx) > abs(dy) * 1.6 else { return }
+                        let tabs = AppTab.allCases
+                        guard let index = tabs.firstIndex(of: selectedTab) else { return }
+                        if value.startLocation.x > width - EdgeSwipe.zoneWidth, dx < 0, index < tabs.count - 1 {
+                            withAnimation { selectedTab = tabs[index + 1] }
+                        } else if value.startLocation.x < EdgeSwipe.zoneWidth, dx > 0, index > 0 {
+                            withAnimation { selectedTab = tabs[index - 1] }
+                        }
+                    }
+            )
+            .overlay {
+                if selectedTab != .voice {
+                    DraggableMicOverlay()
                 }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background(colorScheme))
-    }
-
-    private var voiceWorkspace: some View {
-        VoiceView(showSettings: $showSettings)
             .overlay { ToastOverlay(toast: toast) }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-                    .environment(model)
-                    .environment(toast)
-                    .frame(idealWidth: horizontalSizeClass == .regular ? 560 : nil,
-                           idealHeight: horizontalSizeClass == .regular ? 720 : nil)
-            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .environment(model)
+                .environment(toast)
+                .frame(idealWidth: horizontalSizeClass == .regular ? 560 : nil,
+                       idealHeight: horizontalSizeClass == .regular ? 720 : nil)
+        }
+        .task {
+            model.recorder.models.ensureDownloaded()
+        }
     }
 
-    /// Voice recordings always produce a local transcript in the active
-    /// workspace. There is no longer an editor route that can receive text.
+    /// Transcript routing: cursor-focused editor wins; otherwise the words
+    /// land in Voice as a fresh transcription.
     private func wireRecorder() {
-        let recorder = model.recorder
-        let transcripts = model.transcripts
-        let workspace = model.workspaceGeneration
-        recorder.onTranscript = { text in
-            guard model.workspaceGeneration == workspace,
-                  model.showMainUI, !model.isSigningOut else { return false }
+        model.recorder.onTranscript = { text in
+            guard model.showMainUI, !model.isSigningOut else { return }
             let userID = model.auth.userId
-            guard let item = await transcripts.add(text: text) else { return false }
-            recorder.associateCurrentDelivery(transcriptID: item.id)
-            guard model.workspaceGeneration == workspace,
-                  !model.isSigningOut, model.auth.userId == userID else { return false }
-            if model.settings.autoCopyTranscripts {
-                // Automatic copying must not bypass the recording's cloud
-                // privacy window through Apple's Universal Clipboard.
-                UIPasteboard.general.setItems(
-                    [["public.utf8-plain-text": text]], options: [.localOnly: true]
-                )
+            if editorFocus.insert(text) {
+                toast.show("Inserted", symbol: "text.cursor")
+            } else {
+                await model.transcripts.add(text: text)
+                guard !model.isSigningOut, model.auth.userId == userID else { return }
+                if model.settings.autoCopyTranscripts {
+                    UIPasteboard.general.string = text
+                }
+                toast.show("Saved to Voice", symbol: "waveform")
             }
-            toast.show("Saved to Voice", symbol: "waveform")
-            return true
         }
-        recorder.onNotice = { message, symbol in
-            guard model.workspaceGeneration == workspace else { return }
+        model.recorder.onNotice = { message, symbol in
             toast.show(message, symbol: symbol, duration: 2.6)
         }
-        Task { await recorder.resumePendingWork() }
+        Task { await model.recorder.resumePendingWork() }
     }
 }
 

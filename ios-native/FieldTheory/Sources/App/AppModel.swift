@@ -8,69 +8,23 @@ import Supabase
 final class AppModel {
     let settings: AppSettings
     let auth: AuthStore
-    private(set) var library: LibraryStore
-    private(set) var river: RiverStore
-    private(set) var transcripts: TranscriptStore
-    private(set) var sync: SyncEngine
-    private(set) var recorder: RecorderController
+    let library: LibraryStore
+    let river: RiverStore
+    let transcripts: TranscriptStore
+    let sync: SyncEngine
+    let recorder: RecorderController
 
     private(set) var isSigningOut = false
-    private(set) var isPreparingStorage = true
-    private(set) var isReviewerDemoStorage = false
-    private(set) var storageAccessBlocked = false
-    private(set) var workspaceGeneration = UUID()
-    var storageAlert: StorageAlert?
 
-    private var db: Database
-    private var productionStack: StorageStack
-    private let productionRecorder: RecorderController
-    private let productionDatabasePath: String
-    private let productionLibraryRoot: URL
-    private let reviewerDemoDatabasePath: String
-    private let reviewerDemoRoot: URL
-    private var productionStorageAvailable: Bool
-    private var authTransitionTask: Task<Void, Never>?
-    private var transitionGeneration: UInt64 = 0
-    private var explicitWorkspaceTransition = false
-    private var pendingAuthPhase: AuthPhase?
+    private let db: Database
 
-    struct StorageAlert: Identifiable {
-        let id = UUID()
-        let message: String
-    }
-
-    typealias ReviewerDemoSeed = @MainActor (
-        _ library: LibraryStore,
-        _ river: RiverStore,
-        _ transcripts: TranscriptStore,
-        _ database: Database
-    ) async throws -> Void
-
-    private struct StorageStack {
-        let db: Database
-        let library: LibraryStore
-        let river: RiverStore
-        let transcripts: TranscriptStore
-        let sync: SyncEngine
-    }
-
-    init(
-        databasePathOverride: String? = nil,
-        libraryRootOverride: URL? = nil,
-        reviewerDemoDatabasePathOverride: String? = nil,
-        reviewerDemoRootOverride: URL? = nil,
-        recorderOverride: RecorderController? = nil,
-        startInitialPreparation: Bool = true
-    ) {
+    init() {
         let settings = AppSettings()
         let client = SupabaseConfig.makeClient()
         let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let databasePath = databasePathOverride
-            ?? supportDir.appendingPathComponent("FieldTheory/fieldtheory.sqlite").path
-        let opened = Database.recovering(path: databasePath)
-        let db = opened.database
+        let db = try! Database(path: supportDir.appendingPathComponent("FieldTheory/fieldtheory.sqlite").path)
 
-        let library = LibraryStore(db: db, libraryRoot: libraryRootOverride)
+        let library = LibraryStore(db: db)
         let river = RiverStore(db: db)
         let transcripts = TranscriptStore(db: db)
         let auth = AuthStore(client: client)
@@ -79,77 +33,91 @@ final class AppModel {
 
         self.settings = settings
         self.auth = auth
-        self.productionDatabasePath = databasePath
-        self.productionLibraryRoot = libraryRootOverride ?? LibraryStore.libraryRoot
-        self.reviewerDemoDatabasePath = reviewerDemoDatabasePathOverride
-            ?? supportDir.appendingPathComponent("FieldTheory/reviewer-demo.sqlite").path
-        self.reviewerDemoRoot = reviewerDemoRootOverride
-            ?? Self.documentsRoot.appendingPathComponent("reviewer-demo", isDirectory: true)
-        self.productionStorageAvailable = opened.error == nil
         self.db = db
         self.library = library
         self.river = river
         self.transcripts = transcripts
         self.sync = sync
-        self.productionStack = StorageStack(
-            db: db, library: library, river: river,
-            transcripts: transcripts, sync: sync
-        )
-        let recorder = recorderOverride ?? Self.makeRecorder()
-        self.recorder = recorder
-        self.productionRecorder = recorder
-        recorder.replaceWords = { [weak sync] text in sync?.wordSubstitutions.apply(to: text) ?? text }
-        recorder.setWorkEnabled(auth.hasIdentity && opened.error == nil)
-        wireStorageErrors()
-        if let error = opened.error {
-            storageAccessBlocked = true
-            storageAlert = StorageAlert(message: "Local storage could not be opened. Your existing files were left unchanged. Try again after checking available storage. (\(error.localizedDescription))")
-        }
+        self.recorder = RecorderController()
+        self.recorder.setWorkEnabled(auth.hasIdentity)
 
         auth.onPhaseChange = { [weak self] phase in
             guard let self else { return }
-            self.scheduleAuthTransition(phase)
+            switch phase {
+            case .signedIn(let userId, let email):
+                guard !self.isSigningOut else { return }
+                self.recorder.setWorkEnabled(true)
+                self.sync.start(userId: userId, email: email)
+            case .signedOut:
+                // Session died (offline, refresh failure, revocation). Stop
+                // syncing; local data and identity stay untouched. The only
+                // wipe path is the explicit sign-out in Settings.
+                self.sync.stop()
+            case .loading:
+                break
+            }
         }
 
-        if startInitialPreparation {
-            Task {
-                await prepareProductionStorage(
-                    userId: auth.userId,
-                    liveSession: auth.phase,
-                    transition: 0
-                )
+        Task {
+            await library.reload()
+            await river.reload()
+            await transcripts.reload()
+            if case .signedIn(let userId, let email) = auth.phase {
+                sync.start(userId: userId, email: email)
             }
-        } else {
-            isPreparingStorage = false
         }
 
 #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("ft-preview") {
             enterPreviewMode()
         }
+        // End-to-end whisper validation: the simulator can read host paths,
+        // so transcribe a WAV generated on the Mac and print the result.
+        if ProcessInfo.processInfo.arguments.contains("ft-test-whisper") {
+            Task {
+                recorder.models.ensureDownloaded()
+                while recorder.models.readyModelURL == nil {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if case .failed(let why) = recorder.models.state {
+                        print("FT whisper model download failed: \(why)")
+                        return
+                    }
+                }
+                do {
+                    let text = try await recorder.whisper.transcribe(
+                        audioURL: URL(fileURLWithPath: "/tmp/ft-test.wav"),
+                        modelURL: recorder.models.readyModelURL!
+                    )
+                    print("FT whisper result: \(text)")
+                } catch {
+                    print("FT whisper error: \(error)")
+                }
+            }
+        }
 #endif
     }
 
     func handleDidBecomeActive() {
-        guard !isPreparingStorage, !storageAccessBlocked else { return }
         if case .signedIn = auth.phase {
             sync.scheduleDebounced(after: 0.3)
         }
-        Task {
-            await transcripts.reload()
-            await recorder.resumePendingWork()
-        }
+        Task { await recorder.resumePendingWork() }
     }
 
-    /// Retained only so the dormant Library/River source continues to compile.
-    /// Voice-only navigation deliberately exposes no simulator route directives.
-    var launchDirectives: Set<String> { [] }
+    /// Simulator launch-arg directives for screenshot navigation
+    /// ("ft-tab-river", "ft-open-doc", "ft-open-river"); always empty on
+    /// device. Plain tokens because simctl swallows --flags.
+    var launchDirectives: Set<String> {
+#if targetEnvironment(simulator)
+        Set(ProcessInfo.processInfo.arguments.filter { $0.hasPrefix("ft-") })
+#else
+        []
+#endif
+    }
 
     /// True when the main tab UI should show: any persisted identity (live
     /// session or not — the app is local-first), or simulator preview.
     var showMainUI: Bool {
-        guard !isPreparingStorage, !storageAccessBlocked else { return false }
-        if isReviewerDemoStorage { return true }
         if auth.hasIdentity { return true }
         if case .signedIn = auth.phase { return true }
 #if targetEnvironment(simulator)
@@ -159,40 +127,16 @@ final class AppModel {
 #endif
     }
 
-    /// Reviewer Demo can retain an underlying production session for the
-    /// return path, but it must never submit demo fixture reports remotely.
-    var canSubmitRiverReports: Bool {
-        auth.sessionAlive
-            && !isReviewerDemoStorage
-            && !isPreparingStorage
-            && !storageAccessBlocked
-            && !isSigningOut
-    }
-
-    /// A report captures this generation before its network request. Any
-    /// workspace switch (including Reviewer Demo) invalidates later UI state.
-    func acceptsRiverReportResult(workspace: UUID, reporterID: UUID) -> Bool {
-        canSubmitRiverReports
-            && workspaceGeneration == workspace
-            && auth.userId == reporterID
-    }
-
     /// The explicit sign-out: ends the session, clears identity, wipes the
     /// device copy. The only road back to the login screen.
     func signOutCompletely() async {
-        if isReviewerDemoStorage {
-            await exitReviewerDemo()
-            return
-        }
         guard !isSigningOut else { return }
         isSigningOut = true
         defer { isSigningOut = false }
-        await beginExplicitWorkspaceTransition()
 #if targetEnvironment(simulator)
         previewMode = false
 #endif
-        await sync.stopAndWait()
-        sync.wordSubstitutions.selectUser(nil)
+        sync.stop()
         auth.clearIdentity()
         do {
             try await recorder.discardRecordings()
@@ -201,123 +145,8 @@ final class AppModel {
         }
         await auth.signOut()
         // A token-refresh event may have repersisted identity while cleanup awaited.
-        sync.wordSubstitutions.selectUser(nil)
         auth.clearIdentity()
         await wipeLocalData()
-        recorder.setWorkEnabled(false)
-        finishExplicitWorkspaceTransition(resumeLatestAuth: false)
-    }
-
-    /// Activates a physically separate database and document root for App
-    /// Review. The production sync is fully settled before fixtures can run.
-    /// Demo mode never starts a Supabase sync or consumes pending recordings.
-    func enterReviewerDemo(seed: ReviewerDemoSeed) async throws {
-        guard !isReviewerDemoStorage else { return }
-        isPreparingStorage = true
-        await beginExplicitWorkspaceTransition()
-        await sync.stopAndWait()
-        await recorder.suspendAndWait()
-
-        let opened = Database.recovering(path: reviewerDemoDatabasePath)
-        let demoRoot = reviewerDemoRoot.appendingPathComponent("library", isDirectory: true)
-        let demoAudioRoot = reviewerDemoRoot.appendingPathComponent("pending-audio", isDirectory: true)
-        let demoStack = makeStack(db: opened.database, libraryRoot: demoRoot)
-
-        do {
-            if let error = opened.error { throw error }
-            guard let demoDefaults = UserDefaults(suiteName: "com.afar1.fieldtheory.reviewer-demo") else {
-                throw DatabaseError(message: "Reviewer Demo preferences are unavailable")
-            }
-            demoDefaults.removePersistentDomain(forName: "com.afar1.fieldtheory.reviewer-demo")
-            try await demoStack.db.reset()
-            if FileManager.default.fileExists(atPath: demoRoot.path) {
-                try FileManager.default.removeItem(at: demoRoot)
-            }
-            if FileManager.default.fileExists(atPath: demoAudioRoot.path) {
-                try FileManager.default.removeItem(at: demoAudioRoot)
-            }
-            activate(demoStack)
-            try await seed(library, river, transcripts, db)
-            await reloadActiveStores()
-            recorder = Self.makeRecorder(
-                pendingDirectory: demoAudioRoot,
-                metricsDirectory: reviewerDemoRoot.appendingPathComponent("VoiceDiagnostics", isDirectory: true),
-                defaults: demoDefaults
-            )
-            isReviewerDemoStorage = true
-            auth.beginReviewerDemo()
-            storageAccessBlocked = false
-            recorder.setWorkEnabled(true)
-            workspaceGeneration = UUID()
-            isPreparingStorage = false
-            finishExplicitWorkspaceTransition(resumeLatestAuth: false)
-        } catch {
-            activate(productionStack)
-            recorder = productionRecorder
-            recorder.setWorkEnabled(auth.hasIdentity && productionStorageAvailable)
-            isReviewerDemoStorage = false
-            isPreparingStorage = false
-            finishExplicitWorkspaceTransition(resumeLatestAuth: true)
-            throw error
-        }
-    }
-
-    /// Reopens the durable production database after a launch/storage error.
-    /// The temporary fallback is never allowed to sync or accept edits.
-    func retryStoragePreparation() async {
-        guard !isReviewerDemoStorage else { return }
-        await beginExplicitWorkspaceTransition()
-        isPreparingStorage = true
-        storageAccessBlocked = true
-        await sync.stopAndWait()
-
-        let opened = Database.recovering(path: productionDatabasePath)
-        if let error = opened.error {
-            isPreparingStorage = false
-            presentStorageError("Local storage is still unavailable. Check device storage and try again, or relaunch Ambition. (\(error.localizedDescription))")
-            finishExplicitWorkspaceTransition(resumeLatestAuth: true)
-            return
-        }
-
-        let reopened = makeStack(db: opened.database, libraryRoot: productionLibraryRoot)
-        productionStack = reopened
-        productionStorageAvailable = true
-        activate(reopened)
-        workspaceGeneration = UUID()
-        storageAccessBlocked = false
-        await prepareProductionStorage(userId: auth.userId, liveSession: auth.phase)
-        finishExplicitWorkspaceTransition(resumeLatestAuth: true)
-    }
-
-    /// Removes only Reviewer Demo fixtures, then restores the retained
-    /// production stack. No production table or document path is touched.
-    func exitReviewerDemo() async {
-        guard isReviewerDemoStorage else { return }
-        await beginExplicitWorkspaceTransition()
-        isPreparingStorage = true
-        await sync.stopAndWait()
-        let demoDB = db
-        let demoRoot = library.libraryRoot
-        do {
-            try await recorder.discardRecordings()
-            try await demoDB.reset()
-            if FileManager.default.fileExists(atPath: demoRoot.path) {
-                try FileManager.default.removeItem(at: demoRoot)
-            }
-        } catch {
-            presentStorageError("Reviewer Demo data could not be fully removed. Production data was left unchanged. (\(error.localizedDescription))")
-        }
-
-        activate(productionStack)
-        recorder = productionRecorder
-        isReviewerDemoStorage = false
-        auth.endReviewerDemo()
-#if targetEnvironment(simulator)
-        previewMode = false
-#endif
-        workspaceGeneration = UUID()
-        await prepareProductionStorage(userId: auth.userId, liveSession: auth.phase)
-        finishExplicitWorkspaceTransition(resumeLatestAuth: true)
     }
 
 #if targetEnvironment(simulator)
@@ -327,228 +156,21 @@ final class AppModel {
 
     func enterPreviewMode() {
         previewMode = true
+        recorder.setWorkEnabled(true)
         Task {
-            do {
-                try await enterReviewerDemo { _, _, transcripts, db in
-                    await PreviewFixtures.seed(transcripts: transcripts, db: db)
-                }
-            } catch {
-                previewMode = false
-                presentStorageError("Preview storage could not be prepared. Production data was left unchanged. (\(error.localizedDescription))")
-            }
+            await PreviewFixtures.seed(library: library, river: river, transcripts: transcripts, db: db)
+            await library.reload()
+            await river.reload()
+            await transcripts.reload()
         }
     }
 #endif
 
     private func wipeLocalData() async {
-        if !isReviewerDemoStorage, !productionStorageAvailable {
-            // The durable index could not be opened, so deleting the document
-            // root would destroy files we cannot safely reconcile.
-            presentStorageError("You were signed out, but local files were retained because storage is unavailable. Relaunch Ambition before signing in to another account.")
-            return
-        }
-        do {
-            if FileManager.default.fileExists(atPath: library.libraryRoot.path) {
-                try FileManager.default.removeItem(at: library.libraryRoot)
-            }
-            // Keep the old owner marker until external files are gone. If
-            // cleanup fails, the next different account must still take the
-            // owner-switch path instead of adopting an unclaimed replica.
-            try await db.reset()
-        } catch {
-            presentStorageError("Local account data could not be fully removed. It will remain isolated from the next account. (\(error.localizedDescription))")
-        }
-        await reloadActiveStores()
-    }
-
-    private static var documentsRoot: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    }
-
-    /// Production and reviewer recorders share one local runtime so a workspace
-    /// transition cannot launch a second non-cooperative Core ML load.
-    private static let sharedParakeetService = ParakeetService()
-
-    private static func makeRecorder(
-        pendingDirectory: URL = RecorderController.pendingAudioDir,
-        metricsDirectory: URL = RecorderController.voiceDiagnosticsDir,
-        defaults: UserDefaults = .standard
-    ) -> RecorderController {
-        RecorderController(
-            pendingDirectory: pendingDirectory,
-            metricsDirectory: metricsDirectory,
-            defaults: defaults,
-            speechEngine: ParakeetSpeechTranscriptionEngine(
-                models: ParakeetModelManager(),
-                service: sharedParakeetService
-            )
-        )
-    }
-
-    private func makeStack(db: Database, libraryRoot: URL) -> StorageStack {
-        let library = LibraryStore(db: db, libraryRoot: libraryRoot)
-        let river = RiverStore(db: db)
-        let transcripts = TranscriptStore(db: db)
-        let sync = SyncEngine(
-            client: auth.client, db: db, settings: settings,
-            library: library, river: river, transcripts: transcripts
-        )
-        return StorageStack(db: db, library: library, river: river, transcripts: transcripts, sync: sync)
-    }
-
-    private func activate(_ stack: StorageStack) {
-        db = stack.db
-        library = stack.library
-        river = stack.river
-        transcripts = stack.transcripts
-        sync = stack.sync
-        wireStorageErrors()
-    }
-
-    private func wireStorageErrors() {
-        library.onStorageError = { [weak self] message in self?.presentStorageError(message) }
-        transcripts.onStorageError = { [weak self] message in self?.presentStorageError(message) }
-    }
-
-    private func presentStorageError(_ message: String) {
-        storageAlert = StorageAlert(message: message)
-    }
-
-    private func reloadActiveStores() async {
+        try? await db.reset()
+        try? FileManager.default.removeItem(at: LibraryStore.libraryRoot)
         await library.reload()
         await river.reload()
         await transcripts.reload()
-    }
-
-    private func scheduleAuthTransition(_ phase: AuthPhase) {
-        if explicitWorkspaceTransition {
-            pendingAuthPhase = phase
-            return
-        }
-        startAuthTransition(phase)
-    }
-
-    private func startAuthTransition(_ phase: AuthPhase) {
-        pendingAuthPhase = nil
-        transitionGeneration &+= 1
-        let transition = transitionGeneration
-        authTransitionTask?.cancel()
-        authTransitionTask = Task { [weak self] in
-            guard let self else { return }
-            await self.applyAuthPhase(phase, transition: transition)
-        }
-    }
-
-    private func applyAuthPhase(_ phase: AuthPhase, transition: UInt64) async {
-        guard transition == transitionGeneration,
-              !explicitWorkspaceTransition,
-              !isSigningOut,
-              !isReviewerDemoStorage else { return }
-        switch phase {
-        case .signedIn(let userId, let email):
-            await prepareProductionStorage(
-                userId: userId,
-                liveSession: .signedIn(userId: userId, email: email),
-                transition: transition
-            )
-        case .signedOut:
-            // Session loss keeps the current account's local-first replica,
-            // but no in-flight request may continue under stale credentials.
-            await sync.stopAndWait()
-            guard transition == transitionGeneration else { return }
-            recorder.setWorkEnabled(auth.hasIdentity)
-            isPreparingStorage = false
-        case .loading:
-            break
-        }
-    }
-
-    private func prepareProductionStorage(
-        userId: UUID?,
-        liveSession: AuthPhase,
-        transition: UInt64? = nil
-    ) async {
-        guard transitionIsCurrent(transition) else { return }
-        isPreparingStorage = true
-        guard !isReviewerDemoStorage else {
-            isPreparingStorage = false
-            return
-        }
-        await sync.stopAndWait()
-        guard transitionIsCurrent(transition) else { return }
-        await recorder.suspendAndWait()
-        guard transitionIsCurrent(transition) else { return }
-        guard productionStorageAvailable else {
-            storageAccessBlocked = true
-            recorder.setWorkEnabled(false)
-            isPreparingStorage = false
-            return
-        }
-
-        sync.wordSubstitutions.selectUser(userId?.uuidString.lowercased())
-        if let userId {
-            let ownerID = userId.uuidString.lowercased()
-            var databaseActivated = false
-            do {
-                let changedAccount = try await db.activate(ownerID: ownerID)
-                databaseActivated = true
-                guard transitionIsCurrent(transition) else { return }
-                let cleanupRequired = try await db.externalCleanupRequired()
-                if cleanupRequired {
-                    // The old recorder callback is already settled. Remove its
-                    // queued audio before enabling the new account, then reset
-                    // every workspace-local navigation/editor closure.
-                    try await recorder.discardRecordings()
-                    if FileManager.default.fileExists(atPath: library.libraryRoot.path) {
-                        try FileManager.default.removeItem(at: library.libraryRoot)
-                    }
-                    try await db.markExternalCleanupComplete()
-                }
-                if changedAccount {
-                    workspaceGeneration = UUID()
-                }
-            } catch {
-                presentStorageError("This account's local storage could not be prepared. Existing files were left unchanged and sync remains paused. (\(error.localizedDescription))")
-                if !databaseActivated { productionStorageAvailable = false }
-                storageAccessBlocked = true
-                recorder.setWorkEnabled(false)
-                isPreparingStorage = false
-                return
-            }
-        }
-
-        await reloadActiveStores()
-        guard transitionIsCurrent(transition) else { return }
-        storageAccessBlocked = false
-        recorder.setWorkEnabled(userId != nil)
-        if case .signedIn(let liveUserId, let email) = liveSession,
-           liveUserId == userId {
-            await sync.start(userId: liveUserId, email: email)
-        }
-        isPreparingStorage = false
-    }
-
-    private func transitionIsCurrent(_ transition: UInt64?) -> Bool {
-        guard !Task.isCancelled else { return false }
-        guard let transition else { return true }
-        return transition == transitionGeneration
-    }
-
-    private func beginExplicitWorkspaceTransition() async {
-        explicitWorkspaceTransition = true
-        transitionGeneration &+= 1
-        let previous = authTransitionTask
-        authTransitionTask = nil
-        previous?.cancel()
-        await previous?.value
-    }
-
-    private func finishExplicitWorkspaceTransition(resumeLatestAuth: Bool) {
-        explicitWorkspaceTransition = false
-        let phase = pendingAuthPhase
-        pendingAuthPhase = nil
-        if resumeLatestAuth, let phase {
-            startAuthTransition(phase)
-        }
     }
 }

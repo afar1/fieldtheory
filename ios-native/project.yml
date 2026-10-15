@@ -11,9 +11,6 @@ packages:
   Markdown:
     url: https://github.com/swiftlang/swift-markdown
     from: 0.4.0
-  FluidAudio:
-    url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.15.6
 targets:
   FieldTheoryTests:
     type: bundle.unit-test
@@ -55,14 +52,12 @@ targets:
         product: Supabase
       - package: Markdown
         product: Markdown
-      - package: FluidAudio
-        product: FluidAudio
+      - framework: ../build-apple/whisper.xcframework
+        embed: true
+        codeSign: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.afar1.fieldtheory
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "14"
-        FT_BUILD_COMMIT: development
         DEVELOPMENT_TEAM: 3244UJ94D8
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
@@ -73,13 +68,10 @@ targets:
     info:
       path: FieldTheory/Resources/Info.plist
       properties:
-        CFBundleDisplayName: Ambition
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        FTBuildCommit: $(FT_BUILD_COMMIT)
+        CFBundleDisplayName: Field Theory
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
-        NSMicrophoneUsageDescription: "Ambition records audio so it can transcribe your voice entirely on this device."
+        NSMicrophoneUsageDescription: "Field Theory records audio so it can transcribe your voice entirely on this device."
         UIAppFonts:
           - SourceSerif4-Variable.ttf
           - SourceSerif4-Italic-Variable.ttf

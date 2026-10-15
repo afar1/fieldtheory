@@ -5,36 +5,50 @@ final class NavigationPolishUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testLaunchesDirectlyIntoVoiceWithoutLibraryOrRiverNavigation() {
+    func testLaunchesWithVoiceLibraryRiverTabs() {
         let app = XCUIApplication()
         app.terminate()
         app.launchArguments = ["ft-preview"]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Voice"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Settings"].exists)
-        XCTAssertFalse(app.tabBars.firstMatch.exists)
-        XCTAssertFalse(app.buttons["Library"].exists)
-        XCTAssertFalse(app.buttons["River"].exists)
-        XCTAssertFalse(app.buttons["Goals"].exists)
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 10), "tab bar did not appear")
+
+        let labels = tabBar.buttons.allElementsBoundByIndex
+            .sorted { $0.frame.minX < $1.frame.minX }
+            .map { $0.label }
+        XCTAssertEqual(Array(labels.prefix(3)), ["Voice", "Library", "River"])
+        XCTAssertTrue(tabBar.buttons["Voice"].isSelected, "Voice should be the default mobile tab")
     }
 
-    func testVoiceSettingsStaysOpenAcrossAppearanceChanges() {
+    func testDocumentDisplayControlsStayOpenAcrossChanges() {
         let app = XCUIApplication()
         app.terminate()
-        app.launchArguments = ["ft-preview"]
+        app.launchArguments = ["ft-preview", "ft-open-doc"]
         app.launch()
 
-        let settings = app.buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 10))
-        settings.tap()
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 15), "document surface did not appear")
+        app.navigationBars.buttons["More"].tap()
+        app.buttons["Display"].tap()
 
-        let settingsNavigation = app.navigationBars["Settings"]
-        XCTAssertTrue(settingsNavigation.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Appearance"].exists)
-        XCTAssertTrue(app.staticTexts["Voice"].exists)
-        XCTAssertFalse(app.staticTexts["Library"].exists)
-        app.buttons["Done"].tap()
-        XCTAssertTrue(app.navigationBars["Voice"].waitForExistence(timeout: 5))
+        let display = app.navigationBars["Display"]
+        XCTAssertTrue(display.waitForExistence(timeout: 5), "display controls did not open")
+
+        let lineNumbers = app.switches["Line numbers"]
+        XCTAssertTrue(lineNumbers.waitForExistence(timeout: 5), "line-number toggle missing")
+        lineNumbers.tap()
+        XCTAssertTrue(display.exists, "display controls dismissed after toggling line numbers")
+
+        app.buttons.matching(labelStartingWith("Text size")).firstMatch.tap()
+        app.buttons["Large"].tap()
+        XCTAssertTrue(display.exists, "display controls dismissed after changing text size")
+
+        app.buttons.matching(labelStartingWith("Line spacing")).firstMatch.tap()
+        app.buttons["Loose"].tap()
+        XCTAssertTrue(display.exists, "display controls dismissed after changing line spacing")
+    }
+
+    private func labelStartingWith(_ text: String) -> NSPredicate {
+        NSPredicate(format: "label BEGINSWITH %@", text)
     }
 }

@@ -27,11 +27,9 @@ final class RecordingSignOutTests: XCTestCase {
         try queue()
         var calls = 0
         let recorder = RecorderController(pendingDirectory: directory, defaults: defaults,
-                                         transcribe: { _ in calls += 1; return "private" })
-        recorder.onTranscript = { _ in
-            XCTFail("Signed-out audio was delivered")
-            return false
-        }
+                                         transcribe: { _, _ in calls += 1; return "private" },
+                                         modelURL: { URL(fileURLWithPath: "/unused-model") })
+        recorder.onTranscript = { _ in XCTFail("Signed-out audio was delivered") }
         recorder.setWorkEnabled(true)
         XCTAssertEqual(recorder.pendingSessionCount, 1)
 
@@ -48,16 +46,13 @@ final class RecordingSignOutTests: XCTestCase {
         var finish: CheckedContinuation<String, Never>?
         var delivered: [String] = []
         let recorder = RecorderController(pendingDirectory: directory, defaults: defaults,
-                                         transcribe: { _ in
+                                         transcribe: { _, _ in
             await withCheckedContinuation { continuation in
                 finish = continuation
                 started.fulfill()
             }
-        })
-        recorder.onTranscript = {
-            delivered.append($0)
-            return true
-        }
+        }, modelURL: { URL(fileURLWithPath: "/unused-model") })
+        recorder.onTranscript = { delivered.append($0) }
         recorder.setWorkEnabled(true)
         let drain = Task { await recorder.drainPendingQueue() }
         await fulfillment(of: [started], timeout: 2)
@@ -77,14 +72,14 @@ final class RecordingSignOutTests: XCTestCase {
         var finish: CheckedContinuation<Void, Never>?
         var events: [String] = []
         let recorder = RecorderController(pendingDirectory: directory, defaults: defaults,
-                                         transcribe: { _ in "text" })
+                                         transcribe: { _, _ in "text" },
+                                         modelURL: { URL(fileURLWithPath: "/unused-model") })
         recorder.onTranscript = { _ in
             await withCheckedContinuation { continuation in
                 finish = continuation
                 started.fulfill()
             }
             events.append("delivery finished")
-            return true
         }
         recorder.setWorkEnabled(true)
         let drain = Task { await recorder.drainPendingQueue() }
@@ -107,63 +102,5 @@ final class RecordingSignOutTests: XCTestCase {
         recorder.setWorkEnabled(true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
         XCTAssertFalse(defaults.bool(forKey: "voice-recording-cleanup-required"))
-    }
-
-    func testSuspendSettlesStartedDeliveryWithoutRedeliveringAcrossWorkspaceSwap() async throws {
-        try queue()
-        let started = expectation(description: "delivery started")
-        var finish: CheckedContinuation<Void, Never>?
-        var delivered: [String] = []
-        let recorder = RecorderController(
-            pendingDirectory: directory,
-            defaults: defaults,
-            transcribe: { _ in "private account a" }
-        )
-        recorder.onTranscript = { text in
-            started.fulfill()
-            await withCheckedContinuation { finish = $0 }
-            delivered.append(text)
-            return true
-        }
-        recorder.setWorkEnabled(true)
-        let drain = Task { await recorder.drainPendingQueue() }
-        await fulfillment(of: [started], timeout: 2)
-
-        let suspend = Task { await recorder.suspendAndWait() }
-        await Task.yield()
-        finish?.resume()
-        await suspend.value
-        await drain.value
-
-        XCTAssertEqual(delivered, ["private account a"])
-        XCTAssertEqual(recorder.pendingSessionCount, 0)
-        recorder.setWorkEnabled(true)
-        await recorder.resumePendingWork()
-        XCTAssertEqual(delivered, ["private account a"])
-    }
-
-    func testFailedTranscriptPersistenceKeepsRawAudioForRetry() async throws {
-        try queue()
-        var attempts = 0
-        let recorder = RecorderController(
-            pendingDirectory: directory,
-            defaults: defaults,
-            transcribe: { _ in "recover me" }
-        )
-        recorder.onTranscript = { _ in
-            attempts += 1
-            return attempts > 1
-        }
-        recorder.setWorkEnabled(true)
-
-        await recorder.drainPendingQueue()
-        XCTAssertEqual(attempts, 1)
-        XCTAssertEqual(recorder.pendingSessionCount, 1)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("rec-100-0.wav").path))
-
-        await recorder.resumePendingWork()
-        XCTAssertEqual(attempts, 2)
-        XCTAssertEqual(recorder.pendingSessionCount, 0)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("rec-100-0.wav").path))
     }
 }

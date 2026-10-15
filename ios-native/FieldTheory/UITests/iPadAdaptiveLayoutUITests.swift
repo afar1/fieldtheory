@@ -9,36 +9,35 @@ final class iPadAdaptiveLayoutUITests: XCTestCase {
         }
     }
 
-    func testVoiceWorkspaceSurvivesRotationWithoutSectionSidebar() {
+    func testTopLevelNavigationSurvivesRotation() {
         XCUIDevice.shared.orientation = .landscapeLeft
 
         let app = XCUIApplication()
         app.launchArguments = ["ft-preview"]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Voice"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Settings"].exists)
-        XCTAssertFalse(app.buttons["Library"].exists)
-        XCTAssertFalse(app.buttons["River"].exists)
-        attachScreenshot(named: "Field Theory iPad Voice Landscape", app: app)
+        for tab in ["Voice", "Library", "River"] {
+            let button = app.buttons[tab].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 10), "\(tab) navigation item is missing")
+            button.tap()
+        }
+
+        attachScreenshot(named: "Field Theory iPad Landscape", app: app)
 
         XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(app.navigationBars["Voice"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Settings"].exists)
-        attachScreenshot(named: "Field Theory iPad Voice Portrait", app: app)
+        XCTAssertTrue(app.buttons["River"].firstMatch.waitForExistence(timeout: 5))
+        attachScreenshot(named: "Field Theory iPad Portrait", app: app)
     }
 
-    func testVoiceSettingsKeepsNavigationShellOnIPad() {
+    func testLibraryOpensDocumentWithoutReplacingNavigationShell() {
         let app = XCUIApplication()
-        app.launchArguments = ["ft-preview"]
+        app.launchArguments = ["ft-preview", "ft-open-doc"]
         app.launch()
 
-        let settings = app.buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 10))
-        settings.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        app.buttons["Done"].tap()
-        XCTAssertTrue(app.navigationBars["Voice"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 15), "document editor did not appear")
+        XCTAssertTrue(app.otherElements["FieldTheoryTabView"].exists || app.buttons["Library"].firstMatch.exists,
+                      "top-level iPad navigation disappeared while reading")
+        attachScreenshot(named: "Field Theory iPad Document", app: app)
     }
 
     private func attachScreenshot(named name: String, app: XCUIApplication) {

@@ -25,8 +25,6 @@ struct DocumentView: View {
     @State private var showDisplayControls = false
     @State private var chromeHidden = false
     @State private var deleting = false
-    @State private var documentWorkspace: UUID?
-    @State private var loadFailed = false
 
     private var styling: MarkdownStyling {
         MarkdownStyling(
@@ -35,10 +33,6 @@ struct DocumentView: View {
             mutedColor: Theme.textMuted(colorScheme),
             accentColor: Theme.accent(model.settings.accentPreset, colorScheme)
         )
-    }
-
-    private var canMutateWorkspace: Bool {
-        documentWorkspace == model.workspaceGeneration && model.showMainUI && !model.isSigningOut
     }
 
     private var compactChromeHidden: Bool {
@@ -71,19 +65,6 @@ struct DocumentView: View {
             },
             onPullDismiss: pullDismissAction
         )
-        .disabled(!loaded)
-        .overlay {
-            if loadFailed {
-                ContentUnavailableView {
-                    Label("Couldn’t open note", systemImage: "doc.badge.ellipsis")
-                } description: {
-                    Text("The local file could not be read. It has not been replaced or changed.")
-                } actions: {
-                    Button("Try again") { Task { await loadDocument() } }
-                }
-                .background(Theme.background(colorScheme))
-            }
-        }
         .ignoresSafeArea(.container, edges: .bottom)
         .background(Theme.background(colorScheme))
         .navigationTitle(doc.title)
@@ -102,9 +83,7 @@ struct DocumentView: View {
         }
         .confirmationDialog("Delete \"\(doc.title)\"?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete file", role: .destructive) {
-                guard canMutateWorkspace else { return }
                 deleting = true
-                let library = model.library
                 let pendingSave = saveTask
                 pendingSave?.cancel()
                 saveTask = nil
@@ -112,8 +91,7 @@ struct DocumentView: View {
                     if let pendingSave {
                         await pendingSave.value
                     }
-                    guard canMutateWorkspace else { return }
-                    await library.deleteDocument(doc)
+                    await model.library.deleteDocument(doc)
                     if let onDelete {
                         onDelete()
                     } else {
@@ -125,7 +103,11 @@ struct DocumentView: View {
             Text("Deletes from this device and, on next sync, everywhere.")
         }
         .task(id: doc.clientId) {
-            if !loaded { await loadDocument() }
+            if !loaded {
+                text = model.library.content(of: doc) ?? ""
+                loaded = true
+                await model.library.recordVisit(sourcePath: doc.sourcePath)
+            }
         }
         .onChange(of: text) { _, _ in
             guard loaded else { return }
@@ -228,31 +210,17 @@ struct DocumentView: View {
     }
 
     private func addToVoiceStack() {
-        guard canMutateWorkspace else { return }
-        let transcripts = model.transcripts
-        let snapshot = text
         Task {
-            guard canMutateWorkspace else { return }
-            let saved = await transcripts.addFileSegment(fileName: doc.fileName, content: snapshot, into: nil)
-            guard saved, canMutateWorkspace else { return }
+            await model.transcripts.addFileSegment(fileName: doc.fileName, content: text, into: nil)
             toast.show("Stacked in Voice", symbol: "square.stack.3d.up")
         }
     }
 
     private func shareToRiver() {
-        guard canMutateWorkspace else { return }
-        guard !model.isReviewerDemoStorage else {
-            toast.show("Sharing requires a signed-in team account", symbol: "icloud.slash")
-            return
-        }
-        let sync = model.sync
-        let snapshot = text
         sharing = true
         flushSave()
         Task {
-            guard canMutateWorkspace else { return }
-            let shared = await sync.shareToRiver(sourcePath: doc.sourcePath, content: snapshot)
-            guard canMutateWorkspace else { return }
+            let shared = await model.sync.shareToRiver(sourcePath: doc.sourcePath, content: text)
             sharing = false
             toast.show(
                 shared ? "Shared to River" : "Couldn't share — check connection",
@@ -261,39 +229,21 @@ struct DocumentView: View {
         }
     }
 
-    private func loadDocument() async {
-        documentWorkspace = model.workspaceGeneration
-        guard let content = model.library.content(of: doc) else {
-            loadFailed = true
-            return
-        }
-        loadFailed = false
-        text = content
-        loaded = true
-        await model.library.recordVisit(sourcePath: doc.sourcePath)
-    }
-
     private func scheduleSave() {
         saveTask?.cancel()
-        guard canMutateWorkspace else { return }
-        let library = model.library
         let snapshot = text
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled, canMutateWorkspace else { return }
-            await library.save(sourcePath: doc.sourcePath, content: snapshot)
+            guard !Task.isCancelled else { return }
+            await model.library.save(sourcePath: doc.sourcePath, content: snapshot)
         }
     }
 
     private func flushSave() {
-        guard loaded, canMutateWorkspace else { return }
+        guard loaded else { return }
         saveTask?.cancel()
-        let library = model.library
         let snapshot = text
-        Task {
-            guard canMutateWorkspace else { return }
-            await library.save(sourcePath: doc.sourcePath, content: snapshot)
-        }
+        Task { await model.library.save(sourcePath: doc.sourcePath, content: snapshot) }
     }
 
     private func setChromeHidden(_ hidden: Bool) {

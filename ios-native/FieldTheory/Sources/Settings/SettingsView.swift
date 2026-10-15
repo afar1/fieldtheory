@@ -7,15 +7,30 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var showDeleteConfirmation = false
-    @State private var deleteConfirmationEmail = ""
+    @State private var showFolderPicker = false
 
     var body: some View {
         @Bindable var settings = model.settings
 
         NavigationStack {
             Form {
-                Section("Appearance") {
+                Section("Reading") {
+                    Picker("Typeface", selection: $settings.typographyPreset) {
+                        ForEach(TypographyPresetID.allCases) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    Picker("Text size", selection: $settings.textSize) {
+                        ForEach(TextSizeID.allCases) { size in
+                            Text(size.displayName).tag(size)
+                        }
+                    }
+                    Picker("Line spacing", selection: $settings.lineHeight) {
+                        ForEach(LineHeightID.allCases) { height in
+                            Text(height.displayName).tag(height)
+                        }
+                    }
+                    Toggle("Line numbers", isOn: $settings.showLineNumbers)
                     Picker("Accent", selection: $settings.accentPreset) {
                         ForEach(AccentPreset.allCases) { preset in
                             HStack {
@@ -35,40 +50,86 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section {
+                Section("Library") {
+                    Button {
+                        showFolderPicker = true
+                    } label: {
+                        HStack {
+                            Text("Synced folders")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text(syncedFoldersSummary)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Picker("New documents go to", selection: $settings.newDocFolder) {
+                        ForEach(model.library.folders) { folder in
+                            Text(folder.displayName).tag(folder.name)
+                        }
+                        if !model.library.folders.contains(where: { $0.name == settings.newDocFolder }) {
+                            Text(settings.newDocFolder).tag(settings.newDocFolder)
+                        }
+                    }
+                }
+
+                Section("Voice") {
                     modelRow
                     Toggle("Copy transcripts automatically", isOn: $settings.autoCopyTranscripts)
-                    NavigationLink("Word replacements") {
-                        WordReplacementsView(store: model.sync.wordSubstitutions)
-                    }
-                    if let error = model.sync.wordSubstitutionSyncError {
-                        Text(error).font(.caption).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Ambition")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Parakeet downloads only when you choose Download. Download continues when Ambition is in the background. Reopen the app if you force quit it.")
-                        Text("The model is NVIDIA Parakeet, converted to Core ML by Fluid Inference, under CC BY 4.0.")
-                        Link("Parakeet model attribution", destination: URL(string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")!)
-                            .accessibilityIdentifier("ParakeetModelAttributionLink")
-                    }
                 }
 
-                syncSection
+                Section("Sync") {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        switch model.sync.status {
+                        case .idle:
+                            Text(model.sync.lastSyncAt.map { "Synced \($0.relativeShort)" } ?? "Waiting")
+                                .foregroundStyle(.secondary)
+                        case .syncing:
+                            ProgressView()
+                        case .error(let message):
+                            Text(message)
+                                .foregroundStyle(Theme.unread)
+                                .lineLimit(2)
+                                .font(.system(size: 13))
+                        }
+                    }
+                    Button("Sync now") {
+                        Task { await model.sync.syncNow() }
+                    }
+                }
 
                 Section {
-                    NavigationLink("Configure Remote shortcut") {
-                        ChatGPTRemoteSetupView()
+                    HStack {
+                        Text("Signed in as")
+                        Spacer()
+                        Text(model.auth.email ?? "—")
+                            .foregroundStyle(.secondary)
                     }
-                    .accessibilityIdentifier("ConfigureChatGPTRemote")
+                    HStack {
+                        Text("Connection")
+                        Spacer()
+                        if model.auth.sessionAlive {
+                            Label("Connected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(Theme.markRead)
+                                .font(.system(size: 14))
+                        } else {
+                            Label("Offline", systemImage: "wifi.slash")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 14))
+                        }
+                    }
+                    Button("Sign out", role: .destructive) {
+                        Task {
+                            await model.signOutCompletely()
+                            dismiss()
+                        }
+                    }
                 } header: {
-                    Text("ChatGPT Remote")
+                    Text("Account")
                 } footer: {
-                    Text("Open Remote runs your saved shortcut to show the Remote task list in ChatGPT. It does not send recording data.")
+                    Text("After signing in and downloading the speech model, reading, writing, and transcription work offline. Documents and transcripts sync when connected. Signing out removes local documents, transcripts, and unfinished recordings.")
                 }
-
-                accountSection
 
                 Section("Privacy & Support") {
                     Link("Privacy Policy", destination: AppLinks.privacyPolicy)
@@ -79,14 +140,13 @@ struct SettingsView: View {
 
                 Section {
                     HStack {
-                        Text("Ambition · Made by Field Theory")
-                    }
-                    HStack {
                         Text("Version")
                         Spacer()
-                        Text(versionAndBuild)
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                             .foregroundStyle(.secondary)
                     }
+                } footer: {
+                    Text("Reading preferences use the same names and values as the Mac app, ready for preference sync.")
                 }
             }
             .modifier(SettingsFormLayout(
@@ -95,236 +155,54 @@ struct SettingsView: View {
             ))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(model.auth.accountDeletionState == .deleting)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .keyboardShortcut(.cancelAction)
-                        .disabled(model.auth.accountDeletionState == .deleting)
                 }
             }
-            .alert("Permanently delete account?", isPresented: $showDeleteConfirmation) {
-                TextField("Type your email to confirm", text: $deleteConfirmationEmail)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button("Delete Account", role: .destructive) {
-                    deleteAccount()
-                }
-                .disabled(!AccountDeletionConfirmation.matches(
-                    deleteConfirmationEmail,
-                    accountEmail: model.auth.email
-                ))
-                Button("Cancel", role: .cancel) {
-                    deleteConfirmationEmail = ""
-                }
-            } message: {
-                Text("This permanently deletes your Field Theory account, synced content, shared data, and any active subscription. This cannot be undone.")
+            .sheet(isPresented: $showFolderPicker) {
+                FolderPickerView()
             }
         }
     }
 
-    @ViewBuilder
-    private var syncSection: some View {
-        if model.auth.isReviewerDemo {
-            Section {
-                Label("Disabled in Reviewer Demo", systemImage: "icloud.slash")
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Sync")
-            } footer: {
-                Text("Reviewer Demo uses an isolated sample workspace on this device and never contacts production sync.")
-            }
-        } else {
-            Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    switch model.sync.status {
-                    case .idle:
-                        Text(model.sync.lastSyncAt.map { "Synced to your account \($0.relativeShort)" } ?? "Automatic when signed in")
-                            .foregroundStyle(.secondary)
-                    case .syncing:
-                        ProgressView()
-                    case .error(let message):
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("Voice sync needs attention")
-                                .foregroundStyle(Theme.unread)
-                            Text(message)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                        .font(.system(size: 13))
-                    }
-                }
-                Button(syncActionTitle) {
-                    Task { await model.sync.syncNow() }
-                }
-                .disabled(!model.auth.sessionAlive)
-            } header: {
-                Text("Sync")
-            } footer: {
-                Text("When signed in, Voice syncs automatically. A successful sync confirms storage in your account; it does not confirm another device has received the transcript.")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var accountSection: some View {
-        if model.auth.isReviewerDemo {
-            Section {
-                Label("Local sample workspace", systemImage: "checkmark.shield")
-                Button("Exit Reviewer Demo", role: .destructive) {
-                    Task {
-                        await model.exitReviewerDemo()
-                        model.auth.endReviewerDemo()
-                        dismiss()
-                    }
-                }
-            } header: {
-                Text("Reviewer Demo")
-            } footer: {
-                Text("Sample changes stay in the demo workspace and are removed when you exit. Reviewer Demo does not create or use an account.")
-            }
-        } else {
-            Section {
-                HStack {
-                    Text("Signed in as")
-                    Spacer()
-                    Text(model.auth.email ?? "—")
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Connection")
-                    Spacer()
-                    if model.auth.sessionAlive {
-                        Label("Connected", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(Theme.markRead)
-                            .font(.system(size: 14))
-                    } else {
-                        Label("Offline", systemImage: "wifi.slash")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 14))
-                    }
-                }
-                Button("Sign out", role: .destructive) {
-                    Task {
-                        await model.signOutCompletely()
-                        dismiss()
-                    }
-                }
-                .disabled(model.auth.accountDeletionState == .deleting)
-
-                Button("Delete Account", role: .destructive) {
-                    deleteConfirmationEmail = ""
-                    model.auth.resetAccountDeletionState()
-                    showDeleteConfirmation = true
-                }
-                .disabled(!model.auth.sessionAlive || model.auth.accountDeletionState == .deleting)
-
-                if model.auth.accountDeletionState == .deleting {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Deleting account and synced data…")
-                            .foregroundStyle(.secondary)
-                    }
-                } else if let error = model.auth.accountDeletionError {
-                    Text(error)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.unread)
-                }
-            } header: {
-                Text("Account")
-            } footer: {
-                Text("After signing in and downloading the speech model, Voice works offline. Locally created or edited Voice transcripts and stacks upload when connected. Signing out removes the device copy only; it does not delete your account. Account deletion requires a live authenticated session.")
-            }
-        }
-    }
-
-    private var versionAndBuild: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
-        return "\(version) (\(build))"
-    }
-
-    private var syncActionTitle: String {
-        if case .error = model.sync.status {
-            return "Retry Voice sync"
-        }
-        return "Sync Voice now"
-    }
-
-    private func deleteAccount() {
-        deleteConfirmationEmail = ""
-        Task {
-            let deleted = await model.auth.deleteAccount {
-                await model.signOutCompletely()
-            }
-            if deleted { dismiss() }
-        }
+    private var syncedFoldersSummary: String {
+        guard let selected = model.settings.syncedFolders else { return "All" }
+        return "\(selected.count) of \(model.library.folders.count)"
     }
 
     @ViewBuilder
     private var modelRow: some View {
-        switch model.recorder.engineState {
-        case .checking:
-            HStack {
-                Text("Checking Parakeet…")
-                Spacer()
-                ProgressView()
-            }
-        case .downloading(let progress):
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Downloading Parakeet…")
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("You can leave the app or lock your phone. If you force-quit Ambition, reopen it and retry to continue the download.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        case .preparing:
-            HStack {
-                Text("Preparing Parakeet…")
-                Spacer()
-                ProgressView()
-            }
+        switch model.recorder.models.state {
         case .ready:
             HStack {
-                Text("Transcription model")
+                Text("Speech model")
                 Spacer()
-                Label("Parakeet ready", systemImage: "checkmark.circle.fill")
+                Label("On device", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(Theme.markRead)
                     .font(.system(size: 14))
             }
-            .accessibilityIdentifier("SpeechEngineReady")
-        case .notDownloaded:
+        case .downloading(let progress):
             VStack(alignment: .leading, spacing: 6) {
-                Text("Parakeet is not downloaded.")
-                    .foregroundStyle(.secondary)
-                Button("Download Parakeet — \(ParakeetModelManager.approximateDownloadSize)") {
-                    model.recorder.downloadSpeechEngine()
-                }
-                .accessibilityIdentifier("DownloadSelectedSpeechEngine")
-                Text("Downloads only when you choose Download.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text("Downloading speech model…")
+                ProgressView(value: progress)
+            }
+        case .notDownloaded:
+            Button("Download speech model (142 MB)") {
+                model.recorder.models.ensureDownloaded()
             }
         case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Parakeet needs attention")
-                    .foregroundStyle(Theme.unread)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button("Try Parakeet again") {
-                    model.recorder.downloadSpeechEngine()
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.unread)
+                Button("Retry download") {
+                    model.recorder.models.ensureDownloaded()
                 }
-                .accessibilityIdentifier("RetrySelectedSpeechEngineDownload")
             }
         }
     }
-
 }
 
 private struct SettingsFormLayout: ViewModifier {
@@ -342,68 +220,5 @@ private struct SettingsFormLayout: ViewModifier {
         } else {
             content
         }
-    }
-}
-
-private struct WordReplacementsView: View {
-    let store: WordSubstitutionSettings
-    @State private var from = ""
-    @State private var to = ""
-    @State private var editingFrom: String?
-
-    var body: some View {
-        Form {
-            Section {
-                TextField("Heard word or phrase", text: $from)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Replace with", text: $to)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button(editingFrom == nil ? "Add replacement" : "Save replacement") {
-                    let source = from.trimmingCharacters(in: .whitespacesAndNewlines)
-                    var pairs = store.pairs
-                    if let editingFrom, let index = pairs.firstIndex(where: { $0.from == editingFrom }) {
-                        pairs[index] = WordSubstitution(from: source, to: to)
-                    } else {
-                        pairs.append(WordSubstitution(from: source, to: to))
-                    }
-                    store.set(pairs)
-                    from = ""
-                    to = ""
-                    editingFrom = nil
-                }
-                .disabled(from.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || from.count > 500 || to.count > 2000
-                    || store.pairs.contains { $0.from == from.trimmingCharacters(in: .whitespacesAndNewlines) && $0.from != editingFrom })
-                if editingFrom != nil {
-                    Button("Cancel", role: .cancel) { editingFrom = nil; from = ""; to = "" }
-                }
-            } footer: {
-                Text("Replacements apply to new transcripts and sync with your Mac when online. Tap a replacement to edit it; swipe to delete.")
-            }
-            Section("Replacements") {
-                ForEach(store.pairs, id: \.from) { pair in
-                    Button {
-                        editingFrom = pair.from
-                        from = pair.from
-                        to = pair.to
-                    } label: {
-                        HStack {
-                            Text(pair.from)
-                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                            Text(pair.to.isEmpty ? "(remove)" : pair.to)
-                        }
-                    }
-                }
-                .onDelete { indices in
-                    var pairs = store.pairs
-                    pairs.remove(atOffsets: indices)
-                    store.set(pairs)
-                    editingFrom = nil
-                    from = ""
-                    to = ""
-                }
-            }
-        }
-        .navigationTitle("Word replacements")
     }
 }

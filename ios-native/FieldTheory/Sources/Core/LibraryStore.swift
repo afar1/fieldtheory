@@ -11,8 +11,6 @@ import Observation
 final class LibraryStore {
     private let db: Database
 
-    let libraryRoot: URL
-
     private(set) var folders: [LibraryFolder] = []
     private(set) var docsByFolder: [String: [LibraryDocMeta]] = [:]
     private(set) var allDocs: [LibraryDocMeta] = []
@@ -21,20 +19,18 @@ final class LibraryStore {
 
     /// Bumped whenever a local edit should schedule a push.
     var onLocalChange: (() -> Void)?
-    var onStorageError: ((String) -> Void)?
 
     static var libraryRoot: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("library", isDirectory: true)
     }
 
-    init(db: Database, libraryRoot: URL? = nil) {
+    init(db: Database) {
         self.db = db
-        self.libraryRoot = libraryRoot ?? Self.libraryRoot
     }
 
     func fileURL(for sourcePath: String) -> URL {
-        libraryRoot.appendingPathComponent(sourcePath)
+        Self.libraryRoot.appendingPathComponent(sourcePath)
     }
 
     // MARK: - Loading
@@ -68,20 +64,16 @@ final class LibraryStore {
                 return doc
             }
         } catch {
-            report("Your library could not be loaded. Your files are still on this device.", error: error)
+            // Index unavailable; views show empty state.
         }
     }
 
     /// Records that the user opened a document — the Mac's "visit" semantic.
     func recordVisit(sourcePath: String) async {
-        do {
-            try await db.run("""
-                INSERT INTO recents (source_path, last_opened_at_ms) VALUES (?, ?)
-                ON CONFLICT(source_path) DO UPDATE SET last_opened_at_ms = excluded.last_opened_at_ms
-                """, [.text(sourcePath), .int(Timestamps.nowMs())])
-        } catch {
-            report("This recent item could not be updated.", error: error)
-        }
+        try? await db.run("""
+            INSERT INTO recents (source_path, last_opened_at_ms) VALUES (?, ?)
+            ON CONFLICT(source_path) DO UPDATE SET last_opened_at_ms = excluded.last_opened_at_ms
+            """, [.text(sourcePath), .int(Timestamps.nowMs())])
         await reload()
     }
 
@@ -112,12 +104,6 @@ final class LibraryStore {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try content.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            report("Your note could not be saved. Its previous version remains unchanged.", error: error)
-            return
-        }
-
-        do {
             let hash = Hashing.sha256Hex(content)
             let now = Timestamps.nowMs()
             try await db.run("""
@@ -128,10 +114,7 @@ final class LibraryStore {
             await reload()
             onLocalChange?()
         } catch {
-            // Atomic file writing preserves the user's latest words even when
-            // the index cannot be marked dirty. Report that sync is pending
-            // instead of silently claiming the save succeeded.
-            report("Your note was kept on this device, but it could not be queued for sync. Try again after checking available storage.", error: error)
+            // Persisting locally failed; nothing to push.
         }
     }
 
@@ -139,26 +122,21 @@ final class LibraryStore {
     /// no frontmatter, in the chosen folder.
     @discardableResult
     func createDocument(in folder: String, title: String) async -> LibraryDocMeta? {
-        var createdURL: URL?
-        do {
-            let safeTitle = Self.safeFileName(title.isEmpty ? Self.defaultTitle() : title)
-            var sourcePath = folder.isEmpty ? "\(safeTitle).md" : "\(folder)/\(safeTitle).md"
-            var attempt = 2
-            while true {
-                let indexed = try await db.query("SELECT 1 FROM library_index WHERE source_path = ?", [.text(sourcePath)])
-                let existsOnDisk = FileManager.default.fileExists(atPath: fileURL(for: sourcePath).path)
-                if indexed.isEmpty, !existsOnDisk { break }
-                sourcePath = folder.isEmpty ? "\(safeTitle) \(attempt).md" : "\(folder)/\(safeTitle) \(attempt).md"
-                attempt += 1
-            }
+        let safeTitle = Self.safeFileName(title.isEmpty ? Self.defaultTitle() : title)
+        var sourcePath = folder.isEmpty ? "\(safeTitle).md" : "\(folder)/\(safeTitle).md"
+        var attempt = 2
+        while (try? await db.query("SELECT 1 FROM library_index WHERE source_path = ?", [.text(sourcePath)]))?.isEmpty == false {
+            sourcePath = folder.isEmpty ? "\(safeTitle) \(attempt).md" : "\(folder)/\(safeTitle) \(attempt).md"
+            attempt += 1
+        }
 
-            let clientId = Hashing.libraryClientId(sourcePath: sourcePath)
-            let now = Timestamps.nowMs()
-            let content = ""
-            let url = fileURL(for: sourcePath)
+        let clientId = Hashing.libraryClientId(sourcePath: sourcePath)
+        let now = Timestamps.nowMs()
+        let content = ""
+        let url = fileURL(for: sourcePath)
+        do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try content.write(to: url, atomically: true, encoding: .utf8)
-            createdURL = url
             try await db.run("""
                 INSERT INTO library_index
                     (client_id, source_path, title, remote_hash, local_hash, remote_updated_at_ms, local_updated_at_ms, created_at_ms, dirty, materialized)
@@ -172,8 +150,6 @@ final class LibraryStore {
             onLocalChange?()
             return allDocs.first { $0.clientId == clientId }
         } catch {
-            if let createdURL { try? FileManager.default.removeItem(at: createdURL) }
-            report("The new note could not be saved. Try again after checking available storage.", error: error)
             return nil
         }
     }
@@ -181,32 +157,17 @@ final class LibraryStore {
     /// Explicit user delete: the only path that creates a remote tombstone.
     func deleteDocument(_ doc: LibraryDocMeta) async {
         let now = Timestamps.nowMs()
-        var statements: [(sql: String, params: [SQLValue])] = [
-            ("DELETE FROM library_index WHERE client_id = ?", [.text(doc.clientId)])
-        ]
+        try? FileManager.default.removeItem(at: fileURL(for: doc.sourcePath))
+        try? await db.run("DELETE FROM library_index WHERE client_id = ?", [.text(doc.clientId)])
         if doc.remoteHash != nil || !doc.dirty {
-            statements.append(("""
-                    INSERT INTO library_tombstones (client_id, source_path, created_at_ms, deleted_at_ms)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(client_id) DO UPDATE SET deleted_at_ms = excluded.deleted_at_ms
-                    """, [.text(doc.clientId), .text(doc.sourcePath), .int(doc.createdAtMs), .int(now)]))
+            try? await db.run("""
+                INSERT INTO library_tombstones (client_id, source_path, created_at_ms, deleted_at_ms)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET deleted_at_ms = excluded.deleted_at_ms
+                """, [.text(doc.clientId), .text(doc.sourcePath), .int(doc.createdAtMs), .int(now)])
         }
-        do {
-            try await db.transaction(statements)
-            do {
-                try FileManager.default.removeItem(at: fileURL(for: doc.sourcePath))
-            } catch where (error as NSError).code != NSFileNoSuchFileError {
-                report("The note was removed from your library, but its local file could not be cleaned up.", error: error)
-            }
-            await reload()
-            onLocalChange?()
-        } catch {
-            report("The note could not be deleted, so it remains in your library.", error: error)
-        }
-    }
-
-    private func report(_ message: String, error: Error) {
-        onStorageError?("\(message) (\(error.localizedDescription))")
+        await reload()
+        onLocalChange?()
     }
 
     static func safeFileName(_ value: String) -> String {

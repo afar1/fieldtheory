@@ -1,6 +1,0 @@
-{
-  "description": "Field Theory is a native Voice workspace for iPhone and iPad.\n\nRecord your thoughts and transcribe them on your device with NVIDIA Parakeet. Speech recognition requires a one-time model download. Audio is processed locally. Locally created or edited Voice transcript text and stacks can upload to your Field Theory account when you are signed in.\n\nEdit, copy, select, stack, and separate transcripts in an adaptive iPhone and iPad layout. Explore the included Reviewer Demo without creating an account, or sign in by email to use Voice sync.",
-  "keywords": "voice,transcription,dictation,audio,thoughts,offline",
-  "marketingUrl": "https://www.fieldtheory.dev",
-  "supportUrl": "https://www.fieldtheory.dev/privacy.html"
-}

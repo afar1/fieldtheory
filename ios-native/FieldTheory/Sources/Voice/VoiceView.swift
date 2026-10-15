@@ -7,43 +7,20 @@ private struct TranscriptDayGroup: Identifiable {
     var id: Date { day }
 }
 
-private struct TranscriptSyncRequest {
-    let item: TranscriptItem
-    let workspace: UUID
-    let sendToAgent: Bool
-}
-
 struct VoiceView: View {
     @Binding var showSettings: Bool
     @Environment(AppModel.self) private var model
     @Environment(ToastCenter.self) private var toast
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.scenePhase) private var scenePhase
 
     @State private var searchText = ""
-    @State private var audioToDiscard: PendingAudioSession?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
     @State private var editingItem: TranscriptItem?
     @State private var expandedIds: Set<String> = []
     @State private var copiedId: String?
     @State private var copiedResetTask: Task<Void, Never>?
-    @State private var savingLocalChoice = false
-    @State private var feedbackRequest: TranscriptSyncRequest?
-    @State private var feedbackError: String?
-    @State private var syncRequest: TranscriptSyncRequest?
-
-    // Offer queued transcripts one at a time in the main control. Keep an
-    // already-running deadline first so a new transcript cannot displace it.
-    private var recordingPrivacyItem: TranscriptItem? {
-        guard model.recorder.phase == .idle else { return nil }
-        let offers = model.transcripts.pendingPrivacyOffers
-        return offers.first(where: {
-            if case .privacyHold = $0.syncState { return true }
-            return false
-        }) ?? offers.first
-    }
 
     private var items: [TranscriptItem] {
         guard !searchText.isEmpty else { return model.transcripts.items }
@@ -82,26 +59,6 @@ struct VoiceView: View {
     }
 
     var body: some View {
-        mainContent
-            .confirmationDialog("Send feedback to support?", isPresented: Binding(
-                get: { feedbackRequest != nil },
-                set: { if !$0 { feedbackRequest = nil } }
-            ), titleVisibility: .visible) {
-                Button("Send feedback to support") {
-                    guard let request = feedbackRequest else { return }
-                    feedbackRequest = nil
-                    submitFeedback(request)
-                }
-                Button("Cancel", role: .cancel) { feedbackRequest = nil }
-            } message: {
-                Text("Share this transcript with Field Theory support, along with your account ID, app version and device OS. No audio is included. It queues offline. Your agent choice stays the same.")
-            }
-            .alert("Feedback could not be queued", isPresented: Binding(
-                get: { feedbackError != nil }, set: { if !$0 { feedbackError = nil } }
-            )) { Button("OK") { feedbackError = nil } } message: { Text(feedbackError ?? "") }
-    }
-
-    private var mainContent: some View {
         NavigationStack {
             Group {
                 if isRegularWidth {
@@ -111,34 +68,9 @@ struct VoiceView: View {
                 }
             }
             .background(Theme.background(colorScheme))
-            .navigationTitle("Ambition")
+            .navigationTitle("Voice")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic))
             .refreshable { await model.sync.syncNow() }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active, !showSettings {
-                    beginVisiblePrivacyWindows()
-                } else if phase != .active {
-                    refreshVisiblePrivacyOffers()
-                }
-            }
-            .onChange(of: showSettings) { _, isShowing in
-                if isShowing {
-                    refreshVisiblePrivacyOffers()
-                } else if scenePhase == .active {
-                    beginVisiblePrivacyWindows()
-                }
-            }
-            .onChange(of: editingItem?.id) { _, id in
-                if id != nil {
-                    refreshVisiblePrivacyOffers()
-                } else if scenePhase == .active, !showSettings {
-                    beginVisiblePrivacyWindows()
-                }
-            }
-            .onChange(of: model.storageAlert?.id) { _, id in
-                if id != nil { refreshVisiblePrivacyOffers() }
-                else { beginVisiblePrivacyWindows() }
-            }
             .toolbar {
                 if isRegularWidth {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -167,33 +99,7 @@ struct VoiceView: View {
                     }
                     .keyboardShortcut(",", modifiers: .command)
                     .help("Settings")
-                    .accessibilityLabel("Settings")
                 }
-            }
-            .alert("Discard this audio?", isPresented: Binding(
-                get: { audioToDiscard != nil },
-                set: { if !$0 { audioToDiscard = nil } }
-            )) {
-                Button("Keep audio", role: .cancel) { audioToDiscard = nil }
-                Button("Discard audio", role: .destructive) {
-                    if let session = audioToDiscard {
-                        model.recorder.discardPendingSession(session)
-                    }
-                    audioToDiscard = nil
-                }
-            } message: {
-                Text("Are you sure you want to discard the audio instead of retrying transcription? This cannot be undone.")
-            }
-            .confirmationDialog(syncRequest?.sendToAgent == true ? "Send this transcript to the agent?" : "Save this transcript to the cloud?", isPresented: Binding(
-                get: { syncRequest != nil },
-                set: { if !$0 { syncRequest = nil } }
-            ), titleVisibility: .visible, presenting: syncRequest) { request in
-                Button(request.sendToAgent ? "Send to agent" : "Save to cloud") { syncTranscript(request) }
-                Button("Cancel", role: .cancel) {}
-            } message: { request in
-                Text(request.sendToAgent
-                    ? "Allow the Mac Runner to send this transcript to your agent."
-                    : "Save this transcript in Field Theory. Its action choice stays unchanged.")
             }
             .sheet(item: $editingItem) { item in
                 if isRegularWidth {
@@ -215,7 +121,7 @@ struct VoiceView: View {
                     compactList
                 }
             }
-            if selectionMode && recordingPrivacyItem == nil {
+            if selectionMode {
                 selectionBar
             } else {
                 recordBar
@@ -235,7 +141,7 @@ struct VoiceView: View {
                 }
             }
 
-            if selectionMode && recordingPrivacyItem == nil {
+            if selectionMode {
                 regularSelectionBar
             } else {
                 regularRecordBar
@@ -244,14 +150,16 @@ struct VoiceView: View {
     }
 
     private var compactList: some View {
-        // Lazy rows can finish rendering after a stack shrinks the store.
-        // Their indices and date headers must use the same immutable snapshot.
-        let snapshot = items
-        return ScrollView {
+        ScrollView {
             LazyVStack(spacing: 12, pinnedViews: []) {
-                modelStatus
-                ForEach(Array(snapshot.enumerated()), id: \.element.id) { index, item in
-                    if showsDateHeader(at: index, in: snapshot) {
+                if shouldShowRecorderStatus {
+                    recorderStatusBanner
+                }
+                if case .downloading(let progress) = model.recorder.models.state {
+                    modelBanner(progress: progress)
+                }
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if showsDateHeader(at: index) {
                         Text(Self.dateHeader(for: item.createdAtMs))
                             .font(.system(size: 12, weight: .semibold))
                             .tracking(0.6)
@@ -274,7 +182,12 @@ struct VoiceView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 VStack(spacing: 10) {
-                    modelStatus
+                    if shouldShowRecorderStatus {
+                        recorderStatusBanner
+                    }
+                    if case .downloading(let progress) = model.recorder.models.state {
+                        modelBanner(progress: progress)
+                    }
                 }
 
                 ForEach(dayGroups) { group in
@@ -307,9 +220,6 @@ struct VoiceView: View {
     }
 
     private func transcriptCard(_ item: TranscriptItem, wideLayout: Bool) -> some View {
-        FeedbackSwipeCard(status: model.transcripts.feedbackState(for: item), enabled: !selectionMode, onFeedback: {
-            feedbackRequest = TranscriptSyncRequest(item: item, workspace: model.workspaceGeneration, sendToAgent: false)
-        }) {
         StackCard(
             item: item,
             expanded: expandedIds.contains(item.id),
@@ -321,41 +231,15 @@ struct VoiceView: View {
             onCopy: { copy(item) },
             onEdit: { editingItem = item },
             onSelect: { enterSelection(with: item) },
-            onRequestCloudSync: {
-                syncRequest = TranscriptSyncRequest(item: item, workspace: model.workspaceGeneration, sendToAgent: true)
-            },
-            onRequestCloudSave: {
-                syncRequest = TranscriptSyncRequest(item: item, workspace: model.workspaceGeneration, sendToAgent: false)
-            },
-            onOpenRemote: refreshVisiblePrivacyOffers,
             onToggleExpand: { toggleExpanded(item) },
             onUnstack: {
-                unstackItems([item])
+                Task { await model.transcripts.unstack(item) }
+                toast.show("Unstacked", symbol: "square.stack.3d.down.right")
             }
         )
-        }
-        .accessibilityIdentifier("VoiceTranscript-\(item.id)")
-        .onAppear {
-            model.recorder.markTranscriptVisible(transcriptID: item.id)
-        }
     }
 
-    private func submitFeedback(_ request: TranscriptSyncRequest) {
-        guard request.workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-        Task { @MainActor in
-            guard request.workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-            do {
-                try await model.sync.queueFeedback(item: request.item)
-                guard request.workspace == model.workspaceGeneration else { return }
-                toast.show("Feedback queued for support", symbol: "bubble.left")
-            } catch {
-                guard request.workspace == model.workspaceGeneration else { return }
-                feedbackError = error.localizedDescription
-            }
-        }
-    }
-
-    private func showsDateHeader(at index: Int, in items: [TranscriptItem]) -> Bool {
+    private func showsDateHeader(at index: Int) -> Bool {
         guard index > 0 else { return true }
         let calendar = Calendar.current
         let current = items[index].createdAtMs.msToDate
@@ -372,151 +256,14 @@ struct VoiceView: View {
         return formatter.string(from: date)
     }
 
-    @ViewBuilder
-    private var modelStatus: some View {
-        switch model.recorder.engineState {
-        case .ready:
-            EmptyView()
-        case .checking:
-            engineProgressBanner(message: "Checking Parakeet…", progress: nil)
-        case .downloading(let progress):
-            VStack(alignment: .leading, spacing: 6) {
-                engineProgressBanner(
-                    message: "Downloading Parakeet \(Int(progress * 100))%",
-                    progress: progress
-                )
-                Text("Download continues in the background. If you force-quit the app, reopen it and retry.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        case .preparing:
-            engineProgressBanner(message: "Preparing Parakeet…", progress: nil)
-        case .notDownloaded:
-            engineBanner(
-                title: "Parakeet needs downloading",
-                message: "Open Settings to download Parakeet.",
-                systemImage: "arrow.down.circle",
-                tint: Theme.link,
-                actionTitle: "Open Settings"
-            )
-        case .failed(let message):
-            engineBanner(
-                title: "Parakeet needs attention",
-                message: message,
-                systemImage: "exclamationmark.triangle",
-                tint: Theme.unread,
-                actionTitle: "Open Settings"
-            )
-        }
-    }
-
-    private func beginVisiblePrivacyWindows() {
-        if let item = recordingPrivacyItem { beginPrivacyWindow(item.id) }
-    }
-
-    /// A privacy window begins only after its affordance appears while Voice is
-    /// genuinely usable. The store records the absolute deadline atomically.
-    private func beginPrivacyWindow(_ id: String) {
-        guard scenePhase == .active, !showSettings, editingItem == nil,
-              model.storageAlert == nil, recordingPrivacyItem?.id == id else { return }
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        Task { @MainActor in
-            guard workspace == model.workspaceGeneration,
-                  !model.isSigningOut,
-                  scenePhase == .active,
-                  !showSettings,
-                  editingItem == nil,
-                  model.storageAlert == nil,
-                  recordingPrivacyItem?.id == id
-            else { return }
-            _ = await store.beginPrivacyWindow(id: id)
-        }
-    }
-
-    /// The explicit tap is available only during the visible, persisted
-    /// deadline. A false write immediately reloads instead of claiming success.
-    private func keepPrivacyOfferLocal(_ id: String) {
-        guard case .privacyHold(let deadline)? = model.transcripts.items.first(where: { $0.id == id })?.syncState,
-              deadline > Timestamps.nowMs()
-        else { return }
-        persistLocalPrivacyChoice(id)
-    }
-
-    private func persistLocalPrivacyChoice(_ id: String) {
-        guard !savingLocalChoice else { return }
-        savingLocalChoice = true
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        Task { @MainActor in
-            defer { savingLocalChoice = false }
-            guard workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-            let kept = await store.keepLocal(id: id)
-            if !kept, workspace == model.workspaceGeneration {
-                await store.reload()
-            }
-        }
-    }
-
-    /// Already-started windows belong to the store and survive navigation.
-    private func refreshVisiblePrivacyOffers() {
-        beginVisiblePrivacyWindows()
-    }
-
-    /// A time is enough to distinguish simultaneous privacy choices without
-    /// putting a transcript excerpt into the compact, time-bounded control.
-    private func privacyOfferRecordHint(for item: TranscriptItem) -> String? {
-        guard model.transcripts.pendingPrivacyOffers.count > 1 else { return nil }
-        let time = DateFormatter.localizedString(
-            from: item.createdAtMs.msToDate,
-            dateStyle: .none,
-            timeStyle: .short
-        )
-        return "Recording at \(time)"
-    }
-
-    private func engineProgressBanner(message: String, progress: Double?) -> some View {
+    private func modelBanner(progress: Double) -> some View {
         HStack(spacing: 10) {
-            if let progress {
-                ProgressView(value: progress).frame(maxWidth: .infinity)
-            } else {
-                ProgressView()
-            }
-            Text(message)
+            ProgressView(value: progress)
+                .frame(maxWidth: .infinity)
+            Text("Downloading speech model \(Int(progress * 100))%")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize()
-        }
-        .padding(12)
-        .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("SpeechEngineStatus")
-    }
-
-    private func engineBanner(
-        title: String,
-        message: String,
-        systemImage: String,
-        tint: Color,
-        actionTitle: String? = nil
-    ) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-                .font(.system(size: 17, weight: .semibold))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text(colorScheme))
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textMuted(colorScheme))
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            if let actionTitle {
-                Button(actionTitle) { showSettings = true }
-                    .font(.system(size: 12, weight: .semibold))
-            }
         }
         .padding(12)
         .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
@@ -524,13 +271,17 @@ struct VoiceView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            modelStatus.padding(.horizontal, 16)
+            if shouldShowRecorderStatus {
+                recorderStatusBanner
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
             Image(systemName: "waveform")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
             Text("Talk to your \(deviceName)")
                 .font(.custom("Source Serif 4", size: 20).weight(.medium))
-            Text("Tap record below.")
+            Text("Tap record below. Transcription happens entirely on this device — no internet needed. Lock the screen and keep talking.")
                 .font(.custom("Source Sans 3", size: 15))
                 .foregroundStyle(Theme.textMuted(colorScheme))
                 .multilineTextAlignment(.center)
@@ -541,13 +292,17 @@ struct VoiceView: View {
 
     private var regularEmptyState: some View {
         VStack(spacing: 12) {
-            modelStatus.frame(maxWidth: 680)
+            if shouldShowRecorderStatus {
+                recorderStatusBanner
+                    .frame(maxWidth: 680)
+                    .padding(.bottom, 12)
+            }
             Image(systemName: "waveform")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
             Text("Talk to your iPad")
                 .font(.custom("Source Serif 4", size: 24).weight(.medium))
-            Text("Tap record below.")
+            Text("Tap record below. Transcription happens entirely on this device — no internet needed. Lock the screen and keep talking.")
                 .font(.custom("Source Sans 3", size: 16))
                 .foregroundStyle(Theme.textMuted(colorScheme))
                 .multilineTextAlignment(.center)
@@ -564,123 +319,144 @@ struct VoiceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var shouldShowRecorderStatus: Bool {
+        model.recorder.pendingSessionCount > 0 || model.recorder.lastError != nil
+    }
+
+    private var recorderStatusBanner: some View {
+        let pendingCount = model.recorder.pendingSessionCount
+        let title = pendingCount == 1
+            ? "1 recording waiting to transcribe"
+            : "\(pendingCount) recordings waiting to transcribe"
+        let message = model.recorder.lastError
+            ?? "Audio is saved on this \(deviceName). Field Theory will retry when the app is open."
+
+        return HStack(spacing: 12) {
+            Image(systemName: pendingCount > 0 ? "clock.arrow.circlepath" : "exclamationmark.triangle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(pendingCount > 0 ? Theme.link : Theme.unread)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(pendingCount > 0 ? title : "Voice needs attention")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text(colorScheme))
+                Text(message)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.textMuted(colorScheme))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if pendingCount > 0 {
+                Button {
+                    Task { await model.recorder.resumePendingWork() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.link)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Retry transcription")
+            }
+        }
+        .padding(12)
+        .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.border(colorScheme), lineWidth: 1)
+        )
+    }
+
     // MARK: Record bar
 
     private var recordBar: some View {
-        recordingControls.padding(.bottom, 12)
+        let recorder = model.recorder
+        let accent = Theme.accent(model.settings.accentPreset, colorScheme)
+
+        return Button {
+            recorder.toggle()
+        } label: {
+            Group {
+                switch recorder.phase {
+                case .idle:
+                    HStack(spacing: 9) {
+                        Image(systemName: "mic.fill")
+                        Text("Record")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 26)
+                    .frame(height: 52)
+                    .background(accent, in: Capsule())
+                case .recording:
+                    HStack(spacing: 12) {
+                        WaveformBars(level: recorder.level, tint: .white)
+                        Text(recorder.elapsed.clockString)
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                        Image(systemName: "stop.fill")
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(height: 52)
+                    .background(Theme.unread, in: Capsule())
+                case .transcribing:
+                    HStack(spacing: 10) {
+                        ProgressView().tint(.white)
+                        Text("Transcribing…")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(height: 52)
+                    .background(accent.opacity(0.85), in: Capsule())
+                }
+            }
+            .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(duration: 0.3), value: recorder.phase)
+        .padding(.bottom, 12)
     }
 
     private var regularRecordBar: some View {
-        recordingControls
-            .padding(8)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .padding(.bottom, 16)
-    }
-
-    private var recordingControls: some View {
         let recorder = model.recorder
-        let privacyItem = recordingPrivacyItem
-        let pending = recorder.phase == .idle && privacyItem == nil ? recorder.nextPendingSession : nil
-        return VStack(spacing: 8) {
-            if recorder.phase == .idle, let error = recorder.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-            }
-            HStack(spacing: 10) {
-                if let pending {
-                    Button { audioToDiscard = pending } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 48, height: 52)
-                            .background(.regularMaterial, in: Capsule())
-                    }
-                    .accessibilityLabel("Discard audio")
-                    .accessibilityIdentifier("VoiceDiscardAudio")
-                }
-                Button {
-                    if let privacyItem {
-                        // A tap rendered for this choice can never start audio,
-                        // including at the exact countdown expiry boundary.
-                        keepPrivacyOfferLocal(privacyItem.id)
-                    } else if pending != nil {
-                        Task { await recorder.resumePendingWork() }
-                    } else {
-                        recorder.toggle()
-                    }
-                } label: {
-                    Group {
-                        if let privacyItem {
-                            privacyControlLabel(for: privacyItem)
-                        } else {
-                            recordingControlLabel
-                        }
-                    }
-                        .padding(.horizontal, 22)
-                        .frame(height: 52)
-                        .background(
-                            privacyItem != nil ? Color(hex: 0xB45309)
-                                : recorder.phase == .recording ? Theme.unread
-                                : Theme.accent(model.settings.accentPreset, colorScheme),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(.white)
-                }
-                .disabled(recorder.phase == .transcribing || savingLocalChoice)
-                .accessibilityValue(privacyItem?.id ?? "")
-                .accessibilityIdentifier("VoiceRecordingControl")
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-            }
-            .buttonStyle(.plain)
-            .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
-        }
-        .animation(.spring(duration: 0.3), value: recorder.phase)
-        .onAppear { beginVisiblePrivacyWindows() }
-        .onChange(of: privacyItem?.id) { _, _ in beginVisiblePrivacyWindows() }
-    }
 
-    private func privacyControlLabel(for item: TranscriptItem) -> some View {
-        TimelineView(.periodic(from: .now, by: 0.2)) { context in
-            HStack(spacing: 10) {
-                Image(systemName: "hand.raised.fill")
-                VStack(spacing: 2) {
-                    Text("No action")
-                        .font(.system(size: 15, weight: .semibold))
-                    if case .privacyHold(let deadline) = item.syncState {
-                        let remaining = max(0, Int(ceil(deadline.msToDate.timeIntervalSince(context.date))))
-                        Text("Send to agent in \(remaining)s")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    } else {
-                        Text("Starting countdown…").font(.system(size: 12))
-                    }
-                    if let hint = privacyOfferRecordHint(for: item) {
-                        Text(hint).font(.system(size: 10))
-                    }
-                }
-            }
+        return Button {
+            recorder.toggle()
+        } label: {
+            regularRecordLabel
+                .frame(width: 248, height: 52)
+                .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .hoverEffect(.lift)
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .help(recorder.phase == .recording ? "Stop recording (Shift-Command-R)" : "Start recording (Shift-Command-R)")
+        .accessibilityLabel(recorder.phase == .recording ? "Stop recording" : "Start recording")
+        .animation(.spring(duration: 0.3), value: recorder.phase)
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Theme.border(colorScheme), lineWidth: 0.5))
+        .padding(.bottom, 16)
+        .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
     }
 
     @ViewBuilder
-    private var recordingControlLabel: some View {
+    private var regularRecordLabel: some View {
         let recorder = model.recorder
+        let accent = Theme.accent(model.settings.accentPreset, colorScheme)
+
         switch recorder.phase {
         case .idle:
-            if recorder.nextPendingSession != nil {
-                HStack(spacing: 9) {
-                    Image(systemName: "arrow.clockwise")
-                    VStack(spacing: 2) {
-                        Text(recorder.lastError == nil ? "Audio saved" : "Transcription failed")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Retry transcription?").font(.system(size: 12))
-                    }
-                }
-            } else {
-                Label("Record", systemImage: "mic.fill")
+            HStack(spacing: 9) {
+                Image(systemName: "mic.fill")
+                Text("Record")
                     .font(.system(size: 16, weight: .semibold))
             }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(accent, in: Capsule())
         case .recording:
             HStack(spacing: 12) {
                 WaveformBars(level: recorder.level, tint: .white)
@@ -688,13 +464,18 @@ struct VoiceView: View {
                     .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 Image(systemName: "stop.fill")
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Stop recording")
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.unread, in: Capsule())
         case .transcribing:
             HStack(spacing: 10) {
                 ProgressView().tint(.white)
-                Text("Transcribing…").font(.system(size: 15, weight: .medium))
+                Text("Transcribing…")
+                    .font(.system(size: 15, weight: .medium))
             }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(accent.opacity(0.85), in: Capsule())
         }
     }
 
@@ -893,57 +674,25 @@ struct VoiceView: View {
     private func stackSelected() {
         let ordered = items.filter { selectedIds.contains($0.id) }.map(\.id)
         guard ordered.count >= 2 else { return }
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        Task {
-            guard model.workspaceGeneration == workspace,
-                  await store.stack(ids: ordered),
-                  model.workspaceGeneration == workspace else { return }
-            exitSelection()
-            toast.show("Stacked", symbol: "square.stack.3d.up.fill")
-        }
+        Task { await model.transcripts.stack(ids: ordered) }
+        exitSelection()
+        toast.show("Stacked", symbol: "square.stack.3d.up.fill")
     }
 
     private func unstackSelected() {
         let stacks = selectedItems.filter(\.isStack)
         guard !stacks.isEmpty else { return }
-        unstackItems(stacks)
-    }
-
-    private func unstackItems(_ stacks: [TranscriptItem]) {
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
         Task {
-            for stack in stacks {
-                guard model.workspaceGeneration == workspace,
-                      await store.unstack(stack) else { return }
-            }
-            guard model.workspaceGeneration == workspace else { return }
-            exitSelection()
-            toast.show("Unstacked", symbol: "square.stack.3d.down.right")
+            for stack in stacks { await model.transcripts.unstack(stack) }
         }
+        exitSelection()
+        toast.show("Unstacked", symbol: "square.stack.3d.down.right")
     }
 
     private func editSelected() {
         guard let item = selectedItems.first, selectedIds.count == 1 else { return }
         editingItem = item
         exitSelection()
-    }
-
-    private func syncTranscript(_ request: TranscriptSyncRequest) {
-        guard request.workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-        let store = model.transcripts
-        Task {
-            guard request.workspace == model.workspaceGeneration, !model.isSigningOut else { return }
-            let queued: Bool
-            if request.sendToAgent {
-                queued = await store.requestCloudSync(id: request.item.id)
-            } else {
-                queued = await store.requestCloudSave(id: request.item.id)
-            }
-            guard request.workspace == model.workspaceGeneration else { return }
-            if queued { toast.show(request.sendToAgent ? "Waiting for agent" : "Queued for cloud storage", symbol: "icloud.and.arrow.up") }
-        }
     }
 
     private func deleteSelected() {
@@ -963,10 +712,9 @@ struct VoiceView: View {
 }
 
 /// The voice item card, matching the old app's anatomy: time (or "Copied!"),
-/// word count, action tag, cloud/Remote icons and a bottom-right expansion
-/// chevron, with a 3-line clamp and last-words verification line.
+/// word count, stack badge (long-press to unstack), Expand/Collapse pinned
+/// top-right, 3-line clamp with a last-words verification line.
 struct StackCard: View {
-    @State private var showingDelivery = false
     let item: TranscriptItem
     let expanded: Bool
     let copied: Bool
@@ -977,9 +725,6 @@ struct StackCard: View {
     let onCopy: () -> Void
     let onEdit: () -> Void
     let onSelect: () -> Void
-    let onRequestCloudSync: () -> Void
-    let onRequestCloudSave: () -> Void
-    let onOpenRemote: () -> Void
     let onToggleExpand: () -> Void
     let onUnstack: () -> Void
 
@@ -1036,16 +781,10 @@ struct StackCard: View {
                 .lineSpacing(3)
                 .lineLimit(expanded ? nil : (wideLayout ? 5 : 3))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if needsExpansion {
-                HStack(alignment: .bottom, spacing: 8) {
-                    if let lastWords {
-                        Text("[…] \(lastWords)")
-                            .font(.custom("Source Sans 3", size: 14).italic())
-                            .foregroundStyle(Theme.textMuted(colorScheme))
-                    }
-                    Spacer(minLength: 0)
-                    expansionButton.fixedSize()
-                }
+            if let lastWords {
+                Text("[…] \(lastWords)")
+                    .font(.custom("Source Sans 3", size: 14).italic())
+                    .foregroundStyle(Theme.textMuted(colorScheme))
             }
         }
         .padding(wideLayout ? 16 : 15)
@@ -1123,69 +862,6 @@ struct StackCard: View {
         }
     }
 
-    private var hasEarlierSyncedRevision: Bool {
-        (item.acknowledgedUpdatedAtMs ?? 0) > 0
-            && item.acknowledgedUpdatedAtMs != item.updatedAtMs
-    }
-
-    private var actionLabel: String {
-        VoiceDelivery.status(item: item, events: model.transcripts.events(for: item), receipt: model.transcripts.receipt(for: item))
-    }
-
-    private var syncStateBadge: some View {
-        Button { showingDelivery = true } label: {
-            Text(actionLabel)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(item.wasSentToAgent ? Theme.link : Theme.markRead)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background((item.wasSentToAgent ? Theme.link : Theme.markRead).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.borderless)
-        .sheet(isPresented: $showingDelivery) {
-            VoiceDeliveryView(item: item, onSend: onRequestCloudSync)
-        }
-        .fixedSize()
-        .accessibilityLabel(actionLabel)
-        .accessibilityValue(item.actionPolicy)
-        .accessibilityHint("Shows delivery timestamps and Mac observations")
-    }
-
-    private var cloudStatusButton: some View {
-        Button(action: onRequestCloudSave) {
-            Image(systemName: item.isCloudSaved ? "checkmark.icloud" : "icloud.and.arrow.up")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(item.isCloudSaved ? Theme.link : Theme.textMuted(colorScheme), Theme.textMuted(colorScheme))
-                .font(.system(size: 12))
-        }
-        .buttonStyle(.borderless)
-        .disabled(item.isCloudSaved)
-        .accessibilityLabel(item.isCloudSaved ? "Saved to cloud" : "Waiting to save to cloud")
-        .accessibilityHint(item.isCloudSaved ? "Current version saved in Field Theory" : "Retry cloud storage without changing the action choice")
-    }
-
-    private var expansionButton: some View {
-        Button(action: onToggleExpand) {
-            // Retain the previous text-plus-chevron hit area, even though only
-            // the chevron is visible. Reserve the wider Collapse label in both states.
-            HStack(spacing: 3) {
-                Text("Collapse").font(.system(size: 13))
-                Image(systemName: "chevron.up").font(.system(size: 9, weight: .semibold))
-            }
-            .hidden()
-            .overlay(alignment: .trailing) {
-                Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverEffect(.highlight)
-        .accessibilityLabel(expanded ? "Collapse transcript" : "Expand transcript")
-        .help(expanded ? "Collapse transcript" : "Expand transcript")
-    }
-
     private var header: some View {
         HStack(spacing: 8) {
             Text(copied ? "Copied!" : timeLabel)
@@ -1215,19 +891,24 @@ struct StackCard: View {
                 }
             }
 
-            syncStateBadge
-
             Spacer()
 
-            HStack(spacing: 8) {
-                cloudStatusButton
-                if !selectionMode {
-                    ChatGPTRemoteButton(onWillOpen: onOpenRemote)
-                    .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
+            if needsExpansion {
+                Button {
+                    onToggleExpand()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(expanded ? "Collapse" : "Expand")
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+                .help(expanded ? "Collapse transcript" : "Expand transcript")
             }
-            .fixedSize()
         }
     }
 }
@@ -1239,31 +920,12 @@ struct TranscriptEditSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var text = ""
-    @State private var segments: [TranscriptSegment] = []
-    @State private var saving = false
-    @State private var saveError: String?
     @FocusState private var editorFocused: Bool
-
-    private var editsStackSegments: Bool { item.isStack }
-
-    private var mergedStackText: String {
-        segments.map(\.text).joined(separator: "\n\n")
-    }
-
-    private var canSave: Bool {
-        if editsStackSegments {
-            return !segments.isEmpty
-                && segments.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        }
-        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if editsStackSegments {
-                    stackSegmentEditor
-                } else if regularWidth {
+                if regularWidth {
                     regularEditor
                 } else {
                     TextEditor(text: $text)
@@ -1271,112 +933,29 @@ struct TranscriptEditSheet: View {
                         .padding(.horizontal, 12)
                 }
             }
-                .navigationTitle(editsStackSegments ? "Edit Stack" : (regularWidth ? "Edit Transcript" : "Edit"))
+                .navigationTitle(regularWidth ? "Edit Transcript" : "Edit")
                 .navigationBarTitleDisplayMode(.inline)
-                .interactiveDismissDisabled(saving)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }
                             .keyboardShortcut(.cancelAction)
-                            .disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        if saving {
-                            ProgressView()
-                        } else {
-                            Button("Save") { save() }
-                                .fontWeight(.semibold)
-                                .disabled(!canSave)
-                                .keyboardShortcut(.return, modifiers: .command)
+                        Button("Save") {
+                            Task { await model.transcripts.update(item, text: text) }
+                            dismiss()
                         }
+                        .fontWeight(.semibold)
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .keyboardShortcut(.return, modifiers: .command)
                     }
                 }
                 .onAppear {
                     text = item.text
-                    segments = item.segments ?? []
-                    if regularWidth && !editsStackSegments { editorFocused = true }
-                }
-                .alert("Couldn’t save changes", isPresented: Binding(
-                    get: { saveError != nil },
-                    set: { if !$0 { saveError = nil } }
-                )) {
-                    Button("OK") { saveError = nil }
-                } message: {
-                    Text(saveError ?? "Try again.")
+                    if regularWidth { editorFocused = true }
                 }
         }
         .frame(idealWidth: regularWidth ? 680 : nil, idealHeight: regularWidth ? 640 : nil)
-    }
-
-    private var stackSegmentEditor: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Edit each original transcript separately. Their order and boundaries stay intact when you save.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                ForEach(segments.indices, id: \.self) { index in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Segment \(index + 1)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.textMuted(colorScheme))
-                        TextEditor(text: segmentTextBinding(at: index))
-                            .font(.custom("Source Sans 3", size: 16))
-                            .frame(minHeight: regularWidth ? 140 : 120)
-                            .padding(8)
-                            .background(Theme.backgroundAlt(colorScheme), in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityIdentifier("VoiceStackSegment-\(index + 1)")
-                    }
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Merged transcript preview")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(mergedStackText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-            .padding(regularWidth ? 24 : 16)
-        }
-        .background(Theme.background(colorScheme))
-    }
-
-    private func segmentTextBinding(at index: Int) -> Binding<String> {
-        Binding(
-            get: { segments[index].text },
-            set: { segments[index].text = $0 }
-        )
-    }
-
-    private func save() {
-        guard canSave, !saving else { return }
-        saving = true
-        saveError = nil
-        let store = model.transcripts
-        let workspace = model.workspaceGeneration
-        let accountID = model.auth.userId
-        let textSnapshot = text
-        let segmentSnapshot = segments
-        Task {
-            let saved: Bool
-            if editsStackSegments {
-                saved = await store.updateSegments(item, segments: segmentSnapshot)
-            } else {
-                saved = await store.update(item, text: textSnapshot)
-            }
-            guard model.workspaceGeneration == workspace,
-                  model.auth.userId == accountID else { return }
-            saving = false
-            if saved {
-                dismiss()
-            } else {
-                saveError = "Your edits are still open. Check storage and try again."
-            }
-        }
     }
 
     private var regularEditor: some View {

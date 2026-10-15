@@ -19,9 +19,6 @@ struct RiverReaderView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var currentId: String?
-    @State private var reportItem: RiverItem?
-    @State private var blockCandidate: RiverItem?
-    @State private var showSafetyPolicy = false
 
     init(
         items: [RiverItem],
@@ -69,26 +66,6 @@ struct RiverReaderView: View {
             self.currentId = fallback
             selection?.wrappedValue = fallback
         }
-        .sheet(item: $reportItem) { item in
-            RiverReportComposer(item: item)
-        }
-        .sheet(isPresented: $showSafetyPolicy) {
-            RiverSafetyPolicyView()
-        }
-        .confirmationDialog(
-            "Block \(blockCandidate?.authorLabel ?? "author")?",
-            isPresented: Binding(
-                get: { blockCandidate != nil },
-                set: { if !$0 { blockCandidate = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: blockCandidate
-        ) { item in
-            Button("Block author", role: .destructive) { block(item) }
-            Button("Cancel", role: .cancel) { blockCandidate = nil }
-        } message: { _ in
-            Text("This hides the author’s River items on this device for this account. It does not remove content from River, notify the author, or file a report.")
-        }
     }
 
     private var pages: some View {
@@ -120,9 +97,7 @@ struct RiverReaderView: View {
                 Menu {
                     Button {
                         Task {
-                            let workspace = model.workspaceGeneration
-                            let saved = await model.transcripts.addFileSegment(fileName: item.fileName, content: item.content, into: nil)
-                            guard saved, workspace == model.workspaceGeneration else { return }
+                            await model.transcripts.addFileSegment(fileName: item.fileName, content: item.content, into: nil)
                             toast.show("Stacked in Voice", symbol: "square.stack.3d.up")
                         }
                     } label: {
@@ -134,13 +109,10 @@ struct RiverReaderView: View {
                     } label: {
                         Label("Keep unread", systemImage: "envelope.badge")
                     }
-                    Divider()
-                    safetyActions(for: item)
                 } label: {
                     Image(systemName: "ellipsis")
                         .controlIconStyle()
                 }
-                .accessibilityLabel("River document actions")
             }
             Button {
                 dismiss()
@@ -202,20 +174,16 @@ struct RiverReaderView: View {
                 Menu {
                     Button {
                         Task {
-                            let workspace = model.workspaceGeneration
-                            let saved = await model.transcripts.addFileSegment(
+                            await model.transcripts.addFileSegment(
                                 fileName: item.fileName,
                                 content: item.content,
                                 into: nil
                             )
-                            guard saved, workspace == model.workspaceGeneration else { return }
                             toast.show("Stacked in Voice", symbol: "square.stack.3d.up")
                         }
                     } label: {
                         Label("Add to Voice stack", systemImage: "square.stack.3d.up")
                     }
-                    Divider()
-                    safetyActions(for: item)
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 15, weight: .semibold))
@@ -225,7 +193,7 @@ struct RiverReaderView: View {
                 .buttonStyle(.plain)
                 .hoverEffect(.highlight)
                 .help("More actions")
-                .accessibilityLabel("River document actions")
+                .accessibilityLabel("More actions")
             }
         }
         .padding(.horizontal, 14)
@@ -289,41 +257,6 @@ struct RiverReaderView: View {
                 await model.river.markRead(item)
             } else {
                 await model.river.markUnread(item)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func safetyActions(for item: RiverItem) -> some View {
-        Button {
-            reportItem = item
-        } label: {
-            Label("Report content", systemImage: "exclamationmark.bubble")
-        }
-
-        if item.authorID != nil {
-            Button(role: .destructive) {
-                blockCandidate = item
-            } label: {
-                Label("Block author", systemImage: "person.badge.minus")
-            }
-        }
-
-        Button {
-            showSafetyPolicy = true
-        } label: {
-            Label("River safety and support", systemImage: "shield")
-        }
-    }
-
-    private func block(_ item: RiverItem) {
-        blockCandidate = nil
-        Task {
-            if await model.river.blockAuthor(of: item) {
-                toast.show("Author blocked on this device", symbol: "person.badge.minus")
-                if presentation == .fullScreen { dismiss() }
-            } else {
-                toast.show("Couldn’t block author", symbol: "exclamationmark.triangle")
             }
         }
     }
