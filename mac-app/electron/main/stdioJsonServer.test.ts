@@ -82,6 +82,20 @@ describe('StdioJsonServer', () => {
     expect(server.isReady).toBe(false);
   });
 
+  it('preserves the bounded startup error after download progress', async () => {
+    const server = createServer();
+    const startPromise = server.start();
+    proc.stderr.emit('data', Buffer.from('download progress '.repeat(1000)));
+    const cause = 'Failed to load Parakeet: External data path escapes model directory';
+    proc.stderr.emit('data', Buffer.from('\n' + cause + '\n'));
+    proc.emit('close', 1);
+    const error = await startPromise.catch((value) => value);
+    expect(error.message).toContain('exited during startup');
+    expect(error.stderr).toHaveLength(8000);
+    expect(error.detail).toContain(cause);
+    expect(server.isReady).toBe(false);
+  });
+
   it('rejects start() when process emits error event', async () => {
     const server = createServer();
     const startPromise = server.start();

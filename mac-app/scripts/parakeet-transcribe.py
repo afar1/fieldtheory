@@ -11,14 +11,24 @@ Usage:
 """
 
 import argparse
+import fcntl
 import json
 import os
+from pathlib import Path
+import shutil
+import tempfile
 import struct
 import sys
 
 import numpy as np
 
 DEFAULT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
+
+MODEL_REPOS = {
+    "nemo-parakeet-tdt-0.6b-v2": "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    "nemo-parakeet-tdt-0.6b-v3": "istupakov/parakeet-tdt-0.6b-v3-onnx",
+}
+MODEL_FILES = ("encoder-model.onnx", "encoder-model.onnx.data", "decoder_joint-model.onnx", "vocab.txt")
 
 MIN_SPEECH_DURATION_SECONDS = 0.25
 SILENCE_RMS_THRESHOLD = 0.0015
@@ -45,6 +55,56 @@ def configure_cache_dirs():
     os.environ.setdefault("HF_HOME", hf_home)
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hub_cache)
     os.environ.setdefault("XDG_CACHE_HOME", xdg_cache)
+
+
+
+def materialize_model_files(snapshot):
+    """Keep ONNX graphs and external weights in the same physical directory.
+
+    Never write through a Hugging Face link into the shared blob store. Each
+    replacement is atomic, so a failed/interrupted copy leaves the link usable.
+    Serialize repairs when setup and dictation start against the same snapshot.
+    """
+    snapshot = Path(snapshot)
+    with (snapshot / ".fieldtheory-materialize.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for model_file in snapshot.iterdir():
+            if not model_file.is_symlink():
+                continue
+            temporary_path = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=snapshot, prefix=".fieldtheory-copy-", delete=False) as temporary:
+                    temporary_path = Path(temporary.name)
+                shutil.copyfile(model_file, temporary_path)
+                os.replace(temporary_path, model_file)
+                print(f"Prepared local Parakeet model file: {model_file.name}", file=sys.stderr)
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
+
+def prepare_model_cache(model_name):
+    """Reuse offline snapshots and repair old caches before every model load."""
+    repo_id = MODEL_REPOS.get(model_name)
+    if repo_id is None:
+        return None  # Preserve onnx-asr's other CLI model names.
+
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    patterns = [*MODEL_FILES, "config.json", "decoder_joint-model.onnx.data"]
+    try:
+        snapshot = Path(snapshot_download(repo_id, allow_patterns=patterns, local_files_only=True))
+        complete = all((snapshot / name).is_file() for name in MODEL_FILES)
+    except LocalEntryNotFoundError:
+        complete = False
+    if not complete:
+        snapshot = Path(snapshot_download(repo_id, allow_patterns=patterns))
+    for name in MODEL_FILES:
+        if not (snapshot / name).is_file():
+            raise FileNotFoundError(f"Parakeet model file is missing: {snapshot / name}")
+    materialize_model_files(snapshot)
+    return snapshot
 
 
 def read_wav_float32(path):
@@ -320,7 +380,8 @@ def main():
     # when loading from HuggingFace cache on macOS.
     print(f"Loading {args.model}...", file=sys.stderr)
     try:
-        model = onnx_asr.load_model(args.model, providers=["CPUExecutionProvider"])
+        model_path = prepare_model_cache(args.model)
+        model = onnx_asr.load_model(args.model, path=model_path, providers=["CPUExecutionProvider"])
     except Exception as e:
         print(f"Failed to load {args.model}: {e}", file=sys.stderr)
         sys.exit(1)

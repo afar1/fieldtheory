@@ -3187,6 +3187,26 @@ describe('TranscriberManager parakeet uninstall', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('shows the model-load cause and automatic cache recovery guidance after startup exits', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-status-'));
+    const manager: any = { getParakeetBasePath: () => tempDir };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    try {
+      const cause = 'Failed to load nemo-parakeet-tdt-0.6b-v2: External data path escapes model directory';
+      const error = Object.assign(new Error('Parakeet English server exited during startup with code 1'), {
+        stderr: 'HF_TOKEN warning\n' + cause,
+      });
+      const failure = manager.markParakeetEngineFailure('parakeet', error);
+      expect(failure.summary).toBe(cause);
+      expect(failure.detail).toContain(cause);
+      expect(failure.moreInfo).toContain('repaired automatically');
+      expect(failure.moreInfo).not.toContain('install it again');
+      expect(manager.readPersistedParakeetState().engines.parakeet.lastError).toBe(cause);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('treats a newer Parakeet failure as overriding an older verification', () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-status-'));
     const manager: any = {

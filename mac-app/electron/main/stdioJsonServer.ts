@@ -141,6 +141,7 @@ export class StdioJsonServer {
 
         this.process = proc;
         let buffer = '';
+        let startupStderr = '';
         const startupTimeout = setTimeout(() => {
           if (invalidated()) {
             finish(() => reject(new Error(`${this.name} startup cancelled`)));
@@ -187,7 +188,9 @@ export class StdioJsonServer {
         proc.stdout?.on('data', onData);
 
         proc.stderr?.on('data', (data: Buffer) => {
-          log.info('[%s stderr] %s', this.name, data.toString().trim());
+          const text = data.toString();
+          if (!this.ready) startupStderr = (startupStderr + text).slice(-8000);
+          log.info('[%s stderr] %s', this.name, text.trim());
         });
 
         proc.on('error', (error) => {
@@ -212,7 +215,10 @@ export class StdioJsonServer {
           clearTimeout(startupTimeout);
 
           if (!wasReady) {
-            finish(() => reject(new Error(`${this.name} server exited during startup with code ${code}`)));
+            finish(() => reject(Object.assign(
+              new Error(`${this.name} server exited during startup with code ${code}`),
+              { stderr: startupStderr, detail: startupStderr.trim() || null }
+            )));
           } else {
             log.warn('%s server exited (code %d), will restart on next request', this.name, code);
           }

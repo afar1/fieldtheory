@@ -2305,7 +2305,11 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private normalizeParakeetErrorMessage(error: unknown): string {
-    const raw = error instanceof Error ? error.message : String(error);
+    const stderr = (error as ParakeetProcessError | null | undefined)?.stderr;
+    const loadFailure = typeof stderr === 'string'
+      ? stderr.split(/\r?\n/).filter((line) => line.startsWith('Failed to load ')).at(-1)
+      : undefined;
+    const raw = loadFailure || (error instanceof Error ? error.message : String(error));
     return raw.replace(/\s+/g, ' ').trim().slice(0, 400);
   }
 
@@ -2339,7 +2343,9 @@ export class TranscriberManager extends EventEmitter {
     const detail = this.normalizeParakeetErrorDetail(error) ?? this.normalizeParakeetErrorMessage(error);
     const normalized = `${summary}\n${detail}`.toLowerCase();
     let moreInfo = 'Retry Parakeet setup once. If it fails again, open Diagnostics so support can inspect the setup log.';
-    if (normalized.includes('timed out')) {
+    if (normalized.includes('external data') && normalized.includes('escapes model directory')) {
+      moreInfo = 'Field Theory could not prepare the local model files for ONNX Runtime. Retry Verify; the existing downloaded files will be repaired automatically. If it repeats, open Diagnostics for the startup error.';
+    } else if (normalized.includes('timed out')) {
       moreInfo = 'The runtime installed, but the model did not finish downloading or loading in time. Retry on a stable internet connection. If it repeats, open Diagnostics so support can inspect the setup log.';
     } else if (this.isParakeetRepairableCacheError(error)) {
       moreInfo = 'Field Theory found a broken Parakeet model download. Repair the model to clear the cached snapshot and download it again.';
