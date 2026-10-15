@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Field Theory</title>
+  <meta name="description" content="How Field Theory handles information in its native iPhone and iPad app and on this website.">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/fieldtheory-logo-black.png" alt="Field Theory" class="nav-logo-img"></a>
+      <button class="theme-toggle theme-toggle-mobile" onclick="toggleTheme()">◐</button>
+      <button class="nav-toggle" onclick="toggleNav()" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <ul class="nav-links" id="nav-links">
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/#download">Download</a></li>
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="hot-mic.html">Hot Mic</a></li>
+        <li><a href="cli/">CLI</a></li>
+        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Privacy Policy -->
+  <main class="theory-content">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: September 13, 2026</p>
+    <p>This policy explains how Field Theory, operated by Andrew Farah, handles information in the native iPhone and iPad app and on fieldtheory.dev.</p>
+
+    <h2>Information we use</h2>
+    <p>We use your email address and account identifier to sign you in and connect your workspace. Library documents, document metadata, and voice transcripts are stored locally and synchronized through Supabase when you are connected. Documents shared with a team are available to that team. Reading preferences and other app settings are stored on your device.</p>
+    <p>We use this information to provide authentication, synchronization, shared documents, and support. The native app does not include advertising or cross-app tracking.</p>
+
+    <p>If you submit a River content report, we receive your account identifier, the document and author identifiers, the document title and source path, the report reason, and any notes you provide. Reports are stored through Supabase for human review. The report form does not copy the full document content.</p>
+    <p>Reviewer Demo uses a separate local sample workspace. It does not create an account or synchronize its sample content, and its changes are removed when you exit the demo.</p>
+
+    <h2>Voice recordings</h2>
+    <p>The app asks for microphone permission before recording. In the current native beta, speech transcription runs on your device using NVIDIA Parakeet through FluidAudio. Older builds used whisper.cpp. Audio is not uploaded to a cloud transcription service. The speech model is downloaded from Hugging Face; that download requires an internet connection.</p>
+    <p>Unfinished recordings are kept on your device so transcription can resume. The app removes queued audio after its transcript is delivered successfully or when you sign out. Pending audio and downloaded speech models are excluded from device backups. Completed transcripts can sync to your account. If automatic copying is enabled, completed transcripts are also placed on your device clipboard; you can turn this off in Settings.</p>
+
+    <h2>Service providers and sharing</h2>
+    <p>Supabase processes account and synced workspace data to provide authentication and storage. Hugging Face receives ordinary connection information, such as an IP address, when your device downloads a model. We share information with service providers as needed to operate Field Theory, respond to support requests, and meet legal obligations. Opening an external link takes you to a service with its own privacy practices.</p>
+
+    <h2>TestFlight beta and agent handoff</h2>
+    <p>Apple distributes the iPhone and iPad beta through TestFlight and provides us with beta testing information, such as installation and session information, crashes, and feedback you submit. Public-link enrollment does not show us your name or email address unless you choose to include them in feedback. If you email us to request an invitation, we receive your email and the information you send.</p>
+    <p>The current native beta focuses on Voice and Settings. Transcript text and stack metadata can sync to your Field Theory account and connected Mac. If you use a configured Mac workflow to send instructions to a coding agent, that agent provider processes the content under its own terms and privacy policy. On-device transcription does not mean the later agent workflow stays on-device. The Open Remote shortcut opens the configured destination; that button does not itself send recording data.</p>
+
+    <h2>This website</h2>
+    <p>Vercel hosts this website and provides website analytics. Website requests and analytics may include technical information such as pages visited, browser and device type, and approximate location. The site stores your light or dark appearance preference in your browser. If you contact us, we receive the information you choose to send.</p>
+
+    <h2>Retention and your choices</h2>
+    <p>You can delete documents and transcripts using the app, choose which library folders sync, and change microphone access in your device settings. Signing out removes the app's local workspace copy and unfinished recordings; it does not delete your account or its synced content. Device backups may retain data according to your backup settings.</p>
+    <p>You can initiate account deletion in Settings &gt; Delete Account in the native app. To request access, correction, or help deleting your account or server-side data, email <a href="mailto:support@fieldtheory.dev">support@fieldtheory.dev</a>. We may verify your identity before acting on a request. Some records may need to be retained for security, legal obligations, or resolving disputes, and removal from backups may take additional time.</p>
+
+    <h2>Security</h2>
+    <p>Field Theory uses HTTPS for its app service connections and the platform's secure storage for authentication sessions. No system can guarantee absolute security. Please avoid sending sensitive information in public issue reports.</p>
+
+    <h2>Children</h2>
+    <p>Field Theory is not directed to children under 13. If you believe a child has provided personal information, contact us so we can address it.</p>
+
+    <h2>Changes and contact</h2>
+    <p>We may update this policy as Field Theory changes. The date above identifies the latest version. For privacy questions, contact <a href="mailto:support@fieldtheory.dev">support@fieldtheory.dev</a>.</p>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-content">
+        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> &copy; 2026 <span class="footer-divider">|</span> <a href="mailto:support@fieldtheory.dev" class="footer-email">support@fieldtheory.dev</a> <span class="footer-divider">|</span> <a href="https://github.com/afar1/field-releases/issues" class="footer-email">Report an issue</a></p>
+        <ul class="footer-links">
+          <li><a href="/privacy.html">Privacy</a></li>
+          <li><a href="/#pricing">Pricing</a></li>
+          <li><a href="/#download">Download</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="theory.html">Theory</a></li>
+          <li><a href="hot-mic.html">Hot Mic</a></li>
+        <li><a href="cli/">CLI</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Theme toggle script -->
+  <script>
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleNav() {
+      const navLinks = document.getElementById('nav-links');
+      if (navLinks) {
+        navLinks.classList.toggle('open');
+      }
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      const isDark = document.body.classList.contains('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      // Update logo based on theme
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+    }
+
+    // Update logo on page load based on saved theme
+    (function() {
+      const isDark = document.body.classList.contains('dark');
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+    })();
+  </script>
+
+</body>
+</html>

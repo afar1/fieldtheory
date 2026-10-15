@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Field Theory Commons — Search human-curated bookmarks from Codex</title>
+  <meta name="description" content="Connect Codex to a hosted, human-curated library of 11,000+ saved X posts.">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; connect-src 'self' https://cighxaroptskntwbrctl.supabase.co; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta name="theme-color" content="#1e1e1e">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --text: #e8e8e8;
+      --muted: #999;
+      --accent: #a78bca;
+      --border: #3a3a3a;
+      --error: #e88c84;
+      --mono: 'SF Mono', Monaco, 'Cascadia Code', 'Fira Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+    body { min-height: 100vh; color: var(--text); background: var(--bg); font-family: var(--sans); line-height: 1.5; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .header { border-bottom: 1px solid var(--border); padding: 1.75rem 1.5rem; }
+    .header-inner { max-width: 560px; margin: 0 auto; }
+    .logo { display: inline-flex; align-items: center; }
+    .logo img { display: block; width: auto; height: 20px; }
+
+    main { width: min(100%, 560px); margin: 0 auto; padding: 4rem 1.5rem 5rem; }
+    .eyebrow { margin-bottom: 1.1rem; color: var(--accent); font: 0.72rem/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+    h1 { margin-bottom: 1.25rem; font-size: clamp(2rem, 7vw, 2.9rem); line-height: 1.06; letter-spacing: -0.045em; }
+    .intro { margin-bottom: 2.5rem; color: var(--muted); font-size: 0.98rem; }
+
+    .panel { padding: 1.35rem; border: 1px solid var(--border); border-left: 3px solid var(--accent); }
+    .step { margin-bottom: 0.35rem; color: var(--accent); font: 0.7rem var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+    .panel h2 { margin-bottom: 0.45rem; font-size: 1rem; }
+    .panel-copy { margin-bottom: 1.2rem; color: var(--muted); font-size: 0.82rem; }
+    label { display: block; margin-bottom: 0.4rem; color: var(--muted); font: 0.72rem var(--mono); }
+    input { width: 100%; min-height: 44px; padding: 0.65rem 0.75rem; border: 1px solid var(--border); border-radius: 3px; outline: 0; color: var(--text); background: var(--bg); }
+    input:focus { border-color: var(--accent); }
+    .primary { width: 100%; min-height: 44px; margin-top: 0.75rem; border: 0; border-radius: 3px; color: var(--bg); background: var(--accent); font-weight: 650; }
+    .primary:disabled { cursor: wait; opacity: 0.55; }
+    #verify-form, #setup { display: none; }
+    #status { min-height: 1.4rem; margin-top: 0.8rem; color: var(--muted); font: 0.72rem/1.4 var(--mono); }
+    #status.error { color: var(--error); }
+
+    .code-box { position: relative; margin: 1rem 0 1.25rem; padding: 1rem 4.5rem 1rem 1rem; overflow-x: auto; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 3px; background: var(--bg); }
+    pre { color: var(--text); font: 0.72rem/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .copy { position: absolute; top: 0.65rem; right: 0.65rem; padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 3px; color: var(--muted); background: transparent; font: 0.68rem var(--mono); }
+    .copy:hover { color: var(--text); border-color: var(--muted); }
+    .prompt-box pre { font-size: 0.78rem; line-height: 1.6; }
+    .examples { margin: 0.5rem 0 0 1.1rem; color: var(--muted); font-size: 0.82rem; }
+    .examples li + li { margin-top: 0.45rem; }
+
+    .note { margin-top: 1.25rem; color: var(--muted); font-size: 0.76rem; }
+
+    @media (max-width: 560px) {
+      main { padding-top: 3rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a class="logo" href="https://fieldtheory.dev" aria-label="Field Theory home">
+        <img src="/images/fieldtheory-logo-white.png" alt="Field Theory">
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <p class="eyebrow">Field Theory Commons</p>
+    <h1>Search human-curated bookmarks from Codex.</h1>
+    <p class="intro">Explore 11,000+ saved X posts in the cloud. Nothing to install or sync.</p>
+
+    <section class="panel" id="access-panel">
+      <div id="request-step">
+        <h2>Get a private access key</h2>
+        <p class="panel-copy">There is no account to set up. We use your email to give you a separate key. If that key is shared or misused, we can turn it off without affecting anyone else.</p>
+        <form id="email-form">
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
+          <button class="primary" type="submit">Send one-time code</button>
+        </form>
+
+        <form id="verify-form">
+          <label for="otp">One-time code</label>
+          <input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" required>
+          <button class="primary" type="submit">Show my setup command</button>
+        </form>
+        <p id="status" role="status" aria-live="polite"></p>
+      </div>
+
+      <div id="setup">
+        <p class="step">Connect Codex</p>
+        <h2>Run this in Terminal</h2>
+        <p class="panel-copy">It connects the remote MCP, then starts Codex in the same Terminal window.</p>
+        <div class="code-box">
+          <pre id="setup-command"></pre>
+          <button class="copy" id="copy-setup" type="button">copy</button>
+        </div>
+        <p class="step">Ask Codex</p>
+        <h2>Paste this prompt</h2>
+        <div class="code-box prompt-box">
+          <pre id="codex-prompt">Use only the remote `fieldtheory-commons` MCP to answer the question below.
+
+Do not inspect local files, use the shell or web, open the Field Theory Mac app, use Computer Use, or start subagents.
+
+Run one compact search. Call `get` for at most 1–2 results, and only if the search results do not contain enough detail.
+
+Do not mention the size of the bookmark collection unless I ask. Answer clearly and cite the original X URLs.
+
+Question: What techniques help coding agents manage context in large codebases?</pre>
+          <button class="copy" id="copy-prompt" type="button">copy</button>
+        </div>
+        <p class="step">More questions to try</p>
+        <ul class="examples">
+          <li>What have people learned about evaluating coding-agent reliability?</li>
+          <li>When do parallel coding agents help, and when do they add coordination overhead?</li>
+          <li>What patterns help an AI agent recover after losing context?</li>
+        </ul>
+      </div>
+    </section>
+    <p class="note">Remote and read-only. The remote MCP cannot access your computer or local files. The full bookmark collection stays in the cloud; Codex receives only the records returned by MCP search and get calls.</p>
+  </main>
+
+  <script>
+    const emailForm = document.querySelector('#email-form');
+    const verifyForm = document.querySelector('#verify-form');
+    const setup = document.querySelector('#setup');
+    const status = document.querySelector('#status');
+    const setupCommand = document.querySelector('#setup-command');
+    const codexPrompt = document.querySelector('#codex-prompt');
+    let config;
+    let email = '';
+
+    function setStatus(message, isError = false) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+    }
+
+    async function jsonRequest(url, init) {
+      const response = await fetch(url, init);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.msg || data.message || data.error_description || data.error || 'Request failed.');
+      return data;
+    }
+
+    async function supabaseAuth(path, body) {
+      return jsonRequest(config.supabaseUrl + '/auth/v1/' + path, {
+        method: 'POST',
+        headers: {
+          apikey: config.publishableKey,
+          Authorization: 'Bearer ' + config.publishableKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    }
+
+    async function loadConfig() {
+      try {
+        config = await jsonRequest('/api/mcp-access');
+      } catch (error) {
+        setStatus('Access setup is temporarily unavailable.', true);
+        emailForm.querySelector('button').disabled = true;
+      }
+    }
+
+    emailForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!config) return;
+      email = document.querySelector('#email').value.trim();
+      const button = emailForm.querySelector('button');
+      button.disabled = true;
+      setStatus('Sending your code…');
+      try {
+        await supabaseAuth('otp', { email, create_user: true });
+        emailForm.style.display = 'none';
+        verifyForm.style.display = 'block';
+        document.querySelector('#otp').focus();
+        setStatus('Check your email for the one-time code.');
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    verifyForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = verifyForm.querySelector('button');
+      button.disabled = true;
+      setStatus('Creating your access…');
+      try {
+        const session = await supabaseAuth('verify', {
+          email,
+          token: document.querySelector('#otp').value.trim(),
+          type: 'email',
+        });
+        if (!session.access_token) throw new Error('Field Theory did not return a complete session.');
+        const access = await jsonRequest('/api/mcp-access', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + session.access_token,
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        });
+        setupCommand.textContent = 'export FIELD_THEORY_COMMONS_TOKEN="' + access.token + '"\n' +
+          'codex mcp add fieldtheory-commons \\\n  --url ' + config.mcpUrl + ' \\\n  --bearer-token-env-var FIELD_THEORY_COMMONS_TOKEN\n\n' +
+          'codex';
+        document.querySelector('#request-step').style.display = 'none';
+        setup.style.display = 'block';
+      } catch (error) {
+        setStatus(error.message, true);
+        button.disabled = false;
+      }
+    });
+
+    function showCopyFailure(button) {
+      button.textContent = 'select text';
+      button.title = 'Copy failed. Select the text manually.';
+      button.setAttribute('aria-label', button.title);
+    }
+
+    function copyText(button, value) {
+      if (!navigator.clipboard?.writeText) {
+        showCopyFailure(button);
+        return;
+      }
+      navigator.clipboard.writeText(value).then(() => {
+        button.textContent = 'copied';
+        button.removeAttribute('title');
+        button.removeAttribute('aria-label');
+        window.setTimeout(() => { button.textContent = 'copy'; }, 1200);
+      }).catch(() => {
+        showCopyFailure(button);
+      });
+    }
+
+    document.querySelector('#copy-setup').addEventListener('click', (event) => {
+      copyText(event.currentTarget, setupCommand.textContent);
+    });
+
+    document.querySelector('#copy-prompt').addEventListener('click', (event) => {
+      copyText(event.currentTarget, codexPrompt.textContent);
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>
