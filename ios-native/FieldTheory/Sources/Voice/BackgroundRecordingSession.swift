@@ -39,7 +39,7 @@ final class BackgroundRecordingSession {
             throw SpeechTranscriptionEngineError(message: "Wait for the current transcription to finish.")
         }
         guard model.recorder.canStartRecording else {
-            throw SpeechTranscriptionEngineError(message: "The voice model is preparing. Open Field Theory and wait until it is ready.")
+            throw SpeechTranscriptionEngineError(message: "Recording is still starting or stopping. Try again in a moment.")
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw SpeechTranscriptionEngineError(message: "Enable Live Activities for Field Theory in iPhone Settings.")

@@ -1,22 +1,32 @@
 import SwiftUI
 
-/// Bottom toast, used for "Copied", "Saved to Voice", sync errors.
+/// Top toast for brief notices and ongoing Voice progress.
 @MainActor
 @Observable
 final class ToastCenter {
-    private(set) var message: String?
-    private(set) var symbol: String?
+    private var transientMessage: String?
+    private var transientSymbol: String?
+    private var statusMessage: String?
+    private var statusSymbol: String?
     private var hideTask: Task<Void, Never>?
 
+    var message: String? { transientMessage ?? statusMessage }
+    var symbol: String? { transientMessage == nil ? statusSymbol : transientSymbol }
+
     func show(_ message: String, symbol: String? = nil, duration: Double = 1.8) {
-        self.message = message
-        self.symbol = symbol
+        transientMessage = message
+        transientSymbol = symbol
         hideTask?.cancel()
         hideTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.message = nil
+            self?.transientMessage = nil
         }
+    }
+
+    func setStatus(_ message: String?, symbol: String? = nil) {
+        statusMessage = message
+        statusSymbol = symbol
     }
 }
 

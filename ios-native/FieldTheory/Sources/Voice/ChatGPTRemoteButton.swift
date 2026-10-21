@@ -22,8 +22,11 @@ struct ChatGPTRemoteButton: View {
     @State private var showingSetup = false
     @State private var showingError = false
 
+    private var isAvailable: Bool { configured }
+
     var body: some View {
-        Button {
+        if isAvailable {
+            Button {
             onWillOpen()
             guard configured, let url = ChatGPTRemoteLink.shortcutURL(name: shortcutName) else {
                 showingSetup = true
@@ -32,25 +35,27 @@ struct ChatGPTRemoteButton: View {
             openURL(url) { accepted in
                 if !accepted { showingError = true }
             }
-        } label: {
-            Label("Open Remote", systemImage: "arrow.up.forward.app")
-        }
-        .accessibilityIdentifier("OpenChatGPTRemote")
-        .accessibilityHint("Opens the Remote task list in ChatGPT through your shortcut.")
-        .contextMenu {
-            Button("Configure Remote shortcut") {
-                onWillOpen()
-                showingSetup = true
+            } label: {
+                Label("Open chat", systemImage: "bubble.right")
+                    .foregroundStyle(.secondary)
             }
-        }
-        .sheet(isPresented: $showingSetup) {
-            ChatGPTRemoteSetupView()
-        }
-        .alert("Could not open Shortcuts", isPresented: $showingError) {
-            Button("Set up shortcut") { showingSetup = true }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Make sure Shortcuts and ChatGPT are installed, then check your Remote shortcut setup.")
+            .accessibilityIdentifier("OpenChatGPTRemote")
+            .accessibilityHint("Opens the Remote task list in ChatGPT through your shortcut.")
+            .contextMenu {
+                Button("Configure Remote shortcut") {
+                    onWillOpen()
+                    showingSetup = true
+                }
+            }
+            .sheet(isPresented: $showingSetup) {
+                ChatGPTRemoteSetupView()
+            }
+            .alert("Could not open Shortcuts", isPresented: $showingError) {
+                Button("Set up shortcut") { showingSetup = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Make sure Shortcuts and ChatGPT are installed, then check your Remote shortcut setup.")
+            }
         }
     }
 }

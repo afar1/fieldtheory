@@ -28,14 +28,15 @@ final class TranscriptStore {
     private(set) var runnerPresence: [VoiceRunnerPresence] = []
     private(set) var runnerEvents: [VoiceRunnerEvent] = []
     private(set) var deliveryRefreshedAt: Date?
+    private var deliveryEventsByRevision: [String: [VoiceDeliveryEvent]] = [:]
+    private var deliveryReceiptsByRevision: [String: VoiceAgentReceipt] = [:]
 
     func events(for item: TranscriptItem) -> [VoiceDeliveryEvent] {
-        deliveryEvents.filter { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
-            .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+        deliveryEventsByRevision[item.id + ":" + Hashing.sha256Hex(item.text)] ?? []
     }
 
     func receipt(for item: TranscriptItem) -> VoiceAgentReceipt? {
-        deliveryReceipts.last { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
+        deliveryReceiptsByRevision[item.id + ":" + Hashing.sha256Hex(item.text)]
     }
 
     func updateDelivery(receipts: [VoiceAgentReceipt], events: [VoiceDeliveryEvent]?, presence: [VoiceRunnerPresence]?, runnerEvents: [VoiceRunnerEvent]?, replacingIDs: Set<String>? = nil) {
@@ -52,12 +53,19 @@ final class TranscriptStore {
         }
         if let presence { self.runnerPresence = presence }
         if let runnerEvents { self.runnerEvents = runnerEvents }
+        deliveryEventsByRevision = Dictionary(grouping: deliveryEvents) { $0.transcript_id + ":" + $0.revision }
+        for key in Array(deliveryEventsByRevision.keys) {
+            deliveryEventsByRevision[key]?.sort { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+        }
+        deliveryReceiptsByRevision = Dictionary(deliveryReceipts.map { ($0.transcript_id + ":" + $0.revision, $0) }, uniquingKeysWith: { _, latest in latest })
         deliveryRefreshedAt = Date()
     }
 
     func clearDelivery() {
         deliveryEvents = []
         deliveryReceipts = []
+        deliveryEventsByRevision = [:]
+        deliveryReceiptsByRevision = [:]
         runnerPresence = []
         runnerEvents = []
         deliveryRefreshedAt = nil

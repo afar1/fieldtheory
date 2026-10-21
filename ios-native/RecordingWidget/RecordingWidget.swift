@@ -4,7 +4,23 @@ import WidgetKit
 
 @main
 struct RecordingWidgets: WidgetBundle {
-    var body: some Widget { RecordingLiveActivity() }
+    var body: some Widget {
+        RecordingLiveActivity()
+        RecordControl()
+    }
+}
+
+/// WidgetKit supplies the system control shape in Control Center and on the Lock Screen.
+struct RecordControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "com.afar1.fieldtheory.record") {
+            ControlWidgetButton(action: StartFieldTheoryRecordingIntent()) {
+                Label("Record", systemImage: "mic.fill")
+            }
+        }
+        .displayName("Record")
+        .description("Start a Field Theory voice recording.")
+    }
 }
 
 struct RecordingLiveActivity: Widget {
@@ -106,25 +122,11 @@ struct RecordingLiveActivity: Widget {
                         }.accessibilityLabel("Cancel recording")
                         Spacer(minLength: 8)
                         Button(intent: StopFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "stop.fill").font(.caption2)
-                                Text("Stop")
-                            }
-                            .font(.caption.weight(.semibold))
-                            .frame(width: 108, height: 44)
-                            .background(.white.opacity(0.14), in: Capsule())
-                        }.accessibilityLabel("Stop and transcribe without sending to agent")
-                        Button(intent: SendFieldTheoryRecordingIntent(recordingID: context.attributes.recordingID)) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "stop.fill").font(.caption2)
-                                Image(systemName: "plus").font(.system(size: 9, weight: .medium))
-                                Image(systemName: "paperplane").font(.caption)
-                                Text("Send")
-                            }
+                            Text("Done")
                             .font(.caption.weight(.semibold))
                             .frame(width: 108, height: 44)
                             .background(.white, in: Capsule()).foregroundStyle(.black)
-                        }.accessibilityLabel("Stop, transcribe and send to computer")
+                        }.accessibilityLabel("Done recording")
                     }
                 }
             }

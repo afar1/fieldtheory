@@ -10,6 +10,7 @@ final class AppModel {
     static let shared = AppModel()
     let settings: AppSettings
     let auth: AuthStore
+    let conversations: ConversationStore
     private(set) var library: LibraryStore
     private(set) var river: RiverStore
     private(set) var transcripts: TranscriptStore
@@ -83,6 +84,8 @@ final class AppModel {
 
         self.settings = settings
         self.auth = auth
+        self.conversations = ConversationStore(transport: SupabaseConversationTransport(client: client))
+        self.conversations.configure(owner: auth.userId, connected: auth.sessionAlive)
         self.productionDatabasePath = databasePath
         self.productionLibraryRoot = libraryRootOverride ?? LibraryStore.libraryRoot
         self.reviewerDemoDatabasePath = reviewerDemoDatabasePathOverride
@@ -143,15 +146,12 @@ final class AppModel {
         }
         guard UIApplication.shared.applicationState == .active,
               settings.startRecordingOnOpen, showMainUI, !isSigningOut,
-              !isReviewerDemoStorage, recorder.phase == .idle,
-              recorder.pendingSessionCount == 0 else { return }
+              !isReviewerDemoStorage, recorder.phase == .idle else { return }
         let openingRecorder = recorder
-        guard await openingRecorder.prepareVoiceModelInBackground(),
-              openingRecorder === recorder, !Task.isCancelled,
+        guard openingRecorder === recorder, !Task.isCancelled,
               UIApplication.shared.applicationState == .active,
               settings.startRecordingOnOpen, showMainUI, !isSigningOut,
-              !isReviewerDemoStorage, recorder.phase == .idle,
-              recorder.pendingSessionCount == 0 else { return }
+              !isReviewerDemoStorage, recorder.phase == .idle else { return }
         recorder.start()
     }
 
@@ -210,6 +210,7 @@ final class AppModel {
             return
         }
         guard !isSigningOut else { return }
+        conversations.forget()
         isSigningOut = true
         defer { isSigningOut = false }
         await beginExplicitWorkspaceTransition()
@@ -358,14 +359,27 @@ final class AppModel {
                     await PreviewFixtures.seed(transcripts: transcripts, db: db)
                 }
                 if ProcessInfo.processInfo.arguments.contains("ft-recording-controls-preview") {
-                    recorder = RecorderController(
-                        pendingDirectory: reviewerDemoRoot.appendingPathComponent("control-preview-audio"),
-                        transcribe: { _ in "Preview transcript" })
+                    let arguments = ProcessInfo.processInfo.arguments
+                    let previewDirectory = reviewerDemoRoot.appendingPathComponent("control-preview-audio")
+                    if let index = arguments.firstIndex(of: "ft-engine-setup-state"),
+                       arguments.indices.contains(index + 1),
+                       let engine = PreviewSpeechTranscriptionEngine(stateName: arguments[index + 1]) {
+                        recorder = RecorderController(pendingDirectory: previewDirectory, speechEngine: engine)
+                    } else {
+                        recorder = RecorderController(
+                            pendingDirectory: previewDirectory,
+                            transcribe: { _ in "Preview transcript" })
+                    }
                     if ProcessInfo.processInfo.arguments.contains("ft-recording-controls-perf") {
                         recorder.setWorkEnabled(false)
                         RecordingControlsPerformancePreview.shared.run(recorder: recorder)
                     } else {
                         recorder.setWorkEnabled(true)
+                        if let index = arguments.firstIndex(of: "ft-recording-state"),
+                           arguments.indices.contains(index + 1),
+                           let state = RecordingControlsPerformancePreview.State(rawValue: arguments[index + 1]) {
+                            recorder.applyRecordingControlsPreview(state, cycle: 0)
+                        }
                     }
                 }
             } catch {
@@ -624,3 +638,35 @@ final class AppModel {
         }
     }
 }
+#if targetEnvironment(simulator)
+/// Explicit simulator-only representation of the same engine states the
+/// recorder renders in production. It never downloads or prepares a model.
+@MainActor
+final class PreviewSpeechTranscriptionEngine: SpeechTranscriptionEngine {
+    let runtimeIdentity = "preview-engine"
+    var onStateChange: (() -> Void)?
+    let state: SpeechEngineState
+    let preparationMessage: String
+
+    init?(stateName: String) {
+        switch stateName {
+        case "checking":
+            state = .checking
+            preparationMessage = "Checking local voice files…"
+        case "preparing":
+            state = .preparing
+            preparationMessage = "Getting the voice engine ready…"
+        case "downloading":
+            state = .downloading(progress: 0.42)
+            preparationMessage = "Downloading voice files…"
+        default:
+            return nil
+        }
+    }
+
+    func ensureDownloaded() {}
+    func prepare() async throws {}
+    func cancelPreparation() {}
+    func transcribe(audioURL: URL) async throws -> String { "" }
+}
+#endif

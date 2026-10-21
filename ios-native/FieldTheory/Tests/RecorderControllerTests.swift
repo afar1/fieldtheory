@@ -12,6 +12,7 @@ private final class RecorderTestSpeechEngine: SpeechTranscriptionEngine {
     private(set) var transcribeCalls = 0
     var result: Result<String, Error>
     var preparation: (() async throws -> Void)?
+    var beforeTranscribe: (() async -> Void)?
 
     init(
         identity: String = "test.parakeet/model-v2",
@@ -36,6 +37,7 @@ private final class RecorderTestSpeechEngine: SpeechTranscriptionEngine {
 
     func transcribe(audioURL: URL) async throws -> String {
         transcribeCalls += 1
+        await beforeTranscribe?()
         return try result.get()
     }
 }
@@ -56,6 +58,22 @@ private actor RecorderPreparationGate {
     }
 }
 
+private final class ColdCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
+    private var currentURL: URL?
+    func prepare(url: URL, readyToRecord: Bool) throws { try Data().write(to: url) }
+    func configure(mixWithOtherAudio: Bool) throws {}
+    func activate() throws {}
+    func start(url: URL) throws {
+        currentURL = url
+        try Data("recording".utf8).write(to: url)
+    }
+    func stop() { currentURL = nil }
+    func deactivate() {}
+    func sample() -> AudioCaptureOwner.Sample? {
+        .init(level: 0, isRecording: currentURL != nil, recordedSeconds: 1)
+    }
+}
+
 @MainActor
 private func waitForRecorderCondition(
     _ condition: @escaping @MainActor () -> Bool,
@@ -70,24 +88,105 @@ private func waitForRecorderCondition(
 
 final class RecorderControllerTests: XCTestCase {
     @MainActor
-    func testRecordingRequiresReadyVoiceModelIncludingIntent() async {
+    func testAutoSendChangeDuringTranscriptionAppliesToCurrentSession() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ft-current-send-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sessionID = "100"
+        try Data("audio".utf8).write(to: dir.appendingPathComponent("rec-\(sessionID)-0.wav"))
+        let gate = RecorderPreparationGate()
+        let engine = RecorderTestSpeechEngine(state: .ready)
+        engine.beforeTranscribe = { await gate.wait() }
+        let recorder = RecorderController(pendingDirectory: dir, speechEngine: engine)
+        var deliveredAction: RecordingFinishAction?
+        recorder.onTranscript = { _ in
+            deliveredAction = recorder.finishAction(for: recorder.currentDeliverySessionID)
+            return true
+        }
+        recorder.setWorkEnabled(true)
+        let work = Task { await recorder.resumePendingWork() }
+        let started = await waitForRecorderCondition { recorder.transcribingSessionID == sessionID }
+        XCTAssertTrue(started)
+        recorder.setCurrentTranscriptionAutoSend(true)
+        await gate.release()
+        await work.value
+        XCTAssertEqual(deliveredAction, .send)
+        XCTAssertNil(recorder.transcribingSessionID)
+    }
+
+    @MainActor
+    func testAutoSendChangeDuringRecordingAppliesToCurrentSession() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let engine = RecorderTestSpeechEngine(state: .notDownloaded)
-        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine)
+        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine,
+            captureOwner: AudioCaptureOwner(makeDevice: { ColdCaptureDevice() }))
         recorder.setWorkEnabled(true)
-        XCTAssertFalse(recorder.canStartRecording)
-        recorder.start()
-        XCTAssertEqual(recorder.phase, .idle)
-        do {
-            try await recorder.startFromIntent()
-            XCTFail("Intent must not activate the microphone before the model is ready")
-        } catch {}
-        XCTAssertEqual(recorder.phase, .idle)
-        XCTAssertNil(recorder.startedAt)
-        engine.state = .ready
-        engine.onStateChange?()
+        await recorder.beginSession()
+        let id = try XCTUnwrap(recorder.activeRecordingID)
+        recorder.setCurrentTranscriptionAutoSend(true)
+        XCTAssertEqual(recorder.finishAction(for: id), .send)
+        recorder.setCurrentTranscriptionAutoSend(false)
+        XCTAssertEqual(recorder.finishAction(for: id), .stop)
+        recorder.setCurrentTranscriptionAutoSend(true)
+        await recorder.stopAndTranscribe()
+        XCTAssertEqual(recorder.finishAction(for: id), .send)
+        XCTAssertEqual(recorder.pendingSessionCount, 1)
+    }
+
+    @MainActor
+    func testColdVoiceModelDoesNotBlockRecordingAndQueuesMultipleCaptures() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = RecorderTestSpeechEngine(state: .notDownloaded)
+        let device = ColdCaptureDevice()
+        let recorder = RecorderController(pendingDirectory: root, speechEngine: engine,
+                                          captureOwner: AudioCaptureOwner(makeDevice: { device }))
+        recorder.setWorkEnabled(true)
         XCTAssertTrue(recorder.canStartRecording)
+        for expectedCount in 1...2 {
+            await recorder.beginSession()
+            XCTAssertEqual(recorder.phase, .recording)
+            await recorder.stopAndTranscribe()
+            XCTAssertEqual(recorder.phase, .idle)
+            XCTAssertEqual(recorder.pendingSessionCount, expectedCount)
+            XCTAssertTrue(recorder.canStartRecording)
+        }
+        XCTAssertEqual(engine.transcribeCalls, 0)
+        XCTAssertEqual(RecorderController.pendingSessions(in: root).count, 2)
+    }
+
+    @MainActor
+    func testFailedQueuedRecordingDoesNotBlockLaterTranscription() async throws {
+        struct DamagedAudio: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "PendingErrorTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try Data("damaged".utf8).write(to: root.appendingPathComponent("rec-100-0.wav"))
+        try Data("good".utf8).write(to: root.appendingPathComponent("rec-200-0.wav"))
+        let recorder = RecorderController(pendingDirectory: root, defaults: defaults, transcribe: { url in
+            if url.lastPathComponent == "rec-100-0.wav" { throw DamagedAudio() }
+            return "later recording"
+        })
+        var delivered: [String] = []
+        recorder.onTranscript = { text in delivered.append(text); return true }
+        recorder.setWorkEnabled(true)
+        await recorder.drainPendingQueue()
+        XCTAssertEqual(delivered, ["later recording"])
+        XCTAssertEqual(recorder.pendingSessionCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("rec-100-0.wav").path))
+        let pending = try XCTUnwrap(recorder.nextPendingSession)
+        XCTAssertNotNil(recorder.pendingError(for: pending))
+        let restored = RecorderController(pendingDirectory: root, defaults: defaults,
+            transcribe: { _ in "recovered recording" })
+        XCTAssertNotNil(restored.pendingError(for: pending), "Failure details must survive app relaunch")
+        restored.onTranscript = { _ in true }
+        restored.setWorkEnabled(true)
+        await restored.drainPendingQueue()
+        XCTAssertNil(restored.pendingError(for: pending))
     }
 
 

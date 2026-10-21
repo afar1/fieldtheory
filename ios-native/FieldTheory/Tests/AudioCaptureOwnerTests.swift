@@ -1,4 +1,5 @@
 import XCTest
+import AVFAudio
 @testable import FieldTheory
 
 private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
@@ -7,8 +8,11 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
     var onStop: (() -> Void)?
     var stopGate: DispatchSemaphore?
     var startError: Error?
+    var configureError: Error?
+    var configureErrors: [Error] = []
     private(set) var startCalls = 0
     private(set) var configureCalls = 0
+    private(set) var mixPolicies: [Bool] = []
     private(set) var stopCalls = 0
     private(set) var prepareCalls = 0
     private(set) var fullyPreparedCalls = 0
@@ -29,6 +33,9 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
     func configure(mixWithOtherAudio: Bool) throws {
         XCTAssertFalse(Thread.isMainThread, "Audio configuration must not block UI rendering")
         configureCalls += 1
+        mixPolicies.append(mixWithOtherAudio)
+        if !configureErrors.isEmpty { throw configureErrors.removeFirst() }
+        if let configureError { throw configureError }
     }
     func activate() throws { XCTAssertFalse(Thread.isMainThread) }
     func start(url: URL) throws {
@@ -73,8 +80,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         }
         await lifecycle.value
         let token = UUID()
-        let started = try await owner.start(token: token, sessionID: boundary,
-            mixWithOtherAudio: false)
+        let started = try await owner.start(token: token, sessionID: boundary)
         XCTAssertGreaterThan(started.sessionID, boundary)
         XCTAssertNotEqual(started.files.first, oldURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldURL.path))
@@ -87,7 +93,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         for file in files { try? FileManager.default.removeItem(at: file) }
     }
 
-    func testPreparationNeverCapturesAndOnlyFullyPreparesAfterExplicitStart() async throws {
+    func testPreparationNeverCapturesOrReactivatesSessionBetweenRecordings() async throws {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })
         await owner.setPreparationEnabled(true, revision: 1)
@@ -96,22 +102,22 @@ final class AudioCaptureOwnerTests: XCTestCase {
         XCTAssertEqual(device.configureCalls, 0)
         XCTAssertEqual(device.startCalls, 0)
         let firstToken = UUID()
-        let first = try await owner.start(token: firstToken, sessionID: 910_001,
-            mixWithOtherAudio: false)
+        let first = try await owner.start(token: firstToken, sessionID: 910_001)
         let firstFiles = await owner.stop(token: firstToken)
         XCTAssertEqual(device.prepareCalls, 1, "Stop must return sealed files without waiting for preparation")
+        XCTAssertEqual(device.deactivateCalls, 1, "Stop must release audio while preparation stays enabled")
         await owner.setPreparationEnabled(true, revision: 2)
-        XCTAssertEqual(device.fullyPreparedCalls, 1)
+        XCTAssertEqual(device.fullyPreparedCalls, 0, "Idle preparation must not reactivate audio")
         let secondToken = UUID()
-        let second = try await owner.start(token: secondToken, sessionID: 910_002,
-            mixWithOtherAudio: false)
+        let second = try await owner.start(token: secondToken, sessionID: 910_002, mixWithOtherAudio: true)
         let secondFiles = await owner.stop(token: secondToken)
-        XCTAssertEqual(device.configureCalls, 1)
+        XCTAssertEqual(device.configureCalls, 2, "Each recording must reactivate its session")
+        XCTAssertEqual(device.mixPolicies, [false, true], "Background capture must use the requested mixing policy")
         XCTAssertNotEqual(first.sessionID, second.sessionID)
         XCTAssertEqual(firstFiles.first?.lastPathComponent, "rec-\(first.sessionID)-0.wav")
         XCTAssertEqual(secondFiles.first?.lastPathComponent, "rec-\(second.sessionID)-0.wav")
+        XCTAssertEqual(device.deactivateCalls, 2)
         await owner.setPreparationEnabled(false, revision: 3)
-        XCTAssertEqual(device.deactivateCalls, 1)
         for file in firstFiles + secondFiles { try? FileManager.default.removeItem(at: file) }
     }
 
@@ -132,8 +138,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let owner = AudioCaptureOwner(makeDevice: { device })
         await owner.setPreparationEnabled(true, revision: 1)
         let token = UUID()
-        _ = try await owner.start(token: token, sessionID: 910_003,
-            mixWithOtherAudio: false)
+        _ = try await owner.start(token: token, sessionID: 910_003)
         await owner.setPreparationEnabled(false, revision: 2)
         let sample = await owner.sample(token: token)
         XCTAssertEqual(sample?.isRecording, true)
@@ -148,8 +153,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let owner = AudioCaptureOwner(makeDevice: { device })
         await owner.setPreparationEnabled(true, revision: 1)
         let token = UUID()
-        let started = try await owner.start(token: token, sessionID: 910_004,
-            mixWithOtherAudio: false)
+        let started = try await owner.start(token: token, sessionID: 910_004)
         await owner.interruptionBegan(token: token)
         _ = try await owner.interruptionEnded(token: token, shouldResume: true)
         let files = await owner.stop(token: token)
@@ -164,8 +168,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let boundary: Int64 = 920_000
         await owner.setPreparationEnabled(true, revision: 1, afterPolicyChangeAt: boundary)
         let token = UUID()
-        let started = try await owner.start(token: token, sessionID: boundary,
-            mixWithOtherAudio: false)
+        let started = try await owner.start(token: token, sessionID: boundary)
         XCTAssertEqual(started.sessionID, boundary + 1)
         let files = await owner.stop(token: token)
         await owner.setPreparationEnabled(false, revision: 2)
@@ -180,46 +183,25 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let scratch = try XCTUnwrap(device.preparedURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
         let token = UUID()
-        let started = try await owner.start(token: token, sessionID: 910_005,
-            mixWithOtherAudio: false)
+        let started = try await owner.start(token: token, sessionID: 910_005)
         XCTAssertEqual(started.sessionID, 910_005)
         let files = await owner.stop(token: token)
         await owner.setPreparationEnabled(false, revision: 2)
         for file in files { try? FileManager.default.removeItem(at: file) }
     }
 
-    func testRouteInvalidationAndMixChangeCannotReuseStaleSession() async throws {
+    func testRouteInvalidationCannotReuseStaleSession() async throws {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })
         await owner.setPreparationEnabled(true, revision: 1)
         let token = UUID()
-        _ = try await owner.start(token: token, sessionID: 910_006,
-            mixWithOtherAudio: false)
+        _ = try await owner.start(token: token, sessionID: 910_006)
         var files = await owner.stop(token: token)
         await owner.setPreparationEnabled(true, revision: 2)
         await owner.invalidatePreparation()
         let next = UUID()
-        _ = try await owner.start(token: next, sessionID: 910_007,
-            mixWithOtherAudio: true)
+        _ = try await owner.start(token: next, sessionID: 910_007)
         files += await owner.stop(token: next)
-        XCTAssertEqual(device.configureCalls, 2)
-        await owner.setPreparationEnabled(false, revision: 3)
-        for file in files { try? FileManager.default.removeItem(at: file) }
-    }
-
-    func testIntentMixPolicyReconfiguresWarmForegroundSession() async throws {
-        let device = FakeCaptureDevice()
-        let owner = AudioCaptureOwner(makeDevice: { device })
-        await owner.setPreparationEnabled(true, revision: 1)
-        let first = UUID()
-        _ = try await owner.start(token: first, sessionID: 910_008,
-            mixWithOtherAudio: false)
-        var files = await owner.stop(token: first)
-        await owner.setPreparationEnabled(true, revision: 2)
-        let second = UUID()
-        _ = try await owner.start(token: second, sessionID: 910_009,
-            mixWithOtherAudio: true)
-        files += await owner.stop(token: second)
         XCTAssertEqual(device.configureCalls, 2)
         await owner.setPreparationEnabled(false, revision: 3)
         for file in files { try? FileManager.default.removeItem(at: file) }
@@ -235,8 +217,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         device.onStart = { attempted.fulfill() }
         let token = UUID()
         let startup = Task {
-            try await owner.start(token: token, sessionID: 910_010,
-                mixWithOtherAudio: false)
+            try await owner.start(token: token, sessionID: 910_010)
         }
         await fulfillment(of: [attempted], timeout: 2)
         _ = await owner.stop(token: token)
@@ -257,8 +238,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let owner = AudioCaptureOwner(makeDevice: { device })
         let token = UUID()
         let startup = Task {
-            try await owner.start(token: token, sessionID: 900_001,
-                mixWithOtherAudio: true)
+            try await owner.start(token: token, sessionID: 900_001)
         }
         await fulfillment(of: [firstAttempt], timeout: 2)
         let files = await owner.stop(token: token)
@@ -278,8 +258,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let token = UUID()
         _ = await owner.stop(token: token)
         do {
-            _ = try await owner.start(token: token, sessionID: 900_002,
-                mixWithOtherAudio: false)
+            _ = try await owner.start(token: token, sessionID: 900_002)
             XCTFail("An invalidated attempt started")
         } catch is CancellationError { }
         XCTAssertEqual(device.configureCalls, 0)
@@ -289,15 +268,13 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })
         let first = UUID()
-        _ = try await owner.start(token: first, sessionID: 900_003,
-            mixWithOtherAudio: false)
+        _ = try await owner.start(token: first, sessionID: 900_003)
         let files = await owner.stop(token: first)
         defer { for file in files { try? FileManager.default.removeItem(at: file) } }
         XCTAssertEqual(files.count, 1)
         XCTAssertEqual(try String(contentsOf: XCTUnwrap(files.first), encoding: .utf8), "sealed")
         let second = UUID()
-        _ = try await owner.start(token: second, sessionID: 900_004,
-            mixWithOtherAudio: false)
+        _ = try await owner.start(token: second, sessionID: 900_004)
         _ = await owner.stop(token: first)
         let sample = await owner.sample(token: second)
         XCTAssertEqual(sample?.isRecording, true)
@@ -309,8 +286,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })
         let token = UUID()
-        _ = try await owner.start(token: token, sessionID: 900_005,
-            mixWithOtherAudio: false)
+        _ = try await owner.start(token: token, sessionID: 900_005)
         await owner.interruptionBegan(token: token)
         _ = try await owner.interruptionEnded(token: token, shouldResume: true)
         let files = await owner.stop(token: token)
@@ -323,8 +299,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         device.refuseFirstStart = true
         let owner = AudioCaptureOwner(makeDevice: { device })
         let token = UUID()
-        _ = try await owner.start(token: token, sessionID: 900_006,
-            mixWithOtherAudio: true)
+        _ = try await owner.start(token: token, sessionID: 900_006)
         XCTAssertEqual(device.startCalls, 2)
         let files = await owner.stop(token: token)
         for file in files { try? FileManager.default.removeItem(at: file) }
@@ -335,11 +310,85 @@ final class AudioCaptureOwnerTests: XCTestCase {
         device.startError = NSError(domain: "capture-test", code: 42)
         let owner = AudioCaptureOwner(makeDevice: { device })
         do {
-            _ = try await owner.start(token: UUID(), sessionID: 900_007,
-                mixWithOtherAudio: false)
+            _ = try await owner.start(token: UUID(), sessionID: 900_007)
             XCTFail("Expected nontransient error")
         } catch { XCTAssertEqual((error as NSError).code, 42) }
         XCTAssertEqual(device.startCalls, 1)
+        XCTAssertEqual(device.deactivateCalls, 1, "Failed capture must release audio")
+    }
+
+    func testTransientActivationFailureRetriesBeforeCapturing() async throws {
+        let device = FakeCaptureDevice()
+        device.configureErrors = [NSError(domain: NSOSStatusErrorDomain,
+            code: AVAudioSession.ErrorCode.insufficientPriority.rawValue)]
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        let token = UUID()
+        _ = try await owner.start(token: token, sessionID: 900_011, mixWithOtherAudio: true)
+        XCTAssertEqual(device.mixPolicies, [true, true])
+        let sample = await owner.sample(token: token)
+        XCTAssertEqual(sample?.isRecording, true)
+        let files = await owner.stop(token: token)
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        XCTAssertEqual(files.count, 1)
+    }
+
+    func testPersistentActivationFailureIsBoundedAndRelinquishesSession() async throws {
+        let device = FakeCaptureDevice()
+        device.configureError = NSError(domain: NSOSStatusErrorDomain,
+            code: AVAudioSession.ErrorCode.insufficientPriority.rawValue)
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        do {
+            _ = try await owner.start(token: UUID(), sessionID: 900_012, mixWithOtherAudio: true)
+            XCTFail("Expected activation failure")
+        } catch {
+            XCTAssertEqual((error as NSError).code, AVAudioSession.ErrorCode.insufficientPriority.rawValue)
+        }
+        XCTAssertEqual(device.configureCalls, 4, "Activation retries must use the existing bounded budget")
+        XCTAssertEqual(device.startCalls, 0)
+        XCTAssertGreaterThan(device.deactivateCalls, 0)
+    }
+
+    func testActivationFailureReleasesSessionAndAllowsRetry() async throws {
+        let device = FakeCaptureDevice()
+        let failure = NSError(domain: NSOSStatusErrorDomain, code: 560557684)
+        device.configureError = failure
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        await owner.setPreparationEnabled(true, revision: 1)
+        do {
+            _ = try await owner.start(token: UUID(), sessionID: 900_009)
+            XCTFail("Expected activation failure")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, failure.domain)
+            XCTAssertEqual((error as NSError).code, failure.code)
+        }
+        XCTAssertEqual(device.deactivateCalls, 1)
+        XCTAssertEqual(device.startCalls, 0)
+        device.configureError = nil
+        let retry = UUID()
+        _ = try await owner.start(token: retry, sessionID: 900_010)
+        let sample = await owner.sample(token: retry)
+        XCTAssertEqual(sample?.isRecording, true)
+        let files = await owner.stop(token: retry)
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        XCTAssertEqual(files.count, 1)
+    }
+
+    func testFailedInterruptionResumeReleasesAudioAndPreservesSealedSegment() async throws {
+        let device = FakeCaptureDevice()
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        let token = UUID()
+        _ = try await owner.start(token: token, sessionID: 900_008)
+        await owner.interruptionBegan(token: token)
+        device.startError = NSError(domain: "capture-test", code: 43)
+        do {
+            _ = try await owner.interruptionEnded(token: token, shouldResume: true)
+            XCTFail("Expected resume failure")
+        } catch { XCTAssertEqual((error as NSError).code, 43) }
+        XCTAssertEqual(device.deactivateCalls, 1, "A failed resume must release audio immediately")
+        let files = await owner.stop(token: token)
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        XCTAssertEqual(files.count, 1)
+        XCTAssertEqual(try String(contentsOf: XCTUnwrap(files.first), encoding: .utf8), "sealed")
     }
 
     @MainActor
@@ -433,5 +482,7 @@ final class AudioCaptureOwnerTests: XCTestCase {
         XCTAssertEqual(recorder.phase, .idle)
         XCTAssertEqual(recorder.pendingSessionCount, 0)
     }
+
+
 
 }

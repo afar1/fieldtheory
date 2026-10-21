@@ -41,9 +41,23 @@ enum PreviewFixtures {
             }
         }
         await transcripts.reload()
-        if ProcessInfo.processInfo.arguments.contains("ft-delivery-preview"), let item = transcripts.items.first {
+        let arguments = ProcessInfo.processInfo.arguments
+        let deliveryStage = arguments.enumerated().first(where: { $0.element == "ft-delivery-stage" })
+            .flatMap { arguments.indices.contains($0.offset + 1) ? arguments[$0.offset + 1] : nil }
+        if (arguments.contains("ft-delivery-preview") || deliveryStage != nil), let item = transcripts.items.first {
+            if deliveryStage == "send_to_agent" {
+                try? await db.run("UPDATE transcripts SET privacy_state = 'local_only' WHERE id = ?", [.text(item.id)])
+                await transcripts.reload()
+            } else if deliveryStage == "sent_to_agent" {
+                try? await db.run("UPDATE transcripts SET agent_sent_revision = ? WHERE id = ?", [.text(Hashing.sha256Hex(item.text)), .text(item.id)])
+                await transcripts.reload()
+            }
             let base = Date().addingTimeInterval(-60)
-            let stages = ["uploaded", "received_by_mac", "queued", "started", "completed"]
+            let stages = deliveryStage.flatMap {
+                if $0 == "send_to_agent" { return ["uploaded"] }
+                return ["saved_on_phone", "sent_to_agent"].contains($0) ? nil : [$0]
+            }
+                ?? (arguments.contains("ft-delivery-preview") ? ["uploaded", "received_by_mac", "queued", "started", "completed"] : [])
             let events = stages.enumerated().map { index, stage in
                 VoiceDeliveryEvent(event_id: stage, transcript_id: item.id, revision: Hashing.sha256Hex(item.text), stage: stage,
                     occurred_at: ISO8601DateFormatter().string(from: base.addingTimeInterval(Double(index * 10))), worker_id: "preview", time_source: stage == "started" ? "codex" : stage == "queued" ? "observed" : "server")

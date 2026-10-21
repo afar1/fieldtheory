@@ -58,8 +58,8 @@ enum VoiceDelivery {
         ["Saved on phone", "Uploaded", "Received by Mac", "Queued in Codex", "Working"].contains(status)
     }
 
-    static func status(item: TranscriptItem, events: [VoiceDeliveryEvent], receipt: VoiceAgentReceipt?) -> String {
-        let matching = events.filter { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
+    static func status(item: TranscriptItem, events: [VoiceDeliveryEvent], receipt: VoiceAgentReceipt?, eventsAlreadyOrdered: Bool = false) -> String {
+        let matching = eventsAlreadyOrdered ? events : events.filter { $0.transcript_id == item.id && $0.revision == Hashing.sha256Hex(item.text) }
             .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
         let terminal = ["completed", "context", "needs_user", "failed", "cancelled", "superseded"]
         // A completed run can truthfully report blockers or partial work.

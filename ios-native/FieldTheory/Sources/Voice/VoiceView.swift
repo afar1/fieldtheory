@@ -13,6 +13,11 @@ private struct TranscriptSyncRequest {
     let sendToAgent: Bool
 }
 
+private struct VoiceToastStatus: Equatable {
+    let message: String
+    let symbol: String
+}
+
 struct VoiceView: View {
     @Binding var showSettings: Bool
     @Environment(AppModel.self) private var model
@@ -20,17 +25,18 @@ struct VoiceView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expandedControlContentHeight: CGFloat = 44
-    @State private var recordingControlAvailableWidth: CGFloat = 340
-    @State private var showTranscribedConfirmation = false
+
     @State private var completedTranscriptID: String?
     @State private var sessionBeforeTranscription: String?
-    @State private var preparationStartedAt = Date()
+    @State private var presentingSessionID: String?
+    @State private var presentationStartedAt: ContinuousClock.Instant?
+    @State private var presentationTask: Task<Void, Never>?
     @State private var searchText = ""
+    @State private var isSearchPresented = false
     @State private var recordingToDiscard: String?
     @State private var audioToDiscard: PendingAudioSession?
+    @State private var pendingAudioDetails: String?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
     @State private var editingItem: TranscriptItem?
@@ -61,13 +67,30 @@ struct VoiceView: View {
         horizontalSizeClass == .regular
     }
 
+    private var pendingCardID: String? {
+        guard searchText.isEmpty, !selectionMode,
+              let id = presentingSessionID ?? model.recorder.transcribingSessionID ?? model.recorder.nextPendingSession?.id,
+              id != model.recorder.lastSavedSessionID || presentingSessionID == id else { return nil }
+        return id
+    }
+
+    private var visibleItems: [TranscriptItem] {
+        guard presentingSessionID == model.recorder.lastSavedSessionID,
+              let savedID = model.recorder.lastSavedTranscriptID else { return items }
+        return items.filter { $0.id != savedID }
+    }
+
+    private var cardMotion: Animation? {
+        reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.88)
+    }
+
     private var deviceName: String {
         UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "phone"
     }
 
     private var dayGroups: [TranscriptDayGroup] {
         let calendar = Calendar.current
-        return items.reduce(into: []) { groups, item in
+        return visibleItems.reduce(into: []) { groups, item in
             let day = calendar.startOfDay(for: item.createdAtMs.msToDate)
             if groups.last?.day == day {
                 groups[groups.count - 1].items.append(item)
@@ -80,19 +103,44 @@ struct VoiceView: View {
     var body: some View {
         let measurement = RecordingStartupDiagnostics.startMeasurement(.voiceBody)
         defer { measurement?.finish() }
-        return mainContent
+        let observedContent = mainContent
             .onAppear {
                 RecordingStartupDiagnostics.configureIfEnabled()
                 updateCapturePreparationVisibility()
             }
-            .onDisappear { model.recorder.setCapturePreparationVisible(false) }
+            .onDisappear {
+                presentationTask?.cancel()
+                presentingSessionID = nil
+                presentationStartedAt = nil
+                model.recorder.setCapturePreparationVisible(false)
+                toast.setStatus(nil)
+            }
             .onChange(of: scenePhase) { _, _ in updateCapturePreparationVisibility() }
             .onChange(of: showSettings) { _, _ in updateCapturePreparationVisibility() }
-            .task(id: model.recorder.engineState) {
-                if model.recorder.engineState == .checking { preparationStartedAt = Date() }
+            .onChange(of: voiceToastStatus, initial: true) { _, status in
+                toast.setStatus(status?.message, symbol: status?.symbol)
             }
             .onChange(of: model.recorder.isStartingRecording) { _, starting in
                 RecordingStartupDiagnostics.mark(starting ? "ui.pending-observed" : "ui.pending-ended")
+            }
+            .onChange(of: model.recorder.isStoppingRecording) { _, stopping in
+                if stopping, let id = model.recorder.activeRecordingID {
+                    presentationTask?.cancel()
+                    presentingSessionID = id
+                    presentationStartedAt = .now
+                }
+            }
+            .onChange(of: model.recorder.lastSavedSessionID) { _, savedID in
+                guard let savedID, savedID == presentingSessionID else { return }
+                presentationTask?.cancel()
+                let elapsed = presentationStartedAt.map { $0.duration(to: .now) } ?? .zero
+                let remaining = max(.zero, .milliseconds(350) - elapsed)
+                presentationTask = Task { @MainActor in
+                    try? await Task.sleep(for: remaining)
+                    guard !Task.isCancelled, presentingSessionID == savedID else { return }
+                    presentingSessionID = nil
+                    presentationStartedAt = nil
+                }
             }
             .onChange(of: model.recorder.phase) { old, new in
                 RecordingStartupDiagnostics.mark(new == .recording ? "ui.recording-observed" : "ui.nonrecording-observed")
@@ -105,16 +153,15 @@ struct VoiceView: View {
                    model.recorder.nextPendingSession == nil,
                    model.recorder.lastTranscribedSessionID != nil,
                    model.recorder.lastTranscribedSessionID != sessionBeforeTranscription {
-                    completedTranscriptID = model.recorder.lastSavedTranscriptID
+                    let savedID = model.recorder.lastSavedTranscriptID
+                    if savedID != completedTranscriptID {
+                        completedTranscriptID = savedID
+                        toast.show("Transcribed", symbol: "checkmark")
+                    }
                 }
             }
-            .task(id: completedTranscriptID) {
-                showTranscribedConfirmation = completedTranscriptID != nil
-                guard showTranscribedConfirmation else { return }
-                do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
-                showTranscribedConfirmation = false
-            }
             .onChange(of: model.workspaceGeneration) { _, _ in completedTranscriptID = nil }
+        return observedContent
             .confirmationDialog("Send feedback to support?", isPresented: Binding(
                 get: { feedbackRequest != nil },
                 set: { if !$0 { feedbackRequest = nil } }
@@ -131,6 +178,11 @@ struct VoiceView: View {
             .alert("Feedback could not be queued", isPresented: Binding(
                 get: { feedbackError != nil }, set: { if !$0 { feedbackError = nil } }
             )) { Button("OK") { feedbackError = nil } } message: { Text(feedbackError ?? "") }
+            .alert("Saved recording", isPresented: Binding(
+                get: { pendingAudioDetails != nil }, set: { if !$0 { pendingAudioDetails = nil } }
+            )) { Button("OK") { pendingAudioDetails = nil } } message: {
+                Text(pendingAudioDetails ?? "")
+            }
     }
 
     private func updateCapturePreparationVisibility() {
@@ -150,7 +202,7 @@ struct VoiceView: View {
             }
             .background(Theme.background(colorScheme))
             .navigationTitle("Field Theory")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic))
+            .searchable(text: $searchText, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .automatic))
             .refreshable { await model.sync.syncNow() }
             .toolbar {
                 if isRegularWidth {
@@ -231,7 +283,7 @@ struct VoiceView: View {
     private var compactContent: some View {
         ZStack(alignment: .bottom) {
             Group {
-                if model.transcripts.items.isEmpty {
+                if model.transcripts.items.isEmpty && pendingCardID == nil {
                     VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 16); emptyState }
                 } else {
                     compactList
@@ -248,9 +300,9 @@ struct VoiceView: View {
     private var regularContent: some View {
         ZStack(alignment: .bottom) {
             Group {
-                if model.transcripts.items.isEmpty {
+                if model.transcripts.items.isEmpty && pendingCardID == nil {
                     VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 24); regularEmptyState }
-                } else if items.isEmpty {
+                } else if items.isEmpty && pendingCardID == nil {
                     VStack { dateHeading("", showAutoSend: true).padding(.horizontal, 24); noSearchResults }
                 } else {
                     regularGrid
@@ -268,6 +320,7 @@ struct VoiceView: View {
     private var autoSendControl: some View {
         Button {
             model.settings.autoSendTranscriptions.toggle()
+            model.recorder.setCurrentTranscriptionAutoSend(model.settings.autoSendTranscriptions)
             model.recorder.capturePolicyDidChange()
         } label: {
             HStack(spacing: 6) {
@@ -287,13 +340,15 @@ struct VoiceView: View {
         .accessibilityIdentifier("AutoSendTranscriptions")
         .accessibilityLabel("Auto send transcriptions")
         .accessibilityValue(model.settings.autoSendTranscriptions ? "On" : "Off")
-        .accessibilityHint("Applies to new recordings. Cloud saving stays on.")
+        .accessibilityHint("Applies to the current recording or transcription and new recordings. Cloud saving stays on.")
     }
 
     private func dateHeading(_ title: String, showAutoSend: Bool) -> some View {
         HStack {
-            Text(title).font(.system(size: 12, weight: .semibold))
-                .tracking(0.6).textCase(.uppercase).foregroundStyle(.secondary)
+            Text(title).font(.system(size: 11, weight: .semibold))
+                .tracking(0.9)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.textMuted(colorScheme).opacity(0.78))
             Spacer()
             if showAutoSend { autoSendControl }
         }
@@ -302,21 +357,28 @@ struct VoiceView: View {
     private var compactList: some View {
         // Lazy rows can finish rendering after a stack shrinks the store.
         // Their indices and date headers must use the same immutable snapshot.
-        let snapshot = items
+        let snapshot = visibleItems
         return ScrollView {
-            LazyVStack(spacing: 12, pinnedViews: []) {
-                if snapshot.isEmpty { dateHeading("", showAutoSend: true) }
+            LazyVStack(spacing: 14, pinnedViews: []) {
+                if let pendingCardID {
+                    dateHeading("Today", showAutoSend: true)
+                    transcribingCard(id: pendingCardID)
+                } else if snapshot.isEmpty {
+                    dateHeading("", showAutoSend: true)
+                }
                 ForEach(RecordingStartupDiagnostics.measure(.listEnumeration) { Array(snapshot.enumerated()) }, id: \.element.id) { index, item in
-                    if showsDateHeader(at: index, in: snapshot) {
-                        dateHeading(Self.dateHeader(for: item.createdAtMs), showAutoSend: index == 0)
+                    if showsDateHeader(at: index, in: snapshot),
+                       !(index == 0 && pendingCardID != nil && Calendar.current.isDateInToday(item.createdAtMs.msToDate)) {
+                        dateHeading(Self.dateHeader(for: item.createdAtMs), showAutoSend: index == 0 && pendingCardID == nil)
                             .padding(.top, index == 0 ? 0 : 10)
                     }
                     transcriptCard(item, wideLayout: false)
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 10)
             .padding(.bottom, 150)
+            .animation(cardMotion, value: pendingCardID)
         }
         .scrollIndicators(.hidden)
     }
@@ -324,9 +386,18 @@ struct VoiceView: View {
     private var regularGrid: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
+                if let pendingCardID {
+                    VStack(alignment: .leading, spacing: 10) {
+                        dateHeading("Today", showAutoSend: true)
+                        transcribingCard(id: pendingCardID)
+                            .frame(maxWidth: 460)
+                    }
+                }
                 ForEach(dayGroups) { group in
                     VStack(alignment: .leading, spacing: 10) {
-                        dateHeading(Self.dateHeader(for: group.items[0].createdAtMs), showAutoSend: group.id == dayGroups.first?.id)
+                        if !(pendingCardID != nil && Calendar.current.isDateInToday(group.day)) {
+                            dateHeading(Self.dateHeader(for: group.items[0].createdAtMs), showAutoSend: group.id == dayGroups.first?.id && pendingCardID == nil)
+                        }
 
                         LazyVGrid(columns: regularGridColumns, alignment: .leading, spacing: 16) {
                             ForEach(group.items) { item in
@@ -341,8 +412,41 @@ struct VoiceView: View {
             .padding(.top, 12)
             .padding(.bottom, 118)
             .frame(maxWidth: .infinity)
+            .animation(cardMotion, value: pendingCardID)
         }
         .scrollIndicators(.visible)
+    }
+
+    private func transcribingCard(id: String) -> some View {
+        let label: String
+        if model.recorder.phase == .transcribing {
+            label = "Transcribing…"
+        } else if case .failed = model.recorder.engineState {
+            label = "Waiting to transcribe"
+        } else if case .notDownloaded = model.recorder.engineState {
+            label = "Waiting to transcribe"
+        } else {
+            label = "Preparing transcription…"
+        }
+        return TranscribingVoiceCard(accent: Theme.accent(model.settings.accentPreset, colorScheme),
+                             textColor: Theme.text(colorScheme), reduceMotion: reduceMotion,
+                             label: label)
+        .accessibilityIdentifier("VoiceTranscribingCard-\(id)")
+        .onTapGesture {
+            if let pending = model.recorder.nextPendingSession, pending.id == id {
+                showPendingAudioDetails(for: pending)
+            }
+        }
+        .accessibilityHint("Shows recording details")
+        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+    }
+
+    private func showPendingAudioDetails(for pending: PendingAudioSession) {
+        let recorder = model.recorder
+        pendingAudioDetails = [
+            recorder.pendingError(for: pending) ?? recorder.lastError ?? "Transcription has not finished yet.",
+            "The audio is saved on this phone. You can make another recording or tap Retry."
+        ].joined(separator: "\n\n")
     }
 
     private var regularGridColumns: [GridItem] {
@@ -423,10 +527,14 @@ struct VoiceView: View {
         let date = ms.msToDate
         if Calendar.current.isDateInToday(date) { return "Today" }
         if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        return dayFormatter.string(from: date)
+    }
+
+    private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE, MMM d"
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
 
     private var emptyState: some View {
         VStack(spacing: 10) {
@@ -471,98 +579,101 @@ struct VoiceView: View {
     // MARK: Record bar
 
     private var recordBar: some View {
-        recordingControls.padding(.bottom, 12)
+        VStack(spacing: 10) {
+            queuedAudioControls
+            recordingControls
+        }
+        .padding(.bottom, 12)
     }
 
     private var regularRecordBar: some View {
-        recordingControls
+        VStack(spacing: 10) {
+            queuedAudioControls
+            recordingControls
+        }
             .padding(8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .padding(.bottom, 16)
     }
 
+    @ViewBuilder
+    private var queuedAudioControls: some View {
+        let recorder = model.recorder
+        if recorder.phase == .idle, let pending = recorder.nextPendingSession {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(Theme.textMuted(colorScheme))
+                Text(recorder.pendingSessionCount == 1
+                     ? "1 recording saved for transcription"
+                     : "\(recorder.pendingSessionCount) recordings saved for transcription")
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button("Retry") { Task { await recorder.transcribeUserInitiated() } }
+                    .font(.system(size: 12, weight: .semibold))
+                    .accessibilityIdentifier("VoiceRetryTranscription")
+                Button("Details") {
+                    showPendingAudioDetails(for: pending)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .accessibilityIdentifier("VoicePendingAudioDetails")
+                Button {
+                    if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
+                    else { recorder.discardPendingSession(pending) }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel("Discard saved audio")
+                .accessibilityIdentifier("VoiceDiscardAudio")
+            }
+            .foregroundStyle(Theme.text(colorScheme))
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .frame(maxWidth: 480, minHeight: 44)
+            .background(voiceControlSurface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(voiceControlOutline, lineWidth: 0.75))
+            .padding(.horizontal, 16)
+        }
+    }
+
     private var recordingControls: some View {
         let recorder = model.recorder
-        let pending = recorder.phase == .idle ? recorder.nextPendingSession : nil
         return ZStack(alignment: .leading) {
             Button {
                 guard !recordingActionUnavailable else { return }
-                if modelNeedsAttention { showSettings = true }
-                else if pending != nil { Task { await recorder.transcribeUserInitiated() } }
-                else {
-                    RecordingStartupDiagnostics.setTranscriptCount(model.transcripts.items.count)
-                    recorder.toggle()
-                }
+                RecordingStartupDiagnostics.setTranscriptCount(model.transcripts.items.count)
+                recorder.toggle()
             } label: {
                 recordingControlLabel
-                    .background {
-                        // Keep one shape hierarchy throughout the morph. Only the
-                        // acknowledgement layer switches immediately on a tap.
-                        RoundedRectangle(cornerRadius: 32).fill(controlBackground)
-                        RoundedRectangle(cornerRadius: 32).fill(Theme.unread)
-                            .opacity(recorder.isStartingRecording || recorder.phase == .recording ? 1 : 0)
-                            .animation(nil, value: recorder.isStartingRecording || recorder.phase == .recording)
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 32)
-                            .strokeBorder(voiceControlOutline, lineWidth: 1)
-                            .opacity(controlExpanded ? 1 : 0)
-                    }
                     .clipShape(RoundedRectangle(cornerRadius: 32))
                     .contentShape(RoundedRectangle(cornerRadius: 32))
                     .modifier(RecordingStartupGeometryObservation())
                     .accessibilityElement(children: .ignore)
             }
-            .buttonStyle(VoiceStatusButtonStyle())
+            .buttonStyle(VoiceStatusButtonStyle(
+                restingColor: controlBackground,
+                acknowledgeRecordTap: recorder.phase == .idle,
+                recording: recorder.phase == .recording,
+                startFailed: recorder.lastError != nil
+            ))
             .disabled(recordingActionUnavailable)
-            .opacity(recordingActionUnavailable ? 0.5 : 1)
+            .opacity(recordingActionUnavailable && !recorder.isStartingRecording ? 0.5 : 1)
             .accessibilityLabel(recordingControlAccessibilityLabel)
-            .accessibilityHint(recordingActionUnavailable ? "Recording is unavailable until the voice model is ready." : "")
+            .accessibilityHint("")
             .accessibilityIdentifier("VoiceRecordingControl")
             .keyboardShortcut("r", modifiers: [.command, .shift])
             // Accessory buttons never participate in the pill's centered layout.
-            if recorder.phase == .recording {
+            if recorder.phase == .recording && !recorder.isStoppingRecording {
                 cancelRecordingButton
                     .offset(x: -54)
-                    .transition(.opacity)
-            }
-            if let pending {
-                Button {
-                    if model.settings.confirmBeforeDiscarding { audioToDiscard = pending }
-                    else { recorder.discardPendingSession(pending) }
-                } label: {
-                    Image(systemName: "xmark").font(.body.weight(.semibold))
-                        .foregroundStyle(Theme.text(colorScheme))
-                        .frame(width: 44, height: 44)
-                        .background(voiceControlSurface, in: Circle())
-                        .overlay(Circle().strokeBorder(voiceControlOutline, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Discard audio")
-                .accessibilityIdentifier("VoiceDiscardAudio")
-                .offset(x: -54)
-                .transition(.opacity)
+                    .modifier(RecordingDismissFadeIn())
             }
         }
         .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
         .frame(maxWidth: 480)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-            recordingControlAvailableWidth = width
-        }
         .padding(.horizontal, 16)
-        .animation(controlMorphAnimation, value: controlExpanded)
-        .animation(controlMorphAnimation, value: recorder.phase)
-        .animation(controlMorphAnimation, value: showTranscribedConfirmation)
-        .animation(controlMorphAnimation, value: recorder.isStartingRecording)
-        .animation(controlMorphAnimation, value: pending?.id)
-        .animation(controlMorphAnimation, value: controlText.title)
-        .animation(controlMorphAnimation, value: controlText.detail)
-        .animation(controlMorphAnimation, value: expandedControlContentHeight)
-    }
-
-    private var controlMorphAnimation: Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.22)
     }
 
     private var cancelRecordingButton: some View {
@@ -586,23 +697,8 @@ struct VoiceView: View {
 
     private var recordingActionUnavailable: Bool {
         let recorder = model.recorder
-        return recorder.phase == .transcribing
-            || (recorder.phase == .idle && recorder.nextPendingSession == nil
-                && !recorder.canStartRecording && !modelNeedsAttention)
-    }
-
-    private var modelNeedsAttention: Bool {
-        switch model.recorder.engineState {
-        case .notDownloaded, .failed: return true
-        default: return false
-        }
-    }
-
-    private var controlExpanded: Bool {
-        // Keep startup and capture in the same compact pill as Record.
-        if model.recorder.isStartingRecording || model.recorder.phase == .recording { return false }
-        return model.recorder.phase != .idle || modelNeedsAttention || showTranscribedConfirmation ||
-        model.recorder.nextPendingSession != nil || model.recorder.lastError != nil
+        return recorder.phase == .transcribing || recorder.isStoppingRecording
+            || (recorder.phase == .idle && !recorder.canStartRecording)
     }
 
     private var voiceControlSurface: Color {
@@ -610,152 +706,97 @@ struct VoiceView: View {
     }
 
     private var voiceControlOutline: Color {
-        return colorScheme == .dark ? Color(red: 0.39, green: 0.47, blue: 0.46)
+        colorScheme == .dark ? Color(red: 0.39, green: 0.47, blue: 0.46)
             : Color(red: 0.71, green: 0.76, blue: 0.75)
     }
 
-    private var voiceControlIconSurface: Color {
-        colorScheme == .dark ? Color(red: 0.22, green: 0.29, blue: 0.26)
-            : Color(red: 0.91, green: 0.94, blue: 0.93)
-    }
-
-    private var voiceControlIconColor: Color { Theme.text(colorScheme) }
-
-    private var controlBackground: Color {
-        if model.recorder.phase == .recording { return Theme.unread }
-        return controlExpanded ? voiceControlSurface : Theme.accent(model.settings.accentPreset, colorScheme)
-    }
-
-    private var controlText: (title: String, detail: String, icon: String, busy: Bool) {
+    private var voiceToastStatus: VoiceToastStatus? {
         let recorder = model.recorder
-        if recorder.isStartingRecording { return ("Starting recording…", "Connecting to microphone…", "", true) }
-        if recorder.phase == .recording { return ("Recording", "Tap to stop and transcribe", "stop.fill", false) }
-        if recorder.phase == .transcribing {
-            let detail = recorder.engineState != .ready ? recorder.preparationMessage :
-                (recorder.currentDeliverySessionID != nil ? "Saving transcript…" : "Converting audio to text…")
-            return ("Transcribing", detail, "", true)
+        if recorder.phase == .recording {
+            return recorder.isStoppingRecording
+                ? VoiceToastStatus(message: "Stopping recording…", symbol: "waveform") : nil
         }
-        if recorder.phase == .idle && recorder.nextPendingSession == nil && !modelNeedsAttention {
-            switch recorder.engineState {
-            case .checking, .preparing, .downloading: return ("Record", "", "mic.fill", false)
-            default: break
-            }
+        if recorder.isStartingRecording { return nil }
+        if recorder.phase == .transcribing { return nil }
+        if recorder.nextPendingSession != nil {
+            return nil
+        }
+        if let error = recorder.lastError {
+            return VoiceToastStatus(message: error, symbol: "exclamationmark.triangle")
         }
         switch recorder.engineState {
-        case .checking: return ("Preparing voice model", "Verifying model files…", "", true)
-        case .preparing: return ("Preparing voice model", recorder.preparationMessage, "", true)
-        case .downloading(let fraction): return ("Downloading voice model", "\(Int(fraction * 100))% · Continues in background", "", true)
-        case .notDownloaded: return ("Voice model needed", "Tap to download in Settings", "arrow.down.circle", false)
-        case .failed(let error): return ("Voice model needs attention", error + " · Tap for Settings", "exclamationmark.triangle", false)
-        case .ready: break
+        case .checking: return VoiceToastStatus(message: "Preparing voice model…", symbol: "waveform")
+        case .preparing: return VoiceToastStatus(message: recorder.preparationMessage, symbol: "waveform")
+        case .downloading(let fraction):
+            return VoiceToastStatus(message: "Downloading voice model · \(Int(fraction * 100))%", symbol: "arrow.down.circle")
+        case .notDownloaded: return VoiceToastStatus(message: "Voice model needed — open Settings", symbol: "arrow.down.circle")
+        case .failed(let error): return VoiceToastStatus(message: error, symbol: "exclamationmark.triangle")
+        case .ready: return nil
         }
-        if recorder.nextPendingSession != nil {
-            return ("Audio saved", recorder.lastError ?? "Tap to retry transcription", "arrow.clockwise", false)
+    }
+
+    private var controlBackground: Color {
+        if recordingControlsDesignPreview { return previewControlBackground }
+        return model.recorder.isStartingRecording || model.recorder.phase == .recording
+            ? Theme.unread : Theme.accent(model.settings.accentPreset, colorScheme)
+    }
+
+    /// Simulator-only rendering study; it does not change recorder state.
+    private var recordingControlsDesignPreview: Bool {
+        #if targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains("ft-recording-controls-design-preview")
+        #else
+        false
+        #endif
+    }
+
+    private var previewControlBackground: Color {
+        let recorder = model.recorder
+        if recorder.isStartingRecording || recorder.phase == .recording || recorder.isStoppingRecording {
+            return Color(hex: 0x933D34)
         }
-        if let error = recorder.lastError { return ("Recording needs attention", error, "exclamationmark.triangle", false) }
-        if showTranscribedConfirmation { return ("Transcribed", "Saved to transcripts", "checkmark", false) }
-        return ("Record", "", "mic.fill", false)
+        if recorder.phase == .transcribing { return Color(hex: 0x42647A) }
+        if recorder.lastError != nil { return Color(hex: 0xA14A40) }
+        return Color(hex: 0x3E5D3B)
+    }
+
+    private var recordingActionTitle: String {
+        return "Record"
+    }
+
+    private var recordingActionIcon: String {
+        return "mic.fill"
     }
 
     private var recordingControlAccessibilityLabel: String {
-        if model.recorder.phase == .recording { return "Stop recording" }
-        if model.recorder.isStartingRecording { return "Starting recording" }
-        let text = controlText
-        return controlExpanded && !text.detail.isEmpty ? "\(text.title), \(text.detail)" : text.title
-    }
-
-    private var expandedControlWidth: CGFloat {
-        let hasAccessory = model.recorder.phase == .idle && model.recorder.nextPendingSession != nil
-        return max(168, min(340, recordingControlAvailableWidth - (hasAccessory ? 108 : 0)))
+        model.recorder.phase == .recording ? "Stop recording" : recordingActionTitle
     }
 
     private var recordingControlLabel: some View {
-        let recorder = model.recorder
-        let capturing = recorder.isStartingRecording || recorder.phase == .recording
-        return ZStack {
-            compactRecordingControlLabel
-                .foregroundStyle(.white)
-                .modifier(VoiceControlContentFade(visibility: controlExpanded ? 0 : 1))
-                .accessibilityHidden(controlExpanded)
-            expandedRecordingControlLabel
-                .frame(width: expandedControlWidth - 32)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                    expandedControlContentHeight = max(44, height)
-                }
-                .foregroundStyle(Theme.text(colorScheme))
-                .modifier(VoiceControlContentFade(visibility: controlExpanded ? 1 : 0))
-                .accessibilityHidden(!controlExpanded)
-        }
-        // Native frame interpolation keeps the center anchored while width and
-        // height change. Labels retain their identity inside this one frame.
-        .frame(width: controlExpanded ? expandedControlWidth : (capturing ? 168 : 124),
-               height: controlExpanded ? expandedControlContentHeight + 24 : 52)
+        compactRecordingControlLabel
+            .foregroundStyle(.white)
+            .frame(width: 168, height: 52)
     }
 
     private var compactRecordingControlLabel: some View {
-        let recorder = model.recorder
-        let recording = recorder.phase == .recording
+        let recording = model.recorder.phase == .recording
         return ZStack {
-            // Keep both labels alive so the pill can resize continuously instead
-            // of replacing its layout at the start/end of the animation.
-            HStack(spacing: 9) {
-                ZStack {
-                    Image(systemName: "mic.fill")
-                        .opacity(recorder.isStartingRecording ? 0 : 1)
-                    ProgressView().tint(.white)
-                        .opacity(recorder.isStartingRecording ? 1 : 0)
+            if recording {
+                VoiceRecordingTelemetryLabel(recorder: model.recorder)
+                    .fixedSize()
+            } else {
+                HStack(spacing: 9) {
+                    Image(systemName: recordingActionIcon)
+                        .frame(width: 17, height: 20)
+                    Text(recordingActionTitle)
                 }
-                .frame(width: 17, height: 20)
-                Text("Record")
+                .font(.system(size: 16, weight: .semibold))
+                .fixedSize()
             }
-            .font(.system(size: 16, weight: .semibold))
-            .fixedSize()
-            .modifier(VoiceControlContentFade(visibility: recording ? 0 : 1))
-
-            VoiceRecordingTelemetryLabel(recorder: recorder)
-            .fixedSize()
-            .modifier(VoiceControlContentFade(visibility: recording ? 1 : 0))
         }
-        // Begin widening during startup; capture readiness reveals the live controls.
-        .frame(width: recording || recorder.isStartingRecording ? 124 : 80, height: 52)
+        .frame(width: 124, height: 52)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(recording ? "Stop recording" : (recorder.isStartingRecording ? "Starting recording" : "Record"))
-    }
-
-    private var expandedRecordingControlLabel: some View {
-        let text = controlText
-        return HStack(spacing: 10) {
-            ZStack {
-                ProgressView().tint(voiceControlIconColor)
-                    .opacity(text.busy ? 1 : 0)
-                Image(systemName: text.icon.isEmpty ? "mic.fill" : text.icon)
-                    .font(.system(size: 17, weight: .medium))
-                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-                    .opacity(text.busy ? 0 : 1)
-            }
-            .foregroundStyle(voiceControlIconColor)
-            .frame(width: 32, height: 32)
-            .background(voiceControlIconSurface, in: RoundedRectangle(cornerRadius: 11))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(text.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .contentTransition(.opacity)
-                Text(text.detail)
-                    .font(.system(size: 12))
-                    .contentTransition(.opacity)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            if model.recorder.engineState == .preparing || model.recorder.engineState == .checking {
-                TimelineView(.periodic(from: preparationStartedAt, by: 1)) { context in
-                    Text("\(max(0, Int(context.date.timeIntervalSince(preparationStartedAt))))s")
-                        .monospacedDigit().font(.system(size: 12))
-                        .contentTransition(.numericText())
-                }.accessibilityHidden(true)
-            }
-        }
-        .accessibilityElement(children: .combine)
+        .accessibilityLabel(recordingControlAccessibilityLabel)
     }
 
     // MARK: Selection bar — Back | Stack | Unstack | Edit | Delete
@@ -773,6 +814,10 @@ struct VoiceView: View {
             }
             selectionAction("Edit", systemImage: "pencil", enabled: selectedIds.count == 1) {
                 editSelected()
+            }
+            selectionAction("Agent", systemImage: "bubble.left.and.bubble.right", enabled: !selectedIds.isEmpty && !model.isReviewerDemoStorage) {
+                model.conversations.draftFromVoice = selectedItems.map(\.text).joined(separator: "\n\n")
+                exitSelection()
             }
             selectionAction("Delete", systemImage: "trash", enabled: !selectedIds.isEmpty, destructive: true) {
                 deleteSelected()
@@ -1022,6 +1067,57 @@ struct VoiceView: View {
     }
 }
 
+private struct TranscribingVoiceCard: View {
+    let accent: Color
+    let textColor: Color
+    let reduceMotion: Bool
+    let label: String
+    @State private var shimmer = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(accent)
+                    .frame(width: 7, height: 7)
+                    .opacity(reduceMotion || !shimmer ? 1 : 0.45)
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(textColor)
+            }
+            shimmerLine
+            shimmerLine.frame(maxWidth: 210)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
+        .background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label == "Transcribing…" ? "Transcribing" : label)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 1.7).repeatForever(autoreverses: false)) {
+                shimmer = true
+            }
+        }
+    }
+
+    private var shimmerLine: some View {
+        GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 5)
+                .fill(accent.opacity(0.12))
+                .overlay {
+                    LinearGradient(colors: [.clear, .white.opacity(0.5), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geometry.size.width * 0.55)
+                        .offset(x: shimmer ? geometry.size.width : -geometry.size.width)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .frame(height: 9)
+    }
+}
+
 /// The voice item card, matching the old app's anatomy: time (or "Copied!"),
 /// word count, action tag, cloud/Remote icons and a bottom-right expansion
 /// chevron, with a 3-line clamp and last-words verification line.
@@ -1066,10 +1162,14 @@ struct StackCard: View {
     private var timeLabel: String {
         let measurement = RecordingStartupDiagnostics.startMeasurement(.rowDateFormatting)
         defer { measurement?.finish() }
+        return Self.timeFormatter.string(from: item.createdAtMs.msToDate)
+    }
+
+    private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
-        return formatter.string(from: item.createdAtMs.msToDate)
-    }
+        return formatter
+    }()
 
     @ViewBuilder
     var body: some View {
@@ -1089,43 +1189,68 @@ struct StackCard: View {
     }
 
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             header
             Text(item.text)
                 .font(.custom("Source Sans 3", size: 16))
                 .foregroundStyle(Theme.text(colorScheme))
-                .lineSpacing(3)
+                .lineSpacing(4)
                 .lineLimit(expanded ? nil : (wideLayout ? 5 : 3))
                 .frame(maxWidth: .infinity, alignment: .leading)
             if needsExpansion || item.isStack {
                 HStack(alignment: .bottom, spacing: 8) {
                     if let lastWords {
-                        Text("[…] \(lastWords)")
+                        Button(action: onToggleExpand) {
+                            Text("\(wordCount) words")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Theme.textMuted(colorScheme).opacity(0.82))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2.5)
+                                .background(Theme.textMuted(colorScheme).opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                        Text(lastWords)
                             .font(.custom("Source Sans 3", size: 14).italic())
-                            .foregroundStyle(Theme.textMuted(colorScheme))
+                            .foregroundStyle(Theme.text(colorScheme))
                     }
                     Spacer(minLength: 0)
                     ZStack(alignment: .trailing) {
-                        if needsExpansion { expansionButton.fixedSize() }
+                        if needsExpansion && !expanded { expansionButton.fixedSize() }
                         if item.isStack { stackCount.padding(.trailing, needsExpansion ? 20 : 0) }
                     }
                 }
             }
         }
-        .padding(wideLayout ? 16 : 15)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: wideLayout ? 164 : nil, alignment: .top)
         .background(
-            RoundedRectangle(cornerRadius: 15)
-                .fill(selected ? accent.opacity(0.08) : Theme.backgroundAlt(colorScheme))
+            RoundedRectangle(cornerRadius: 16)
+                .fill(selected ? accent.opacity(0.08) : Theme.background(colorScheme))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 15)
+                    RoundedRectangle(cornerRadius: 16)
                         .strokeBorder(
-                            copied ? Theme.link : (selected ? accent : Theme.border(colorScheme)),
-                            lineWidth: copied || selected ? 1.5 : 1
+                            selected ? accent : Theme.border(colorScheme).opacity(0.72),
+                            lineWidth: selected ? 1.5 : 0.75
                         )
                 )
         )
+        .overlay(alignment: .bottomTrailing) {
+            if expanded && needsExpansion {
+                Button(action: onToggleExpand) {
+                    Text("Collapse")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.textMuted(colorScheme))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Theme.background(colorScheme).opacity(0.96), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.border(colorScheme).opacity(0.95), lineWidth: 0.8))
+                        .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
+                }
+                .buttonStyle(.plain)
+                .offset(x: -16, y: -16)
+            }
+        }
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(selectionMode ? "Toggles selection" : "Copies transcript")
@@ -1210,8 +1335,61 @@ struct StackCard: View {
     }
 
     private var actionLabel: String {
-        VoiceDelivery.status(item: item, events: model.transcripts.events(for: item), receipt: model.transcripts.receipt(for: item))
+        VoiceDelivery.status(item: item, events: model.transcripts.events(for: item),
+                             receipt: model.transcripts.receipt(for: item), eventsAlreadyOrdered: true)
     }
+
+    /// The card communicates the user's next-relevant outcome. The delivery sheet
+    /// still exposes the precise transport stage when that detail is useful.
+    private var cardStatusLabel: String {
+        if actionLabel == "Saved on phone", model.sync.status == .syncing { return "Syncing" }
+        switch actionLabel {
+        case "Saved on phone": return "Local"
+        case "Uploaded", "Received by Mac", "Queued in Codex", "Sent to agent": return "Synced"
+        case "Working": return "Working"
+        case "Complete", "Saved as context": return "Done"
+        case "Needs you": return "Needs input"
+        case "Failed": return "Error"
+        case "Cancelled", "Replaced by newer version": return "No longer current"
+        default: return actionLabel
+        }
+    }
+
+    private var cardStatusIsActive: Bool {
+        ["Syncing", "Working"].contains(cardStatusLabel)
+    }
+
+    private var statusForeground: Color {
+        switch cardStatusLabel {
+        case "Send to agent", "Done":
+            return Color(hex: 0x3E5D3B)
+        case "Local":
+            return Color(hex: 0x5F5B52)
+        case "Syncing", "Synced":
+            return Color(hex: 0x2E6B3D)
+        case "Working":
+            return Color(hex: 0x42647A)
+        case "Needs input":
+            return Color(hex: 0x9A622A)
+        case "Error":
+            return Color(hex: 0x963F38)
+        default:
+            return Theme.textMuted(colorScheme)
+        }
+    }
+
+    private var statusIcon: String? {
+        switch cardStatusLabel {
+        case "Send to agent": return "arrow.up"
+        case "Done": return "checkmark"
+        case "Needs input": return "exclamationmark.triangle"
+        case "Error": return "exclamationmark.circle"
+        case "No longer current": return "arrow.triangle.2.circlepath"
+        default: return nil
+        }
+    }
+
+    private var statusIsAction: Bool { actionLabel == "Send to agent" }
 
     private var syncStateBadge: some View {
         Button {
@@ -1219,33 +1397,31 @@ struct StackCard: View {
             else { showingDelivery = true }
         } label: {
             HStack(spacing: 3) {
-                Text(actionLabel)
-                if VoiceDelivery.isInProgress(actionLabel) { DeliveryEllipsis() }
+                if let statusIcon {
+                    Image(systemName: statusIcon)
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                Text(cardStatusLabel)
+                if cardStatusIsActive { DeliveryEllipsis() }
             }
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(item.wasSentToAgent ? Theme.link : Theme.markRead)
-            .padding(.horizontal, 6).padding(.vertical, 2.5)
-            .background((item.wasSentToAgent ? Theme.link : Theme.markRead).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(statusForeground.opacity(statusIsAction ? 1 : 0.95))
+            .padding(.horizontal, statusIsAction ? 8 : 6)
+            .padding(.vertical, statusIsAction ? 3.5 : 2.5)
+            .background(statusForeground.opacity(statusIsAction ? 0.035 : 0.11), in: RoundedRectangle(cornerRadius: statusIsAction ? 7 : 6))
+            .overlay {
+                if statusIsAction {
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(statusForeground.opacity(0.85), lineWidth: 0.75)
+                }
+            }
         }
         .buttonStyle(.borderless)
         .sheet(isPresented: $showingDelivery) { VoiceDeliveryView(item: item, onSend: onRequestCloudSync) }
         .fixedSize()
-        .accessibilityLabel(actionLabel)
+        .accessibilityLabel(cardStatusLabel)
         .accessibilityValue(item.actionPolicy)
         .accessibilityHint(actionLabel == "Send to agent" ? "Shows Send to agent option" : "Shows delivery timestamps and Mac observations")
-    }
-
-    private var cloudStatusButton: some View {
-        Button(action: onRequestCloudSave) {
-            Image(systemName: item.isCloudSaved ? "checkmark.icloud" : "icloud.and.arrow.up")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(item.isCloudSaved ? Theme.link : Theme.textMuted(colorScheme), Theme.textMuted(colorScheme))
-                .font(.system(size: 12))
-        }
-        .buttonStyle(.borderless)
-        .disabled(item.isCloudSaved)
-        .accessibilityLabel(item.isCloudSaved ? "Saved to cloud" : "Waiting to save to cloud")
-        .accessibilityHint(item.isCloudSaved ? "Current version saved in Field Theory" : "Retry cloud storage without changing the action choice")
     }
 
     private var expansionButton: some View {
@@ -1294,21 +1470,12 @@ struct StackCard: View {
                 .font(.system(size: 12, weight: copied ? .semibold : .regular))
                 .foregroundStyle(copied ? Theme.link : Theme.textMuted(colorScheme).opacity(0.8))
 
-            Text("\(wordCount) words")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background(Theme.textMuted(colorScheme).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-
-
             syncStateBadge
 
             Spacer()
 
             HStack(spacing: 8) {
                 if deliveryError != nil { deliveryErrorButton }
-                cloudStatusButton
                 if !selectionMode {
                     ChatGPTRemoteButton(onWillOpen: onOpenRemote)
                     .labelStyle(.iconOnly)
@@ -1498,24 +1665,61 @@ struct TranscriptEditSheet: View {
     }
 }
 
-/// Fade the outgoing words away before introducing the incoming layer, so
-/// Record and the timer never form a ghosted, overlapping line mid-transition.
-private struct VoiceControlContentFade: AnimatableModifier {
-    var visibility: Double
-    var animatableData: Double {
-        get { visibility }
-        set { visibility = newValue }
-    }
+/// The discard affordance fades in without animating the recording control.
+private struct RecordingDismissFadeIn: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visible = false
 
     func body(content: Content) -> some View {
-        content.opacity(max(0, min(1, visibility * 2 - 1)))
+        content
+            .opacity(visible || reduceMotion ? 1 : 0)
+            .onAppear {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.55)) {
+                    visible = true
+                }
+            }
+            .onDisappear { visible = false }
     }
 }
 
 /// Status remains readable while taps are handled without invoking recording.
 private struct VoiceStatusButtonStyle: ButtonStyle {
+    let restingColor: Color
+    let acknowledgeRecordTap: Bool
+    let recording: Bool
+    let startFailed: Bool
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        StyleContent(configuration: configuration, restingColor: restingColor,
+             acknowledgeRecordTap: acknowledgeRecordTap, recording: recording,
+             startFailed: startFailed)
+    }
+
+    private struct StyleContent: View {
+        let configuration: Configuration
+        let restingColor: Color
+        let acknowledgeRecordTap: Bool
+        let recording: Bool
+        let startFailed: Bool
+        @State private var acknowledgedPress = false
+
+        var body: some View {
+            configuration.label
+                .background {
+                    RoundedRectangle(cornerRadius: 32)
+                        .fill((configuration.isPressed && acknowledgeRecordTap) || acknowledgedPress
+                              ? Theme.unread : restingColor)
+                }
+                .onChange(of: configuration.isPressed) { _, pressed in
+                    if pressed && acknowledgeRecordTap { acknowledgedPress = true }
+                }
+                .onChange(of: recording) { _, isRecording in
+                    if isRecording { acknowledgedPress = false }
+                }
+                .onChange(of: startFailed) { _, failed in
+                    if failed { acknowledgedPress = false }
+                }
+        }
     }
 }
 
@@ -1524,6 +1728,8 @@ private struct VoiceStatusButtonStyle: ButtonStyle {
 /// invalidate the transcript list and the rest of the Voice screen.
 private struct VoiceRecordingTelemetryLabel: View {
     let recorder: RecorderController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var settled = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1532,6 +1738,15 @@ private struct VoiceRecordingTelemetryLabel: View {
                 .font(.system(size: 16, weight: .semibold, design: .monospaced))
             Image(systemName: "stop.fill")
                 .font(.system(size: 17, weight: .semibold))
+        }
+        // Show the real controls on the first recording frame. Motion only
+        // settles their position; it never gates capture or the Stop action.
+        .offset(y: settled || reduceMotion ? 0 : 3)
+        .scaleEffect(settled || reduceMotion ? 1 : 0.97)
+        .onAppear {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                settled = true
+            }
         }
     }
 }

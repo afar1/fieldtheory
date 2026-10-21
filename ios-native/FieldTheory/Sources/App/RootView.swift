@@ -28,6 +28,7 @@ struct RootView: View {
     @State private var toast = ToastCenter()
     @State private var readingState = ReadingState()
     @State private var showSettings = false
+    @State private var selectedTab = "voice"
 
     var body: some View {
         Group {
@@ -51,7 +52,14 @@ struct RootView: View {
         .environment(toast)
         .environment(readingState)
         .preferredColorScheme(model.settings.appearanceMode.colorScheme)
-        .onAppear { wireRecorder() }
+        .onAppear {
+            wireRecorder()
+            configureConversations()
+        }
+        .onChange(of: model.auth.phase) { _, _ in configureConversations() }
+        .onChange(of: model.conversations.draftFromVoice) { _, text in
+            if text != nil { selectedTab = "agent" }
+        }
         .onChange(of: model.workspaceGeneration) { _, _ in
             // Workspace-local callbacks must not survive an account or
             // Reviewer Demo storage swap.
@@ -59,6 +67,7 @@ struct RootView: View {
             readingState = ReadingState()
             showSettings = false
             wireRecorder()
+            configureConversations()
         }
         .onChange(of: ObjectIdentifier(model.recorder)) { _, _ in
             wireRecorder()
@@ -94,7 +103,20 @@ struct RootView: View {
     }
 
     private var voiceWorkspace: some View {
-        VoiceView(showSettings: $showSettings)
+        Group {
+            if model.isReviewerDemoStorage {
+                VoiceView(showSettings: $showSettings)
+            } else {
+                TabView(selection: $selectedTab) {
+                    Tab("Voice", systemImage: "waveform", value: "voice") {
+                        VoiceView(showSettings: $showSettings)
+                    }
+                    Tab("Agent", systemImage: "bubble.left.and.bubble.right", value: "agent") {
+                        ConversationView()
+                    }
+                }
+            }
+        }
             .overlay { ToastOverlay(toast: toast) }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
@@ -103,6 +125,11 @@ struct RootView: View {
                     .frame(idealWidth: horizontalSizeClass == .regular ? 560 : nil,
                            idealHeight: horizontalSizeClass == .regular ? 720 : nil)
             }
+    }
+
+    private func configureConversations() {
+        model.conversations.configure(owner: model.isReviewerDemoStorage ? nil : model.auth.userId,
+                                      connected: !model.isReviewerDemoStorage && model.auth.sessionAlive)
     }
 
     /// Voice recordings always produce a local transcript in the active

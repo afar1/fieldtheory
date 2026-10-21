@@ -2,6 +2,48 @@ import XCTest
 
 #if targetEnvironment(simulator)
 final class PrivacyHoldUITests: XCTestCase {
+    func testSavedAudioKeepsRecordPrimaryAndOffersRetry() {
+        let app = XCUIApplication()
+        app.launchArguments = ["ft-preview", "ft-recording-controls-preview", "ft-recording-state", "pending"]
+        app.launch()
+        let record = app.buttons["VoiceRecordingControl"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15))
+        XCTAssertEqual(record.label, "Record")
+        XCTAssertTrue(app.buttons["VoiceRetryTranscription"].exists)
+        XCTAssertTrue(app.buttons["VoiceDiscardAudio"].exists)
+    }
+
+    func testSavedAudioExplainsWhyTranscriptionPaused() {
+        let app = XCUIApplication()
+        app.launchArguments = ["ft-preview", "ft-recording-controls-preview", "ft-recording-state", "pendingLong"]
+        app.launch()
+        let details = app.buttons["VoicePendingAudioDetails"].firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 15))
+        details.tap()
+        XCTAssertTrue(app.alerts["Saved recording"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "audio is saved on this phone")).firstMatch.exists)
+        app.alerts.buttons["OK"].tap()
+        let card = app.descendants(matching: .any)["VoiceTranscribingCard-preview-pending"].firstMatch
+        XCTAssertTrue(card.exists)
+        card.tap()
+        XCTAssertTrue(app.alerts["Saved recording"].waitForExistence(timeout: 5))
+    }
+
+    func testTranscriptionProgressUsesPendingCardWhileRecordStaysCompact() {
+        let app = XCUIApplication()
+        app.launchArguments = ["ft-preview", "ft-recording-controls-preview", "ft-recording-state", "transcribing"]
+        app.launch()
+
+        let record = app.buttons["VoiceRecordingControl"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15))
+        XCTAssertEqual(record.label, "Record")
+        XCTAssertFalse(record.isEnabled)
+        let pendingCard = app.descendants(matching: .any)["VoiceTranscribingCard-preview-0"].firstMatch
+        XCTAssertTrue(pendingCard.waitForExistence(timeout: 5))
+        XCTAssertEqual(pendingCard.label, "Transcribing")
+        XCTAssertFalse(app.staticTexts["Converting audio to text…"].exists)
+    }
+
     func testActiveRecordingCanBeKeptThenDiscarded() {
         let app = XCUIApplication()
         app.launchArguments = ["ft-preview", "ft-recording-controls-preview", "--recording-startup-diagnostics-once"]
@@ -13,12 +55,14 @@ final class PrivacyHoldUITests: XCTestCase {
         XCTAssertTrue(idle.waitForExistence(timeout: 5), "Wait for model-ready confirmation to finish")
         let idleFrame = record.frame
         record.tap()
+        XCTAssertFalse(app.staticTexts["Starting recording…"].exists)
         let cancel = app.buttons["VoiceCancelRecording"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         XCTAssertEqual(record.label, "Stop recording")
+        XCTAssertTrue(record.isEnabled, "Stop must be available as soon as recording appears")
         XCTAssertEqual(record.frame.midX, idleFrame.midX, accuracy: 0.5, "The cancel control must not push the pill sideways")
         XCTAssertEqual(record.frame.midY, idleFrame.midY, accuracy: 0.5, "The pill stays on the same baseline")
-        XCTAssertGreaterThan(record.frame.width, idleFrame.width, "Record morphs into a wider stop pill")
+        XCTAssertEqual(record.frame.width, idleFrame.width, accuracy: 0.5, "Record keeps its width when recording starts")
         XCTAssertLessThanOrEqual(record.frame.height, 56, "Recording stays in the compact Record pill")
         cancel.tap()
         let alert = app.alerts["Are you sure you want to discard this audio?"]

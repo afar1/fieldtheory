@@ -37,8 +37,8 @@ private struct SystemVoiceProcessingScheduler: VoiceProcessingScheduler {
     func submit() throws {
         let request = BGContinuedProcessingTaskRequest(
             identifier: VoiceContinuedProcessing.identifier,
-            title: "Transcribing recording",
-            subtitle: "Converting audio to text on this device"
+            title: "Recording saved",
+            subtitle: "Transcribing on this device"
         )
         request.strategy = .fail
         try BGTaskScheduler.shared.submit(request)
@@ -100,9 +100,9 @@ final class VoiceContinuedProcessing {
         let work = Task { @MainActor in
             logger.info("Continued transcription started")
             let succeeded = await operation(task.progress, true)
-            logger.info("Continued transcription finished success=\(succeeded && !Task.isCancelled, privacy: .public) background=\(UIApplication.shared.applicationState == .background, privacy: .public)")
-            if succeeded && !Task.isCancelled { task.progress.completedUnitCount = task.progress.totalUnitCount }
-            task.complete(success: succeeded && !Task.isCancelled)
+            logger.info("Continued recording finished audio_safe=\(succeeded, privacy: .public) background=\(UIApplication.shared.applicationState == .background, privacy: .public)")
+            if succeeded { task.progress.completedUnitCount = task.progress.totalUnitCount }
+            task.complete(success: succeeded)
             finish()
         }
         worker = work

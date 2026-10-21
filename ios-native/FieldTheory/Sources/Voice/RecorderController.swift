@@ -42,6 +42,9 @@ final class RecorderController {
     private(set) var elapsed: TimeInterval = 0
     private(set) var pendingSessionCount = 0
     private(set) var nextPendingSession: PendingAudioSession?
+#if targetEnvironment(simulator)
+    private var previewPendingAudio = false
+#endif
     var lastError: String?
 
     private var lastStartFailure: Error?
@@ -115,8 +118,13 @@ final class RecorderController {
     private(set) var lastTranscribedSessionID: String?
     private(set) var lastSavedTranscriptID: String?
     private(set) var currentDeliverySessionID: String?
+    /// The queued recording currently being transcribed or saved.
+    private(set) var transcribingSessionID: String?
+    private(set) var lastSavedSessionID: String?
 
-    var canStartRecording: Bool { engineState == .ready && !isStartingRecording && !isStoppingCapture && !stopActionInFlight }
+    var canStartRecording: Bool { !isStartingRecording && !isStoppingCapture && !stopActionInFlight }
+    /// Read-only UI signal: capture has ended but the recording is not yet safe to retry.
+    var isStoppingRecording: Bool { isStoppingCapture }
     var preparationMessage: String {
         _ = engineStateRevision
         return speechEngine.preparationMessage
@@ -242,6 +250,7 @@ final class RecorderController {
     func associateCurrentDelivery(transcriptID: String) {
         guard let sessionID = currentDeliverySessionID else { return }
         lastSavedTranscriptID = transcriptID
+        lastSavedSessionID = sessionID
         if let visibleAtMs = earlyVisibilityByTranscriptID.removeValue(forKey: transcriptID) {
             recordVisibility(sessionID: sessionID, visibleAtMs: visibleAtMs)
             return
@@ -319,6 +328,7 @@ final class RecorderController {
             } else if case .failed(let message) = speechEngine.state,
                       !Self.pendingSessions(in: pendingDirectory).isEmpty {
                 lastError = "Voice model preparation failed: \(message)"
+                rememberPendingError(sessionID: nextPendingSession?.id)
             }
         }
     }
@@ -363,6 +373,7 @@ final class RecorderController {
                 guard let self, workEnabled, workGeneration == generation,
                       enginePreparationToken == token else { return }
                 lastError = "Voice model preparation failed: \(error.localizedDescription)"
+                rememberPendingError(sessionID: nextPendingSession?.id)
                 if !Self.pendingSessions(in: pendingDirectory).isEmpty {
                     onNotice?("Saved — retry voice model preparation", "clock.arrow.circlepath")
                 }
@@ -473,6 +484,7 @@ final class RecorderController {
     /// settle any delivery already in progress before AppModel wipes its stores.
     func discardRecordings() async throws {
         defaults.removeObject(forKey: Self.finishActionsKey)
+        defaults.removeObject(forKey: Self.pendingErrorsKey)
         onCaptureCancelled?()
         workEnabled = false
         updateCapturePreparation()
@@ -527,6 +539,24 @@ final class RecorderController {
     }
 
     private static let finishActionsKey = "ft-recording-finish-actions"
+    private static let pendingErrorsKey = "ft-pending-audio-errors"
+
+    func pendingError(for session: PendingAudioSession) -> String? {
+        (defaults.dictionary(forKey: Self.pendingErrorsKey)?[session.id] as? String)
+    }
+
+    private func rememberPendingError(sessionID: String?) {
+        guard let sessionID, let message = lastError else { return }
+        var errors = defaults.dictionary(forKey: Self.pendingErrorsKey) ?? [:]
+        errors[sessionID] = message
+        defaults.set(errors, forKey: Self.pendingErrorsKey)
+    }
+
+    private func clearPendingError(for sessionID: String) {
+        var errors = defaults.dictionary(forKey: Self.pendingErrorsKey) ?? [:]
+        errors.removeValue(forKey: sessionID)
+        defaults.set(errors, forKey: Self.pendingErrorsKey)
+    }
 
     func finishAction(for sessionID: String?) -> RecordingFinishAction? {
         guard let sessionID,
@@ -539,6 +569,20 @@ final class RecorderController {
         guard activeRecordingID == expectedID else { return }
         var actions = defaults.dictionary(forKey: Self.finishActionsKey) ?? [:]
         actions[expectedID] = action.rawValue
+        defaults.set(actions, forKey: Self.finishActionsKey)
+    }
+
+    /// A preference change applies to the recording already in progress, too.
+    func setCurrentTranscriptionAutoSend(_ enabled: Bool) {
+        let sessionID: String?
+        switch phase {
+        case .recording: sessionID = activeRecordingID
+        case .transcribing: sessionID = transcribingSessionID
+        case .idle: sessionID = nil
+        }
+        guard let sessionID, sessionID != lastSavedSessionID else { return }
+        var actions = defaults.dictionary(forKey: Self.finishActionsKey) ?? [:]
+        actions[sessionID] = enabled ? RecordingFinishAction.send.rawValue : RecordingFinishAction.stop.rawValue
         defaults.set(actions, forKey: Self.finishActionsKey)
     }
 
@@ -622,8 +666,10 @@ final class RecorderController {
             startupTrace?.mark("main.start-task-enqueue")
             Task { @MainActor in
                 RecordingStartupDiagnostics.mark("main.start-task-entered")
-                self.isRequestingRecordPermission = false
-                guard self.workEnabled, self.workGeneration == generation else { return }
+                guard self.workEnabled, self.workGeneration == generation else {
+                    self.isRequestingRecordPermission = false
+                    return
+                }
                 await self.beginSession()
             }
             return
@@ -631,9 +677,12 @@ final class RecorderController {
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
-                self.isRequestingRecordPermission = false
-                guard self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else { return }
+                guard self.workEnabled, self.workGeneration == generation, self.phase == .idle, !self.isStartingCapture else {
+                    self.isRequestingRecordPermission = false
+                    return
+                }
                 guard granted else {
+                    self.isRequestingRecordPermission = false
                     self.lastError = "Microphone access is off. Enable it in Settings."
                     RecordingStartupDiagnostics.finish("permission-denied", matching: startupTrace)
                     return
@@ -649,9 +698,6 @@ final class RecorderController {
         guard workEnabled, phase == .idle, !isStartingCapture, !isRequestingRecordPermission, !stopActionInFlight else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and finish the current recording first.")
         }
-        guard engineReady else {
-            throw SpeechTranscriptionEngineError(message: "The voice model is preparing. Wait until it is ready before recording.")
-        }
         guard AVAudioApplication.shared.recordPermission == .granted else {
             throw SpeechTranscriptionEngineError(message: "Open Field Theory and allow microphone access first.")
         }
@@ -663,14 +709,18 @@ final class RecorderController {
     }
 
     func beginSession(mixWithOtherAudio: Bool = false) async {
-        guard workEnabled, phase == .idle, engineReady, !isStartingCapture, !isStoppingCapture, !stopActionInFlight else { return }
+        guard workEnabled, phase == .idle, !isStartingCapture, !isStoppingCapture, !stopActionInFlight else {
+            isRequestingRecordPermission = false
+            return
+        }
         isStartingCapture = true
+        isRequestingRecordPermission = false
         defer { isStartingCapture = false }
         let generation = workGeneration
         let deletionGeneration = captureDeletionGeneration
         let token = UUID()
         captureToken = token
-        sessionId = Timestamps.nowMs()
+        sessionId = max(Timestamps.nowMs(), sessionId + 1)
         lastStartFailure = nil
         let trace = RecordingStartupDiagnostics.activeTrace
         trace?.mark("main.capture-start-entered")
@@ -679,7 +729,8 @@ final class RecorderController {
             await capturePreparationTask?.value
             trace?.mark("main.preparation-wait-end")
             let started = try await captureOwner.start(token: token, sessionID: sessionId,
-                mixWithOtherAudio: mixWithOtherAudio, trace: trace)
+                mixWithOtherAudio: mixWithOtherAudio, trace: trace,
+                applicationState: UIApplication.shared.applicationState.rawValue)
             trace?.mark("main.owner-returned")
             guard !Task.isCancelled, workEnabled, workGeneration == generation, captureToken == token, phase == .idle else {
                 if captureToken == token {
@@ -822,6 +873,10 @@ final class RecorderController {
         guard workEnabled, !draining, !userTranscriptionPending, phase != .recording,
               pendingSessionCount > 0 else { return }
         let generation = workGeneration
+        // The recording was sealed into the durable queue before this system
+        // task began. Its success reports that safety, not that every queued
+        // recording or remote agent task finished successfully.
+        let audioWasSaved = nextPendingSession != nil
         userTranscriptionPending = true
         defer { userTranscriptionPending = false }
         await continuedProcessing.run { [self] progress, hasContinuedRuntime in
@@ -841,13 +896,16 @@ final class RecorderController {
                 } catch {
                     if !(error is CancellationError) {
                         lastError = "Voice model preparation failed: \(error.localizedDescription)"
+                        rememberPendingError(sessionID: nextPendingSession?.id)
+                        onNotice?("Saved — retry voice model preparation", "clock.arrow.circlepath")
                     }
-                    return false
+                    return audioWasSaved && workEnabled && workGeneration == generation
                 }
             }
-            guard workEnabled, workGeneration == generation, !Task.isCancelled else { return false }
+            guard workEnabled, workGeneration == generation else { return false }
+            guard !Task.isCancelled else { return audioWasSaved }
             await drainPendingQueue(continued: true, hasContinuedRuntime: hasContinuedRuntime)
-            return pendingSessionCount == 0 && !Task.isCancelled
+            return audioWasSaved && workEnabled && workGeneration == generation
         }
     }
 
@@ -924,6 +982,7 @@ final class RecorderController {
             finishBackgroundTask(task)
             if workGeneration == generation {
                 phase = .idle
+                transcribingSessionID = nil
                 startedAt = nil
                 draining = false
                 refreshPendingAudioStatus()
@@ -937,6 +996,7 @@ final class RecorderController {
                 break
             }
             let engineIdentity = speechEngine.runtimeIdentity
+            transcribingSessionID = session.id
             let engineWasCold = usedEngineIdentities.insert(engineIdentity).inserted
             do {
                 let audio = Self.audioMetrics(for: session.files)
@@ -970,6 +1030,7 @@ final class RecorderController {
                     deliveryBindingURL = nil
                     guard delivered else {
                         lastError = "The transcript could not be saved. Its audio is queued for retry."
+                        rememberPendingError(sessionID: session.id)
                         onNotice?("Saved audio — retrying transcript later", "clock.arrow.circlepath")
                         break
                     }
@@ -1009,6 +1070,7 @@ final class RecorderController {
                     at: Self.engineBindingURL(forSessionID: session.id, in: pendingDirectory)
                 )
                 lastError = nil
+                clearPendingError(for: session.id)
                 refreshPendingAudioStatus()
             } catch {
                 guard workEnabled, workGeneration == generation else { return }
@@ -1017,9 +1079,12 @@ final class RecorderController {
                     break
                 }
                 lastError = "Parakeet transcription failed: \(error.localizedDescription)"
+                rememberPendingError(sessionID: session.id)
                 logger.error("Voice transcription failed engine=\(engineIdentity, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                 onNotice?("Saved — retry transcription when Field Theory is open", "clock.arrow.circlepath")
-                break
+                // One damaged recording must not prevent later recordings from
+                // being transcribed. Its original audio stays in the queue.
+                continue
             }
         }
     }
@@ -1042,6 +1107,7 @@ final class RecorderController {
                 try FileManager.default.removeItem(at: binding)
             }
             clearFinishAction(for: session.id)
+            clearPendingError(for: session.id)
             stoppedAtMsBySessionID.removeValue(forKey: session.id)
             lastError = nil
         } catch {
@@ -1051,6 +1117,9 @@ final class RecorderController {
     }
 
     func refreshPendingAudioStatus() {
+#if targetEnvironment(simulator)
+        if previewPendingAudio { return }
+#endif
         let sessions = Self.pendingSessions(in: pendingDirectory)
         pendingSessionCount = sessions.count
         nextPendingSession = sessions.first
@@ -1253,6 +1322,7 @@ final class RecorderController {
     /// Isolated UI fixture; only the explicit simulator performance launch calls it.
     func applyRecordingControlsPreview(_ state: RecordingControlsPerformancePreview.State, cycle: Int) {
         workEnabled = false
+        previewPendingAudio = state == .pending || state == .pendingLong
         isRequestingRecordPermission = false
         isStartingCapture = state == .starting
         isStoppingCapture = state == .stopping
@@ -1260,6 +1330,7 @@ final class RecorderController {
         nextPendingSession = nil
         pendingSessionCount = 0
         currentDeliverySessionID = state == .saving ? "preview-\(cycle)" : nil
+        transcribingSessionID = state == .transcribing || state == .saving ? "preview-\(cycle)" : nil
         switch state {
         case .idle, .starting, .error:
             phase = .idle

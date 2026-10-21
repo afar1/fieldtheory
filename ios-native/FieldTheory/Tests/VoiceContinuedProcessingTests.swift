@@ -126,7 +126,7 @@ final class VoiceContinuedProcessingTests: XCTestCase {
         let completed = await eventually { !systemTask.results.isEmpty }
         XCTAssertTrue(completed)
         await run.value
-        XCTAssertEqual(systemTask.results, [false])
+        XCTAssertEqual(systemTask.results, [true], "Saved audio is a successful recording task even when model preparation pauses")
         XCTAssertEqual(engine.cancellations, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: audio.path))
     }
@@ -162,7 +162,7 @@ final class VoiceContinuedProcessingTests: XCTestCase {
         XCTAssertTrue(started)
         systemTask.expiration?()
         await run.value
-        XCTAssertEqual(systemTask.results, [false])
+        XCTAssertEqual(systemTask.results, [true], "Saved audio is a successful recording task even when inference is interrupted")
         XCTAssertEqual(deliveries, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: audio.path))
         XCTAssertEqual(recorder.phase, .idle)
@@ -171,5 +171,33 @@ final class VoiceContinuedProcessingTests: XCTestCase {
         XCTAssertEqual(deliveries, 1)
         XCTAssertEqual(recorder.pendingSessionCount, 0)
         XCTAssertEqual(scheduler.submissions, 1, "Automatic recovery must not submit another user task")
+    }
+
+    @MainActor
+    func testOtherQueuedFailureDoesNotMarkSavedRecordingTaskFailed() async throws {
+        struct DamagedAudio: Error {}
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("damaged".utf8).write(to: directory.appendingPathComponent("rec-100-0.wav"))
+        try Data("good".utf8).write(to: directory.appendingPathComponent("rec-200-0.wav"))
+        let scheduler = TestVoiceProcessingScheduler()
+        let runner = VoiceContinuedProcessing(scheduler: scheduler, isForeground: { true })
+        let recorder = RecorderController(pendingDirectory: directory, transcribe: { url in
+            if url.lastPathComponent == "rec-100-0.wav" { throw DamagedAudio() }
+            return "good recording"
+        }, continuedProcessing: runner)
+        var delivered = 0
+        recorder.onTranscript = { _ in delivered += 1; return true }
+        recorder.setWorkEnabled(true)
+        let run = Task { await recorder.transcribeUserInitiated() }
+        let submitted = await eventually { scheduler.submissions == 1 }
+        XCTAssertTrue(submitted)
+        let task = TestVoiceProcessingTask()
+        scheduler.handler?(task)
+        await run.value
+        XCTAssertEqual(delivered, 1)
+        XCTAssertEqual(recorder.pendingSessionCount, 1)
+        XCTAssertEqual(task.results, [true])
     }
 }

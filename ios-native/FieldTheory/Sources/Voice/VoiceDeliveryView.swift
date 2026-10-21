@@ -36,15 +36,32 @@ struct VoiceDeliveryView: View {
                             }
                         }
                     }
-                    if let receipt = store.receipt(for: item) {
-                        if let result = receipt.final_response, !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Text(result) }
-                        else if let summary = receipt.summary, !summary.isEmpty { Text(summary) }
-                    }
                     if events.isEmpty {
                         Text("Detailed delivery history is not available yet. Status is based on confirmed upload and agent receipts.").font(.caption).foregroundStyle(.secondary)
                     }
                     if !item.wasSentToAgent && item.actionPolicy != "send" {
                         Button("Send to agent") { dismiss(); onSend() }
+                    }
+                }
+                if let receipt = store.receipt(for: item) {
+                    Section(receipt.status == "failed" ? "What happened" : "Codex task") {
+                        LabeledContent("Task status", value: receipt.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                        if let summary = receipt.summary, !summary.isEmpty {
+                            Text(summary)
+                        }
+                        if let result = receipt.final_response,
+                           !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(result).font(.subheadline)
+                        }
+                        if let threadID = receipt.thread_id, !threadID.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Codex task ID").font(.caption).foregroundStyle(.secondary)
+                                Text(threadID).font(.caption.monospaced()).textSelection(.enabled)
+                            }
+                        } else {
+                            Text("No Codex task ID has been reported yet.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Section("Mac observations") {
