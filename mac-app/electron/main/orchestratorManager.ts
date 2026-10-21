@@ -60,10 +60,19 @@ export function parsePlan(
   answer?: string;
   delegations: Delegation[];
 } {
-  const raw = JSON.parse(text.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, ''));
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.delegations) || raw.delegations.length > 4)
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, ''));
+  } catch {
+    // Providers can honor a user's exact-answer format instead of the planning
+    // envelope. A completed text answer is displayable, never a delegation.
+    if (!text.trim()) throw new Error('Missing answer');
+    return { answer: text, delegations: [] };
+  }
+  const plan = raw as { answer?: unknown; delegations?: unknown } | null;
+  if (!plan || typeof plan !== 'object' || !Array.isArray(plan.delegations) || plan.delegations.length > 4)
     throw new Error('Invalid plan');
-  const delegations = raw.delegations.map((d: Delegation) => {
+  const delegations = plan.delegations.map((d: Delegation) => {
     const cap = capabilities.find((c) => c.id === d.provider && c.available && c.signed_in === true);
     if (
       !cap ||
@@ -75,9 +84,9 @@ export function parsePlan(
       throw new Error('Unsupported delegation');
     return { provider: d.provider, task: d.task, ...(d.model ? { model: d.model } : {}) };
   });
-  if (!delegations.length && (typeof raw.answer !== 'string' || !raw.answer.trim()))
+  if (!delegations.length && (typeof plan.answer !== 'string' || !plan.answer.trim()))
     throw new Error('Missing answer');
-  return { answer: typeof raw.answer === 'string' ? raw.answer : undefined, delegations };
+  return { answer: typeof plan.answer === 'string' ? plan.answer : undefined, delegations };
 }
 /** Main-process relay, independent of desktop visibility. Existing auth owns refresh. */
 export class OrchestratorManager {

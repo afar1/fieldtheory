@@ -32,6 +32,12 @@ test('rejects unauthenticated, invented-model, and unbounded delegations', () =>
     expect(() => parsePlan(JSON.stringify({ delegations: d }), [cap])).toThrow();
   expect(parsePlan('{"answer":"Answer","delegations":[]}', [cap]).answer).toBe('Answer');
 });
+test('returns a completed exact-format text answer without inventing a delegation', () => {
+  expect(parsePlan('FIELD_THEORY_RUNNER_READY', [cap])).toEqual({
+    answer: 'FIELD_THEORY_RUNNER_READY', delegations: [],
+  });
+  expect(() => parsePlan('  ', [cap])).toThrow('Missing answer');
+});
 function setup(failPublish = false) {
   vi.useFakeTimers();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-orchestrator-test-'));
