@@ -12,6 +12,16 @@ Voice text can be reviewed in Agent before sending. Existing legacy transcript
 Send to Agent routing is preserved.
 
 Relay schema/Mac runner dependency remains `7eef1438b` from the companion
-orchestration task. No hosted migration or Mac deployment is part of this
-phone installation. Until the relay is provisioned, Agent shows its explicit
-unavailable state.
+orchestration task. On October 20, 2026, after explicit user authorization, migration
+`20261021030000` was applied to Field Theory project `cighxaroptskntwbrctl`
+through the Supabase CLI in one transaction, including migration history.
+Remote source MD5 `7eb1c0113b79e09a27ff2f45444d8041` matches the reviewed file.
+Verified all four tables have RLS, anonymous reads are denied, authenticated
+roles can select, and runner RPCs require authentication. PostgREST denies
+anonymous access with HTTP 401 / code 42501, confirming the table is exposed
+with its access policy. No Mac runner deployment was performed in this chat.
+
+Build 83 was installed and launched on Focus; installed version readback
+confirmed 83. Thirteen conversation, recording-signout and Reviewer Access
+simulator tests passed. Full physical phone-to-provider execution remains
+unverified pending the updated Mac runner.
