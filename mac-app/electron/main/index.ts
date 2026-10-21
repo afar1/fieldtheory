@@ -1,4 +1,5 @@
 import { WordSubstitutionSync } from './wordSubstitutionSync';
+import { OrchestratorManager } from './orchestratorManager';
 import { applyVoiceInboxTitles } from './voiceInboxLibraryTitles';
 import { normalizeLauncherSections, launcherFolderSection, parseLauncherFolder } from '../shared/launcherSections';
 import { VoiceWorkManager } from './voiceWorkManager';
@@ -7736,6 +7737,7 @@ let pendingOpenMarkdownPath: string | null = null;
 let voiceWorkManager: VoiceWorkManager | null = null;
 let voiceRunnerTelemetry: VoiceRunnerTelemetry | null = null;
 let voiceRunnerPower: VoiceRunnerPower | null = null;
+let orchestratorManager: OrchestratorManager | null = null;
 let voiceInboxStore: VoiceInboxService | null = null;
 let voiceInboxSync: VoiceInboxSync | null = null;
 let voicePreferencesReady: Promise<unknown> = Promise.resolve();
@@ -15529,6 +15531,7 @@ async function initTranscriberSystem(): Promise<void> {
   powerMonitor.on('unlock-screen', () => voiceRunnerTelemetry?.record('unlock'));
   powerMonitor.on('suspend', () => voiceRunnerTelemetry?.record('sleep'));
   powerMonitor.on('resume', () => voiceRunnerTelemetry?.record('wake'));
+  orchestratorManager = new OrchestratorManager(authManager, path.join(app.getPath('userData'), 'orchestrator'));
   voiceRunnerPower = new VoiceRunnerPower(powerMonitor, powerSaveBlocker);
   let telemetryIdentity: string | null = null;
   let telemetryConnected: boolean | null = null;
@@ -15541,6 +15544,7 @@ async function initTranscriberSystem(): Promise<void> {
       voiceRunnerTelemetry?.record(connected ? 'connected' : 'disconnected');
     }
     voiceRunnerPower?.update(state);
+    orchestratorManager?.update(state);
     const window = clipboardHistoryWindow?.getWindow() ?? null;
     if (isVoiceWorkWindowTrusted(window, { appPath: app.getAppPath(), startUrl: process.env.ELECTRON_START_URL })) {
       window.webContents.send(VOICE_WORK_CHANNELS.stateChanged, state);
@@ -15771,6 +15775,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   let voiceWakeGeneration = 0;
   powerMonitor.on('suspend', () => {
+    orchestratorManager?.suspend();
     voiceWakeGeneration++;
     voiceWorkManager?.stop();
     voiceInboxSync?.stop();
@@ -15790,6 +15795,7 @@ async function initTranscriberSystem(): Promise<void> {
       await authManager?.refreshIfExpiringSoon().catch(() => log.warn('[Voice Inbox] Account refresh will retry after wake.'));
       if (generation !== voiceWakeGeneration) return;
       await Promise.all([voiceWorkManager?.resume(), voiceInboxSync?.resume()]);
+      orchestratorManager?.resume();
     })().catch(() => log.warn('[Voice Inbox] Wake recovery failed; saved requests are retained.'));
     bookmarkSyncController?.resume();
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
@@ -17260,6 +17266,7 @@ if (!gotTheLock) {
     { name: 'hotkeys', run: () => getHotkeyManager().unregisterAll() },
     { name: 'squares-hotkeys', run: () => squaresManager?.unregisterHotkeys() },
     { name: 'bookmarks-sync', run: () => bookmarkSyncController?.stop() },
+    { name: 'orchestrator', run: () => orchestratorManager?.dispose() },
     { name: 'voice-work', run: () => voiceWorkManager?.stop() },
     { name: 'voice-telemetry', run: () => voiceRunnerTelemetry?.stop() },
     { name: 'voice-inbox', run: () => voiceInboxSync?.stop() },
