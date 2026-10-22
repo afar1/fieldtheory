@@ -122,6 +122,17 @@ async function flushAsyncWork() {
 }
 
 describe('HotMicManager call audio', () => {
+  it.each(['system-audio', 'microphone-and-system-audio'] as const)('only enforces a microphone when %s capture needs one', async source => {
+    const { manager, nativeHelper } = createManager({ transcriptionInputSource: source });
+    const priority = vi.fn(async () => undefined);
+    Reflect.set(manager, 'audioManager', { ensurePriorityEnforced: priority });
+    manager.activate();
+    await flushAsyncWork();
+    expect(nativeHelper.startRecording).toHaveBeenCalledWith(source);
+    expect(priority).toHaveBeenCalledTimes(source === 'system-audio' ? 0 : 1);
+    manager.destroy();
+  });
+
   it('preserves the combined recording during a device change', async () => {
     const { manager, nativeHelper } = createManager({ transcriptionInputSource: 'microphone-and-system-audio' });
     manager.activate();

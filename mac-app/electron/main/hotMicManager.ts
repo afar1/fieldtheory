@@ -1067,7 +1067,7 @@ export class HotMicManager extends EventEmitter {
             this.registerEscapeDismissHotkey();
             return;
           }
-          if (this.audioManager) {
+          if (this.audioManager && this.getRecordingSource() !== 'system-audio') {
             await this.audioManager.ensurePriorityEnforced();
           }
           if (this.destroyed) return;
@@ -1124,7 +1124,7 @@ export class HotMicManager extends EventEmitter {
       if (this.destroyed) return false;
       log.info('Hot Mic: unmuted');
       try {
-        if (this.audioManager) {
+        if (this.audioManager && this.getRecordingSource() !== 'system-audio') {
           await this.audioManager.ensurePriorityEnforced();
         }
         if (this.destroyed) return false;
@@ -1254,7 +1254,7 @@ export class HotMicManager extends EventEmitter {
     }
 
     try {
-      if (this.audioManager) {
+      if (this.audioManager && this.getRecordingSource() !== 'system-audio') {
         await this.audioManager.ensurePriorityEnforced();
       }
       if (this.destroyed) return;
@@ -1498,7 +1498,7 @@ export class HotMicManager extends EventEmitter {
     this.setState('recording');
 
     try {
-      if (this.audioManager) {
+      if (this.audioManager && this.getRecordingSource() !== 'system-audio') {
         await this.audioManager.ensurePriorityEnforced();
       }
       if (this.destroyed) return;
