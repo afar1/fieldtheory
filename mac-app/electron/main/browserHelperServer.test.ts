@@ -134,6 +134,10 @@ describe('BrowserHelperServer', () => {
     expect(runOnboardingAction).not.toHaveBeenCalled();
     expect((await request(`${base}/action`, { method: 'POST', headers, body: { action: 'set-recording-source', source: 'microphone-and-system-audio' } })).status).toBe(200);
     expect(runOnboardingAction).toHaveBeenCalledWith('set-recording-source', 'microphone-and-system-audio');
+    runOnboardingAction.mockImplementationOnce(() => { throw new Error('Stop recording before changing the recording source'); });
+    const busy = await request(`${base}/action`, { method: 'POST', headers, body: { action: 'set-recording-source', source: 'system-audio' } });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error).toBe('Stop recording before changing the recording source');
   });
 
   it('requires the browser helper token', async () => {

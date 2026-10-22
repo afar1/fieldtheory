@@ -658,10 +658,14 @@ export class BrowserHelperServer {
           writeJson(res, 400, { ok: false, error: 'Choose a supported recording source' }, req.headers.origin);
           return;
         }
-        const result = body.action === 'set-recording-source'
-          ? await this.nativeBridge.runOnboardingAction(body.action, body.source as OnboardingRecordingSource)
-          : await this.nativeBridge.runOnboardingAction(body.action as OnboardingAction);
-        writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        try {
+          const result = body.action === 'set-recording-source'
+            ? await this.nativeBridge.runOnboardingAction(body.action, body.source as OnboardingRecordingSource)
+            : await this.nativeBridge.runOnboardingAction(body.action as OnboardingAction);
+          writeJson(res, 200, { ok: true, result }, req.headers.origin);
+        } catch (error) {
+          writeJson(res, 409, { ok: false, error: error instanceof Error ? error.message : 'Setup action could not finish. Try again after the current operation.' }, req.headers.origin);
+        }
         return;
       }
 

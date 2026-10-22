@@ -3206,7 +3206,7 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
           if (!transcriberManager || !source) throw new Error('Recording setup is not ready');
           if (hotMicManager?.isActive) throw new Error('Stop Hot Mic before changing the recording source');
           await transcriberManager.setRecordingSource(source);
-          return { accepted: true, source: transcriberManager.getRecordingSource() };
+          return { accepted: true, source: transcriberManager.getRecordingSource(), permissions: getAssistedSetupStatus().permissions, callAudio: 'not-verified' };
         }
         if (action === 'prepare-parakeet') {
           if (!transcriberManager) throw new Error('Transcription is still starting. Try again shortly.');
@@ -3215,14 +3215,13 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
           if (transcriberManager.getParakeetStatus().engines.some(item => item.engine === engine && item.verified)) {
             return { accepted: true, alreadyPrepared: true };
           }
-          if (!assistedParakeetPreparing) {
-            assistedParakeetPreparing = true;
+          if (!transcriberManager.isParakeetSetupInProgress) {
             assistedParakeetError = null;
             void transcriberManager.setupParakeet(engine).then(result => {
               assistedParakeetError = result.success ? null : result.error ?? 'Parakeet setup failed';
             }).catch(error => {
               assistedParakeetError = error instanceof Error ? error.message : 'Parakeet setup failed';
-            }).finally(() => { assistedParakeetPreparing = false; });
+            });
           }
           return { accepted: true, preparing: true };
         }
@@ -7059,14 +7058,15 @@ function setupAppMetadataIPCHandlersOnce(): void {
 }
 
 // One setup job per app process. Polling never changes preferences or starts downloads.
-let assistedParakeetPreparing = false;
+let assistedSetupInitialized = false;
+let pendingAssistedOnboarding = false;
 let assistedParakeetError: string | null = null;
 
 function openAssistedOnboarding(step?: OnboardingStep): void {
   setupOnboardingIPCHandlersOnce();
   setupTranscribeIPCHandlersOnce();
   onboardingWindow = onboardingWindow ?? createOnboardingWindow();
-  onboardingWindow.show(step ?? preferencesManager?.get().onboardingStep ?? OnboardingStep.PERMISSIONS);
+  onboardingWindow.show(step ?? (preferencesManager?.get().onboardingComplete ? OnboardingStep.PERMISSIONS : preferencesManager?.get().onboardingStep) ?? OnboardingStep.PERMISSIONS, step !== undefined);
 }
 
 function getAssistedSetupStatus() {
@@ -7093,7 +7093,7 @@ function getAssistedSetupStatus() {
         engine, verified, needsReinstall, lastError, setupError,
       })),
     } : null,
-    setup: { parakeetPreparing: assistedParakeetPreparing, lastError: assistedParakeetError },
+    setup: { parakeetPreparing: transcriberManager?.isParakeetSetupInProgress ?? false, lastError: assistedParakeetError, onboardingComplete: preferencesManager?.get().onboardingComplete ?? false },
     verification: { callAudio: 'not-verified', computerUse: 'host-must-verify' },
   };
 }
@@ -16053,7 +16053,10 @@ async function handleProtocolUrl(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === 'fieldtheory:' && parsed.host === 'onboard') {
-      await app.whenReady();
+      if (!assistedSetupInitialized) {
+        pendingAssistedOnboarding = true;
+        return;
+      }
       openAssistedOnboarding();
       return;
     }
@@ -17309,6 +17312,12 @@ if (!gotTheLock) {
         onboardingWindow.show(2); // account phase
       }
     }, REQUIREMENT_CHECK_INTERVAL);
+
+    assistedSetupInitialized = true;
+    if (pendingAssistedOnboarding) {
+      pendingAssistedOnboarding = false;
+      openAssistedOnboarding();
+    }
 
     app.on('activate', () => {
       // Always show clipboard history when app becomes active.

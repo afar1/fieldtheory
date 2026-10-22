@@ -247,6 +247,11 @@ export class TranscriberManager extends EventEmitter {
   // Persistent JSON server for Parakeet engines.
   // All use the same stdin/stdout JSON protocol via StdioJsonServer.
   private parakeetServer: StdioJsonServer | null = null;
+  private parakeetSetupJob: { engine: ParakeetEngine; promise: Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }> } | null = null;
+
+  get isParakeetSetupInProgress(): boolean {
+    return Boolean(this.parakeetSetupJob);
+  }
   private destroyPromise: Promise<void> | null = null;
   private destroyed = false;
   private parakeetServerEngine: ParakeetEngine | null = null;
@@ -2799,7 +2804,18 @@ export class TranscriberManager extends EventEmitter {
     };
   }
 
-  async setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }> {
+  setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }> {
+    if (this.parakeetSetupJob) {
+      return this.parakeetSetupJob.engine === engine
+        ? this.parakeetSetupJob.promise
+        : Promise.resolve({ success: false, error: 'Wait for the current Parakeet setup to finish before preparing another model.' });
+    }
+    const promise = this.performParakeetSetup(engine).finally(() => { this.parakeetSetupJob = null; });
+    this.parakeetSetupJob = { engine, promise };
+    return promise;
+  }
+
+  private async performParakeetSetup(engine: ParakeetEngine): Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }> {
     const venvDir = path.join(this.getParakeetBasePath(), 'venv');
     const reportProgress: ParakeetSetupReporter = (progress) => {
       this.emitParakeetSetupProgress(engine, progress);

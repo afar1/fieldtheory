@@ -3332,7 +3332,13 @@ describe('TranscriberManager parakeet uninstall', () => {
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
-    const result = await manager.setupParakeet('parakeet-multilingual');
+    const setup = manager.setupParakeet('parakeet-multilingual');
+    expect(manager.isParakeetSetupInProgress).toBe(true);
+    // The native setup screen and assistant can request the same installation.
+    expect(manager.setupParakeet('parakeet-multilingual')).toBe(setup);
+    expect(await manager.setupParakeet('parakeet')).toMatchObject({ success: false });
+    const result = await setup;
+    expect(manager.isParakeetSetupInProgress).toBe(false);
 
     expect(result).toEqual({ success: true });
     expect(manager.installParakeetRuntime).toHaveBeenCalledWith(

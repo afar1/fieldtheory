@@ -155,13 +155,28 @@ export class OnboardingWindow {
    * If already visible, brings it to focus.
    * Also shows the app in the Dock so user can Cmd+Tab back to it.
    */
-  show(startStep: OnboardingStep = OnboardingStep.PERMISSIONS): void {
+  private loadStep(startStep: OnboardingStep): void {
+    const startUrl = process.env.ELECTRON_START_URL;
+    if (startUrl) {
+      // Dev mode - load from Vite dev server.
+      this.window?.loadURL(`${startUrl}#/onboarding?step=${startStep}`);
+    } else {
+      // Production - load from built files (frontend is in dist/, not electron-dist/).
+      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
+      this.window?.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
+    }
+
+  }
+
+  show(startStep: OnboardingStep = OnboardingStep.PERMISSIONS, navigateExisting = false): void {
     // Show app in Dock during onboarding so user can Cmd+Tab back
     if (app.dock) {
       app.dock.show();
     }
 
     if (this.window && !this.window.isDestroyed()) {
+      // Explicit assistant actions must reach the requested setup page.
+      if (navigateExisting) this.loadStep(startStep);
       // Bring to front on macOS
       this.window.show();
       this.window.focus();
@@ -208,16 +223,7 @@ export class OnboardingWindow {
       }
     });
 
-    // Load the onboarding page with the start step as a query param.
-    const startUrl = process.env.ELECTRON_START_URL;
-    if (startUrl) {
-      // Dev mode - load from Vite dev server.
-      this.window.loadURL(`${startUrl}#/onboarding?step=${startStep}`);
-    } else {
-      // Production - load from built files (frontend is in dist/, not electron-dist/).
-      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
-      this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
-    }
+    this.loadStep(startStep);
 
     // Handle close during onboarding - show quit confirmation.
     this.window.on('close', async (event) => {
