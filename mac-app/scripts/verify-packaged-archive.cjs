@@ -43,6 +43,13 @@ function verifyPackagedArchive(archivePath) {
     if (metadata.main !== 'electron-dist/main/index.js') throw new Error('unexpected main entrypoint');
     asar.statFile(archivePath, metadata.main);
     if (!scripts) throw new Error('no Electron scripts were checked');
+    if (metadata.fieldTheoryBuildChannel === 'production') {
+      const auth = JSON.parse(asar.extractFile(archivePath, 'electron-dist/main/public-runtime-config.json').toString('utf8'));
+      if (typeof auth.supabaseUrl !== 'string' || !auth.supabaseUrl.startsWith('https://')
+        || typeof auth.supabasePublishableKey !== 'string' || !auth.supabasePublishableKey.trim()) {
+        throw new Error('production package is missing public account configuration; regenerate public-runtime-config.json after building Electron');
+      }
+    }
   } catch (error) { failures.push(`entrypoint: ${error.message}`); }
   if (failures.length) throw new Error(`Packaged archive verification failed (${failures.length} failures):\n${failures.slice(0, 8).join('\n')}`);
   return { files, scripts };

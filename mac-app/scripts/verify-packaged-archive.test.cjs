@@ -108,3 +108,14 @@ test('rejects another architecture prebuild and empty SQLite payloads', async t 
   fs.writeFileSync(path.join(`${archive}.unpacked`, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'), '');
   assert.throws(() => verifyPackagedNativePayload(archive, nativeTarget), /Native dependency is empty/);
 });
+
+
+test('production previews require account configuration in the delivered archive', async t => {
+  const metadata = { 'package.json': JSON.stringify({ main: 'electron-dist/main/index.js', fieldTheoryBuildChannel: 'production', version: '0.3.78-onboarding.1' }) };
+  const missing = await fixture(t, metadata);
+  assert.throws(() => verifyPackagedArchive(missing), /public-runtime-config/);
+  const empty = await fixture(t, { ...metadata, 'electron-dist/main/public-runtime-config.json': '{}' });
+  assert.throws(() => verifyPackagedArchive(empty), /missing public account configuration/);
+  const configured = await fixture(t, { ...metadata, 'electron-dist/main/public-runtime-config.json': JSON.stringify({ supabaseUrl: 'https://example.supabase.co', supabasePublishableKey: 'public-test-key' }) });
+  assert.doesNotThrow(() => verifyPackagedArchive(configured));
+});
