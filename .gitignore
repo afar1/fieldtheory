@@ -89,3 +89,5 @@ mac-app/build-parakeet
 
 # Working plan docs (local only)
 docs/plans/
+.vercel
+.env*

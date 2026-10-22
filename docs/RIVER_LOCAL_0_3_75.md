@@ -33,3 +33,13 @@ Quit the existing app before opening the candidate. With two signed-in users who
 - ZIP SHA-256: `8dcb546114d62ac4c5479a5225651ac10ab3dc13c4bb609463fbd10c72537cdf`.
 
 Artifacts are in `mac-app/release/`: `Field.Theory-0.3.75-arm64.dmg` and `Field.Theory-0.3.75-arm64-mac.zip`, with `SHA256SUMS.txt`. No local installation or app-UI runtime acceptance is claimed.
+
+## Publication receipts
+
+Published October 21, 2026 after user approval: https://github.com/afar1/field-releases/releases/tag/v0.3.75.
+
+All six GitHub assets match their local size and SHA-256 digest. Public latest updater metadata matches the final local YAML. Public DMG and ZIP range downloads returned HTTP 206 and matched the corresponding local bytes.
+
+Website source: `ac75a372`; only the two Mac download links changed. The staged production deployment was checked before promotion. Deployment `dpl_DU3zm7B4GsRzEvsqucdQwx5FBxRP` (`https://fieldtheory-65webtay1-afar1.vercel.app`) was promoted to production. Live https://fieldtheory.dev HTML matches the staged source and both download buttons target the verified 0.3.75 DMG.
+
+This was binary publication and a website deployment. No source repository push or local application installation was performed.
