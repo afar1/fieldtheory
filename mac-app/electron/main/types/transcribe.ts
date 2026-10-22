@@ -10,7 +10,7 @@ export type TranscriptionEngine =
   | 'mlx-whisper'
   | 'parakeet'
   | 'parakeet-multilingual';
-export type RecordingInputSource = 'microphone' | 'system-audio';
+export type RecordingInputSource = 'microphone' | 'system-audio' | 'microphone-and-system-audio';
 export type HotMicEngine = 'default' | TranscriptionEngine;
 export type ParakeetEngine = Extract<TranscriptionEngine, 'parakeet' | 'parakeet-multilingual'>;
 export type AutoImproveProvider = 'local' | 'codex' | 'claude';

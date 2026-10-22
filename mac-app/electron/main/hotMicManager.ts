@@ -20,6 +20,7 @@ import {
   isParakeetEngine,
   isTranscriptionEngine,
   type TranscriptionEngine,
+  type RecordingInputSource,
 } from './types/transcribe';
 import type { HotMicEngineStatus } from './types/hotMic';
 import { createLogger } from './logger';
@@ -667,18 +668,18 @@ export class HotMicManager extends EventEmitter {
   }
 
   private async handleDeviceEnforced(): Promise<void> {
-    if (this.state === 'idle' || !this.nativeHelper.isRecordingActive()) return;
+    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle' || !this.nativeHelper.isRecordingActive()) return;
     log.info('Hot Mic: restarting recording after device enforcement');
     try {
       await this.nativeHelper.stopRecording();
-      await this.nativeHelper.startRecording();
+      await this.nativeHelper.startRecording(this.getRecordingSource());
     } catch (error) {
       log.error('Hot Mic: failed to restart recording after device enforcement:', error);
     }
   }
 
   private async handlePriorityDeviceUnavailable(): Promise<void> {
-    if (this.state === 'idle' || this.muted || !this.nativeHelper.isRecordingActive()) return;
+    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle' || this.muted || !this.nativeHelper.isRecordingActive()) return;
 
     const defaultInputId = this.audioManager?.getState().defaultInputId ?? null;
     log.warn('Hot Mic: priority input disappeared; restarting recording on current default input');
@@ -689,7 +690,7 @@ export class HotMicManager extends EventEmitter {
         log.warn('Hot Mic: priority input disappeared and no fallback input is available; recording stopped');
         return;
       }
-      await this.nativeHelper.startRecording();
+      await this.nativeHelper.startRecording(this.getRecordingSource());
     } catch (error) {
       log.error('Hot Mic: failed to recover after priority input disappeared:', error);
     }
@@ -1090,7 +1091,7 @@ export class HotMicManager extends EventEmitter {
           }
           if (this.destroyed) return;
           this.setRealtimeHarvestMode();
-          await this.nativeHelper.startRecording();
+          await this.nativeHelper.startRecording(this.getRecordingSource());
           if (this.destroyed) return;
           this.yieldedToTranscriber = false;
           this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
@@ -1147,7 +1148,7 @@ export class HotMicManager extends EventEmitter {
         }
         if (this.destroyed) return false;
         this.setRealtimeHarvestMode();
-        await this.nativeHelper.startRecording();
+        await this.nativeHelper.startRecording(this.getRecordingSource());
         if (this.destroyed) return false;
         this.startAudioMonitoring();
       } catch (error) {
@@ -1277,10 +1278,11 @@ export class HotMicManager extends EventEmitter {
       }
       if (this.destroyed) return;
       this.setRealtimeHarvestMode();
-      await this.nativeHelper.startRecording();
+      await this.nativeHelper.startRecording(this.getRecordingSource());
     } catch (error) {
       if (this.destroyed) return;
       log.error('Hot Mic: failed to start recording in listening:', error);
+      this.cursorStatusManager?.showRecordingNote((error as Error).message);
       this.setState('idle');
       return;
     }
@@ -1520,7 +1522,7 @@ export class HotMicManager extends EventEmitter {
       }
       if (this.destroyed) return;
       this.setRealtimeHarvestMode();
-      await this.nativeHelper.startRecording();
+      await this.nativeHelper.startRecording(this.getRecordingSource());
     } catch (error) {
       if (this.destroyed) return;
       log.error('Failed to start recording for Hot Mic:', error);
@@ -1531,8 +1533,20 @@ export class HotMicManager extends EventEmitter {
     if (!this.destroyed) this.startAudioMonitoring();
   }
 
+  notifyCaptureInterrupted(message: string): void {
+    if (!this.isActive) return;
+    this.setCondition('degraded');
+    this.cursorStatusManager?.showRecordingNote(message);
+  }
+
+  private getRecordingSource(): RecordingInputSource {
+    const configured = this.preferences.getPreference('transcriptionInputSource');
+    return configured === 'system-audio' || configured === 'microphone-and-system-audio' ? configured : 'microphone';
+  }
+
   private getBackgroundFilterEnabled(): boolean {
-    return this.preferences.getPreference('hotMicBackgroundFilterEnabled') === true;
+    return this.getRecordingSource() === 'microphone'
+      && this.preferences.getPreference('hotMicBackgroundFilterEnabled') === true;
   }
 
   private getBackgroundFilterStrength(): number {

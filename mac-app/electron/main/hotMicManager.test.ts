@@ -81,7 +81,7 @@ function createManager(preferences: Record<string, unknown> = {}) {
     getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' })),
     typeIntoApp: vi.fn(async () => ({ success: true })),
     setHarvestMode: vi.fn(),
-    startRecording: vi.fn(async () => undefined),
+    startRecording: vi.fn(async (_source?: string) => undefined),
     stopRecording: vi.fn(async () => undefined),
     cancelRecording: vi.fn(async () => undefined),
     isRecordingActive: vi.fn(() => false),
@@ -119,6 +119,21 @@ async function flushAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+describe('HotMicManager call audio', () => {
+  it('keeps the combined source when resuming capture after a device change', async () => {
+    const { manager, nativeHelper } = createManager({ transcriptionInputSource: 'microphone-and-system-audio' });
+    manager.activate();
+    await flushAsyncWork();
+    expect(nativeHelper.startRecording).toHaveBeenCalledWith('microphone-and-system-audio');
+    nativeHelper.isRecordingActive.mockReturnValue(true);
+    await (manager as any).handleDeviceEnforced();
+    expect(nativeHelper.startRecording.mock.calls.map(call => call[0])).toEqual([
+      'microphone-and-system-audio', 'microphone-and-system-audio',
+    ]);
+    manager.destroy();
+  });
+});
 
 describe('HotMicManager shutdown', () => {
   it.each(['activate', 'resume', 'unmute'])('does not restart recording after a pending %s finishes during shutdown', async mode => {

@@ -84,10 +84,10 @@ describe('NativeHelper recording command sequencing', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(sentCommands()).toEqual([
       { type: 'cancelRecording' },
-      { type: 'startRecording', recordingSource: 'microphone' },
+      { type: 'startRecording', recordingSource: 'microphone', requestId: expect.any(String) },
     ]);
 
-    helper.handleMessage({ type: 'recordingStarted' });
+    helper.handleMessage({ type: 'recordingStarted', requestId: sentCommands().at(-1)?.requestId });
 
     await expect(cancelPromise).resolves.toBeUndefined();
     await expect(startPromise).resolves.toBeUndefined();
@@ -100,34 +100,67 @@ describe('NativeHelper recording command sequencing', () => {
     const startPromise = helper.startRecording();
     await flushMicrotasks();
 
-    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone' }]);
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone', requestId: expect.any(String) }]);
 
     helper.handleMessage({ type: 'error', message: 'Failed to start recording' });
     await flushMicrotasks();
 
-    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone' }]);
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone', requestId: expect.any(String) }]);
 
     await vi.advanceTimersByTimeAsync(120);
     expect(sentCommands()).toEqual([
-      { type: 'startRecording', recordingSource: 'microphone' },
-      { type: 'startRecording', recordingSource: 'microphone' },
+      { type: 'startRecording', recordingSource: 'microphone', requestId: expect.any(String) },
+      { type: 'startRecording', recordingSource: 'microphone', requestId: expect.any(String) },
     ]);
 
-    helper.handleMessage({ type: 'recordingStarted' });
+    helper.handleMessage({ type: 'recordingStarted', requestId: sentCommands().at(-1)?.requestId });
 
     await expect(startPromise).resolves.toBeUndefined();
   });
 
-  it('passes through a system-audio recording source override', async () => {
+  it.each(['system-audio', 'microphone-and-system-audio'] as const)('passes through the %s recording source', async source => {
     const { helper, sentCommands } = createHelperHarness();
 
-    const startPromise = helper.startRecording('system-audio');
+    const startPromise = helper.startRecording(source);
     await flushMicrotasks();
 
-    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'system-audio' }]);
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: source, requestId: expect.any(String) }]);
 
-    helper.handleMessage({ type: 'recordingStarted' });
+    helper.handleMessage({ type: 'recordingStarted', requestId: sentCommands().at(-1)?.requestId });
     await expect(startPromise).resolves.toBeUndefined();
+  });
+
+  it('reports system capture permission failures immediately without restarting audio', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const startPromise = helper.startRecording('microphone-and-system-audio');
+    const rejected = expect(startPromise).rejects.toThrow('Screen Recording permission required');
+    await flushMicrotasks();
+    helper.handleMessage({ type: 'recordingStartFailed', requestId: sentCommands()[0].requestId, message: 'Screen Recording permission required' });
+    await rejected;
+    expect(sentCommands()).toHaveLength(1);
+    expect(helper.recordingActive).toBe(false);
+  });
+
+  it('ignores late startup replies from another request', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    const startPromise = helper.startRecording('microphone-and-system-audio');
+    await flushMicrotasks();
+    helper.handleMessage({ type: 'recordingStarted', requestId: 'previous-request' });
+    expect(helper.recordingActive).toBe(false);
+    helper.handleMessage({ type: 'recordingStarted', requestId: sentCommands()[0].requestId });
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(helper.recordingActive).toBe(true);
+  });
+
+  it('releases recording state when the native stop operation fails', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+    helper.recordingActive = true;
+    const stopPromise = helper.stopRecording();
+    const rejected = expect(stopPromise).rejects.toThrow('Audio file could not be closed');
+    await flushMicrotasks();
+    helper.handleMessage({ type: 'recordingStopFailed', requestId: sentCommands()[0].requestId, message: 'Audio file could not be closed' });
+    await rejected;
+    expect(helper.recordingActive).toBe(false);
   });
 
   it('does not ask the helper to snapshot when no recording is active', async () => {

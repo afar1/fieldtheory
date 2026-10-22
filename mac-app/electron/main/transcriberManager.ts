@@ -920,7 +920,7 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    if (recordingSource === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+    if (recordingSource !== 'microphone' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
       const errorMsg = 'System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.';
       this.emit('error', new Error(errorMsg));
       this.cursorStatusManager?.showRecordingNote(errorMsg);
@@ -976,12 +976,8 @@ export class TranscriberManager extends EventEmitter {
       this.resetStandardRealtimeSession();
       this.activeRecordingSource = recordingSource;
       this.startLiveTypingSessionIfEligible(recordingSource);
-      if (recordingSource === 'microphone') {
-        this.attachStandardChunkListener();
-        this.setStandardRealtimeHarvestMode();
-      } else {
-        this.nativeHelper.setHarvestMode('off');
-      }
+      this.attachStandardChunkListener();
+      this.setStandardRealtimeHarvestMode();
       // Start model loading alongside device capture after sleep/crash. start()
       // deduplicates concurrent warmup/chunk requests; never delay microphone capture.
       void this.warmup().catch((error) => log.warn('Standard recording warmup failed: %s', (error as Error).message));
@@ -1094,7 +1090,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private startLiveTypingSessionIfEligible(recordingSource: RecordingInputSource): void {
-    if (!this.getLiveTyping() || recordingSource !== 'microphone') {
+    if (!this.getLiveTyping()) {
       return;
     }
 
@@ -1491,7 +1487,7 @@ export class TranscriberManager extends EventEmitter {
       let snapshotMs = 0;
       let snapshotStatus = 'skipped';
       const shouldSnapshotTail =
-        activeRecordingSource === 'microphone' &&
+        activeRecordingSource !== null &&
         !this.pendingImmediateSquaresAction &&
         liveCharsAtFinish > 0;
       if (shouldSnapshotTail) {
@@ -1510,7 +1506,7 @@ export class TranscriberManager extends EventEmitter {
           snapshotStatus = 'failed';
           // Snapshot can fail when no audio has accumulated yet; continue with normal stop.
         }
-      } else if (activeRecordingSource === 'microphone' && !this.pendingImmediateSquaresAction) {
+      } else if (activeRecordingSource !== null && !this.pendingImmediateSquaresAction) {
         snapshotStatus = 'skipped-no-live-transcript';
       }
 
@@ -1525,7 +1521,7 @@ export class TranscriberManager extends EventEmitter {
       const wavPath = await this.nativeHelper.stopRecording();
       const stopMs = Math.round(performance.now() - stopStart);
       let drainMs = 0;
-      if (activeRecordingSource === 'microphone') {
+      if (activeRecordingSource !== null) {
         const drainStart = performance.now();
         await this.waitForStandardChunkDrain();
         drainMs = Math.round(performance.now() - drainStart);
@@ -3277,7 +3273,7 @@ export class TranscriberManager extends EventEmitter {
     }
 
     const source = this.getRecordingSource();
-    if (source === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+    if (source !== 'microphone' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
       throw new Error('System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.');
     }
     if (options && source !== 'microphone') {
@@ -3440,10 +3436,16 @@ export class TranscriberManager extends EventEmitter {
 
   getRecordingSource(): RecordingInputSource {
     const configured = this.preferences.getPreference('transcriptionInputSource');
-    return configured === 'system-audio' ? 'system-audio' : 'microphone';
+    return configured === 'system-audio' || configured === 'microphone-and-system-audio' ? configured : 'microphone';
   }
 
   async setRecordingSource(source: RecordingInputSource): Promise<void> {
+    if (!['microphone', 'system-audio', 'microphone-and-system-audio'].includes(source)) {
+      throw new Error('Unsupported recording source');
+    }
+    if (this.status === 'recording' || this.status === 'transcribing' || this.status === 'silentStacking') {
+      throw new Error('Stop recording before changing the recording source');
+    }
     await this.preferences.save({ transcriptionInputSource: source });
   }
 

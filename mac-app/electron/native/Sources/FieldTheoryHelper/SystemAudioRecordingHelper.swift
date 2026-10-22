@@ -7,6 +7,7 @@ import ScreenCaptureKit
 enum RecordingSource: String, Codable {
     case microphone = "microphone"
     case systemAudio = "system-audio"
+    case microphoneAndSystemAudio = "microphone-and-system-audio"
 }
 
 enum RecordingCoordinatorError: LocalizedError {
@@ -14,153 +15,128 @@ enum RecordingCoordinatorError: LocalizedError {
     case notRecording
     case missingScreenRecordingPermission
     case noShareableDisplay
-    case snapshotUnsupported
     case startFailed(String)
     case stopFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .alreadyRecording:
-            return "Recording already in progress"
-        case .notRecording:
-            return "No recording in progress"
-        case .missingScreenRecordingPermission:
-            return "System audio capture requires Screen Recording permission"
-        case .noShareableDisplay:
-            return "No display available for system audio capture"
-        case .snapshotUnsupported:
-            return "System audio recording does not support realtime snapshots"
-        case .startFailed(let message):
-            return message
-        case .stopFailed(let message):
-            return message
+        case .alreadyRecording: return "Recording already in progress"
+        case .notRecording: return "No recording in progress"
+        case .missingScreenRecordingPermission: return "System audio capture requires Screen Recording permission"
+        case .noShareableDisplay: return "No display available for system audio capture"
+        case .startFailed(let message), .stopFailed(let message): return message
         }
     }
 }
 
 final class RecordingCoordinator {
     static let shared = RecordingCoordinator()
-
+    private var generation = UUID()
+    private var activeRequestId: String?
     private var activeSource: RecordingSource?
-
     private init() {}
 
     @MainActor
-    func startRecording(source: RecordingSource) async throws {
-        guard activeSource == nil else {
-            throw RecordingCoordinatorError.alreadyRecording
+    func startRecording(source: RecordingSource, requestId: String? = nil) async throws {
+        guard activeSource == nil else { throw RecordingCoordinatorError.alreadyRecording }
+        if source != .microphone && !CGPreflightScreenCaptureAccess() {
+            throw RecordingCoordinatorError.missingScreenRecordingPermission
         }
-
-        switch source {
-        case .microphone:
-            guard RecordingHelper.shared.startRecording() else {
-                throw RecordingCoordinatorError.startFailed("Failed to start recording")
-            }
-        case .systemAudio:
-            try await SystemAudioRecordingHelper.shared.startRecording()
-        }
-
+        let session = UUID()
+        generation = session
+        activeRequestId = requestId
         activeSource = source
+        guard RecordingHelper.shared.startRecording(
+            captureMicrophone: source != .systemAudio,
+            captureSystemAudio: source != .microphone
+        ) else {
+            activeSource = nil
+            throw RecordingCoordinatorError.startFailed("Failed to start recording")
+        }
+        do {
+            if source != .microphone, let consume = RecordingHelper.shared.systemAudioConsumer() {
+                try await SystemAudioRecordingHelper.shared.startCapture(consume: consume, isCurrent: { self.generation == session })
+                guard generation == session else {
+                    throw RecordingCoordinatorError.startFailed("Audio capture stopped during startup")
+                }
+            }
+        } catch {
+            if generation == session {
+                RecordingHelper.shared.cancelRecording()
+                activeSource = nil
+                activeRequestId = nil
+            }
+            throw error
+        }
     }
 
     @MainActor
     func stopRecording() async throws -> String? {
-        guard let source = activeSource else {
-            throw RecordingCoordinatorError.notRecording
+        guard let source = activeSource else { throw RecordingCoordinatorError.notRecording }
+        if source != .microphone { await SystemAudioRecordingHelper.shared.stopCapture() }
+        if source != .microphone, let drain = RecordingHelper.shared.systemAudioDrain() {
+            guard await drain() else {
+                RecordingHelper.shared.disableSystemAudio()
+                sendLog(level: "warn", message: "System audio drain timed out; preserving the captured recording")
+                let path = RecordingHelper.shared.stopRecording()
+                activeSource = nil
+                activeRequestId = nil
+                return path
+            }
         }
-
-        let filePath: String?
-        switch source {
-        case .microphone:
-            filePath = RecordingHelper.shared.stopRecording()
-        case .systemAudio:
-            filePath = try await SystemAudioRecordingHelper.shared.stopRecording()
-        }
-
+        let path = RecordingHelper.shared.stopRecording()
         activeSource = nil
-        return filePath
+        activeRequestId = nil
+        return path
     }
 
     @MainActor
     func snapshotRecording() async throws -> String? {
-        switch activeSource {
-        case .microphone, .none:
-            return RecordingHelper.shared.snapshotRecording()
-        case .systemAudio:
-            throw RecordingCoordinatorError.snapshotUnsupported
-        }
+        return RecordingHelper.shared.snapshotRecording()
     }
 
     @MainActor
-    func cancelRecording() async {
-        let source = activeSource
-        activeSource = nil
-
-        switch source {
-        case .microphone:
-            RecordingHelper.shared.cancelRecording()
-        case .systemAudio:
-            await SystemAudioRecordingHelper.shared.cancelRecording()
-        case .none:
-            break
+    func cancelRecording(requestId: String? = nil) async {
+        if let requestId, requestId != activeRequestId { return }
+        generation = UUID()
+        if activeSource != nil && activeSource != .microphone {
+            await SystemAudioRecordingHelper.shared.stopCapture()
         }
+        RecordingHelper.shared.cancelRecording()
+        activeSource = nil
+        activeRequestId = nil
+    }
+
+    @MainActor
+    func interruptSystemAudio(message: String) async {
+        guard let source = activeSource, source != .microphone else { return }
+        await SystemAudioRecordingHelper.shared.stopCapture()
+        RecordingHelper.shared.disableSystemAudio()
+        let detail = source == .systemAudio
+            ? "System audio stopped. Finish recording to transcribe the audio already captured."
+            : "System audio stopped; microphone capture continues. Finish recording to keep the captured audio."
+        sendJSON(["type": "recordingCaptureInterrupted", "message": "\(detail) \(message)"])
     }
 
     func setHarvestMode(_ mode: String, silenceMs: Int?) {
-        if activeSource != .systemAudio {
-            RecordingHelper.shared.setHarvestMode(mode, silenceMs: silenceMs)
-        }
+        RecordingHelper.shared.setHarvestMode(mode, silenceMs: silenceMs)
     }
 }
 
-final class SystemAudioRecordingHelper: NSObject, SCStreamOutput {
+final class SystemAudioRecordingHelper: NSObject, SCStreamOutput, SCStreamDelegate {
     static let shared = SystemAudioRecordingHelper()
-
     private let sampleQueue = DispatchQueue(label: "FieldTheoryHelper.SystemAudio")
-    private let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: 16_000,
-        channels: 1,
-        interleaved: false
-    )!
-    private static let wavSettings: [String: Any] = [
-        AVFormatIDKey: Int(kAudioFormatLinearPCM),
-        AVSampleRateKey: 16000,
-        AVNumberOfChannelsKey: 1,
-        AVLinearPCMBitDepthKey: 32,
-        AVLinearPCMIsFloatKey: true,
-        AVLinearPCMIsBigEndianKey: false
-    ]
-
+    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    private var converter: AVAudioConverter?
     private var stream: SCStream?
-    private var audioFile: AVAudioFile?
-    private var recordingURL: URL?
-    private var isRecording = false
-
-    private override init() {
-        super.init()
-    }
+    private var consume: ((AVAudioPCMBuffer) -> Bool)?
+    private var sampleStream: SCStream?
 
     @MainActor
-    func startRecording() async throws {
-        guard !isRecording else {
-            throw RecordingCoordinatorError.alreadyRecording
-        }
-
-        guard CGPreflightScreenCaptureAccess() else {
-            throw RecordingCoordinatorError.missingScreenRecordingPermission
-        }
-
+    func startCapture(consume: @escaping (AVAudioPCMBuffer) -> Bool, isCurrent: @escaping @MainActor () -> Bool) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first else {
-            throw RecordingCoordinatorError.noShareableDisplay
-        }
-
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "fieldtheory-system-audio-\(UUID().uuidString).wav"
-        let url = tempDir.appendingPathComponent(fileName)
-        let file = try AVAudioFile(forWriting: url, settings: Self.wavSettings)
-
+        guard isCurrent() else { throw RecordingCoordinatorError.startFailed("Recording start cancelled") }
+        guard let display = content.displays.first else { throw RecordingCoordinatorError.noShareableDisplay }
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
@@ -172,96 +148,53 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput {
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         configuration.queueDepth = 2
         configuration.showsCursor = false
-
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
-        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-
-        self.audioFile = file
-        self.recordingURL = url
-        self.stream = stream
-        self.isRecording = true
-
+        let capture = SCStream(filter: filter, configuration: configuration, delegate: self)
+        try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+        sampleQueue.sync { self.consume = consume; self.sampleStream = capture }
+        stream = capture
         do {
-            try await startCapture(stream)
-            sendLog(level: "info", message: "System audio recording started: \(url.path)")
+            try await startCapture(capture)
+            if !isCurrent() {
+                try? await stopCapture(capture)
+                throw RecordingCoordinatorError.startFailed("Recording start cancelled")
+            }
         } catch {
-            self.isRecording = false
-            self.audioFile = nil
-            self.recordingURL = nil
-            self.stream = nil
-            try? FileManager.default.removeItem(at: url)
+            sampleQueue.sync {
+                if self.sampleStream === capture { self.consume = nil; self.converter = nil; self.sampleStream = nil }
+            }
+            if stream === capture { stream = nil }
             throw error
         }
     }
 
     @MainActor
-    func stopRecording() async throws -> String? {
-        guard isRecording, let stream = stream, let url = recordingURL else {
-            throw RecordingCoordinatorError.notRecording
-        }
-
-        isRecording = false
-        self.stream = nil
-        self.audioFile = nil
-        self.recordingURL = nil
-
-        try? stream.removeStreamOutput(self, type: .audio)
-        do {
-            try await stopCapture(stream)
-        } catch {
-            throw RecordingCoordinatorError.stopFailed(error.localizedDescription)
-        }
-
-        let path = url.path
-        if !FileManager.default.fileExists(atPath: path) {
-            throw RecordingCoordinatorError.stopFailed("Recording file does not exist")
-        }
-
-        return path
-    }
-
-    @MainActor
-    func cancelRecording() async {
-        guard let stream = stream else {
-            return
-        }
-
-        let url = recordingURL
-        isRecording = false
-        self.stream = nil
-        self.audioFile = nil
-        self.recordingURL = nil
-
-        try? stream.removeStreamOutput(self, type: .audio)
-        _ = try? await stopCapture(stream)
-
-        if let url {
-            try? FileManager.default.removeItem(at: url)
+    func stopCapture() async {
+        guard let capture = stream else { return }
+        stream = nil
+        try? await stopCapture(capture)
+        try? capture.removeStreamOutput(self, type: .audio)
+        sampleQueue.sync {
+            if sampleStream === capture { consume = nil; converter = nil; sampleStream = nil }
         }
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-        guard outputType == .audio, isRecording, CMSampleBufferDataIsReady(sampleBuffer) else {
-            return
-        }
-
-        guard
-            let inputBuffer = pcmBuffer(from: sampleBuffer),
-            let bufferToWrite = convertToTargetFormatIfNeeded(inputBuffer),
-            let audioFile = audioFile
-        else {
-            return
-        }
-
-        do {
-            try audioFile.write(from: bufferToWrite)
-        } catch {
-            sendLog(level: "error", message: "Failed to write system audio buffer: \(error.localizedDescription)")
+        guard sampleStream === stream, outputType == .audio, CMSampleBufferDataIsReady(sampleBuffer), let consume,
+              let input = pcmBuffer(from: sampleBuffer), let buffer = convertToTargetFormatIfNeeded(input) else { return }
+        if !consume(buffer) {
+            failCapture(stream, message: "System audio could not keep up with capture; recording stopped")
         }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        sendLog(level: "error", message: "System audio capture stopped: \(error.localizedDescription)")
+        failCapture(stream, message: error.localizedDescription)
+    }
+
+    private func failCapture(_ stream: SCStream, message: String) {
+        Task { @MainActor in
+            guard self.stream === stream else { return }
+            await RecordingCoordinator.shared.interruptSystemAudio(message: message)
+        }
     }
 
     private func startCapture(_ stream: SCStream) async throws {
@@ -296,9 +229,10 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput {
             return inputBuffer
         }
 
-        guard let converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat) else {
-            return nil
+        if converter?.inputFormat.isEqual(inputBuffer.format) != true {
+            converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
         }
+        guard let converter else { return nil }
 
         let ratio = targetFormat.sampleRate / inputBuffer.format.sampleRate
         let capacity = AVAudioFrameCount((Double(inputBuffer.frameLength) * ratio).rounded(.up))
@@ -340,27 +274,24 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput {
         }
         pcmBuffer.frameLength = frameCount
 
-        var audioBufferList = AudioBufferList(
-            mNumberBuffers: 1,
-            mBuffers: AudioBuffer(mNumberChannels: format.channelCount, mDataByteSize: 0, mData: nil)
+        var listSize = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer, bufferListSizeNeededOut: &listSize, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: nil
         )
+        guard (sizeStatus == noErr || listSize > 0), listSize > 0 else { return nil }
+        let storage = UnsafeMutableRawPointer.allocate(byteCount: listSize, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { storage.deallocate() }
+        let list = storage.bindMemory(to: AudioBufferList.self, capacity: 1)
         var blockBuffer: CMBlockBuffer?
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBuffer
+            sampleBuffer, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: listSize,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &blockBuffer
         )
-
-        guard status == noErr else {
-            return nil
-        }
-
-        let sourceBuffers = UnsafeMutableAudioBufferListPointer(&audioBufferList)
+        guard status == noErr else { return nil }
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(list)
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(pcmBuffer.mutableAudioBufferList)
         for index in 0..<min(sourceBuffers.count, destinationBuffers.count) {
             guard let sourceData = sourceBuffers[index].mData, let destinationData = destinationBuffers[index].mData else {

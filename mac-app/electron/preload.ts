@@ -934,8 +934,8 @@ export interface TranscribeAPI {
   getDownloadingModels: () => Promise<string[]>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
-  getRecordingSource: () => Promise<'microphone' | 'system-audio'>;
-  setRecordingSource: (source: 'microphone' | 'system-audio') => Promise<void>;
+  getRecordingSource: () => Promise<'microphone' | 'system-audio' | 'microphone-and-system-audio'>;
+  setRecordingSource: (source: 'microphone' | 'system-audio' | 'microphone-and-system-audio') => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey: () => Promise<string | null>;
@@ -1422,11 +1422,11 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_SELECTED_MODEL, modelSize);
   },
 
-  getRecordingSource: async (): Promise<'microphone' | 'system-audio'> => {
+  getRecordingSource: async (): Promise<'microphone' | 'system-audio' | 'microphone-and-system-audio'> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_RECORDING_SOURCE);
   },
 
-  setRecordingSource: async (source: 'microphone' | 'system-audio'): Promise<void> => {
+  setRecordingSource: async (source: 'microphone' | 'system-audio' | 'microphone-and-system-audio'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_RECORDING_SOURCE, source);
   },
 

@@ -316,8 +316,8 @@ interface TranscribeAPI {
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
-  getRecordingSource?: () => Promise<'microphone' | 'system-audio'>;
-  setRecordingSource?: (source: 'microphone' | 'system-audio') => Promise<void>;
+  getRecordingSource?: () => Promise<'microphone' | 'system-audio' | 'microphone-and-system-audio'>;
+  setRecordingSource?: (source: 'microphone' | 'system-audio' | 'microphone-and-system-audio') => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey?: () => Promise<string | null>;

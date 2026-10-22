@@ -284,15 +284,15 @@ describe('TranscriberManager recording source selection', () => {
     expect(manager.getRecordingSource()).toBe('microphone');
   });
 
-  it('returns a saved system-audio recording source', () => {
+  it.each(['system-audio', 'microphone-and-system-audio'] as const)('returns the saved %s recording source', source => {
     const manager: any = {
       preferences: {
-        getPreference: (key: string) => key === 'transcriptionInputSource' ? 'system-audio' : undefined,
+        getPreference: (key: string) => key === 'transcriptionInputSource' ? source : undefined,
       },
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
-    expect(manager.getRecordingSource()).toBe('system-audio');
+    expect(manager.getRecordingSource()).toBe(source);
   });
 
   it('persists recording source changes to preferences', async () => {
@@ -3383,13 +3383,13 @@ describe('TranscriberManager parakeet uninstall', () => {
 });
 
 describe('standard recording cold model startup', () => {
-  it('starts capture without awaiting model warmup', async () => {
+  it.each(['microphone', 'microphone-and-system-audio'] as const)('starts %s capture without awaiting model warmup', async source => {
     let release!: () => void;
     const warmup = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
     const capture = vi.fn(async () => undefined);
     const manager: any = Object.create(TranscriberManager.prototype);
     Object.assign(manager, {
-      status: 'idle', getRecordingSource: () => 'microphone',
+      status: 'idle', getRecordingSource: () => source,
       preferences: { getPreference: (key: string) => key === 'onboardingComplete' },
       setStatus: vi.fn(), overlay: { showRecording: vi.fn() },
       registerAbandonHotkey: vi.fn(), soundManager: { play: vi.fn() },
@@ -3399,7 +3399,7 @@ describe('standard recording cold model startup', () => {
     });
     await manager.startRecording();
     expect(warmup).toHaveBeenCalledOnce();
-    expect(capture).toHaveBeenCalledWith('microphone');
+    expect(capture).toHaveBeenCalledWith(source);
     release();
   });
 });

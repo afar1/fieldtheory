@@ -8,7 +8,7 @@
  * Used to distinguish between the USB-C dongle and Bluetooth variants of Little One.
  */
 export type TransportType = 'usb' | 'bluetooth' | 'built-in' | 'other';
-export type RecordingInputSource = 'microphone' | 'system-audio';
+export type RecordingInputSource = 'microphone' | 'system-audio' | 'microphone-and-system-audio';
 
 /**
  * Represents a single audio device as seen by CoreAudio.
@@ -199,6 +199,7 @@ export interface HelperLogMessage extends HelperMessage {
  * Recording started message from the helper.
  */
 export interface RecordingStartedMessage extends HelperMessage {
+  requestId?: string;
   type: 'recordingStarted';
 }
 
@@ -206,6 +207,7 @@ export interface RecordingStartedMessage extends HelperMessage {
  * Recording stopped message from the helper.
  */
 export interface RecordingStoppedMessage extends HelperMessage {
+  requestId?: string;
   type: 'recordingStopped';
   filePath: string;
 }
@@ -231,6 +233,7 @@ export interface RecordingChunkReadyMessage extends HelperMessage {
  * Recording cancelled message from the helper.
  */
 export interface RecordingCancelledMessage extends HelperMessage {
+  requestId?: string;
   type: 'recordingCancelled';
 }
 
@@ -488,6 +491,8 @@ export interface GazeSampleMessage extends HelperMessage {
 export type HelperOutgoingMessage =
   | DevicesChangedMessage
   | DefaultInputChangedMessage
+  | (HelperMessage & { type: 'recordingCaptureInterrupted'; message: string })
+  | (HelperMessage & { type: 'recordingStartFailed' | 'recordingStopFailed'; requestId?: string; message: string })
   | HelperErrorMessage
   | HelperLogMessage
   | RecordingStartedMessage
@@ -538,11 +543,13 @@ export interface WarmupAudioCommand {
 }
 
 export interface StartRecordingCommand {
+  requestId?: string;
   type: 'startRecording';
   recordingSource?: RecordingInputSource;
 }
 
 export interface StopRecordingCommand {
+  requestId?: string;
   type: 'stopRecording';
 }
 
@@ -551,6 +558,7 @@ export interface SnapshotRecordingCommand {
 }
 
 export interface CancelRecordingCommand {
+  requestId?: string;
   type: 'cancelRecording';
 }
 

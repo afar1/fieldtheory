@@ -372,6 +372,10 @@ export class NativeHelper extends EventEmitter {
    */
   async startRecording(recordingSource: RecordingInputSource = 'microphone'): Promise<void> {
     return this.enqueueRecordingCommand('startRecording', async () => {
+      if (recordingSource !== 'microphone') {
+        await this.startRecordingOnce(recordingSource);
+        return;
+      }
       let lastError: Error | null = null;
 
       for (let attempt = 0; attempt <= START_RECORDING_RETRY_DELAYS_MS.length; attempt += 1) {
@@ -439,6 +443,7 @@ export class NativeHelper extends EventEmitter {
         this.markRecordingReleased();
         throw new Error('No recording in progress');
       }
+      const requestId = randomUUID();
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           cleanup();
@@ -447,8 +452,15 @@ export class NativeHelper extends EventEmitter {
         }, 10000); // Increased timeout to 10 seconds
 
         const handler = (msg: HelperOutgoingMessage) => {
-          if (msg.type === 'recordingStopped') {
+          if ((msg.type === 'recordingStopped' || msg.type === 'recordingStopFailed') && msg.requestId !== requestId) return;
+          if (msg.type === 'recordingStopFailed') {
             this.recordingActive = false;
+            this.markRecordingReleased();
+            cleanup();
+            reject(new Error(msg.message));
+          } else if (msg.type === 'recordingStopped') {
+            this.recordingActive = false;
+            this.markRecordingReleased();
             cleanup();
             resolve(msg.filePath);
           } else if (msg.type === 'error' && /stop recording|no recording in progress/i.test(msg.message)) {
@@ -467,7 +479,7 @@ export class NativeHelper extends EventEmitter {
         };
 
         this.on('message', handler);
-        this.send({ type: 'stopRecording' });
+        this.send({ type: 'stopRecording', requestId });
       });
     });
   }
@@ -1107,14 +1119,14 @@ export class NativeHelper extends EventEmitter {
         this.emit('message', msg);
         break;
 
-      case 'recordingStarted':
-        this.recordingActive = true;
-        this.emit('message', msg);
+      case 'recordingCaptureInterrupted':
+        this.emit('recordingCaptureInterrupted', new Error(msg.message));
         break;
 
+      case 'recordingStarted':
       case 'recordingStopped':
-        this.recordingActive = false;
-        this.markRecordingReleased();
+      case 'recordingStartFailed':
+      case 'recordingStopFailed':
         this.emit('message', msg);
         break;
 
@@ -1124,6 +1136,7 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'recordingCancelled':
+        if (msg.requestId) { this.emit('message', msg); break; }
         this.recordingActive = false;
         this.markRecordingReleased();
         this.emit('message', msg);
@@ -1290,14 +1303,20 @@ export class NativeHelper extends EventEmitter {
     await this.waitForReady();
     log.info('[AudioRecovery] startRecordingOnce: helperRunning=%s helperReady=%s recordingActive=%s',
       this.isRunning, this.isReady, this.recordingActive);
+    const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
+        this.send({ type: 'cancelRecording', requestId });
         reject(new Error('startRecording timed out'));
-      }, 5000);
+      }, recordingSource === 'microphone' ? 5000 : 20_000);
 
       const handler = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'recordingStarted') {
+        if ((msg.type === 'recordingStarted' || msg.type === 'recordingStartFailed') && msg.requestId !== requestId) return;
+        if (msg.type === 'recordingStartFailed') {
+          cleanup();
+          reject(new Error(msg.message));
+        } else if (msg.type === 'recordingStarted') {
           this.recordingActive = true;
           cleanup();
           resolve();
@@ -1316,7 +1335,7 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.on('message', handler);
-      this.send({ type: 'startRecording', recordingSource });
+      this.send({ type: 'startRecording', recordingSource, requestId });
     });
   }
 

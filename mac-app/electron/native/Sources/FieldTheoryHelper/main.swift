@@ -142,22 +142,21 @@ struct ErrorMessage: Codable {
     }
 }
 
-struct RecordingStartedMessage: Codable {
+struct RecordingStartedMessage: Encodable {
     let type = "recordingStarted"
-    
-    enum CodingKeys: String, CodingKey {
-        case type
-    }
+    let requestId: String?
 }
 
-struct RecordingStoppedMessage: Codable {
+struct RecordingOperationFailedMessage: Encodable {
+    let type: String
+    let requestId: String?
+    let message: String
+}
+
+struct RecordingStoppedMessage: Encodable {
     let type = "recordingStopped"
     let filePath: String
-    
-    enum CodingKeys: String, CodingKey {
-        case type
-        case filePath
-    }
+    let requestId: String?
 }
 
 struct RecordingSnapshotMessage: Codable {
@@ -1481,6 +1480,8 @@ final class RecordingHelper {
     
     static let shared = RecordingHelper()
 
+    private var recordingTapNode: AVAudioNode?
+    private var systemAudioBridge: SystemAudioPlaybackBridge?
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
@@ -1706,7 +1707,7 @@ final class RecordingHelper {
 
     /// Start recording from the default input device.
     /// Records to a temporary WAV file at 16kHz mono PCM.
-    func startRecording() -> Bool {
+    func startRecording(captureMicrophone: Bool = true, captureSystemAudio: Bool = false) -> Bool {
         guard !isRecording else {
             sendLog(level: "error", message: "Recording already in progress")
             return false
@@ -1714,6 +1715,7 @@ final class RecordingHelper {
 
         // Query the default input device from the HAL before creating the engine.
         // If coreaudiod crashed or no mic is connected, fail fast with a clear message.
+        if captureMicrophone {
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -1729,8 +1731,9 @@ final class RecordingHelper {
         )
         if status != noErr || deviceID == kAudioObjectUnknown {
             sendLog(level: "error", message: "No audio input device available (CoreAudio status=\(status), deviceID=\(deviceID)) — is a microphone connected?")
-            sendJSON(["type": "error", "message": "Failed to start recording"])
             return false
+        }
+
         }
 
         // Create temporary file path
@@ -1745,8 +1748,8 @@ final class RecordingHelper {
 
         // Set up audio engine
         let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
+        let inputNode = captureMicrophone ? engine.inputNode : nil
+        let inputFormat = inputNode?.inputFormat(forBus: 0) ?? AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
         
         sendLog(level: "info", message: "Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
         
@@ -1773,10 +1776,32 @@ final class RecordingHelper {
             return false
         }
         
-        // Install tap on input node
+        let tapNode: AVAudioNode
+        let tapFormat: AVAudioFormat
+        if captureSystemAudio {
+            let mixer = AVAudioMixerNode()
+            let player = AVAudioPlayerNode()
+            engine.attach(mixer)
+            engine.attach(player)
+            engine.connect(player, to: mixer, format: format)
+            if let inputNode {
+                engine.connect(inputNode, to: mixer, format: inputFormat)
+            }
+            engine.connect(mixer, to: engine.mainMixerNode, format: format)
+            // Render the capture graph without playing the call back through the speakers.
+            engine.mainMixerNode.outputVolume = 0
+            systemAudioBridge = SystemAudioPlaybackBridge(player: player)
+            tapNode = mixer
+            tapFormat = format
+        } else {
+            guard let inputNode else { return false }
+            tapNode = inputNode
+            tapFormat = inputFormat
+        }
+        recordingTapNode = tapNode
         let bufferSize: AVAudioFrameCount = 2048
-        let needsConversion = inputFormat.sampleRate != format.sampleRate || inputFormat.channelCount != format.channelCount
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
+        let needsConversion = tapFormat.sampleRate != format.sampleRate || tapFormat.channelCount != format.channelCount
+        tapNode.installTap(onBus: 0, bufferSize: bufferSize, format: tapFormat) { [weak self] buffer, _ in
             guard let self = self, self.isRecording, let audioFile = self.audioFile else { return }
 
             // 1. Calculate RMS from raw input buffer (for UI level meter)
@@ -1796,14 +1821,14 @@ final class RecordingHelper {
             // 2. Convert to 16kHz mono (move before VAD so we can run VAD on target format)
             let writeBuffer: AVAudioPCMBuffer
             if needsConversion {
-                guard let converter = AVAudioConverter(from: inputFormat, to: format) else {
+                guard let converter = AVAudioConverter(from: tapFormat, to: format) else {
                     sendLog(level: "error", message: "Failed to create audio converter")
                     // Send level without VAD so UI meter doesn't stall
                     sendJSON(AudioLevelMessage(level: level, isSpeech: false))
                     return
                 }
 
-                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / inputFormat.sampleRate)
+                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / tapFormat.sampleRate)
                 guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
                     sendJSON(AudioLevelMessage(level: level, isSpeech: false))
                     return
@@ -1856,6 +1881,7 @@ final class RecordingHelper {
         do {
             try engine.start()
             isRecording = true
+            systemAudioBridge?.start()
             resetHarvestSpeechState()
             lastAudioProcessTimeNs = 0
             silenceTimer?.cancel()
@@ -1865,7 +1891,10 @@ final class RecordingHelper {
             return true
         } catch {
             sendLog(level: "error", message: "Failed to start audio engine: \(error.localizedDescription)")
-            inputNode.removeTap(onBus: 0)
+            recordingTapNode?.removeTap(onBus: 0)
+            recordingTapNode = nil
+            systemAudioBridge?.stop()
+            systemAudioBridge = nil
             audioEngine = nil
             audioFile = nil
             recordingURL = nil
@@ -1873,6 +1902,21 @@ final class RecordingHelper {
         }
     }
     
+    func systemAudioConsumer() -> ((AVAudioPCMBuffer) -> Bool)? {
+        guard let bridge = systemAudioBridge else { return nil }
+        return { buffer in bridge.enqueue(buffer) }
+    }
+
+    func disableSystemAudio() {
+        systemAudioBridge?.stop()
+        systemAudioBridge = nil
+    }
+
+    func systemAudioDrain() -> (() async -> Bool)? {
+        guard let bridge = systemAudioBridge else { return nil }
+        return { await bridge.finish() }
+    }
+
     /// Stop recording and return the file path.
     func stopRecording() -> String? {
         guard isRecording else {
@@ -1901,7 +1945,10 @@ final class RecordingHelper {
         lastAudioProcessTimeNs = 0
 
         // Remove tap and stop engine
-        engine.inputNode.removeTap(onBus: 0)
+        recordingTapNode?.removeTap(onBus: 0)
+        recordingTapNode = nil
+        systemAudioBridge?.stop()
+        systemAudioBridge = nil
         engine.stop()
         
         // Flush and close audio file
@@ -2004,7 +2051,10 @@ final class RecordingHelper {
         lastAudioProcessTimeNs = 0
         
         if let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
+            recordingTapNode?.removeTap(onBus: 0)
+            recordingTapNode = nil
+            systemAudioBridge?.stop()
+            systemAudioBridge = nil
             engine.stop()
         }
         
@@ -2206,10 +2256,10 @@ final class MessageHandler {
             let source = RecordingSource(rawValue: message.recordingSource ?? RecordingSource.microphone.rawValue) ?? .microphone
             Task { @MainActor in
                 do {
-                    try await RecordingCoordinator.shared.startRecording(source: source)
-                    sendJSON(RecordingStartedMessage())
+                    try await RecordingCoordinator.shared.startRecording(source: source, requestId: message.requestId)
+                    sendJSON(RecordingStartedMessage(requestId: message.requestId))
                 } catch {
-                    sendError(error.localizedDescription)
+                    sendJSON(RecordingOperationFailedMessage(type: "recordingStartFailed", requestId: message.requestId, message: error.localizedDescription))
                 }
             }
             
@@ -2217,12 +2267,12 @@ final class MessageHandler {
             Task { @MainActor in
                 do {
                     if let filePath = try await RecordingCoordinator.shared.stopRecording() {
-                        sendJSON(RecordingStoppedMessage(filePath: filePath))
+                        sendJSON(RecordingStoppedMessage(filePath: filePath, requestId: message.requestId))
                     } else {
-                        sendError("Failed to stop recording")
+                        sendJSON(RecordingOperationFailedMessage(type: "recordingStopFailed", requestId: message.requestId, message: "No recording in progress"))
                     }
                 } catch {
-                    sendError(error.localizedDescription)
+                    sendJSON(RecordingOperationFailedMessage(type: "recordingStopFailed", requestId: message.requestId, message: error.localizedDescription))
                 }
             }
             
@@ -2241,8 +2291,12 @@ final class MessageHandler {
 
         case .cancelRecording:
             Task { @MainActor in
-                await RecordingCoordinator.shared.cancelRecording()
-                sendJSON(RecordingCancelledMessage())
+                await RecordingCoordinator.shared.cancelRecording(requestId: message.requestId)
+                if let requestId = message.requestId {
+                    sendJSON(["type": "recordingCancelled", "requestId": requestId])
+                } else {
+                    sendJSON(RecordingCancelledMessage())
+                }
             }
             
         case .checkPermissions:

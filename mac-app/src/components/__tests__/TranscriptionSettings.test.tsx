@@ -207,6 +207,19 @@ describe('TranscriptionSettings Parakeet labels', () => {
     });
   });
 
+  it('selects combined call audio and reports a refusal while recording', async () => {
+    const setRecordingSource = vi.fn(async () => undefined);
+    (window as any).transcribeAPI = makeTranscribeApi({ setRecordingSource });
+    (window as any).hotMicAPI = makeHotMicApi();
+    render(<TranscriptionSettings />);
+    const combined = await screen.findByRole('button', { name: 'Microphone + System Audio' });
+    await act(async () => { fireEvent.click(combined); });
+    expect(setRecordingSource).toHaveBeenCalledWith('microphone-and-system-audio');
+    setRecordingSource.mockRejectedValueOnce(new Error('Stop Hot Mic before changing the recording source'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Microphone$/ })); });
+    expect(screen.getByRole('alert').textContent).toContain('Stop Hot Mic');
+  });
+
   it('loads and saves the live typing toggle', async () => {
     const setLiveTyping = vi.fn(async () => undefined);
     (window as any).transcribeAPI = makeTranscribeApi({ setLiveTyping });

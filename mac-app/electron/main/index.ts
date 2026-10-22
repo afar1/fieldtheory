@@ -6057,9 +6057,6 @@ async function applyInputMode(mode: InputMode): Promise<InputMode> {
     hotMicManager.stop();
   }
 
-  if (!shouldEnableHotMic && transcriberManager?.getRecordingSource() === 'system-audio') {
-    await transcriberManager.setRecordingSource('microphone');
-  }
 
   broadcastInputMode(normalized);
   return normalized;
@@ -10112,10 +10109,11 @@ function setupTranscribeIPCHandlers(): void {
     return transcriberManager?.getRecordingSource() ?? 'microphone';
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_RECORDING_SOURCE, async (_event, source: 'microphone' | 'system-audio') => {
+  ipcMain.handle(TranscribeIPCChannels.SET_RECORDING_SOURCE, async (_event, source: 'microphone' | 'system-audio' | 'microphone-and-system-audio') => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
+    if (hotMicManager?.isActive) throw new Error('Stop Hot Mic before changing the recording source');
     await transcriberManager.setRecordingSource(source);
   });
 
@@ -14337,6 +14335,10 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   log.info('[audio-startup] === BOOT TIMELINE (ready handler): +%dms since module load', Date.now() - BOOT_MARK);
   nativeHelper = new NativeHelper();
+  nativeHelper.on('recordingCaptureInterrupted', (error: Error) => {
+    hotMicManager?.notifyCaptureInterrupted(error.message);
+    cursorStatusManager?.showRecordingNote(`Audio capture stopped: ${error.message}`);
+  });
   nativeHelper.start();
   secureInputHotkeyRecovery = new SecureInputHotkeyRecovery({
     getSecureInputStatus: () => nativeHelper?.getSecureInputStatus() ?? Promise.resolve(null),

@@ -85,7 +85,8 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
   const [hotkeyRecoveryMessage, setHotkeyRecoveryMessage] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('small');
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
-  const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio'>('microphone');
+  const [recordingSourceError, setRecordingSourceError] = useState<string | null>(null);
+  const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio' | 'microphone-and-system-audio'>('microphone');
   const [liveTypingEnabled, setLiveTypingEnabled] = useState(false);
 
   // Engine selection state.
@@ -188,7 +189,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
         setModelStatus(currentModelStatus);
         setHotkey(currentHotkey);
         setSelectedModel(currentSelectedModel);
-        setRecordingSource(currentRecordingSource as 'microphone' | 'system-audio');
+        setRecordingSource(currentRecordingSource as 'microphone' | 'system-audio' | 'microphone-and-system-audio');
         setAbandonHotkey(currentAbandonHotkey);
         setAutoImprove(currentAutoImprove);
         setAutoImproveProvider(currentAutoImproveProvider as AutoImproveProvider);
@@ -258,13 +259,14 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
     }
   }, []);
 
-  const handleRecordingSourceChange = useCallback(async (source: 'microphone' | 'system-audio') => {
+  const handleRecordingSourceChange = useCallback(async (source: 'microphone' | 'system-audio' | 'microphone-and-system-audio') => {
     if (!window.transcribeAPI?.setRecordingSource) return;
-    setRecordingSource(source);
+    setRecordingSourceError(null);
     try {
       await window.transcribeAPI.setRecordingSource(source);
+      setRecordingSource(source);
     } catch (err) {
-      console.error('Failed to set recording source:', err);
+      setRecordingSourceError(err instanceof Error ? err.message : 'Could not change the recording source');
     }
   }, []);
 
@@ -896,14 +898,15 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
           </div>
         </div>
 
-        <div style={{ ...styles.row, borderBottom: 0 }}>
+        <div style={{ ...styles.row, borderBottom: 0, flexDirection: 'column', alignItems: 'stretch' }}>
           <div style={styles.rowText}>
             <span style={styles.rowLabel}>Recording source</span>
+            {recordingSourceError && <span role="alert" style={styles.modelHint}>{recordingSourceError}</span>}
             <span style={styles.modelHint}>
-              System audio uses Screen Recording permission and captures call output instead of your microphone.
+              Applies to regular recording and Hot Mic. Capture both sides of a call with Microphone + System Audio. System audio requires Screen Recording permission. Use headphones to avoid capturing call audio twice through your microphone.
             </span>
           </div>
-          <div style={styles.rowControls}>
+          <div style={{ ...styles.rowControls, flexWrap: 'wrap' }}>
             <button
               onClick={() => void handleRecordingSourceChange('microphone')}
               style={recordingSource === 'microphone' ? styles.btn : styles.btnGhost}
@@ -915,6 +918,12 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
               style={recordingSource === 'system-audio' ? styles.btn : styles.btnGhost}
             >
               System Audio
+            </button>
+            <button
+              onClick={() => void handleRecordingSourceChange('microphone-and-system-audio')}
+              style={recordingSource === 'microphone-and-system-audio' ? styles.btn : styles.btnGhost}
+            >
+              Microphone + System Audio
             </button>
           </div>
         </div>
