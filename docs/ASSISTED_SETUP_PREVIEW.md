@@ -15,8 +15,8 @@ Start at [Onboard](https://onboard-assisted-setup-afar1.vercel.app) or [Field Th
 
 - Onboard: signed, notarized, Gatekeeper accepted; anonymous artifact download matches the local build. Website copy/assistant switching and native readiness display checked.
 - Field Theory: authenticated local status/actions, native navigation, deduplicated Parakeet setup and packaged account-configuration guard. TypeScript, 210 focused native tests and 12 package archive checks pass.
-- Plugin: actual installed MCP and Claude Code calls recognized the running preview, preserved the existing mixed-audio source and shortcut, and reported verified Parakeet models. Missing account access stays unfinished.
+- Plugin: actual installed MCP and Claude Code calls recognized the running preview, preserved the existing mixed-audio source and shortcut, and reported verified Parakeet models. The corrected packaged build restored the existing signed-in account without asking the user to sign in again.
 - Claude Desktop: ZIP accepted; its local-server permission requires user confirmation before tool testing.
-- Remaining acceptance: corrected packaged account screen, native sign-in if needed, real call capture/transcript handoff, clean-Mac installation, and Claude Desktop local tool use. Official marketplace publication requires separate platform review.
+- Remaining acceptance: real call capture/transcript handoff, fresh-account email verification, clean-Mac installation, and Claude Desktop local tool use. Official marketplace publication requires separate platform review.
 
 This branch is stacked on the existing 0.3.77 call-audio changes at `59178a087`. Its private base branch is `codex/onboarding-audio-base`. Preview auto-updates are disabled; no production updater metadata is published.
