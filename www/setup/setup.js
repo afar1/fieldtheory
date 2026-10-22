@@ -7,7 +7,6 @@
       await navigator.clipboard.writeText(prompt.value);
       status.textContent = 'Copied. Paste it into ChatGPT or Claude.';
     } catch {
-      document.querySelector('.help').open = true;
       prompt.closest('details').open = true;
       prompt.focus();
       prompt.select();
