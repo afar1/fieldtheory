@@ -83,6 +83,7 @@ function createManager(preferences: Record<string, unknown> = {}) {
     setHarvestMode: vi.fn(),
     startRecording: vi.fn(async (_source?: string) => undefined),
     stopRecording: vi.fn(async () => undefined),
+    refreshRecordingInput: vi.fn(),
     cancelRecording: vi.fn(async () => undefined),
     isRecordingActive: vi.fn(() => false),
     on: vi.fn(),
@@ -121,16 +122,16 @@ async function flushAsyncWork() {
 }
 
 describe('HotMicManager call audio', () => {
-  it('keeps the combined source when resuming capture after a device change', async () => {
+  it('preserves the combined recording during a device change', async () => {
     const { manager, nativeHelper } = createManager({ transcriptionInputSource: 'microphone-and-system-audio' });
     manager.activate();
     await flushAsyncWork();
     expect(nativeHelper.startRecording).toHaveBeenCalledWith('microphone-and-system-audio');
     nativeHelper.isRecordingActive.mockReturnValue(true);
     await (manager as any).handleDeviceEnforced();
-    expect(nativeHelper.startRecording.mock.calls.map(call => call[0])).toEqual([
-      'microphone-and-system-audio', 'microphone-and-system-audio',
-    ]);
+    expect(nativeHelper.refreshRecordingInput).toHaveBeenCalledOnce();
+    expect(nativeHelper.startRecording).toHaveBeenCalledOnce();
+    expect(nativeHelper.stopRecording).not.toHaveBeenCalled();
     manager.destroy();
   });
 });
@@ -1214,7 +1215,7 @@ describe('HotMicManager audio device recovery', () => {
     vi.clearAllMocks();
   });
 
-  it('restarts active recording when the priority input disappears and a fallback input exists', async () => {
+  it('keeps captured audio while refreshing a fallback microphone', async () => {
     const { manager, nativeHelper } = createManager();
     const audioManager = new EventEmitter() as EventEmitter & { getState: ReturnType<typeof vi.fn> };
     audioManager.getState = vi.fn(() => ({ defaultInputId: 'built-in-mic' }));
@@ -1226,12 +1227,13 @@ describe('HotMicManager audio device recovery', () => {
     audioManager.emit('priorityDeviceUnavailable', 'priority-mic');
     await flushAsyncWork();
 
-    expect(nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.startRecording).toHaveBeenCalledTimes(1);
+    expect(nativeHelper.refreshRecordingInput).toHaveBeenCalledOnce();
+    expect(nativeHelper.stopRecording).not.toHaveBeenCalled();
+    expect(nativeHelper.startRecording).not.toHaveBeenCalled();
     manager.destroy();
   });
 
-  it('stops active recording when the priority input disappears and no fallback input exists', async () => {
+  it('keeps captured audio when a microphone disappears without a fallback', async () => {
     const { manager, nativeHelper } = createManager();
     const audioManager = new EventEmitter() as EventEmitter & { getState: ReturnType<typeof vi.fn> };
     audioManager.getState = vi.fn(() => ({ defaultInputId: null }));
@@ -1243,7 +1245,8 @@ describe('HotMicManager audio device recovery', () => {
     audioManager.emit('priorityDeviceUnavailable', 'priority-mic');
     await flushAsyncWork();
 
-    expect(nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
+    expect(nativeHelper.refreshRecordingInput).toHaveBeenCalledOnce();
+    expect(nativeHelper.stopRecording).not.toHaveBeenCalled();
     expect(nativeHelper.startRecording).not.toHaveBeenCalled();
     manager.destroy();
   });

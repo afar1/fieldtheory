@@ -15,6 +15,8 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        .target(name: "CaptureAudio"),
+        .testTarget(name: "CaptureAudioTests", dependencies: ["CaptureAudio"]),
         .target(name: "NativeKeyboardEvents"),
         .testTarget(name: "NativeKeyboardEventsTests", dependencies: ["NativeKeyboardEvents"]),
         .target(
@@ -28,7 +30,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "FieldTheoryHelper",
-            dependencies: ["WebRTCVad", "NativeKeyboardEvents"],
+            dependencies: ["WebRTCVad", "NativeKeyboardEvents", "CaptureAudio"],
             path: "Sources/FieldTheoryHelper",
             exclude: ["GazeTrackingHelper.swift"],
             linkerSettings: [

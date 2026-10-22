@@ -883,15 +883,9 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private async handleDeviceEnforced(): Promise<void> {
-    if (this.status !== 'recording') return;
-    if (!this.nativeHelper.isRecordingActive()) return;
-    log.info('Standard recording: restarting after device enforcement');
-    try {
-      await this.nativeHelper.stopRecording();
-      await this.nativeHelper.startRecording();
-    } catch (error) {
-      log.error('Standard recording: failed to restart after device enforcement:', error);
-    }
+    if (this.status !== 'recording' || this.getRecordingSource() === 'system-audio') return;
+    // Native input recovery retains the file, source, timeline and already captured speech.
+    this.nativeHelper.refreshRecordingInput();
   }
 
   /**

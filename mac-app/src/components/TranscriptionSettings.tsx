@@ -903,7 +903,7 @@ export default function TranscriptionSettings({ mode = 'transcription' }: Transc
             <span style={styles.rowLabel}>Recording source</span>
             {recordingSourceError && <span role="alert" style={styles.modelHint}>{recordingSourceError}</span>}
             <span style={styles.modelHint}>
-              Applies to regular recording and Hot Mic. Capture both sides of a call with Microphone + System Audio. System audio requires Screen Recording permission. Use headphones to avoid capturing call audio twice through your microphone.
+              Applies to regular recording and Hot Mic. Capture both sides of a call with Microphone + System Audio. System audio requires Screen Recording permission. Use headphones to avoid capturing call audio twice. For steady AirPods playback volume in mixed mode, select your Mac microphone in Audio settings.
             </span>
           </div>
           <div style={{ ...styles.rowControls, flexWrap: 'wrap' }}>

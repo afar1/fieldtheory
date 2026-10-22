@@ -668,32 +668,13 @@ export class HotMicManager extends EventEmitter {
   }
 
   private async handleDeviceEnforced(): Promise<void> {
-    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle' || !this.nativeHelper.isRecordingActive()) return;
-    log.info('Hot Mic: restarting recording after device enforcement');
-    try {
-      await this.nativeHelper.stopRecording();
-      await this.nativeHelper.startRecording(this.getRecordingSource());
-    } catch (error) {
-      log.error('Hot Mic: failed to restart recording after device enforcement:', error);
-    }
+    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle') return;
+    this.nativeHelper.refreshRecordingInput();
   }
 
   private async handlePriorityDeviceUnavailable(): Promise<void> {
-    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle' || this.muted || !this.nativeHelper.isRecordingActive()) return;
-
-    const defaultInputId = this.audioManager?.getState().defaultInputId ?? null;
-    log.warn('Hot Mic: priority input disappeared; restarting recording on current default input');
-
-    try {
-      await this.nativeHelper.stopRecording();
-      if (!defaultInputId) {
-        log.warn('Hot Mic: priority input disappeared and no fallback input is available; recording stopped');
-        return;
-      }
-      await this.nativeHelper.startRecording(this.getRecordingSource());
-    } catch (error) {
-      log.error('Hot Mic: failed to recover after priority input disappeared:', error);
-    }
+    if (this.getRecordingSource() === 'system-audio' || this.state === 'idle' || this.muted) return;
+    this.nativeHelper.refreshRecordingInput();
   }
 
   setTranscriberStatusGetter(getter: () => string): void {

@@ -137,6 +137,7 @@ export type HelperIncomingMessageType =
   | 'startMonitoring'
   | 'startRecording'
   | 'stopRecording'
+  | 'refreshRecordingInput'
   | 'snapshotRecording'
   | 'cancelRecording'
   | 'checkPermissions'
@@ -491,6 +492,7 @@ export interface GazeSampleMessage extends HelperMessage {
 export type HelperOutgoingMessage =
   | DevicesChangedMessage
   | DefaultInputChangedMessage
+  | (HelperMessage & { type: 'recordingCaptureStats'; stats: Record<string, number> })
   | (HelperMessage & { type: 'recordingCaptureInterrupted'; message: string })
   | (HelperMessage & { type: 'recordingStartFailed' | 'recordingStopFailed'; requestId?: string; message: string })
   | HelperErrorMessage
@@ -695,6 +697,7 @@ export type HelperIncomingCommand =
   | WarmupAudioCommand
   | StartRecordingCommand
   | StopRecordingCommand
+  | { type: 'refreshRecordingInput' }
   | SnapshotRecordingCommand
   | CancelRecordingCommand
   | CheckPermissionsCommand

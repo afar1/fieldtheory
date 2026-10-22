@@ -69,6 +69,21 @@ function writePcmWav(filePath: string, durationMs = 100): void {
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
 // since both engines use the shared StdioJsonServer class.
 
+describe('TranscriberManager device recovery', () => {
+  it.each(['microphone', 'microphone-and-system-audio', 'system-audio'])('preserves captured audio when enforcing a device in %s mode', async source => {
+    const refreshRecordingInput = vi.fn();
+    const stopRecording = vi.fn();
+    const manager = Object.assign(Object.create(TranscriberManager.prototype), {
+      status: 'recording',
+      getRecordingSource: () => source,
+      nativeHelper: { refreshRecordingInput, stopRecording },
+    });
+    await manager.handleDeviceEnforced();
+    expect(refreshRecordingInput).toHaveBeenCalledTimes(source === 'system-audio' ? 0 : 1);
+    expect(stopRecording).not.toHaveBeenCalled();
+  });
+});
+
 describe('TranscriberManager shutdown', () => {
   it.each([false, true])('waits for Parakeet exit and blocks recreation when overlay cleanup fails=%s', async failOverlay => {
     let finish!: () => void;

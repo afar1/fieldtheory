@@ -1,3 +1,4 @@
+import { appendTranscriberTrace } from './transcriberTrace';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 import { spawn, exec, ChildProcessWithoutNullStreams } from 'child_process';
@@ -436,6 +437,11 @@ export class NativeHelper extends EventEmitter {
   /**
    * Stop recording and get the path to the recorded WAV file.
    */
+  /** Rebuild the input tap without replacing the current recording or system stream. */
+  refreshRecordingInput(): void {
+    if (this.recordingActive) this.send({ type: 'refreshRecordingInput' });
+  }
+
   async stopRecording(): Promise<string> {
     return this.enqueueRecordingCommand('stopRecording', async () => {
       await this.waitForReady();
@@ -1117,6 +1123,10 @@ export class NativeHelper extends EventEmitter {
           this.emit('error', new Error(msg.message));
         }
         this.emit('message', msg);
+        break;
+
+      case 'recordingCaptureStats':
+        appendTranscriberTrace('capture.native', msg.stats);
         break;
 
       case 'recordingCaptureInterrupted':

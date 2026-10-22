@@ -7,6 +7,7 @@ import Foundation
 import CoreAudio
 import AudioToolbox
 import AVFoundation
+import CaptureAudio
 import ApplicationServices
 import AppKit
 import Carbon.HIToolbox
@@ -33,6 +34,7 @@ enum MessageType: String, Codable {
     case warmupAudio
     case startRecording
     case stopRecording
+    case refreshRecordingInput
     case snapshotRecording
     case cancelRecording
     case checkPermissions
@@ -1476,12 +1478,20 @@ final class VoiceActivityDetector {
 
 /// Manages audio recording using AVAudioEngine.
 /// Records from the default input device at 16kHz mono PCM (whisper.cpp format).
+struct RecordingCaptureStatsMessage: Encodable {
+    let type = "recordingCaptureStats"
+    let stats: [String: Int]
+}
+
 final class RecordingHelper {
     
     static let shared = RecordingHelper()
 
     private var recordingTapNode: AVAudioNode?
-    private var systemAudioBridge: SystemAudioPlaybackBridge?
+    private var capturePipeline: CaptureAudioPipeline?
+    private var captureGeneration = UUID()
+    private var capturesMicrophone = false
+    private var configurationObserver: NSObjectProtocol?
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
@@ -1502,7 +1512,6 @@ final class RecordingHelper {
     private var consecutiveSpeechMs: Double = 0
     private var voicedMsSinceLastHarvest: Double = 0
     private var observedMsSinceLastHarvest: Double = 0
-    private var lastAudioProcessTimeNs: UInt64 = 0
 
     private static let SPEECH_THRESHOLD: Double = 0.02  // RMS fallback when VAD unavailable
     private static let SILENCE_COMMAND_MS: Int = 300
@@ -1527,6 +1536,7 @@ final class RecordingHelper {
 
     /// Pre-create the next WAV file on a background queue so snapshotRecording is near-instant.
     private func prepareNextFile() {
+        let generation = captureGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let tempDir = FileManager.default.temporaryDirectory
             let fileName = "littleone-recording-\(UUID().uuidString).wav"
@@ -1535,7 +1545,7 @@ final class RecordingHelper {
             do {
                 let file = try AVAudioFile(forWriting: url, settings: RecordingHelper.wavSettings)
                 DispatchQueue.main.async {
-                    guard let self = self, self.isRecording else {
+                    guard let self = self, self.isRecording, self.captureGeneration == generation else {
                         // Recording stopped before we finished — clean up
                         try? FileManager.default.removeItem(at: url)
                         return
@@ -1551,19 +1561,14 @@ final class RecordingHelper {
 
     /// Process an audio level on the main thread for silence detection.
     /// Called from the tap callback via DispatchQueue.main.async.
-    func processAudioLevel(_ level: Double, isSpeech: Bool) {
+    func processAudioLevel(_ level: Double, isSpeech: Bool, durationMs: Double) {
         guard isRecording else { return }
         // "off" mode: regular transcriber owns the recording — no harvest snapshots.
         guard harvestMode != "off" else { return }
 
-        let nowNs = DispatchTime.now().uptimeNanoseconds
-        let deltaMs: Double
-        if lastAudioProcessTimeNs == 0 || nowNs < lastAudioProcessTimeNs {
-            deltaMs = 0
-        } else {
-            deltaMs = Double(nowNs - lastAudioProcessTimeNs) / 1_000_000.0
-        }
-        lastAudioProcessTimeNs = nowNs
+        // Capture callbacks can be delivered in a burst after file rotation/device recovery.
+        // Count recorded samples, not main-queue delivery delays, when deciding what speech to retain.
+        let deltaMs = max(0, durationMs)
 
         // Use VAD result when available, fall back to RMS threshold
         let speechDetected = vad.isValid ? isSpeech : (level > RecordingHelper.SPEECH_THRESHOLD)
@@ -1708,288 +1713,157 @@ final class RecordingHelper {
     /// Start recording from the default input device.
     /// Records to a temporary WAV file at 16kHz mono PCM.
     func startRecording(captureMicrophone: Bool = true, captureSystemAudio: Bool = false) -> Bool {
-        guard !isRecording else {
-            sendLog(level: "error", message: "Recording already in progress")
-            return false
-        }
-
-        // Query the default input device from the HAL before creating the engine.
-        // If coreaudiod crashed or no mic is connected, fail fast with a clear message.
-        if captureMicrophone {
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var deviceID: AudioDeviceID = kAudioObjectUnknown
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0, nil,
-            &size, &deviceID
-        )
-        if status != noErr || deviceID == kAudioObjectUnknown {
-            sendLog(level: "error", message: "No audio input device available (CoreAudio status=\(status), deviceID=\(deviceID)) — is a microphone connected?")
-            return false
-        }
-
-        }
-
-        // Create temporary file path
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "littleone-recording-\(UUID().uuidString).wav"
-        recordingURL = tempDir.appendingPathComponent(fileName)
-
-        guard let url = recordingURL else {
-            sendLog(level: "error", message: "Failed to create recording URL")
-            return false
-        }
-
-        // Set up audio engine
-        let engine = AVAudioEngine()
-        let inputNode = captureMicrophone ? engine.inputNode : nil
-        let inputFormat = inputNode?.inputFormat(forBus: 0) ?? AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
-        
-        sendLog(level: "info", message: "Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
-        
-        // Target format: 16kHz mono PCM (whisper.cpp requirement)
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
-            channels: 1,
-            interleaved: false
-        )
-        
-        guard let format = targetFormat else {
-            sendLog(level: "error", message: "Failed to create target audio format")
-            return false
-        }
-        
-        // Create audio file first
-        let file: AVAudioFile
-        do {
-            file = try AVAudioFile(forWriting: url, settings: RecordingHelper.wavSettings)
-            audioFile = file
-        } catch {
-            sendLog(level: "error", message: "Failed to create audio file: \(error.localizedDescription)")
-            return false
-        }
-        
-        let tapNode: AVAudioNode
-        let tapFormat: AVAudioFormat
-        if captureSystemAudio {
-            let mixer = AVAudioMixerNode()
-            let player = AVAudioPlayerNode()
-            engine.attach(mixer)
-            engine.attach(player)
-            engine.connect(player, to: mixer, format: format)
-            if let inputNode {
-                engine.connect(inputNode, to: mixer, format: inputFormat)
-            }
-            engine.connect(mixer, to: engine.mainMixerNode, format: format)
-            // Render the capture graph without playing the call back through the speakers.
-            engine.mainMixerNode.outputVolume = 0
-            systemAudioBridge = SystemAudioPlaybackBridge(player: player)
-            tapNode = mixer
-            tapFormat = format
-        } else {
-            guard let inputNode else { return false }
-            tapNode = inputNode
-            tapFormat = inputFormat
-        }
-        recordingTapNode = tapNode
-        let bufferSize: AVAudioFrameCount = 2048
-        let needsConversion = tapFormat.sampleRate != format.sampleRate || tapFormat.channelCount != format.channelCount
-        tapNode.installTap(onBus: 0, bufferSize: bufferSize, format: tapFormat) { [weak self] buffer, _ in
-            guard let self = self, self.isRecording, let audioFile = self.audioFile else { return }
-
-            // 1. Calculate RMS from raw input buffer (for UI level meter)
-            var level: Double = 0
-            if let channelData = buffer.floatChannelData {
-                let channel = channelData[0]
-                let frameLength = Int(buffer.frameLength)
-                var sum: Float = 0
-                for i in 0..<frameLength {
-                    let sample = channel[i]
-                    sum += sample * sample
-                }
-                let rms = sqrt(sum / Float(frameLength))
-                level = min(1.0, Double(rms))
-            }
-
-            // 2. Convert to 16kHz mono (move before VAD so we can run VAD on target format)
-            let writeBuffer: AVAudioPCMBuffer
-            if needsConversion {
-                guard let converter = AVAudioConverter(from: tapFormat, to: format) else {
-                    sendLog(level: "error", message: "Failed to create audio converter")
-                    // Send level without VAD so UI meter doesn't stall
-                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
-                    return
-                }
-
-                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / tapFormat.sampleRate)
-                guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
-                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
-                    return
-                }
-
-                var convError: NSError?
-                let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-                    outStatus.pointee = .haveData
-                    return buffer
-                }
-
-                converter.convert(to: convertedBuffer, error: &convError, withInputFrom: inputBlock)
-
-                if let convError = convError {
-                    sendLog(level: "error", message: "Audio conversion error: \(convError.localizedDescription)")
-                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
-                    return
-                }
-                writeBuffer = convertedBuffer
-            } else {
-                writeBuffer = buffer
-            }
-
-            // 3. Run VAD on the converted 16kHz Float32 data
-            var isSpeech = false
-            if let channelData = writeBuffer.floatChannelData {
-                isSpeech = self.vad.process(samples: channelData[0], count: Int(writeBuffer.frameLength))
-            }
-
-            // 4. Send combined audioLevel message with both level and isSpeech
-            sendJSON(AudioLevelMessage(level: level, isSpeech: isSpeech))
-
-            // 5. Dispatch to main thread for silence detection
-            DispatchQueue.main.async { [weak self] in
-                self?.processAudioLevel(level, isSpeech: isSpeech)
-            }
-
-            // 6. Write converted buffer to file
-            do {
-                try audioFile.write(from: writeBuffer)
-            } catch {
-                sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
-            }
-        }
-        
-        audioEngine = engine
-
-        // Start engine
+        guard !isRecording else { return false }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("littleone-recording-\(UUID().uuidString).wav")
+        do { audioFile = try AVAudioFile(forWriting: url, settings: RecordingHelper.wavSettings) }
+        catch { sendLog(level: "error", message: "Cannot create recording: \(error.localizedDescription)"); return false }
+        recordingURL = url
+        captureGeneration = UUID()
+        let generation = captureGeneration
+        capturesMicrophone = captureMicrophone
+        capturePipeline = CaptureAudioPipeline(
+            mixed: captureMicrophone && captureSystemAudio,
+            origin: AVAudioTime.seconds(forHostTime: mach_absolute_time())
+        ) { [weak self] buffer in self?.processCapturedBuffer(buffer, generation: generation) }
+        isRecording = true
         vad.reset()
+        resetHarvestSpeechState()
+        silenceTimer?.cancel(); silenceTimer = nil
         do {
-            try engine.start()
-            isRecording = true
-            systemAudioBridge?.start()
-            resetHarvestSpeechState()
-            lastAudioProcessTimeNs = 0
-            silenceTimer?.cancel()
-            silenceTimer = nil
+            if captureMicrophone { try startMicrophoneCapture() }
             prepareNextFile()
-            sendLog(level: "info", message: "Recording started: \(url.path)")
+            sendLog(level: "info", message: "Capture-only recording started: \(url.path)")
             return true
         } catch {
-            sendLog(level: "error", message: "Failed to start audio engine: \(error.localizedDescription)")
-            recordingTapNode?.removeTap(onBus: 0)
-            recordingTapNode = nil
-            systemAudioBridge?.stop()
-            systemAudioBridge = nil
-            audioEngine = nil
-            audioFile = nil
-            recordingURL = nil
+            sendLog(level: "error", message: "Cannot start microphone: \(error.localizedDescription)")
+            cancelRecording()
             return false
         }
     }
-    
-    func systemAudioConsumer() -> ((AVAudioPCMBuffer) -> Bool)? {
-        guard let bridge = systemAudioBridge else { return nil }
-        return { buffer in bridge.enqueue(buffer) }
+
+    /// Only an input tap is connected. System audio never enters a hardware playback graph.
+    private func startMicrophoneCapture() throws {
+        guard CoreAudioHelper.shared.getDefaultInputDeviceId() != nil else {
+            throw NSError(domain: "FieldTheory.Capture", code: 2, userInfo: [NSLocalizedDescriptionKey: "No microphone available"])
+        }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let inputFormat = input.inputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: inputFormat, to: format), let pipeline = capturePipeline else {
+            throw NSError(domain: "FieldTheory.Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "No usable microphone format"])
+        }
+        let generation = captureGeneration
+        input.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, time in
+            let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * 16_000 / inputFormat.sampleRate)) + 32
+            guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var supplied = false
+            var error: NSError?
+            let status = converter.convert(to: converted, error: &error) { _, state in
+                if supplied { state.pointee = .noDataNow; return nil }
+                supplied = true; state.pointee = .haveData; return buffer
+            }
+            guard status != .error, error == nil, converted.frameLength > 0 else { return }
+            let at = time.isHostTimeValid ? AVAudioTime.seconds(forHostTime: time.hostTime)
+                : AVAudioTime.seconds(forHostTime: mach_absolute_time()) - Double(converted.frameLength) / 16_000
+            if !pipeline.append(converted, source: .microphone, at: at) {
+                DispatchQueue.main.async {
+                    guard let self, self.captureGeneration == generation, self.isRecording, self.audioEngine === engine else { return }
+                    self.stopMicrophoneCapture()
+                    sendJSON(["type": "recordingCaptureInterrupted", "message": "Microphone capture could not keep up. Finish recording to keep the audio already captured."])
+                }
+            }
+        }
+        audioEngine = engine
+        recordingTapNode = input
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self, weak engine] _ in
+            // AVFoundation calls from an internal queue. Defer teardown beyond the notification callback.
+            DispatchQueue.main.async {
+                guard let self, let engine, self.audioEngine === engine else { return }
+                let current = engine.inputNode.inputFormat(forBus: 0)
+                guard !engine.isRunning || current.sampleRate != inputFormat.sampleRate || current.channelCount != inputFormat.channelCount else { return }
+                self.requestMicrophoneRefresh()
+            }
+        }
+        do { try engine.start() }
+        catch { stopMicrophoneCapture(); throw error }
     }
 
-    func disableSystemAudio() {
-        systemAudioBridge?.stop()
-        systemAudioBridge = nil
+    private func stopMicrophoneCapture() {
+        if let observer = configurationObserver { NotificationCenter.default.removeObserver(observer) }
+        configurationObserver = nil
+        recordingTapNode?.removeTap(onBus: 0); recordingTapNode = nil
+        audioEngine?.stop(); audioEngine = nil
     }
 
-    func systemAudioDrain() -> (() async -> Bool)? {
-        guard let bridge = systemAudioBridge else { return nil }
-        return { await bridge.finish() }
+    /// Coalesce device notifications without replacing the recording file, SCK stream, or mixer timeline.
+    func requestMicrophoneRefresh() {
+        guard isRecording, capturesMicrophone else { return }
+        let generation = captureGeneration
+        let engine = audioEngine
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRecording, self.captureGeneration == generation, self.audioEngine === engine else { return }
+            self.stopMicrophoneCapture()
+            do { try self.startMicrophoneCapture() }
+            catch {
+                sendLog(level: "error", message: "Microphone recovery failed: \(error.localizedDescription)")
+                sendJSON(["type": "recordingCaptureInterrupted", "message": "Microphone stopped. Finish recording to keep captured audio. System audio, if selected, continues."])
+            }
+        }
     }
 
-    /// Stop recording and return the file path.
+    private func processCapturedBuffer(_ buffer: AVAudioPCMBuffer, generation: UUID) {
+        guard let data = buffer.floatChannelData, let file = audioFile else { return }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+        var sum: Double = 0
+        for i in 0..<count { sum += Double(data[0][i]) * Double(data[0][i]) }
+        let level = min(1, sqrt(sum / Double(count)))
+        let speech = vad.process(samples: data[0], count: count)
+        sendJSON(AudioLevelMessage(level: level, isSpeech: speech))
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.captureGeneration == generation else { return }
+            self.processAudioLevel(level, isSpeech: speech, durationMs: Double(count) / 16)
+        }
+        do { try file.write(from: buffer) }
+        catch { sendLog(level: "error", message: "Recording write failed: \(error.localizedDescription)") }
+    }
+
+    func systemAudioConsumer() -> ((AVAudioPCMBuffer, Double) -> Bool)? {
+        guard let pipeline = capturePipeline else { return nil }
+        return { buffer, time in pipeline.append(buffer, source: .system, at: time) }
+    }
+
     func stopRecording() -> String? {
-        guard isRecording else {
-            sendLog(level: "error", message: "No recording in progress (isRecording=false)")
-            return nil
-        }
-        
-        guard let engine = audioEngine else {
-            sendLog(level: "error", message: "No audio engine available")
-            isRecording = false
-            return nil
-        }
-        
-        guard let url = recordingURL else {
-            sendLog(level: "error", message: "No recording URL available")
-            isRecording = false
-            audioEngine = nil
-            return nil
-        }
-        
-        // Stop recording first
+        guard isRecording, let url = recordingURL else { return nil }
         isRecording = false
-        silenceTimer?.cancel()
-        silenceTimer = nil
+        silenceTimer?.cancel(); silenceTimer = nil
         resetHarvestSpeechState()
-        lastAudioProcessTimeNs = 0
-
-        // Remove tap and stop engine
-        recordingTapNode?.removeTap(onBus: 0)
-        recordingTapNode = nil
-        systemAudioBridge?.stop()
-        systemAudioBridge = nil
-        engine.stop()
-        
-        // Flush and close audio file
-        // File is automatically flushed when deallocated
-        audioFile = nil
-        
-        // Get path before clearing URL
-        let path = url.path
-        
-        // Clean up
-        audioEngine = nil
+        stopMicrophoneCapture()
+        if let statistics = capturePipeline?.finish() {
+            sendJSON(RecordingCaptureStatsMessage(stats: statistics))
+        }
+        capturePipeline?.synchronize { audioFile = nil }
+        capturePipeline = nil
         recordingURL = nil
-
-        // Clean up pre-created pending file
-        if let pendingURL = pendingRecordingURL {
-            try? FileManager.default.removeItem(at: pendingURL)
-        }
+        capturesMicrophone = false
         pendingAudioFile = nil
+        if let pending = pendingRecordingURL { try? FileManager.default.removeItem(at: pending) }
         pendingRecordingURL = nil
-
-        // Verify file exists
-        if !FileManager.default.fileExists(atPath: path) {
-            sendLog(level: "error", message: "Recording file does not exist: \(path)")
-            return nil
-        }
-
-        // Check file size
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-           let fileSize = attributes[.size] as? Int64 {
-            sendLog(level: "info", message: "Recording stopped: \(path) (\(fileSize) bytes)")
-        } else {
-            sendLog(level: "info", message: "Recording stopped: \(path)")
-        }
-
-        return path
+        return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
     }
-    
+
+    func snapshotRecording() -> String? {
+        capturePipeline?.synchronize { rotateRecordingFile() }
+    }
+
     /// Snapshot the current recording: close the current WAV file and open a new one
     /// without stopping the audio engine or removing the input tap.
     /// Returns the path to the completed file, or nil on failure.
-    func snapshotRecording() -> String? {
+    private func rotateRecordingFile() -> String? {
         guard isRecording else {
             sendLog(level: "error", message: "No recording in progress for snapshot")
             return nil
@@ -2040,42 +1914,10 @@ final class RecordingHelper {
 
     /// Cancel recording without saving.
     func cancelRecording() {
-        guard isRecording else {
-            return
-        }
-
-        isRecording = false
-        silenceTimer?.cancel()
-        silenceTimer = nil
-        resetHarvestSpeechState()
-        lastAudioProcessTimeNs = 0
-        
-        if let engine = audioEngine {
-            recordingTapNode?.removeTap(onBus: 0)
-            recordingTapNode = nil
-            systemAudioBridge?.stop()
-            systemAudioBridge = nil
-            engine.stop()
-        }
-        
-        // Delete the file if it exists
-        if let url = recordingURL {
-            try? FileManager.default.removeItem(at: url)
-        }
-
-        // Clean up pre-created pending file
-        if let pendingURL = pendingRecordingURL {
-            try? FileManager.default.removeItem(at: pendingURL)
-        }
-
-        audioEngine = nil
-        audioFile = nil
-        recordingURL = nil
-        pendingAudioFile = nil
-        pendingRecordingURL = nil
-        
-        sendLog(level: "info", message: "Recording cancelled")
+        if let path = stopRecording() { try? FileManager.default.removeItem(atPath: path) }
+        captureGeneration = UUID()
     }
+
 }
 
 // MARK: - CoreAudio Callbacks
@@ -2276,6 +2118,9 @@ final class MessageHandler {
                 }
             }
             
+        case .refreshRecordingInput:
+            DispatchQueue.main.async { RecordingHelper.shared.requestMicrophoneRefresh() }
+
         case .snapshotRecording:
             Task { @MainActor in
                 do {

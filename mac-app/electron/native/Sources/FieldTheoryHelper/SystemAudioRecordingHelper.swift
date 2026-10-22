@@ -73,17 +73,8 @@ final class RecordingCoordinator {
     @MainActor
     func stopRecording() async throws -> String? {
         guard let source = activeSource else { throw RecordingCoordinatorError.notRecording }
+        generation = UUID()
         if source != .microphone { await SystemAudioRecordingHelper.shared.stopCapture() }
-        if source != .microphone, let drain = RecordingHelper.shared.systemAudioDrain() {
-            guard await drain() else {
-                RecordingHelper.shared.disableSystemAudio()
-                sendLog(level: "warn", message: "System audio drain timed out; preserving the captured recording")
-                let path = RecordingHelper.shared.stopRecording()
-                activeSource = nil
-                activeRequestId = nil
-                return path
-            }
-        }
         let path = RecordingHelper.shared.stopRecording()
         activeSource = nil
         activeRequestId = nil
@@ -111,7 +102,6 @@ final class RecordingCoordinator {
     func interruptSystemAudio(message: String) async {
         guard let source = activeSource, source != .microphone else { return }
         await SystemAudioRecordingHelper.shared.stopCapture()
-        RecordingHelper.shared.disableSystemAudio()
         let detail = source == .systemAudio
             ? "System audio stopped. Finish recording to transcribe the audio already captured."
             : "System audio stopped; microphone capture continues. Finish recording to keep the captured audio."
@@ -129,11 +119,11 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput, SCStreamDelega
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     private var converter: AVAudioConverter?
     private var stream: SCStream?
-    private var consume: ((AVAudioPCMBuffer) -> Bool)?
+    private var consume: ((AVAudioPCMBuffer, Double) -> Bool)?
     private var sampleStream: SCStream?
 
     @MainActor
-    func startCapture(consume: @escaping (AVAudioPCMBuffer) -> Bool, isCurrent: @escaping @MainActor () -> Bool) async throws {
+    func startCapture(consume: @escaping (AVAudioPCMBuffer, Double) -> Bool, isCurrent: @escaping @MainActor () -> Bool) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard isCurrent() else { throw RecordingCoordinatorError.startFailed("Recording start cancelled") }
         guard let display = content.displays.first else { throw RecordingCoordinatorError.noShareableDisplay }
@@ -150,6 +140,8 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput, SCStreamDelega
         configuration.showsCursor = false
         let capture = SCStream(filter: filter, configuration: configuration, delegate: self)
         try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+        // Drain the tiny video output too; audio-only registration otherwise logs a dropped-frame error every second.
+        try capture.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
         sampleQueue.sync { self.consume = consume; self.sampleStream = capture }
         stream = capture
         do {
@@ -173,6 +165,7 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput, SCStreamDelega
         stream = nil
         try? await stopCapture(capture)
         try? capture.removeStreamOutput(self, type: .audio)
+        try? capture.removeStreamOutput(self, type: .screen)
         sampleQueue.sync {
             if sampleStream === capture { consume = nil; converter = nil; sampleStream = nil }
         }
@@ -180,8 +173,12 @@ final class SystemAudioRecordingHelper: NSObject, SCStreamOutput, SCStreamDelega
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard sampleStream === stream, outputType == .audio, CMSampleBufferDataIsReady(sampleBuffer), let consume,
-              let input = pcmBuffer(from: sampleBuffer), let buffer = convertToTargetFormatIfNeeded(input) else { return }
-        if !consume(buffer) {
+              let input = pcmBuffer(from: sampleBuffer), let buffer = convertToTargetFormatIfNeeded(input), buffer.frameLength > 0 else { return }
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let hostTime = stream.synchronizationClock.map { CMSyncConvertTime(timestamp, from: $0, to: CMClockGetHostTimeClock()) } ?? timestamp
+        let pts = CMTimeGetSeconds(hostTime)
+        let at = pts.isFinite ? pts : AVAudioTime.seconds(forHostTime: mach_absolute_time()) - Double(buffer.frameLength) / 16_000
+        if !consume(buffer, at) {
             failCapture(stream, message: "System audio could not keep up with capture; recording stopped")
         }
     }
