@@ -50,7 +50,9 @@ export function isAutoUpdaterEnabledForBuildChannel(channel: FieldTheoryBuildCha
   return channel === 'production' || channel === 'experimental';
 }
 
-export function autoUpdaterReleaseRepoForBuildChannel(channel: FieldTheoryBuildChannel): string | null {
+export function autoUpdaterReleaseRepoForBuildChannel(channel: FieldTheoryBuildChannel, version?: string): string | null {
+  // Private production previews must never replace themselves with a public release.
+  if (channel === 'production' && version?.includes('-')) return null;
   return isAutoUpdaterEnabledForBuildChannel(channel)
     ? releaseRepoForBuildChannel(channel)
     : null;

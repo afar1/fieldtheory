@@ -2602,7 +2602,7 @@ const fieldTheoryBuildChannel = resolveFieldTheoryBuildChannel({
   metadataChannel: readPackagedBuildChannel(),
 });
 const isExperimentalBuild = fieldTheoryBuildChannel === 'experimental';
-const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheoryBuildChannel);
+const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheoryBuildChannel, app.getVersion());
 const isAutoUpdaterEnabled = autoUpdaterReleaseRepo !== null;
 let autoUpdaterInstance: import('electron-updater').AppUpdater | null = null;
 

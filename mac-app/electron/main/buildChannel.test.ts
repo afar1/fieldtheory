@@ -56,6 +56,8 @@ describe('buildChannel', () => {
   it('exposes auto-updater feeds by release channel', () => {
     expect(autoUpdaterReleaseRepoForBuildChannel('production')).toBe('field-releases');
     expect(autoUpdaterReleaseRepoForBuildChannel('experimental')).toBe('oscar');
+    expect(autoUpdaterReleaseRepoForBuildChannel('production', '0.3.78-onboarding.1')).toBeNull();
+    expect(autoUpdaterReleaseRepoForBuildChannel('production', '0.3.78')).toBe('field-releases');
   });
 
   it('builds a public production auto-updater feed', () => {
